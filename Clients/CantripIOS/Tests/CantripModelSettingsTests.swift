@@ -113,10 +113,14 @@ final class CantripModelSettingsTests: XCTestCase {
         XCTAssertEqual(loaded.chain, [])
         XCTAssertEqual(loaded.addable.map(\.id), ["Copilot", "Codex"])
         XCTAssertEqual(loaded.status, "At its usage limit: Claude Code until 5:00 AM.")
-        let saved = await model.updateUsageFallback(loaded.change(to: ["Copilot"]))
+        XCTAssertTrue(loaded.canResetLimits)
+        XCTAssertNil(loaded.limitedModels, "Older Macs send no model limits")
+        XCTAssertNil(loaded.primaryChoice)
+        let saved = await model.updateUsageFallback(try XCTUnwrap(loaded.adding("Copilot")))
         XCTAssertEqual(saved?.chain, ["Copilot"])
         XCTAssertEqual(saved?.addable.map(\.id), [], "An older Mac takes no second backup")
         XCTAssertNil(posts.first?["backends"], "Older Macs get only the field they know")
+        XCTAssertNil(posts.first?["entries"])
         XCTAssertEqual(posts.first?["backend"] as? String, "Copilot")
         XCTAssertEqual(posts.first?["revision"] as? String, "f1")
         XCTAssertNil(posts.first?["resetLimits"], "Only the changed field is sent")
@@ -163,24 +167,37 @@ final class CantripModelSettingsTests: XCTestCase {
         XCTAssertTrue(state.supportsChain)
         XCTAssertEqual(state.chain, ["Copilot", "Codex"])
         XCTAssertEqual(state.addable.map(\.id), ["Antigravity"])
-        XCTAssertEqual(state.label("Claude Code"), "Claude Code (skipped: the Mac's backend)")
+        XCTAssertEqual(state.addable.map(state.addLabel), ["Antigravity"], "Each backend once on a Mac without entries")
+        XCTAssertFalse(state.supportsModels)
+        XCTAssertNil(state.models(at: 0))
 
-        let next1 = await model.updateUsageFallback(state.change(to: state.chain + ["Antigravity"]))
+        let next1 = await model.updateUsageFallback(try XCTUnwrap(state.adding("Antigravity")))
         state = try XCTUnwrap(next1)
         XCTAssertEqual(state.chain, ["Copilot", "Codex", "Antigravity"], "Add appends")
         XCTAssertNil(posts.last?["backend"], "A chain-aware Mac gets the whole chain")
-        let next2 = await model.updateUsageFallback(state.change(to: ["Antigravity", "Copilot", "Codex"]))
+        XCTAssertNil(posts.last?["entries"], "A Mac without entries gets backends")
+        XCTAssertNil(state.adding("Antigravity"), "No second Antigravity on a Mac without entries")
+        let next2 = await model.updateUsageFallback(state.moving(2, by: -1))
         state = try XCTUnwrap(next2)
-        XCTAssertEqual(state.chain, ["Antigravity", "Copilot", "Codex"], "Reorder")
-        let next3 = await model.updateUsageFallback(state.change(to: ["Antigravity", "Codex"]))
+        XCTAssertEqual(state.chain, ["Copilot", "Antigravity", "Codex"], "Up one")
+        let next3 = await model.updateUsageFallback(state.moving(0, by: 1))
         state = try XCTUnwrap(next3)
+        XCTAssertEqual(state.chain, ["Antigravity", "Copilot", "Codex"], "Down one")
+        let next4 = await model.updateUsageFallback(state.removing(1))
+        state = try XCTUnwrap(next4)
         XCTAssertEqual(state.chain, ["Antigravity", "Codex"], "Remove")
         XCTAssertEqual(state.addable.map(\.id), ["Copilot"])
-        let next4 = await model.updateUsageFallback(state.change(to: []))
-        state = try XCTUnwrap(next4)
+        let next5 = await model.updateUsageFallback(state.change(to: []))
+        state = try XCTUnwrap(next5)
         XCTAssertEqual(state.chain, [])
         XCTAssertEqual(state.status, "Off: a usage limit stops the run with the error.")
-        XCTAssertEqual(posts.map { $0["revision"] as? String }, ["r1", "r2", "r3", "r4"])
+        XCTAssertEqual(posts.map { $0["revision"] as? String }, ["r1", "r2", "r3", "r4", "r5"])
+
+        // An older Mac's chain with its own backend in it: the Mac skips that one.
+        chain = ["Claude Code", "Codex"]
+        state = try await model.usageFallback()
+        XCTAssertEqual(state.title(at: 0), "Claude Code (skipped: the Mac's backend)")
+        XCTAssertEqual(state.title(at: 1), "Codex")
     }
 
     func testUsageFallbackBackupsPickTheirModelAndEffort() async throws {
@@ -212,16 +229,28 @@ final class CantripModelSettingsTests: XCTestCase {
             return (200, try fallback())
         }
         var state = try await model.usageFallback()
-        XCTAssertEqual(state.models(for: "Claude Code")?.map(\.id), ["claude-opus-5-5", "claude-sonnet-5-5"])
-        XCTAssertNil(state.models(for: "Codex"), "A backend without a model picker shows none")
-        XCTAssertEqual(state.efforts(for: "Claude Code"), ["low", "high"], "Default model: its efforts")
-        let first = await model.updateUsageFallback(state.change(backend: "Claude Code", model: "claude-opus-5-5", effort: "high"))
+        XCTAssertEqual(state.models(at: 0)?.map(\.id), ["claude-opus-5-5", "claude-sonnet-5-5"])
+        XCTAssertNil(state.models(at: 1), "A backend without a model picker shows none")
+        XCTAssertTrue(state.offersDefault(at: 0))
+        XCTAssertEqual(state.efforts(at: 0), ["low", "high"], "Default model: its efforts")
+        XCTAssertFalse(state.listsBackendsAgain, "A Mac without model limits lists each backend once")
+        XCTAssertNil(state.adding("Claude Code"), "So it offers no second Claude Code")
+        XCTAssertEqual(state.addable.map(\.id), [])
+        let first = await model.updateUsageFallback(state.setting(0, model: "claude-opus-5-5", effort: "high"))
         state = try XCTUnwrap(first)
-        XCTAssertEqual(state.entry("Claude Code"), .init(backend: "Claude Code", model: "claude-opus-5-5", effort: "high"))
-        XCTAssertEqual(state.entry("Codex").model, "", "The other backup is kept as it was")
+        XCTAssertEqual(state.rows[0], .init(backend: "Claude Code", model: "claude-opus-5-5", effort: "high"))
+        XCTAssertEqual(state.rows[1].model, "", "The other backup is kept as it was")
         XCTAssertEqual((posted?["entries"] as? [[String: String]])?.count, 2)
+        XCTAssertEqual((posted?["entries"] as? [[String: String]])?.map { Set($0.keys) },
+                       [["backend", "model", "effort"], ["backend", "model", "effort"]],
+                       "Only the fields every Mac with entries takes")
         XCTAssertNil(posted?["backends"], "Model changes go through entries")
-        XCTAssertEqual(state.efforts(for: "Claude Code"), ["low", "medium", "high"], "The chosen model's efforts")
+        XCTAssertEqual(state.efforts(at: 0), ["low", "medium", "high"], "The chosen model's efforts")
+        let moved = await model.updateUsageFallback(state.moving(0, by: 1))
+        state = try XCTUnwrap(moved)
+        XCTAssertEqual(state.rows.map(\.backend), ["Codex", "Claude Code"])
+        XCTAssertEqual(state.rows[1].model, "claude-opus-5-5", "Moving keeps the backup's model")
+        XCTAssertNil(posted?["backends"], "Moves go through entries too")
 
         // A Mac from before backup models sends no entries: no pickers, the chain still edits.
         ModelSettingsRequestProtocol.handler = { _ in
@@ -231,8 +260,301 @@ final class CantripModelSettingsTests: XCTestCase {
             ]))
         }
         let older = try await model.usageFallback()
-        XCTAssertNil(older.models(for: "Codex"))
+        XCTAssertNil(older.models(at: 0))
         XCTAssertTrue(older.supportsChain)
+    }
+
+    /// A Mac that lists a backend again with another model: Antigravity is its own backend (it
+    /// runs Gemini 4 Argon) and is listed twice with other models, Claude Code once.
+    private func perModelFallback(entries: [[String: String]]? = nil, limitedModels: Bool = true,
+                                  revision: String = "p1") throws -> Data {
+        let entries = entries ?? [
+            ["backend": "Antigravity", "model": "gemini-3.8-flash-medium", "effort": "",
+             "label": "Antigravity · Gemini 3.8 Flash (Medium)",
+             "limitedUntil": "2026-11-01T03:00:00Z", "limitedUntilLabel": "8:00 PM"],
+            ["backend": "Antigravity", "model": "claude-sonnet-5-5-low", "effort": "",
+             "label": "Antigravity · Claude Sonnet 5.5 (Low)"],
+            ["backend": "Claude Code", "model": "claude-sonnet-5-5", "effort": "high",
+             "label": "Claude Code · claude-sonnet-5-5 · high"],
+        ]
+        let antigravity: [String: Any] = [
+            "id": "Antigravity", "label": "Antigravity · Gemini 4 Argon (High)", "defaultModel": "Gemini 4 Argon (High)",
+            "defaultModelID": "gemini-4-argon-high", "defaultEfforts": [String](),
+            "models": [["id": "gemini-4-argon-high", "label": "Gemini 4 Argon (High)", "efforts": [String]()],
+                       ["id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)", "efforts": [String]()],
+                       ["id": "claude-sonnet-5-5-low", "label": "Claude Sonnet 5.5 (Low)", "efforts": [String]()],
+                       ["id": "gpt-oss-120b-medium", "label": "GPT-OSS 120B (Medium)", "efforts": [String]()]],
+        ]
+        var object: [String: Any] = [
+            "backend": entries.first?["backend"] ?? "", "backends": entries.map { $0["backend"]! }, "entries": entries,
+            "primary": "Antigravity", "revision": revision,
+            "choices": [
+                ["id": "Claude Code", "label": "Claude Code · opus", "defaultModel": "opus", "defaultModelID": "claude-opus-5-5",
+                 "defaultEfforts": ["low", "high"],
+                 "models": [["id": "claude-opus-5-5", "label": "claude-opus-5-5", "efforts": ["low", "medium", "high"]],
+                            ["id": "claude-sonnet-5-5", "label": "claude-sonnet-5-5", "efforts": ["low", "high"]]]],
+                ["id": "Codex", "label": "Codex"],
+                ["id": "Copilot", "label": "Copilot · gpt-5.6",
+                 "models": [["id": "gpt-5.6", "label": "gpt-5.6"], ["id": "gpt-5.6-mini", "label": "gpt-5.6-mini"]]],
+            ],
+            "primaryChoice": antigravity,
+            "limited": [["backend": "Copilot", "until": "2026-11-01T05:00:00Z", "untilLabel": "10:00 PM"]],
+        ]
+        if limitedModels {
+            object["limitedModels"] = [["backend": "Antigravity", "scope": "argon", "label": "Gemini 4 Argon",
+                                        "until": "2026-11-01T03:00:00Z", "untilLabel": "8:00 PM"]]
+        }
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    private func body(_ change: CantripUsageFallbackChange) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(change)) as? [String: Any])
+    }
+
+    private func entries(_ change: CantripUsageFallbackChange) throws -> [[String: String]] {
+        let body = try body(change)
+        XCTAssertEqual(Set(body.keys), ["revision", "entries"], "Only the whole chain is sent")
+        let entries = try XCTUnwrap(body["entries"] as? [[String: String]])
+        for entry in entries { XCTAssertEqual(Set(entry.keys), ["backend", "model", "effort"], "No read-only fields") }
+        return entries
+    }
+
+    func testUsageFallbackDecodesPerModelChainAndOlderPayloads() throws {
+        let state = try JSONDecoder().decode(CantripUsageFallback.self, from: perModelFallback())
+        XCTAssertTrue(state.listsBackendsAgain)
+        XCTAssertEqual(state.chain, ["Antigravity", "Antigravity", "Claude Code"])
+        XCTAssertEqual(state.rows[0].label, "Antigravity · Gemini 3.8 Flash (Medium)")
+        XCTAssertEqual(state.rows[0].limitedUntil, "2026-11-01T03:00:00Z")
+        XCTAssertEqual(state.rows[0].limitedUntilLabel, "8:00 PM")
+        XCTAssertNil(state.rows[1].limitedUntilLabel)
+        XCTAssertEqual(state.primaryChoice?.id, "Antigravity")
+        XCTAssertEqual(state.primaryChoice?.defaultModelID, "gemini-4-argon-high")
+        XCTAssertEqual(state.choice("Claude Code")?.defaultModelID, "claude-opus-5-5")
+        XCTAssertNil(state.choice("Copilot")?.defaultModelID)
+        XCTAssertEqual(state.limitedModels, [.init(backend: "Antigravity", scope: "argon", label: "Gemini 4 Argon",
+                                                   until: "2026-11-01T03:00:00Z", untilLabel: "8:00 PM")])
+        XCTAssertEqual(state.title(at: 0), "Antigravity · Gemini 3.8 Flash (Medium)",
+                       "The Mac's own backend with another model isn't skipped")
+        XCTAssertEqual(state.title(at: 2), "Claude Code · claude-sonnet-5-5 · high")
+        XCTAssertEqual(state.status, "At its usage limit: Copilot until 10:00 PM, Antigravity Gemini 4 Argon until 8:00 PM.")
+        XCTAssertTrue(state.canResetLimits)
+        XCTAssertEqual(Set(state.rowIDs).count, 3)
+
+        // Only a model at its limit still offers Try every backend again.
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: perModelFallback()) as? [String: Any])
+        object["limited"] = [[String: String]]()
+        let onlyModels = try JSONDecoder().decode(CantripUsageFallback.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertTrue(onlyModels.canResetLimits)
+        XCTAssertEqual(onlyModels.status, "At its usage limit: Antigravity Gemini 4 Argon until 8:00 PM.")
+        object["limitedModels"] = [[String: String]]()
+        let none = try JSONDecoder().decode(CantripUsageFallback.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertFalse(none.canResetLimits)
+        XCTAssertTrue(none.status.contains("only that model is skipped"))
+
+        // A Mac from before repeats: entries without labels, no primaryChoice, limitedModels or defaultModelID.
+        let older = try JSONDecoder().decode(CantripUsageFallback.self, from: JSONSerialization.data(withJSONObject: [
+            "backend": "Claude Code", "backends": ["Claude Code"], "primary": "Copilot", "revision": "o1",
+            "entries": [["backend": "Claude Code", "model": "", "effort": ""]],
+            "choices": [["id": "Claude Code", "label": "Claude Code · opus", "defaultModel": "opus",
+                         "models": [["id": "claude-opus-5-5", "label": "claude-opus-5-5"]]]],
+            "limited": [],
+        ]))
+        XCTAssertNil(older.primaryChoice)
+        XCTAssertNil(older.limitedModels)
+        XCTAssertNil(older.rows[0].label)
+        XCTAssertNil(older.choice("Claude Code")?.defaultModelID)
+        XCTAssertFalse(older.listsBackendsAgain)
+        XCTAssertFalse(older.canResetLimits)
+        XCTAssertEqual(older.title(at: 0), "Claude Code · opus")
+        XCTAssertFalse(older.status.contains("only that model"), "Older Macs don't skip single models")
+    }
+
+    func testAddBackupOffersTheMacsBackendAndListedBackendsWithAnotherModel() throws {
+        let state = try JSONDecoder().decode(CantripUsageFallback.self, from: perModelFallback())
+        // Antigravity's own model and both listed ones are taken: the next free one is offered.
+        XCTAssertEqual(state.takenModels("Antigravity"),
+                       ["gemini-3.8-flash-medium", "claude-sonnet-5-5-low", "gemini-4-argon-high"])
+        XCTAssertEqual(state.freeModel("Antigravity"), "gpt-oss-120b-medium")
+        XCTAssertEqual(state.freeModel("Claude Code"), "", "Default runs opus, which no backup runs")
+        XCTAssertEqual(state.freeModel("Codex"), "")
+        XCTAssertEqual(state.freeModel("Copilot"), "", "An unknown default counts as its own model")
+        XCTAssertEqual(state.addable.map(\.id), ["Claude Code", "Codex", "Copilot", "Antigravity"],
+                       "Every backend with a free model, the Mac's own last")
+        XCTAssertEqual(state.addable.map(state.addLabel),
+                       ["Claude Code with another model", "Codex", "Copilot · gpt-5.6", "Antigravity with another model"])
+
+        let added = try entries(XCTUnwrap(state.adding("Antigravity")))
+        XCTAssertEqual(added.count, 4)
+        XCTAssertEqual(added.last, ["backend": "Antigravity", "model": "gpt-oss-120b-medium", "effort": ""])
+        XCTAssertEqual(Array(added.prefix(3)), [
+            ["backend": "Antigravity", "model": "gemini-3.8-flash-medium", "effort": ""],
+            ["backend": "Antigravity", "model": "claude-sonnet-5-5-low", "effort": ""],
+            ["backend": "Claude Code", "model": "claude-sonnet-5-5", "effort": "high"],
+        ], "The chain is kept as it was")
+        XCTAssertEqual(try entries(XCTUnwrap(state.adding("Claude Code"))).last,
+                       ["backend": "Claude Code", "model": "", "effort": ""], "Default first when it's free")
+
+        // Claude Code's default (opus) taken by a default backup: the next free model.
+        var chain = try JSONDecoder().decode(CantripUsageFallback.self, from: perModelFallback(entries: [
+            ["backend": "Claude Code", "model": "", "effort": ""],
+            ["backend": "Codex", "model": "", "effort": ""],
+        ]))
+        XCTAssertEqual(chain.freeModel("Claude Code"), "claude-sonnet-5-5")
+        XCTAssertNil(chain.freeModel("Codex"), "A backend without models is added once")
+        XCTAssertFalse(chain.addable.map(\.id).contains("Codex"))
+        XCTAssertEqual(chain.freeModel("Antigravity"), "gemini-3.8-flash-medium",
+                       "The Mac's own backend never offers its own model, Default included")
+
+        // Every model taken: the backend isn't offered.
+        chain = try JSONDecoder().decode(CantripUsageFallback.self, from: perModelFallback(entries: [
+            ["backend": "Claude Code", "model": "", "effort": ""],
+            ["backend": "Claude Code", "model": "claude-sonnet-5-5", "effort": ""],
+            ["backend": "Antigravity", "model": "gemini-3.8-flash-medium", "effort": ""],
+            ["backend": "Antigravity", "model": "claude-sonnet-5-5-low", "effort": ""],
+            ["backend": "Antigravity", "model": "gpt-oss-120b-medium", "effort": ""],
+        ]))
+        XCTAssertNil(chain.adding("Claude Code"))
+        XCTAssertNil(chain.adding("Antigravity"))
+        XCTAssertEqual(chain.addable.map(\.id), ["Codex", "Copilot"])
+
+        // The Mac's backend without a model picker has no primaryChoice: never offered.
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: perModelFallback(entries: [])) as? [String: Any])
+        object["primaryChoice"] = NSNull()
+        let noPicker = try JSONDecoder().decode(CantripUsageFallback.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertNil(noPicker.primaryChoice)
+        XCTAssertEqual(noPicker.addable.map(\.id), ["Claude Code", "Codex", "Copilot"])
+        XCTAssertEqual(noPicker.addable.map(noPicker.addLabel), ["Claude Code · opus", "Codex", "Copilot · gpt-5.6"],
+                       "Backends not yet listed keep their own labels")
+    }
+
+    func testUsageFallbackRowsChangeMoveAndRemoveByPosition() throws {
+        let state = try JSONDecoder().decode(CantripUsageFallback.self, from: perModelFallback())
+        let changed = try entries(state.setting(1, model: "gpt-oss-120b-medium", effort: ""))
+        XCTAssertEqual(changed.map { $0["model"] }, ["gemini-3.8-flash-medium", "gpt-oss-120b-medium", "claude-sonnet-5-5"],
+                       "Only the second Antigravity backup changes")
+        XCTAssertEqual(changed[2]["effort"], "high")
+        let effort = try entries(state.setting(2, model: "claude-sonnet-5-5", effort: "low"))
+        XCTAssertEqual(effort[2], ["backend": "Claude Code", "model": "claude-sonnet-5-5", "effort": "low"])
+        XCTAssertEqual(Array(effort.prefix(2)).map { $0["model"] }, ["gemini-3.8-flash-medium", "claude-sonnet-5-5-low"])
+
+        let up = try entries(state.moving(2, by: -1))
+        XCTAssertEqual(up.map { $0["model"] }, ["gemini-3.8-flash-medium", "claude-sonnet-5-5", "claude-sonnet-5-5-low"])
+        let down = try entries(state.moving(0, by: 1))
+        XCTAssertEqual(down.map { $0["model"] }, ["claude-sonnet-5-5-low", "gemini-3.8-flash-medium", "claude-sonnet-5-5"],
+                       "The same backend's backups swap by position")
+        let removed = try entries(state.removing(0))
+        XCTAssertEqual(removed, [
+            ["backend": "Antigravity", "model": "claude-sonnet-5-5-low", "effort": ""],
+            ["backend": "Claude Code", "model": "claude-sonnet-5-5", "effort": "high"],
+        ], "Removing one Antigravity backup keeps the other")
+        XCTAssertEqual(try entries(state.change(to: [])), [])
+        XCTAssertEqual(try body(state.removing(0))["revision"] as? String, "p1")
+
+        // A Mac with backends but no entries gets the order (it keeps each backup's model).
+        let older = CantripUsageFallback(backend: "Codex", backends: ["Codex", "Claude Code"], primary: "Copilot",
+                                         choices: [.init(id: "Codex", label: "Codex"), .init(id: "Claude Code", label: "Claude Code")],
+                                         limited: [], revision: "o1")
+        let moved = try body(older.moving(1, by: -1))
+        XCTAssertEqual(moved["backends"] as? [String], ["Claude Code", "Codex"])
+        XCTAssertNil(moved["entries"])
+        XCTAssertEqual(try body(older.removing(0))["backends"] as? [String], ["Claude Code"])
+        // The oldest Macs take one backup through `backend`.
+        let oldest = CantripUsageFallback(backend: "Codex", primary: "Copilot",
+                                          choices: [.init(id: "Codex", label: "Codex")], limited: [], revision: "o0")
+        XCTAssertEqual(try body(oldest.removing(0)) as? [String: String], ["revision": "o0", "backend": ""])
+    }
+
+    func testBackupModelPickersLeaveOutModelsAnotherBackupRuns() throws {
+        let state = try JSONDecoder().decode(CantripUsageFallback.self, from: perModelFallback(entries: [
+            ["backend": "Antigravity", "model": "gemini-3.8-flash-medium", "effort": ""],
+            ["backend": "Antigravity", "model": "claude-sonnet-5-5-low", "effort": ""],
+            ["backend": "Claude Code", "model": "claude-sonnet-5-5", "effort": "high"],
+            ["backend": "Claude Code", "model": "", "effort": ""],
+            ["backend": "Codex", "model": "", "effort": ""],
+        ]))
+        // The Mac's own model (Argon) and the other Antigravity backup's are left out; its own stays.
+        XCTAssertEqual(state.models(at: 0)?.map(\.id), ["gemini-3.8-flash-medium", "gpt-oss-120b-medium"])
+        XCTAssertEqual(state.models(at: 1)?.map(\.id), ["claude-sonnet-5-5-low", "gpt-oss-120b-medium"])
+        XCTAssertFalse(state.offersDefault(at: 0), "Default runs the Mac's own model")
+        // Claude Code's default backup runs opus: the other one can't pick opus or Default.
+        XCTAssertEqual(state.models(at: 2)?.map(\.id), ["claude-sonnet-5-5"])
+        XCTAssertFalse(state.offersDefault(at: 2))
+        XCTAssertEqual(state.models(at: 3)?.map(\.id), ["claude-opus-5-5"], "Sonnet is the other backup's")
+        XCTAssertTrue(state.offersDefault(at: 3), "The row's current Default stays offered")
+        XCTAssertNil(state.models(at: 4), "No model picker for a backend without models")
+        XCTAssertEqual(state.efforts(at: 2), ["low", "high"], "The chosen model's efforts")
+        XCTAssertEqual(state.efforts(at: 3), ["low", "high"], "Default: its default efforts")
+        XCTAssertEqual(state.efforts(at: 0), [])
+
+        // A model that left the catalog stays the row's selection.
+        let gone = try JSONDecoder().decode(CantripUsageFallback.self, from: perModelFallback(entries: [
+            ["backend": "Claude Code", "model": "claude-haiku-4", "effort": ""],
+        ]))
+        XCTAssertEqual(gone.models(at: 0)?.map(\.id), ["claude-opus-5-5", "claude-sonnet-5-5"])
+        XCTAssertTrue(gone.offersDefault(at: 0))
+    }
+
+    func testPerModelChainRoundTripsThroughTheHostAndShowsItsErrors() async throws {
+        let model = try await model()
+        var current = try perModelFallback()
+        var posts: [[String: Any]] = []
+        ModelSettingsRequestProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                let stream = try XCTUnwrap(request.httpBodyStream)
+                stream.open()
+                defer { stream.close() }
+                var bytes = [UInt8](repeating: 0, count: 8192)
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bytes.prefix(count))) as? [String: Any])
+                posts.append(body)
+                let entries = try XCTUnwrap(body["entries"] as? [[String: String]])
+                let keys = entries.map { "\($0["backend"]!)/\($0["model"]!)" }
+                guard Set(keys).count == keys.count else {
+                    return (400, Data(#"{"error":"Claude Code · opus is in the chain twice. Each backend and model can be listed once."}"#.utf8))
+                }
+                current = try self.perModelFallback(entries: entries, revision: "p\(posts.count + 1)")
+            }
+            return (200, current)
+        }
+        var state = try await model.usageFallback()
+        let added = await model.updateUsageFallback(try XCTUnwrap(state.adding("Antigravity")))
+        state = try XCTUnwrap(added)
+        XCTAssertEqual(state.chain, ["Antigravity", "Antigravity", "Claude Code", "Antigravity"])
+        XCTAssertEqual(state.rows.last?.model, "gpt-oss-120b-medium")
+        XCTAssertEqual(posts.last?["revision"] as? String, "p1")
+        XCTAssertNil(posts.last?["backends"])
+        XCTAssertNil(state.adding("Antigravity"), "Every other Antigravity model is listed now")
+
+        let failed = await model.updateUsageFallback(state.setting(3, model: "claude-sonnet-5-5-low", effort: ""))
+        XCTAssertNil(failed)
+        XCTAssertTrue(model.errorMessage?.contains("is in the chain twice") == true, "The host's message is shown")
+    }
+
+    func testBackupRowsFitANarrowFoldedWidthAndLargeText() throws {
+        let state = try JSONDecoder().decode(CantripUsageFallback.self, from: perModelFallback())
+        // The folded iPhone Duo leaves about 382 pt beside its vertical bar; 300 pt is a narrow split.
+        for width: CGFloat in [300, 382, 720] {
+            for size: DynamicTypeSize in [.large, .accessibility3, .accessibility5] {
+                for index in state.rows.indices {
+                    let row = UIHostingController(rootView: CantripUsageFallbackRow(fallback: state, index: index, saving: false) { _ in }
+                        .environment(\.dynamicTypeSize, size))
+                    let measured = row.sizeThatFits(in: CGSize(width: width, height: 5000))
+                    XCTAssertLessThanOrEqual(measured.width, width + 1, "Row \(index + 1) at \(width) pt, \(size)")
+                    XCTAssertGreaterThan(measured.height, 20)
+                    XCTAssertLessThan(measured.height, 4000)
+                    if index == 0, width == 382, size == .large || size == .accessibility3 {
+                        let renderer = ImageRenderer(content: row.rootView.frame(width: width).padding()
+                            .background(Color(uiColor: .systemBackground)))
+                        renderer.scale = 2
+                        let attachment = XCTAttachment(image: try XCTUnwrap(renderer.uiImage))
+                        attachment.name = "backup-row-\(size)"
+                        attachment.lifetime = .keepAlways
+                        add(attachment)
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(CantripUsageFallbackRow.name(state, index: 1), "Antigravity backup 2")
     }
 
     func testSavePreflightsOnceAndPinsTheOriginalTabAndRevision() async throws {
@@ -485,10 +807,8 @@ final class CantripModelSettingsTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "GET", "Opening settings must not modify the Mac")
             if request.url?.path == "/api/v1/usage-fallback" {
                 fallbackReads += 1
-                return (200, try JSONSerialization.data(withJSONObject: [
-                    "backend": "Copilot", "primary": "Claude Code", "revision": "f1", "limited": [],
-                    "choices": [["id": "Copilot", "label": "Copilot"], ["id": "Codex", "label": "Codex"]],
-                ]))
+                // Backups that list a backend again, one at its limit: the longest rows.
+                return (200, try self.perModelFallback())
             }
             reads += 1
             return (200, try self.snapshot())
@@ -524,6 +844,17 @@ final class CantripModelSettingsTests: XCTestCase {
                 attachment.name = "Model settings \(Int(width)) \(size)"
                 attachment.lifetime = .keepAlways
                 add(attachment)
+                // The usage limit fallbacks, further down.
+                if let form = scrollViews.max(by: { $0.contentSize.height < $1.contentSize.height }) {
+                    form.setContentOffset(CGPoint(x: 0, y: max(0, form.contentSize.height * 0.45)), animated: false)
+                    try await Task.sleep(for: .milliseconds(300))
+                    let fallbacks = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                    })
+                    fallbacks.name = "Usage limit fallbacks \(Int(width)) \(size)"
+                    fallbacks.lifetime = .keepAlways
+                    add(fallbacks)
+                }
             }
         }
     }

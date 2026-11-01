@@ -1,7 +1,7 @@
 import XCTest
 
-/// Model Settings' usage limit fallbacks against a real Mac host: add backups, move one earlier and
-/// remove one, each saving right away. Runs on any iPhone, and on an iPhone Duo folded or unfolded.
+/// Model Settings' usage limit fallbacks against a real Mac host: add backups (a backend again with
+/// another model, when the host offers it), move one earlier and remove one, each saving right away. Runs on any iPhone, and on an iPhone Duo folded or unfolded.
 /// Set `TEST_RUNNER_CANTRIP_UITEST_HOME_URL=http://127.0.0.1:<port>` (and
 /// `TEST_RUNNER_CANTRIP_UITEST_HOME_TOKEN` if the host's token isn't `duo-qa-token`) to a host with
 /// the backup chain whose fallback starts off. `TEST_RUNNER_CANTRIP_UITEST_SHOTS=<folder>` saves
@@ -59,7 +59,7 @@ final class CantripUsageFallbackUITests: XCTestCase {
         save(app, "fallback-three")
 
         // A backup's model, from the backend's own list, saves right away.
-        let modelPicker = app.buttons["usageFallback.model.Claude Code"].firstMatch
+        let modelPicker = app.buttons["usageFallback.model.1.Claude Code"].firstMatch
         if modelPicker.waitForExistence(timeout: 5) {
             reveal(modelPicker, app: app)
             tap(modelPicker, app: app)
@@ -72,15 +72,36 @@ final class CantripUsageFallbackUITests: XCTestCase {
             save(app, "fallback-model")
         }
 
-        tap(app.buttons["Try Antigravity earlier"].firstMatch, app: app)
+        tap(app.buttons["Try Antigravity backup 3 earlier"].firstMatch, app: app)
         XCTAssertTrue(waitForOrder(app, ["Claude Code", "Antigravity", "Codex"]), "The arrow moves it up one")
         save(app, "fallback-reordered")
 
-        tap(app.buttons["Remove Claude Code"].firstMatch, app: app)
+        // A host that lists a backend again offers Claude Code with another model.
+        if offers("Claude Code with another model", app: app) {
+            addBackup("Claude Code with another model", app: app)
+            XCTAssertEqual(order(app), ["Claude Code", "Antigravity", "Codex", "Claude Code"], "Listed again at the end")
+            XCTAssertTrue(app.buttons["usageFallback.model.4.Claude Code"].firstMatch.exists, "Its own model picker")
+            save(app, "fallback-again")
+            tap(app.buttons["Remove Claude Code backup 4"].firstMatch, app: app)
+            XCTAssertTrue(waitForOrder(app, ["Claude Code", "Antigravity", "Codex"]), "Remove drops only that one")
+        }
+
+        tap(app.buttons["Remove Claude Code backup 1"].firstMatch, app: app)
         XCTAssertTrue(waitForOrder(app, ["Antigravity", "Codex"]), "Remove drops it")
-        XCTAssertFalse(app.buttons["Try Antigravity earlier"].firstMatch.isEnabled, "The first backup can't move up")
-        XCTAssertFalse(app.buttons["Try Codex later"].firstMatch.isEnabled, "The last backup can't move down")
+        XCTAssertFalse(app.buttons["Try Antigravity backup 1 earlier"].firstMatch.isEnabled, "The first backup can't move up")
+        XCTAssertFalse(app.buttons["Try Codex backup 2 later"].firstMatch.isEnabled, "The last backup can't move down")
         save(app, "fallback-removed")
+    }
+
+    /// Whether Add a backup lists `option`; closes the menu again.
+    private func offers(_ option: String, app: XCUIApplication) -> Bool {
+        let add = app.buttons["usageFallback.add"].firstMatch
+        reveal(add, app: app)
+        tap(add, app: app)
+        let found = app.buttons[option].firstMatch.waitForExistence(timeout: 3)
+        let close = app.buttons["Choose a backend"].firstMatch
+        if close.exists { tap(close, app: app) }
+        return found
     }
 
     private func addBackup(_ backend: String, app: XCUIApplication) {
@@ -127,7 +148,9 @@ final class CantripUsageFallbackUITests: XCTestCase {
             .filter(\.exists)
             .sorted { $0.frame.minY < $1.frame.minY }
             .map { String($0.identifier.dropFirst("usageFallback.backup.".count)) }
+            // "2.Antigravity": one per row, numbered, so a backend listed twice shows twice.
             .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+            .map { $0.split(separator: ".", maxSplits: 1).last.map(String.init) ?? $0 }
     }
 
     private func waitForOrder(_ app: XCUIApplication, _ expected: [String]) -> Bool {
