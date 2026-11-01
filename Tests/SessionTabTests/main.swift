@@ -179,6 +179,7 @@ struct SessionTabTests {
         try await testRemoteMemory()
         try await testRemoteVoiceVocabulary()
         try await testVoiceTurns()
+        try await testWatchDevices()
         try await testRemoteMaintenance()
         try await testRemoteNotifications()
         try await testRemoteBadges()

@@ -875,6 +875,40 @@ the reply as plain sentences: code and tables are mentioned rather than read,
 links become their words, and a long answer stops after about 1,200 characters
 with "The rest is on screen." Turns are kept in memory for an hour.
 
+### Apple Watch
+
+Cantrip on Apple Watch talks to Home through the voice API above without the
+pairing token. When you set it up, the watch makes a signing key in its Secure
+Enclave, which never leaves the watch. Cantrip Agent on the paired iPhone then
+registers the public key with `POST /api/v1/watch/devices`
+(`{"name": "Apple Watch", "publicKey": "<base64 X9.63 P-256 key>"}`, pairing token
+required). It answers `201 {"device": {"id", "name", "addedAt", "lastUsedAt"}}`,
+or `200` when that key is already registered. `GET /api/v1/watch/devices` lists
+the watches, and `DELETE /api/v1/watch/devices/<id>` removes one at once. The list
+is `~/.cache/Cantrip/watch-devices.json` (mode 600, public keys only), up to 10
+watches.
+
+Each watch request carries `X-Cantrip-Device` (its ID), `X-Cantrip-Time` (Unix
+seconds), `X-Cantrip-Nonce` (at least 16 random bytes, base64url) and
+`X-Cantrip-Signature`: base64 of the ECDSA P-256 SHA-256 signature (DER) over
+these lines, joined by newlines:
+
+```text
+cantrip-device-v1
+POST
+/api/v1/voice/turns
+1793580000
+<nonce>
+<lowercase hex SHA-256 of the body>
+```
+
+The second and third lines are the method and the request target exactly as
+sent, query included. Cantrip refuses a removed or unknown watch, a time more
+than 5 minutes from the Mac's, a nonce that watch already used in the last 10
+minutes, and a bad signature, all with `401`. A watch's signature opens only
+`/api/v1/voice/config` and `/api/v1/voice/turns`. Every other endpoint, including
+the watch list and the vocabulary, still needs the pairing token.
+
 ### Tab mentions
 
 Session snapshots carry two flags for `@` mentions
