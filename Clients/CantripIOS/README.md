@@ -125,6 +125,8 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, usage limits (Copilot at the top level, Claude Code under `claude`, plus `activeBackend`), View Mac |
 | `GET/POST /api/v1/usage-fallback` | Usage limit fallbacks in Model Settings (Mac-wide): `{backends, entries, backend, primary, choices, primaryChoice, limited, limitedModels, revision}`; the section lists the backups in order (each entry's `label`, and "at its limit until" its `limitedUntilLabel`) with **Add a backup**, up/down and **Remove**, plus **Model** and **Effort** menus from `choices[].models` for backends that have them. A backend can be listed again with another model, the Mac's own too (`primaryChoice`): Add offers "<Backend> with another model" while one of its models (`""` = `defaultModelID`) is free, and each row's Model menu leaves out models the backend's other backups (or the Mac itself) run. Rows are edited by position and each change saves right away with POST `{revision, entries}` (the whole chain: each backup's `backend`, `model`, `effort`; a `400` says why, e.g. a duplicate), or `{revision, resetLimits: true}` for **Try every backend again** (whole backends in `limited`, model quotas in `limitedModels`). Macs that send no `limitedModels` list each backend once; Macs that send no `entries` get `{revision, backends}`, and Macs from before the chain send no `backends`: one backup, set with `{revision, backend}` (`""` = off). `supportsUsageFallback` on session lists; older hosts `404` and the section stays hidden |
+| `GET /api/v1/skills` | Skills & Rules (Mac-wide): `{library, backends, skills, rules, drift, driftCheckedAt, checking}`; each skill has `name`, `description`, `enabled`, the `backends` that see it and `problems`; each rule `folder`, `lines` and optional `mirror`; each drift finding `path` and `problem`. `driftCheckedAt` (ISO 8601) is absent or `null` until the check has run. Older hosts `404` and the sheet says to update Cantrip on the Mac |
+| `POST /api/v1/skills` | `{"action":"setEnabled","name","enabled"}` (on or off for every backend), `{"action":"sync"}` (relink; the reply adds `messages`) or `{"action":"check"}` (starts the drift check; poll `GET` every ~2 s while `checking`). Replies with the same payload as `GET`; a `400 {"error"}` is shown as written and not retried |
 | `GET /api/v1/voice/vocabulary` | Dictation names: project, tab, note, task and tracker terms plus the busiest people (handles, optional names); older hosts reply `404` and the app falls back to tab and task titles |
 | `GET /api/v1/link-previews/image`, `GET /api/v1/map-tile` | Rich cards on assistant messages (`linkPreviews`, `placeCard`): cached Open Graph preview images (`?id=`) and OpenStreetMap raster tiles (`?z=&x=&y=`) |
 
@@ -241,8 +243,8 @@ retain 44-point tap targets. New Tab and tab actions live in the
 drawer rather than duplicate top-bar buttons. Resume (when available) and New
 conversation remain in the shared chat's hamburger menu.
 
-The hamburger menu's **Cantrip Mac** section opens **Mac Permissions & View Mac**
-and **Update & Rebuild Cantrip** directly, without going through Settings. These
+The hamburger menu's **Cantrip Mac** section opens **Mac Permissions & View Mac**,
+**Skills & Rules** and **Update & Rebuild Cantrip** directly, without going through Settings. These
 controls use the selected saved Mac and are disabled until Remote is configured.
 Settings keeps connection, notification, voice, and reply preferences.
 
@@ -863,6 +865,25 @@ visible, and changing the paired server clears the viewer's state.
 Requires updated Cantrip Agent and an updated, reopened Cantrip host. Older
 hosts show an update notice. Uses existing paired LAN/Tailscale access; memory
 reads have a 20-second content deadline and do not block chat polling or sends.
+
+### Skills & Rules
+
+Open **hamburger menu > Skills & Rules** under **Cantrip Mac** (or the same action in
+a tab's menu) to see the one skills library Cantrip on the Mac gives every backend.
+Skills are Mac-wide, not per tab, and are edited on the Mac (`cantrip skills edit NAME`).
+
+- Each skill has an on/off switch (for every backend), its description, which backends see
+  it ("Seen by: …" or "No backend sees it") and any problems as warning lines.
+- **Relink** links everything again and briefly lists what changed.
+- **Folder rules** lists each folder's rules file and its line count, with the file it's
+  mirrored to.
+- **Drift** lists rules files that have drifted; **Check now** runs the check on the Mac
+  ("Checking…" while it runs, then "Last checked …" or "No drift found").
+
+The sheet reads every 10 seconds while open, and every 2 seconds while a drift check runs.
+A refused change shows the Mac's reason; nothing retries on its own. Macs whose Cantrip
+doesn't share skills yet show an update notice instead. Cantrip Gateway Mac and Windows
+offer the same screen.
 
 ### Saved Private Local tab in Cantrip Remote
 
