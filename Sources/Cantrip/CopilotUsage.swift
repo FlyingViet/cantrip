@@ -16,6 +16,8 @@ struct CopilotUsageSnapshot: Codable {
     var codex: CodexUsageState?
     /// The Mac's backend when the snapshot was served, so clients lead with the limit in use.
     var activeBackend: String?
+    /// Calls to Cantrip's OpenAI-compatible endpoint per consumer; set when the snapshot is served.
+    var endpoint: EndpointUsageSnapshot?
 
     func isStale(at now: Date = Date()) -> Bool {
         guard account != nil, error == nil, let checked = copilotDate(checkedAt),

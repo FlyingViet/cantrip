@@ -474,6 +474,33 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
 
     static let policyHookID = "cantrip_home_policy"
 
+    /// A root `assistant` message Claude sent instead of an answer because the plan is used up
+    /// (its `error` field is `rate_limit` or `billing_error`): the message to show, and the code.
+    static func usageLimitMessage(_ event: [String: Any]) -> (text: String, report: UsageLimitReport)? {
+        guard let error = event["error"] as? String, ["rate_limit", "billing_error"].contains(error) else { return nil }
+        let content = (event["message"] as? [String: Any])?["content"] as? [[String: Any]] ?? []
+        let text = content.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
+            .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (text.isEmpty ? "Claude usage limit reached." : text, UsageLimitReport(code: error, resetsAt: nil))
+    }
+
+    /// Records a `rate_limit_event` for the Usage Limits screen, and returns the window that is
+    /// used up (status `rejected`) with the time it opens again.
+    static func rateLimitEvent(_ event: [String: Any], tracker: UsageTracker = .shared) -> UsageLimitReport? {
+        guard let info = event["rate_limit_info"] as? [String: Any],
+              let resets = info["resetsAt"] as? TimeInterval else { return nil }
+        // Utilization appears only in some CLI versions/situations;
+        // grab it under any of its known names when present.
+        let rawUtil = (info["utilization"] ?? info["used_percentage"]
+            ?? info["percentUsed"] ?? info["percent_used"]) as? Double
+        let percent = rawUtil.map { $0 <= 1.0 ? $0 * 100 : $0 }
+        let type = info["rateLimitType"] as? String ?? "window"
+        let status = info["status"] as? String ?? "unknown"
+        tracker.updateRateLimit(type: type, resetsAtEpoch: resets, status: status, percentUsed: percent)
+        guard status == "rejected" else { return nil }
+        return UsageLimitReport(code: "rate_limit/\(type)", resetsAt: Date(timeIntervalSince1970: resets))
+    }
+
     /// Copilot's watcher and parallel-request conventions, in Claude Code's terms.
     static let subagentGuidance = """
     For passive waiting after you have already started an external build, TestFlight upload, \
@@ -956,11 +983,9 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             guard let message = obj["message"] as? [String: Any],
                   let content = message["content"] as? [[String: Any]] else { return }
             let parentID = obj["parent_tool_use_id"] as? String
-            if parentID == nil, let error = obj["error"] as? String, ["rate_limit", "billing_error"].contains(error) {
-                let text = content.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
-                    .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                usageLimitText = text.isEmpty ? "Claude usage limit reached." : text
-                if usageLimitReport == nil { usageLimitReport = UsageLimitReport(code: error, resetsAt: nil) }
+            if parentID == nil, let limit = Self.usageLimitMessage(obj) {
+                usageLimitText = limit.text
+                if usageLimitReport == nil { usageLimitReport = limit.report }
             }
             if let parentID, var parent = activities[parentID], parent.subagent != nil {
                 // A subagent's own message: feed the monitor, keep it out of the answer.
@@ -1106,26 +1131,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
             // A long command or agent still running; nothing to show, but the run is alive.
             onEvent(.heartbeat)
         case "rate_limit_event":
-            if let info = obj["rate_limit_info"] as? [String: Any],
-               let resets = info["resetsAt"] as? TimeInterval {
-                // Utilization appears only in some CLI versions/situations;
-                // grab it under any of its known names when present.
-                let rawUtil = (info["utilization"] ?? info["used_percentage"]
-                    ?? info["percentUsed"] ?? info["percent_used"]) as? Double
-                let percent = rawUtil.map { $0 <= 1.0 ? $0 * 100 : $0 }
-                let type = info["rateLimitType"] as? String ?? "window"
-                let status = info["status"] as? String ?? "unknown"
-                UsageTracker.shared.updateRateLimit(
-                    type: type,
-                    resetsAtEpoch: resets,
-                    status: status,
-                    percentUsed: percent)
-                if status == "rejected" {
-                    // The window that's used up, and when it opens again.
-                    usageLimitReport = UsageLimitReport(code: "rate_limit/\(type)",
-                                                        resetsAt: Date(timeIntervalSince1970: resets))
-                }
-            }
+            if let report = Self.rateLimitEvent(obj) { usageLimitReport = report }
         case "system":
             let subtype = obj["subtype"] as? String ?? ""
             if subtype == "init" {
