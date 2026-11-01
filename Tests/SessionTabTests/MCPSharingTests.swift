@@ -1,4 +1,5 @@
 import Foundation
+import JavaScriptCore
 
 extension SessionTabTests {
     @MainActor
@@ -10,6 +11,7 @@ extension SessionTabTests {
         try await testMCPRelay()
         try testMCPMigration()
         try testMCPMigrationClaudeCLI()
+        try testMCPConsentStep()
         try await testMCPRemoteList()
         try await testMCPClientReuse()
         print("MCP sharing: import, backend configs, OAuth with single-flight refresh, the relay and the remote list passed")
@@ -647,5 +649,66 @@ extension SessionTabTests {
         }
         precondition(!calls.joined().contains("secret-"), "No credential reaches Claude Code's config")
         precondition(MCPMigration.claudeExecutable("", locator: locator) == claude.path, "Blank means `claude`, found on the PATH")
+    }
+
+    /// A consent page that offers a sign-in next to free, guest or anonymous access never gets a
+    /// free option approved: you're asked to log in in agent Chrome instead, and Cantrip presses
+    /// only the exact button you approved.
+    static func testMCPConsentStep() throws {
+        func page(_ buttons: [String], login: Bool = false) -> AgentChrome.Page {
+            AgentChrome.Page(title: "Authorize", host: "seats.aero", url: "https://seats.aero/mcp/oauth/authorize?client_id=c",
+                             text: "", buttons: buttons, login: login, approve: nil)
+        }
+        let cases: [([String], Bool, AgentChrome.Step)] = [
+            // seats.aero with agent Chrome logged out, then logged in.
+            (["Sign in with seats.aero Pro", "Continue as a free user"], false, .logIn(declined: "Continue as a free user")),
+            (["Allow access", "Cancel"], false, .approve("Allow access")),
+            (["Continue as a free user"], false, .logIn(declined: "Continue as a free user")),
+            (["Continue as guest", "Log in"], false, .logIn(declined: "Continue as guest")),
+            (["Continue anonymously", "Login"], false, .logIn(declined: "Continue anonymously")),
+            (["Continue with Google", "Continue without an account"], false, .logIn(declined: "Continue without an account")),
+            (["Use the free plan", "Allow"], false, .approve("Allow")),
+            (["Approve", "Deny"], false, .approve("Approve")),
+            (["Continue with Google", "Continue"], true, .logIn(declined: nil)),
+            ([], false, .wait),
+        ]
+        for (buttons, login, expected) in cases {
+            let step = AgentChrome.step(for: page(buttons, login: login))
+            precondition(step == expected, "\(buttons) login=\(login): \(step), expected \(expected)")
+            if case .approve(let label) = step {
+                precondition(label.range(of: AgentChrome.limitedPattern, options: [.regularExpression, .caseInsensitive]) == nil,
+                             "Never approves a free or guest option: \(label)")
+            }
+        }
+
+        // The page's own scripts, on a stand-in page.
+        let context = JSContext()!
+        context.exceptionHandler = { _, error in preconditionFailure("JavaScript error: \(error?.toString() ?? "")") }
+        context.evaluateScript("""
+        var clicked = [], location = { host: 'seats.aero', href: 'https://seats.aero/mcp/oauth/authorize?client_id=c' };
+        function show(labels) {
+          clicked = [];
+          document = { title: 'Authorize', body: { innerText: 'Connect your account' }, querySelector: () => null,
+            querySelectorAll: () => labels.map(l => ({ innerText: l, offsetParent: {}, click() { clicked.push(l) } })) };
+        }
+        var document;
+        """)
+        func show(_ labels: [String]) {
+            let literal = String(decoding: try! JSONEncoder().encode(labels), as: UTF8.self)
+            context.evaluateScript("show(\(literal))")
+        }
+        show(["Sign in with seats.aero Pro", "Continue as a free user"])
+        let inspected = context.evaluateScript(AgentChrome.inspectScript)?.toString() ?? ""
+        let decoded = try JSONDecoder().decode(AgentChrome.Page.self, from: Data(inspected.utf8))
+        precondition(decoded.buttons == ["Sign in with seats.aero Pro", "Continue as a free user"] && decoded.approve == nil
+                     && AgentChrome.step(for: decoded) == .logIn(declined: "Continue as a free user"), inspected)
+        let refused = context.evaluateScript(AgentChrome.approveScript(label: "Allow access"))?.toString()
+        precondition(refused == "none" && context.evaluateScript("clicked.length")?.toInt32() == 0,
+                     "An approval for another page presses nothing here, the free option included")
+
+        show(["Continue as a free user", "Allow \"access\" \\ now"])
+        let pressed = context.evaluateScript(AgentChrome.approveScript(label: "Allow \"access\" \\ now"))?.toString()
+        precondition(pressed == "clicked" && context.evaluateScript("clicked.join('|')")?.toString() == "Allow \"access\" \\ now",
+                     "Only the approved button is pressed, its label taken literally")
     }
 }
