@@ -11,8 +11,11 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
 
 // MARK: Tool names from each backend
 
-expect(BrowserPreview.isBrowserTool("browser-click"), "Copilot naming")
-expect(BrowserPreview.isBrowserTool("mcp__browser__page_read"), "Claude / Cantrip MCP naming")
+expect(BrowserPreview.isBrowserTool("agent_chrome-click"), "Copilot naming")
+expect(BrowserPreview.isBrowserTool("mcp__agent_chrome__page_read"), "Claude / Cantrip MCP naming")
+expect(!BrowserPreview.isBrowserTool("agent_chromecast-play"), "other server with a similar prefix")
+expect(BrowserPreview.isBrowserTool("browser-click"), "legacy Copilot naming in older history")
+expect(BrowserPreview.isBrowserTool("mcp__browser__page_read"), "legacy Claude naming in older history")
 expect(!BrowserPreview.isBrowserTool("browsers-click"), "other server with a similar prefix")
 expect(!BrowserPreview.isBrowserTool("mcp__personal__mail_search"), "other MCP server")
 expect(!BrowserPreview.isBrowserTool("bash"), "built-in tool")

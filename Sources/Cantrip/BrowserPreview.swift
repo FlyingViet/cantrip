@@ -2,7 +2,8 @@ import Foundation
 
 /// Live view of an agent-controlled Chrome for remote clients.
 ///
-/// A browser MCP server (named `browser`) records the tab it last worked in to
+/// The agent-Chrome MCP server (named `agent_chrome`; `browser` before OpenAI models refused that
+/// namespace) records the tab it last worked in to
 /// `~/.local/share/agent-browser/active.json` (`targetId`, `url`, `title`, `tool`,
 /// `updatedAt`). Clients show a live card under replies whose tool calls used that
 /// server (`activity.browser` in history) and poll `/api/v1/browser/frame`, which
@@ -12,7 +13,8 @@ import Foundation
 /// Browser-internal pages (extension popups such as a password manager, chrome://,
 /// devtools) are never captured. `browserPreviewEnabled` (default on) turns it off.
 enum BrowserPreview {
-    static let serverName = "browser"
+    /// The server's names in tool calls: `agent_chrome` now, and `browser` in older history.
+    static let serverNames = ["agent_chrome", "browser"]
     static let enabledKey = "browserPreviewEnabled"
     static let portKey = "browserPreviewCDPPort"
     /// A tab counts as in use for this long after the agent's last browser tool call.
@@ -35,7 +37,7 @@ enum BrowserPreview {
     /// Copilot names MCP tools `<server>-<tool>`; Claude Code and Cantrip's own
     /// MCP client use `mcp__<server>__<tool>`.
     static func isBrowserTool(_ name: String) -> Bool {
-        name.hasPrefix(serverName + "-") || name.hasPrefix("mcp__\(serverName)__")
+        serverNames.contains { name.hasPrefix($0 + "-") || name.hasPrefix("mcp__\($0)__") }
     }
 
     /// Pages that must never be shown: password-manager popups and other extension
