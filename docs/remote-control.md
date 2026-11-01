@@ -891,8 +891,12 @@ Copilot's allowance at the top level, Claude Code's limits under `claude`
 (`account.windows[]`: `id`, `percentUsed`, `resetsAt`, `severity`,
 `lockedReason`; `checkedAt`, `error`), Antigravity's under `antigravity`
 (`account.groups[]`: `name`, `models`, `buckets[]` with `id`, `name`,
-`window`, `remainingPercent`, `resetsAt`; `checkedAt`, `error`), and
-`activeBackend`. Mac and mobile
+`window`, `remainingPercent`, `resetsAt`; `checkedAt`, `error`),
+`activeBackend`, and the [OpenAI-compatible API](backends.md#serve-your-backends-to-other-apps-openai-compatible-api)'s
+calls under `endpoint` (`enabled`, `listening`, `port`, `consumers[]`: `name`,
+`lastCallAt`, and `today`/`week` totals with `calls`, `failed`, `limited`,
+`inputTokens`, `outputTokens`, `premiumRequests`, `costUSD` and calls per
+backend in `backends`; absent on older hosts). Mac and mobile
 share that cache. Only these fields leave the Mac, never tokens or
 authentication payloads. The phone polls while foregrounded; pull-to-refresh
 does not bypass the host throttle. Re-pairing clears the phone's old snapshot.

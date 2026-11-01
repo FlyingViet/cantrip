@@ -79,6 +79,9 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   [Privacy and memory](docs/privacy-and-memory.md)
 - **Usage and context:** Copilot AI-credit usage and a per-prompt context
   window breakdown.
+- **OpenAI-compatible API:** scripts and apps on the Mac call
+  `127.0.0.1:11439/v1` and get the same backend, usage-limit backups and usage
+  tracking as tabs, counted per app. [Backends](docs/backends.md#serve-your-backends-to-other-apps-openai-compatible-api)
 - **Extensions:** dashboards, MCP tools with inline MCP App views, custom
   slash commands and a `cantrip` CLI. Typing `/` suggests the backend's own
   commands and skills. [Extensions](docs/extensions-and-skills.md)
@@ -129,6 +132,7 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 | `cantrip doctor` | Check the host, Remote, backends and Tailscale | [Headless](docs/headless.md#commands) |
 | `cantrip cleanup [--dry-run] [--list] [--simulators] [--json]` | Remove unused agent sessions, worktrees and simulators now (Cantrip also does this daily) | [Free up disk space](docs/updating-and-troubleshooting.md#free-up-disk-space) |
 | `cantrip mcp` / `migrate [--apply]` / `connect NAME` / `approve NAME` / `enable` / `disable NAME [--backend B \| --tab ID]` / `restore` | Share MCP servers and their sign-ins with every backend, sign in to remote ones (approve from any client) | [Share MCP servers](docs/extensions-and-skills.md#share-mcp-servers-with-every-backend) |
+| `cantrip api [--json]` / `api key new` / `api key clear` | Cantrip's OpenAI-compatible API for apps on this Mac: status, calls per consumer and the proxy key | [OpenAI-compatible API](docs/backends.md#serve-your-backends-to-other-apps-openai-compatible-api) |
 | `cantrip sim acquire --device NAME [--os VERSION]` / `release` / `list` / `adopt UDID` | Lease a shared simulator to a tab (a temporary copy while another tab has it) and give it back | [Shared simulators](docs/updating-and-troubleshooting.md#shared-simulators) |
 | `cantrip help` | Show the usage of these host commands (`cantrip --help` shows the ask and `runs` examples) | [Headless](docs/headless.md#commands) |
 

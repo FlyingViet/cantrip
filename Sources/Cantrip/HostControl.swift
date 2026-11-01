@@ -19,6 +19,8 @@ final class HostControl {
             return TabInsight.handle(request, manager: manager)
         case "mcp":
             return mcp(request)
+        case "api":
+            return api(request)
         case "pair":
             guard settings.remoteControlEnabled || HostMode.isHeadless else {
                 return ["error": "Remote control is off. Turn it on with `cantrip config set remoteControlEnabled true`."]
@@ -117,7 +119,11 @@ final class HostControl {
         ]
         if let error = settings.remoteControlError { remote["error"] = error }
         if let lan = settings.remoteLANStatus { remote["lanPort"] = lan.port }
+        var endpoint: [String: Any] = ["enabled": settings.openAIEndpointEnabled, "port": settings.openAIEndpointPort]
+        if let port = settings.openAIEndpointListeningPort { endpoint["listening"] = port }
+        if let error = settings.openAIEndpointError { endpoint["error"] = error }
         return [
+            "openAIEndpoint": endpoint,
             "host": HostMode.isHeadless ? "headless" : "app",
             "pid": Int(getpid()),
             "build": CrashRecovery.buildIdentity,
@@ -128,6 +134,35 @@ final class HostControl {
             "cantripHome": settings.cantripHomeEnabled,
             "remote": remote,
         ]
+    }
+
+    /// `cantrip api`: the OpenAI-compatible endpoint's state and calls per consumer, or a new key.
+    private func api(_ request: [String: Any]) -> [String: Any] {
+        let settings = AppSettings.shared
+        switch request["action"] as? String {
+        case "key-new":
+            guard let key = settings.generateOpenAIEndpointKey() else { return ["error": "The Keychain didn't save the key."] }
+            Log.write("cli: OpenAI endpoint key replaced from the terminal")
+            return ["key": key]
+        case "key-clear":
+            settings.clearOpenAIEndpointKey()
+            return ["cleared": true]
+        default:
+            let encoder = JSONEncoder()
+            let consumers = EndpointUsageLedger.shared.consumers().compactMap { consumer -> Any? in
+                (try? encoder.encode(consumer)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
+            }
+            var reply: [String: Any] = [
+                "enabled": settings.openAIEndpointEnabled, "port": settings.openAIEndpointPort,
+                "model": settings.openAIEndpointModel, "effort": settings.openAIEndpointEffort,
+                "contextTier": settings.openAIEndpointContextTier, "keySet": settings.openAIEndpointKey != nil,
+                "chain": settings.openAIEndpointChain().map(\.label), "consumers": consumers,
+                "status": settings.openAIEndpointStatusText,
+            ]
+            if let port = settings.openAIEndpointListeningPort { reply["listening"] = port }
+            if let error = settings.openAIEndpointError { reply["error"] = error }
+            return reply
+        }
     }
 
     private func pairing(token: String) -> [String: Any] {
@@ -146,7 +181,7 @@ final class HostControl {
     }
 
     /// A backend by its display name or a short terminal name (copilot, claude, codex, local).
-    static func backend(named name: String) -> BackendKind? {
+    nonisolated static func backend(named name: String) -> BackendKind? {
         let key = name.lowercased().filter { $0.isLetter }
         let aliases: [String: BackendKind] = ["copilot": .copilot, "claude": .claudeCode, "claudecode": .claudeCode,
                                               "codex": .codex, "agy": .antigravity, "antigravity": .antigravity,

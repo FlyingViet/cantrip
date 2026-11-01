@@ -36,6 +36,10 @@ struct SessionTabTests {
                 try await testBackgroundWatcherLive()
                 return
             }
+            if ProcessInfo.processInfo.environment["CANTRIP_OPENAI_LIVE_TEST"] == "1" {
+                try await testOpenAIEndpointLive()
+                return
+            }
             if ProcessInfo.processInfo.environment["CANTRIP_CODEX_LIVE_TEST"] == "1" {
                 try await testCodexLive()
                 return
@@ -178,6 +182,7 @@ struct SessionTabTests {
         try testCopilotRuntimeActivity()
         try await testRunContinuity()
         try await testUsageLimitFallback()
+        try await testOpenAIEndpoint()
         try await testStopPausesTheQueue()
         try await testMCPSharing()
         try await testRunWatchdog()

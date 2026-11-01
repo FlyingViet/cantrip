@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "tab", "tabs", "sim", "mcp", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "tab", "tabs", "sim", "mcp", "api", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 
@@ -19,6 +19,7 @@ enum CantripCLI {
             case "tab", "tabs": return try tab(Array(arguments.dropFirst()))
             case "sim": return try sim(Array(arguments.dropFirst()))
             case "mcp": return try mcp(Array(arguments.dropFirst()))
+            case "api": try api(Array(arguments.dropFirst()))
             default: print(usage)
             }
             return 0
@@ -64,6 +65,9 @@ enum CantripCLI {
                                   copy is deleted
       cantrip sim list [--json]   The pool's simulators, leases and temporary copies
       cantrip sim adopt UDID      Make an existing simulator the pool's for its device type and iOS version
+      cantrip api [--json]        The OpenAI-compatible API: where it listens, its backends and calls per consumer
+      cantrip api key new         Make a key for requests that come through a proxy (printed once)
+      cantrip api key clear       Remove it: proxied requests are refused again
       cantrip mcp                 MCP servers Cantrip shares with every backend, and their sign-ins
       cantrip mcp migrate [--apply]
                                   Import Copilot's and Claude Code's MCP servers into Cantrip (credentials to the
@@ -493,6 +497,56 @@ enum CantripCLI {
             print("Remote: off. Turn it on with `cantrip config set remoteControlEnabled true`.")
         }
         if let error = remote["error"] as? String { print("Remote problem: \(error)") }
+        if let endpoint = reply["openAIEndpoint"] as? [String: Any], endpoint["enabled"] as? Bool == true {
+            if let port = endpoint["listening"] { print("OpenAI-compatible API: http://127.0.0.1:\(port)/v1") }
+            if let error = endpoint["error"] as? String { print("API problem: \(error)") }
+        }
+    }
+
+    // MARK: - api
+
+    static func api(_ arguments: [String]) throws {
+        if arguments.first == "key" {
+            switch arguments.dropFirst().first {
+            case "new":
+                let reply = try request(["command": "api", "action": "key-new"])
+                if let error = reply["error"] as? String { throw Failure(message: error) }
+                print(reply["key"] as? String ?? "")
+                FileHandle.standardError.write(Data("Send it as `Authorization: Bearer <key>` through the proxy. It isn't shown again.\n".utf8))
+            case "clear":
+                _ = try request(["command": "api", "action": "key-clear"])
+                print("Removed the API key. Requests through a proxy are refused.")
+            default:
+                throw Failure(message: "Usage: cantrip api key new|clear")
+            }
+            return
+        }
+        let reply = try request(["command": "api"])
+        if arguments.contains("--json") { return printJSON(reply) }
+        print(reply["status"] as? String ?? "")
+        guard reply["enabled"] as? Bool == true else {
+            print("Turn it on with `cantrip config set openAIEndpointEnabled true`.")
+            return
+        }
+        let chain = reply["chain"] as? [String] ?? []
+        if !chain.isEmpty { print("Model auto: " + chain.joined(separator: ", then ")) }
+        print("Proxy key: " + (reply["keySet"] as? Bool == true ? "set" : "none (proxied requests are refused)"))
+        let consumers = reply["consumers"] as? [[String: Any]] ?? []
+        guard !consumers.isEmpty else {
+            print("No calls in the last 7 days.")
+            return
+        }
+        print("Calls (today / last 7 days):")
+        for consumer in consumers {
+            let today = consumer["today"] as? [String: Any] ?? [:]
+            let week = consumer["week"] as? [String: Any] ?? [:]
+            var line = "  \(consumer["name"] ?? "?"): \(today["calls"] ?? 0) / \(week["calls"] ?? 0)"
+            if let data = try? JSONSerialization.data(withJSONObject: week),
+               let totals = try? JSONDecoder().decode(EndpointUsageTotals.self, from: data), !totals.detail.isEmpty {
+                line += " · " + totals.detail
+            }
+            print(line)
+        }
     }
 
     // MARK: - pair

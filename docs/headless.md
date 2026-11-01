@@ -62,13 +62,18 @@ encrypted TLS-PSK listener.
 | `cantrip doctor` | Check the host, Remote, the backend CLI and Tailscale |
 | `cantrip cleanup [--dry-run] [--list] [--json]` | Remove unused agent sessions and worktrees now ([details](updating-and-troubleshooting.md#free-up-disk-space)) |
 | `cantrip tab list` / `read ID` / `ask ID "question"` / `reply ASK_ID` | Look into other tabs ([details](sessions-and-council.md#look-into-other-tabs)) |
+| `cantrip api [--json]` / `api key new` / `api key clear` | The OpenAI-compatible API: where it listens, its backends, calls per consumer, and its proxy key ([details](backends.md#serve-your-backends-to-other-apps-openai-compatible-api)) |
 
 Settings use the same names as `~/.cantriprc`. Common ones: `backend`,
 `copilotModel`, `copilotEffort`, `allowActions`, `remoteControlPort`,
 `remoteLANPort` (0 = any free port), `cantripHomeEnabled`, `memoryEnabled`,
 `memoryPath`, `storageUpkeepEnabled`, `storageSessionRetentionDays` (3–365,
 default 14), `limitFallbackBackends` (`off` or comma-separated backend names, tried in
-order; see [usage limit fallbacks](backends.md#fall-back-when-a-backend-hits-its-usage-limit)). Run `cantrip config` for the full list.
+order; see [usage limit fallbacks](backends.md#fall-back-when-a-backend-hits-its-usage-limit)),
+`openAIEndpointEnabled`, `openAIEndpointPort` (default 11439), `openAIEndpointModel`
+(`backend:model`, or empty for the tabs' model), `openAIEndpointEffort` and
+`openAIEndpointContextTier` (see [OpenAI-compatible API](backends.md#serve-your-backends-to-other-apps-openai-compatible-api)).
+Run `cantrip config` for the full list.
 
 ## Good to know
 

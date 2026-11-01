@@ -299,6 +299,72 @@ order to try them), or `off`. The older `limitFallbackBackend` name still sets a
 single backup. Paired clients use `GET/POST
 /api/v1/usage-fallback`; see [Remote control](remote-control.md#usage-limit-fallback).
 
+## Serve your backends to other apps (OpenAI-compatible API)
+
+**Mac only, off by default.** Apps and scripts on this Mac can use Cantrip's
+backends through an OpenAI-compatible API, so they get the same backend, backup
+chain and usage tracking as your tabs. Turn on **OpenAI-compatible API for apps
+on this Mac** in Settings (under Remote control), or run
+`cantrip config set openAIEndpointEnabled true`. It listens on
+`http://127.0.0.1:11439/v1` (`openAIEndpointPort` changes the port) and only on
+this Mac's loopback address.
+
+- `POST /v1/chat/completions` takes the usual OpenAI request (`messages`, `model`,
+  `stream`, `max_tokens`, `reasoning_effort`) and answers with a `chat.completion`
+  (or `chat.completion.chunk` events when `stream` is true). The answer arrives
+  as one chunk; the stream sends keep-alive comments while the model works.
+- `GET /v1/models` lists `auto` and each backend's models; `GET /health` shows
+  the chain and which backends are at their limit (`copilot_limited_until`
+  too, for probes written against Copilot-only servers).
+
+**Model names.** `auto`, an empty or missing `model`, and any name that isn't
+a backend (so clients written for another server keep working) use the Mac's backend first, then the backups under
+**Usage limit fallbacks**, each with the model and effort chosen there. A
+backend name (`copilot`, `claude`, `antigravity`, `local`) or `backend:model`
+(for example `copilot:gpt-5.6-sol` or `claude:sonnet`) runs only there, as
+picked, and returns 429 when that backend is at its limit. `reasoning_effort`
+overrides the effort where the model supports it. The reply's `model` names
+what answered, such as `claude:claude-opus-5-5`, and the `X-Cantrip-Backend`
+header names the backend.
+
+**Which model `auto` uses.** By default, the same model, effort and context
+window as your tabs. To run API calls on something else, pick **Model**,
+**Effort** and **Context** under the API setting, or set them from Terminal:
+`cantrip config set openAIEndpointModel copilot:gpt-5.6-sol openAIEndpointEffort xhigh openAIEndpointContextTier long_context`.
+The setting names its backend and applies only when that backend answers.
+
+**Usage limits.** When a backend reports its plan's limit (the same error fields
+as in [the fallback section](#fall-back-when-a-backend-hits-its-usage-limit)),
+Cantrip marks it limited for every tab and the API, and the call moves to the
+next backup. A backend that fails for another reason, or can't take the request,
+also hands the call to the next one. When every backend is at its limit, the
+API answers 429 with `Retry-After` set to the soonest reset.
+
+**What a call can do.** Each request is one stateless call: no session, no
+earlier conversation beyond the messages you send, no tools, no MCP servers and
+no files. Copilot runs `copilot -p` with no tools and an isolated config, and
+Claude Code runs `claude -p` with `--tools ""` and no MCP servers. Antigravity
+has no tool-free mode, so Cantrip's guardrail hook refuses every tool it asks
+for. Images (base64 `data:` URLs in user messages) go to Copilot as
+attachments and to Claude Code as image blocks. Antigravity can't read them
+without its file tools, so image requests skip it. Codex can't turn its shell
+off and Copilot Remote has no one-shot mode, so the API skips both. At most
+four calls run at once; the rest wait.
+
+**Who used it.** Name each app in its base URL, for example
+`http://127.0.0.1:11439/consumer/my-script/v1`, or send an `X-Cantrip-Consumer`
+header. The usage screen's **API endpoint** section and `cantrip api` show each
+consumer's calls today and over the last 7 days: which backends answered,
+Copilot premium requests, tokens, and calls refused at limits or failed. The
+calls also count toward each backend's totals.
+
+**Access.** Apps on this Mac need no key, and the `Authorization` header that
+OpenAI clients send is ignored. A request that came through a proxy, such as
+Tailscale Serve (it adds `Tailscale-User-Login` or `X-Forwarded-For`), must send
+the API key as `Authorization: Bearer KEY`. Without a key, proxied requests are
+refused. Make one with **Make key** in Settings (copied once to the clipboard)
+or `cantrip api key new` (printed once); it's kept in the Keychain.
+
 ## Connect a local model
 
 **Mac only.** Cantrip does not install or start the model server for you.

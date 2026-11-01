@@ -76,6 +76,7 @@ working or deliberately unsupported with a clear message.
 | Usage limit fallback | `.usageLimit(UsageLimitReport)` from a structured code, sent just before `.failure` | `BackendLimits.swift`, `ChatSession` | 825fcfb, 86abf76 |
 | Usage Limits screens | Quota used and reset times, read without spending quota | `UsageTracker.swift`, `CopilotUsage.swift`, `CopilotUsageView.swift`, `QuotaFetcher.swift` | 5c08fdc, 3a04b3f |
 | Auto routing, queue plans, Done-when checks | A tool-free, fast one-shot call | `MessageRouter.swift`, `ChatSession.routerProvider` | daa63fe |
+| OpenAI-compatible API | A stateless, tool-free one-shot call with images, structured limit errors and token or premium-request counts | `OneShotCompletion.swift`, `OpenAIEndpoint.swift` | this guide's section 4, "Routing and other helper calls" |
 | Memory consolidation (optional) | Same one-shot call, with write limits | `ConsolidationPolicy.swift`, `Consolidator.swift` | 6b2942f, 291336e |
 | Slash commands and skills | Built-ins plus discovered skills | `BackendCommands.swift`, `BackendCommandDiscovery.swift`, `BackendCommandCatalog.swift` | 2a2272c |
 | Subagent monitor | `ToolActivity.subagent` (`SubagentInfo`); `canCancel` only if it really can | `SubagentMonitorView.swift`, `RemoteHistory.swift` | c70aaa8, edd4aba, 21b114d |
@@ -102,7 +103,7 @@ Codex (0.166.0), as wired in `CodexBackend` and `CodexAppServer`:
 | Usage limits and screens | `codexErrorInfo` → `.usageLimit` (`codex/usageLimitExceeded`), reset from the last `account/rateLimits/updated`; `account/rateLimits/read` → `CodexUsage`, `copilotUsage.codex` |
 | Shared MCP servers | `MCPBackendConfig.codexArgs` `-c` overrides on the app server; tool calls come back as `mcpServer/elicitation/request` |
 | Subagents | Shown from agent items; `canCancel` is false |
-| Auto routing, queue plans, consolidation | Unavailable: no tool-free one-shot mode |
+| Auto routing, queue plans, consolidation, OpenAI-compatible API | Unavailable: no tool-free one-shot mode (the shell can't be turned off) |
 
 Context such as memory, location, calendar, files, screen and continuity is added to
 `request.prompt` by `ChatSession.composeContext` and `prepareMemory`, so a backend gets it
@@ -298,7 +299,14 @@ live run.
 
 **Routing and other helper calls**
 - Router calls must be tool-free: block tools outright, or the model may try a command, get
-  refused and return nothing.
+  refused and return nothing. Check the CLI's own record of what it offered the model: Copilot
+  ignores an empty `--available-tools=`, so routing sent 20 tools (8.5K tokens) a call until
+  `MessageRouter.copilotNoTools` named a tool that doesn't exist (9e9bee6). A CLI with no
+  tool-free mode (Antigravity) can still be used when Cantrip's hook denies every tool.
+- The OpenAI-compatible API (`OneShotCompletion`) runs the same kind of call for other apps: no
+  session, tools, MCP servers or files, images passed natively (`--attachment`, image blocks),
+  and limits read from the same structured fields as tabs. Add the backend to
+  `OneShotCompletion.run` or to `unsupportedReason`.
 - Time out after the CLI's real startup time plus the answer, measured live (`agy` takes 5 to
   11 seconds to start, so it gets 25 seconds). Measure the success rate over about 20 live
   tries (daa63fe).

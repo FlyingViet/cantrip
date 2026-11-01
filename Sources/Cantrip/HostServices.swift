@@ -153,6 +153,24 @@ final class HostServices {
         }
         .store(in: &cancellables)
 
+        // Cantrip's OpenAI-compatible API on loopback, off until turned on (`OpenAIEndpoint`).
+        let endpoint = OpenAIEndpoint.shared
+        endpoint.onStatus = { port, error in AppSettings.shared.reportOpenAIEndpoint(listening: port, error: error) }
+        Publishers.CombineLatest3(
+            AppSettings.shared.$openAIEndpointEnabled,
+            AppSettings.shared.$openAIEndpointPort,
+            AppSettings.shared.$openAIEndpointKeyRevision
+        )
+        .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+        .sink { enabled, port, _ in
+            if enabled {
+                endpoint.start(port: port, key: AppSettings.shared.openAIEndpointKey)
+            } else {
+                endpoint.stop()
+            }
+        }
+        .store(in: &cancellables)
+
         // Daily memory consolidation, off the launch path; failed runs retry with backoff.
         Consolidator.start()
         // Daily cleanup of agent session folders and worktrees nothing uses anymore.
@@ -175,6 +193,7 @@ final class HostServices {
 
     func stop() {
         remoteControlServer?.stop()
+        OpenAIEndpoint.shared.stop()
         for error in RunJournal.drainForTermination() {
             Log.write("run-journal: exit flush failed code=\((error as NSError).code)")
         }

@@ -925,6 +925,9 @@ final class RemoteControlServer {
             usage.refreshQuotas()
             var snapshot = usage.copilotUsage
             snapshot.activeBackend = AppSettings.shared.backend.rawValue
+            snapshot.endpoint = EndpointUsageLedger.shared.snapshot(
+                enabled: AppSettings.shared.openAIEndpointEnabled,
+                listening: AppSettings.shared.openAIEndpointListeningPort)
             sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
             return
         }

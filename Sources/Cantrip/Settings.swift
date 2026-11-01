@@ -88,6 +88,62 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// Cantrip's OpenAI-compatible API on loopback (`OpenAIEndpoint`). Off until turned on.
+    @Published var openAIEndpointEnabled: Bool {
+        didSet { d.set(openAIEndpointEnabled, forKey: "openAIEndpointEnabled") }
+    }
+    @Published var openAIEndpointPort: Int {
+        didSet { d.set(openAIEndpointPort, forKey: "openAIEndpointPort") }
+    }
+    /// The model requests without one run with, as `backend:model` (e.g. `copilot:gpt-5.6-sol`).
+    /// It applies when that backend answers; empty uses the backend's own default, as tabs do.
+    @Published var openAIEndpointModel: String {
+        didSet { d.set(openAIEndpointModel, forKey: "openAIEndpointModel") }
+    }
+    /// Effort and Copilot context tier that go with `openAIEndpointModel`.
+    @Published var openAIEndpointEffort: String {
+        didSet { d.set(openAIEndpointEffort, forKey: "openAIEndpointEffort") }
+    }
+    @Published var openAIEndpointContextTier: String {
+        didSet { d.set(openAIEndpointContextTier, forKey: "openAIEndpointContextTier") }
+    }
+    /// Bumped when the endpoint key changes, so the running endpoint picks it up.
+    @Published private(set) var openAIEndpointKeyRevision = 0
+    /// Where the endpoint is listening, or why it isn't.
+    @Published private(set) var openAIEndpointListeningPort: Int?
+    @Published private(set) var openAIEndpointError: String?
+
+    func reportOpenAIEndpoint(listening port: Int?, error: String?) {
+        openAIEndpointListeningPort = port
+        openAIEndpointError = error
+    }
+
+    var openAIEndpointStatusText: String {
+        if let error = openAIEndpointError { return error }
+        guard openAIEndpointEnabled else { return "Off." }
+        guard let port = openAIEndpointListeningPort else { return "Starting…" }
+        let chain = ([backend.rawValue] + limitFallbackBackends.filter { $0 != backend.rawValue }).joined(separator: ", then ")
+        return "Listening at http://127.0.0.1:\(port)/v1 · \(chain)"
+    }
+
+    /// The key requests that come through a proxy must send; nil when none is set.
+    var openAIEndpointKey: String? {
+        (try? OpenAIEndpointCredentials.load()).flatMap { $0?.isEmpty == false ? $0 : nil }
+    }
+
+    /// Makes a new endpoint key and returns it (shown once), or nil if the Keychain refused it.
+    func generateOpenAIEndpointKey() -> String? {
+        guard let key = RemoteControlCredentials.generate(),
+              OpenAIEndpointCredentials.store(key) == errSecSuccess else { return nil }
+        openAIEndpointKeyRevision += 1
+        return key
+    }
+
+    func clearOpenAIEndpointKey() {
+        OpenAIEndpointCredentials.delete()
+        openAIEndpointKeyRevision += 1
+    }
+
     var remoteControlToken: String {
         do { return try RemoteControlCredentials.load() ?? "" }
         catch {
@@ -681,6 +737,11 @@ final class AppSettings: ObservableObject {
             "storageUpkeepEnabled": storageUpkeepEnabled,
             "storageSessionRetentionDays": storageSessionRetentionDays,
             "storageSimulatorCleanup": storageSimulatorCleanup,
+            "openAIEndpointEnabled": openAIEndpointEnabled,
+            "openAIEndpointPort": openAIEndpointPort,
+            "openAIEndpointModel": openAIEndpointModel,
+            "openAIEndpointEffort": openAIEndpointEffort,
+            "openAIEndpointContextTier": openAIEndpointContextTier,
         ]
     }
 
@@ -793,6 +854,18 @@ final class AppSettings: ObservableObject {
             self.storageSessionRetentionDays = $0
         }
         bool("storageSimulatorCleanup") { self.storageSimulatorCleanup = $0 }
+        bool("openAIEndpointEnabled") { self.openAIEndpointEnabled = $0 }
+        int("openAIEndpointPort", 1...65535) { self.openAIEndpointPort = $0 }
+        // "copilot:gpt-5.6-sol", a bare backend name, or empty for the backend's default.
+        if let raw = dict["openAIEndpointModel"] as? String {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || HostControl.backend(named: String(trimmed.split(separator: ":", maxSplits: 1)[0])) != nil {
+                openAIEndpointModel = trimmed
+                applied.append("openAIEndpointModel")
+            }
+        }
+        str("openAIEndpointEffort") { self.openAIEndpointEffort = $0.trimmingCharacters(in: .whitespaces) }
+        str("openAIEndpointContextTier") { self.openAIEndpointContextTier = $0.trimmingCharacters(in: .whitespaces) }
         int("remoteControlPort", 1...65535) { self.remoteControlPort = $0 }
         int("remoteLANPort", 0...65535) { self.remoteLANPort = $0 }
         if let opacity = dict["panelOpacity"] as? NSNumber, CFGetTypeID(opacity) != CFBooleanGetTypeID(),
@@ -875,6 +948,12 @@ final class AppSettings: ObservableObject {
         storageUpkeepEnabled = d.object(forKey: "storageUpkeepEnabled") == nil ? true : d.bool(forKey: "storageUpkeepEnabled")
         storageSessionRetentionDays = StorageUpkeep.Configuration.retentionDays(d)
         storageSimulatorCleanup = d.bool(forKey: "storageSimulatorCleanup")
+        openAIEndpointEnabled = d.bool(forKey: "openAIEndpointEnabled")
+        let storedEndpointPort = d.integer(forKey: "openAIEndpointPort")
+        openAIEndpointPort = (1...65535).contains(storedEndpointPort) ? storedEndpointPort : OpenAIEndpoint.defaultPort
+        openAIEndpointModel = d.string(forKey: "openAIEndpointModel") ?? ""
+        openAIEndpointEffort = d.string(forKey: "openAIEndpointEffort") ?? ""
+        openAIEndpointContextTier = d.string(forKey: "openAIEndpointContextTier") ?? ""
         let storedParallelRuns = d.integer(forKey: "cantripHomeParallelRuns")
         cantripHomeParallelRuns = storedParallelRuns == 0
             ? CantripHomeBackgroundRunner.defaultParallelRuns
@@ -993,6 +1072,46 @@ enum RemoteTokenFile {
             try? FileManager.default.removeItem(at: temporary)
             throw CocoaError(.fileWriteUnknown)
         }
+    }
+}
+
+/// The OpenAI-compatible endpoint's key, in the login Keychain.
+private enum OpenAIEndpointCredentials {
+    private static let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "com.brian.agentspotlight.openai-endpoint",
+        kSecAttrAccount as String: "api-key",
+    ]
+
+    static func load() throws -> String? {
+        var request = query
+        request[kSecReturnData as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        defer { context.invalidate() }
+        request[kSecUseAuthenticationContext as String] = context
+        var result: AnyObject?
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: nil)
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func store(_ key: String) -> OSStatus {
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(key.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
+        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        guard status == errSecItemNotFound else { return status }
+        return SecItemAdd(query.merging(attributes) { _, new in new } as CFDictionary, nil)
+    }
+
+    static func delete() {
+        SecItemDelete(query as CFDictionary)
     }
 }
 

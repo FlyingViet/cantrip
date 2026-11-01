@@ -2747,6 +2747,9 @@ struct LauncherView: View {
             if usage.copilotUsage.antigravity != nil { AntigravityUsageView(usage: usage) }
             if usage.copilotUsage.codex != nil { CodexUsageView(usage: usage) }
             CopilotUsageView(usage: usage)
+            if settings.openAIEndpointEnabled || !EndpointUsageLedger.shared.consumers().isEmpty {
+                EndpointUsageView(ledger: .shared, settings: settings)
+            }
             if claudeMonthSpend > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "dollarsign.circle")
@@ -4308,6 +4311,7 @@ struct SettingsView: View {
                     .font(.caption2)
                     .foregroundStyle(.red)
             }
+            OpenAIEndpointSettingsView(settings: settings)
             Toggle("Show web link preview cards under replies", isOn: $settings.linkPreviewsEnabled)
                 .font(.caption)
                 .toggleStyle(.checkbox)
