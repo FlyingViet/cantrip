@@ -55,7 +55,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .voice: return "Speech recognition and reply voice"
         case .notifications: return "Alerts, widget and Live Activity"
         case .appearance: return "Mascot and reply steps"
-        case .about: return "Version, updates and Mac permissions"
+        case .about: return "Version, updates, Mac permissions and skills"
         }
     }
 

@@ -161,6 +161,8 @@ enum CantripSkills {
 /// rules and check them for drift. Skills themselves are edited on the Mac.
 struct CantripSkillsView: View {
     @ObservedObject var remote: CantripRemoteModel
+    /// A page inside Settings (About & Updates) rather than its own sheet.
+    var embedded = false
     @Environment(\.dismiss) private var dismiss
     @State private var snapshot: CantripSkillsSnapshot?
     @State private var error: String?
@@ -170,7 +172,7 @@ struct CantripSkillsView: View {
     @State private var now = Date()
 
     var body: some View {
-        NavigationStack {
+        CantripSheetStack(embedded: embedded) {
             List {
                 Section {
                     Text(LocalizedStringKey(CantripSkills.explainer))
@@ -191,7 +193,9 @@ struct CantripSkillsView: View {
             .navigationTitle(CantripSkills.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                if !embedded {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                }
             }
             .task(id: [snapshot?.checking == true, unsupported]) { await poll() }
             .refreshable { await load() }

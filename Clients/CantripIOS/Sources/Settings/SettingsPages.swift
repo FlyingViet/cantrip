@@ -319,10 +319,16 @@ struct SettingsAboutPage: View {
                     Label("Mac permissions & View Mac", systemImage: "display")
                 }
                 .accessibilityIdentifier("settings.macAccess")
+                NavigationLink {
+                    CantripSkillsView(remote: remote, embedded: true)
+                } label: {
+                    Label(CantripSkills.title, systemImage: "books.vertical")
+                }
+                .accessibilityIdentifier("settings.skills")
             } header: {
                 Text("Cantrip on \(remote.macName)")
             } footer: {
-                Text("Update pulls Cantrip's latest version on the Mac and reopens it when no tab is working. Permissions shows what the Mac lets Cantrip do, and lets you view its screen.")
+                Text("Update pulls Cantrip's latest version on the Mac and reopens it when no tab is working. Permissions shows what the Mac lets Cantrip do, and lets you view its screen. Skills & Rules turns the Mac's shared skills on or off for every backend.")
             }
             .disabled(!remote.isConfigured)
             if env.hermesLanesShown {
