@@ -181,6 +181,7 @@ struct SessionTabTests {
         try await testCopilotRuntimeRecovery()
         try testCopilotRuntimeActivity()
         try await testRunContinuity()
+        try await testModelTiers()
         try await testUsageLimitFallback()
         try await testOpenAIEndpoint()
         try await testStopPausesTheQueue()

@@ -683,9 +683,44 @@ final class ChatSession: ObservableObject {
             : tabMetadata.modelSettings(for: kind)
     }
 
+    /// The tier this tab (or its Home task) asks for on the Mac's backend; nil for a model name.
+    /// Backups left on their default model run the same tier.
+    var runTier: ModelTier? {
+        isLocalPrivate ? nil : ownModelSelection(for: modelSettingsBackend).flatMap { ModelTier(model: $0.model) }
+    }
+
+    /// The model `kind` runs for this tab's tier, when the tab asks for one there.
+    private func ownTierResolution(for kind: BackendKind) -> ModelTierResolution? {
+        guard !isLocalPrivate, AppSettings.tierBackends.contains(kind), let own = ownModelSelection(for: kind),
+              let tier = ModelTier(model: own.model) else { return nil }
+        return settings.resolveTier(tier, on: kind, effort: own.effort)
+    }
+
+    /// What this tab runs `kind` with on its own: a tier as that backend's model for it now.
+    private func ownRunSelection(for kind: BackendKind) -> SessionModelSelection? {
+        guard let resolution = ownTierResolution(for: kind) else { return ownModelSelection(for: kind) }
+        // None of the tier's models offered: the Mac's own model for the backend.
+        return resolution.model.isEmpty ? nil : resolution.selection
+    }
+
+    /// The tier the current run is on for `kind`: its backup's, or the tab's own.
+    func runningTier(on kind: BackendKind) -> ModelTier? {
+        if let fallbackModel, fallbackModel.backend == kind { return fallbackModel.tier }
+        return ownTierResolution(for: kind)?.tier
+    }
+
     /// The model this tab runs on `kind` on its own ("" when only the CLI knows its default).
     private func ownModel(for kind: BackendKind) -> String {
-        settings.effectiveModel(kind, chosen: ownModelSelection(for: kind)?.model ?? "")
+        settings.effectiveModel(kind, chosen: ownRunSelection(for: kind)?.model ?? "")
+    }
+
+    /// The model a backup entry runs for this tab, to check its limit: a tier as its model now, and
+    /// an entry on its default model as the run's tier when it has one.
+    private func chainModel(_ kind: BackendKind, _ model: String) -> String {
+        if AppSettings.tierBackends.contains(kind), let tier = ModelTier(model: model) ?? (model.isEmpty ? runTier : nil) {
+            return settings.effectiveModel(kind, chosen: settings.resolveTier(tier, on: kind).model)
+        }
+        return settings.effectiveModel(kind, chosen: model)
     }
 
     /// The model the current run is on: its backup's, or the tab's own.
@@ -699,6 +734,10 @@ final class ChatSession: ObservableObject {
     /// What a backup entry runs with. A backup on the tab's own backend with the default model runs
     /// the Mac's model for it, not the tab's own pick (which may be the one at its limit).
     private func backupRun(_ entry: FallbackEntry) -> FallbackRun {
+        // A backup left on its default model keeps the run's tier, so a deep run stays deep.
+        if entry.model.isEmpty, let tier = runTier, let kind = entry.kind, AppSettings.tierBackends.contains(kind) {
+            return settings.fallbackRun(for: FallbackEntry(backend: entry.backend, model: tier.rawValue, effort: entry.effort))
+        }
         let run = settings.fallbackRun(for: entry)
         guard run.selection == nil, let kind = entry.kind, kind == (isLocalPrivate ? .localModel : settings.backend),
               AppSettings.fallbackModelBackends.contains(kind) else { return run }
@@ -713,11 +752,15 @@ final class ChatSession: ObservableObject {
             : "\(kind.rawValue) · \(settings.fallbackModelLabel(kind, model))"
     }
 
+    /// The model and effort the run on `kind` uses: its backup's, or the tab's own (a tier as
+    /// that backend's model for it now); nil follows the Mac's settings for the backend.
+    func runSelection(for kind: BackendKind) -> SessionModelSelection? {
+        if let fallbackModel, fallbackModel.backend == kind, let pinned = fallbackModel.selection { return pinned }
+        return ownRunSelection(for: kind)
+    }
+
     private func applyModelSelection() {
-        func selection(for kind: BackendKind) -> SessionModelSelection? {
-            if let fallbackModel, fallbackModel.backend == kind, let pinned = fallbackModel.selection { return pinned }
-            return ownModelSelection(for: kind)
-        }
+        func selection(for kind: BackendKind) -> SessionModelSelection? { runSelection(for: kind) }
         if let backend = copilot as? CopilotBackend {
             let copilotSelection = selection(for: .copilot)
             backend.modelOverride = copilotSelection?.model
@@ -2211,19 +2254,25 @@ final class ChatSession: ObservableObject {
         let ownModel = ownModel(for: backendKind)
         if !isLocalPrivate, !isResume, let until = BackendLimitTracker.shared.limitedUntil(backendKind, model: ownModel),
            let fallback = BackendFallback.next(after: backendKind, model: ownModel, chain: settings.limitFallbackEntries,
-                                               homeRun: isCantripHomeRun, model: settings.effectiveModel),
+                                               homeRun: isCantripHomeRun, model: chainModel),
            let fallbackKind = fallback.kind {
             limitNotice = "\(limitedLabel(backendKind, model: ownModel)) is at its usage limit until \(BackendFallback.untilLabel(until))."
                 + " Using \(backupRun(fallback).label)."
-            if fallbackKind == .antigravity, requestedBackend != .antigravity {
+            // A tier picks the backup's model itself; otherwise Antigravity sizes it from the model it stands in for.
+            if fallbackKind == .antigravity, requestedBackend != .antigravity, backupRun(fallback).tier == nil {
                 antigravity.fallbackSourceModel = sourceModelName(for: requestedBackend)
             }
             target = fallback
             backendKind = fallbackKind
         }
-        // On a backup, use the model and effort chosen for it in the chain.
+        // A tier on its own backend skipped a model that isn't offered or is at its own limit.
+        if limitNotice == nil, target == nil, let resolution = ownTierResolution(for: backendKind), let note = resolution.note {
+            limitNotice = "\(resolution.tier.label) on \(backendKind.rawValue): \(note)."
+        }
+        // On a backup, use the model and effort chosen for it in the chain. A tier is resolved
+        // again for every run, since a model's limit may have lifted or started.
         let backup = isLocalPrivate ? nil : target.map(backupRun)
-        if backup != fallbackModel {
+        if backup != fallbackModel || backup?.tier != nil || runTier != nil {
             fallbackModel = backup
             applyModelSelection()
         }
@@ -3305,12 +3354,19 @@ final class ChatSession: ObservableObject {
         let resumable = currentRunPrompt != nil && lastRunHadProgress
         let fallback = usageLimitFallback(after: errorText)
         recordInterruption(errorText)
+        let limitedKind = runningBackendKind ?? currentRunBackend
         appendRunMessage(ChatMessage(role: .error, text: fallback.map {
-            errorText + "\n\nContinuing this task with \(backupRun($0).label) (Settings ▸ Usage limit fallbacks)."
+            let run = backupRun($0)
+            // The next model in the run's tier on the same backend, before any backup.
+            if $0.kind == limitedKind, let tier = run.tier {
+                return errorText + "\n\nContinuing this task on the next \(tier.label) model: \(run.label)."
+            }
+            return errorText + "\n\nContinuing this task with \(run.label) (Settings ▸ Usage limit fallbacks)."
         } ?? errorText))
         if let fallback, let fallbackKind = fallback.kind {
             Log.write("resume: \(runningBackendKind?.rawValue ?? "backend") hit its usage limit — continuing on \(backupRun(fallback).label)")
-            if fallbackKind == .antigravity, let source = runningBackendKind ?? currentRunBackend, source != .antigravity {
+            if fallbackKind == .antigravity, let source = runningBackendKind ?? currentRunBackend, source != .antigravity,
+               backupRun(fallback).tier == nil {
                 antigravity.fallbackSourceModel = sourceModelName(for: source)
             }
             currentRunBackend = fallbackKind
@@ -3432,8 +3488,17 @@ final class ChatSession: ObservableObject {
         if report == nil { Log.write("usage-limit: \(limited.rawValue) matched by wording only: \(errorText.prefix(120))") }
         BackendLimitTracker.shared.markLimited(limited, model: model, message: errorText, report: report)
         guard currentRunPrompt != nil, currentRunMode == .single, !councilMode, journalError == nil else { return nil }
+        // A run on a tier tries the tier's next model on the same backend first. A limit on the
+        // whole backend (Copilot's shared quota) leaves no model there, so it goes to the chain.
+        if let tier = runningTier(on: limited) {
+            let next = settings.resolveTier(tier, on: limited)
+            if !next.model.isEmpty, next.model != model,
+               BackendLimitTracker.shared.limitedUntil(limited, model: next.model) == nil {
+                return FallbackEntry(backend: limited.rawValue, model: tier.rawValue)
+            }
+        }
         return BackendFallback.next(after: limited, model: model, chain: settings.limitFallbackEntries,
-                                    homeRun: isCantripHomeRun, model: settings.effectiveModel)
+                                    homeRun: isCantripHomeRun, model: chainModel)
     }
 
     /// Error text a dropped or flaky connection produces (Node, URLSession and DNS failures).

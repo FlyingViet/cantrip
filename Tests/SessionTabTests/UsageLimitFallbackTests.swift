@@ -432,11 +432,17 @@ extension SessionTabTests {
         let claudeChoice = (offered.1["choices"] as? [[String: Any]] ?? []).first { $0["id"] as? String == "Claude Code" }
         let codexChoice = (offered.1["choices"] as? [[String: Any]] ?? []).first { $0["id"] as? String == "Codex" }
         let remoteChoice = (offered.1["choices"] as? [[String: Any]] ?? []).first { $0["id"] as? String == "Copilot Remote" }
-        let claudeModels = claudeChoice?["models"] as? [[String: Any]]
-        let codexModels = codexChoice?["models"] as? [[String: Any]]
-        precondition(claudeModels?.first?["id"] as? String == "claude-opus-5-5"
-                     && claudeModels?.first?["efforts"] as? [String] == ["low", "high"]
-                     && codexModels?.first?["id"] as? String == "gpt-6-luna" && codexModels?.first?["efforts"] as? [String] == ["low", "max"]
+        // The tiers come first, then the backend's own models.
+        let claudeAll = claudeChoice?["models"] as? [[String: Any]] ?? []
+        let codexAll = codexChoice?["models"] as? [[String: Any]] ?? []
+        precondition(claudeAll.prefix(3).compactMap { $0["id"] as? String } == ["fast", "standard", "deep"]
+                     && codexAll.prefix(3).compactMap { $0["id"] as? String } == ["fast", "standard", "deep"]
+                     && codexAll[2]["label"] as? String == "Deep (GPT-6-Luna)",
+                     "Each backend's tiers lead its models, labeled with what they run: \(codexAll)")
+        let claudeModels = Array(claudeAll.dropFirst(3)), codexModels = Array(codexAll.dropFirst(3))
+        precondition(claudeModels.first?["id"] as? String == "claude-opus-5-5"
+                     && claudeModels.first?["efforts"] as? [String] == ["low", "high"]
+                     && codexModels.first?["id"] as? String == "gpt-6-luna" && codexModels.first?["efforts"] as? [String] == ["low", "max"]
                      && remoteChoice != nil && remoteChoice?["models"] == nil,
                      "Choices list each backend's real models and efforts, none for a backend without a picker: \(offered.1)")
         var rev = offered.1["revision"] as? String ?? ""
@@ -453,8 +459,22 @@ extension SessionTabTests {
                      && savedEntries?.first?["model"] as? String == "claude-opus-5-5"
                      && savedEntries?.first?["effort"] as? String == "high" && savedEntries?.last?["model"] as? String == "",
                      "POST entries saves the chain with each backup's model and effort: \(entries)")
-        // A client that only edits the order keeps the chosen models.
+        // A backup can be pinned to a tier, saved by its name; its effort is checked against the tier's model.
         rev = entries.1["revision"] as? String ?? ""
+        let tierEffort = try await call("POST", ["revision": rev, "entries": [["backend": "Codex", "model": "deep", "effort": "high"]]])
+        precondition(tierEffort.0 == 400, "gpt-6-luna takes low or max here")
+        let tiered = try await call("POST", ["revision": rev, "entries": [
+            ["backend": "Claude Code", "model": "claude-opus-5-5", "effort": "high"], ["backend": "Codex", "model": "Deep", "effort": "max"]]])
+        let tieredEntry = (tiered.1["entries"] as? [[String: Any]])?.last
+        precondition(tiered.0 == 200 && tieredEntry?["model"] as? String == "deep"
+                     && (tieredEntry?["label"] as? String)?.hasPrefix("Codex · Deep · GPT-6-Luna · max (gpt-5.6-terra isn't offered") == true,
+                     "\(tiered)")
+        precondition(settings.fallbackRun(for: settings.limitFallbackEntries[1]).tier == .deep)
+        let untiered = try await call("POST", ["revision": tiered.1["revision"] as? String ?? "", "entries": [
+            ["backend": "Claude Code", "model": "claude-opus-5-5", "effort": "high"], ["backend": "Codex"]]])
+        precondition(untiered.0 == 200)
+        // A client that only edits the order keeps the chosen models.
+        rev = untiered.1["revision"] as? String ?? ""
         let reordered = try await call("POST", ["revision": rev, "backends": ["Codex", "Claude Code"]])
         let kept = (reordered.1["entries"] as? [[String: Any]])?.last
         precondition(reordered.0 == 200 && kept?["backend"] as? String == "Claude Code" && kept?["model"] as? String == "claude-opus-5-5",

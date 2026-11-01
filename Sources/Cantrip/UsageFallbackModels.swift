@@ -3,6 +3,8 @@ import Foundation
 /// One backup in the usage-limit chain: a backend and the model and effort it runs ("" = the
 /// backend's default). The chain is unique by backend and model, so a backend whose models have
 /// their own limits (Antigravity, Claude's model tiers) can be listed again with another model.
+/// `model` can name a tier (`ModelTier`): the backup then runs that tier's model on its backend.
+/// A backup left on its default model follows the run's tier when the run has one.
 struct FallbackEntry: Codable, Hashable {
     var backend: String
     var model: String = ""
@@ -24,6 +26,8 @@ struct FallbackRun: Equatable {
     let selection: SessionModelSelection?
     /// For the run's note, e.g. "Claude Code · claude-opus-5.5 · high".
     let label: String
+    /// The tier it runs, when the backup is pinned to one or follows the run's.
+    var tier: ModelTier? = nil
 }
 
 extension AppSettings {
@@ -55,8 +59,19 @@ extension AppSettings {
     }
 
     /// The backup's model and effort, or its default when the chosen model is no longer offered.
-    func fallbackRun(for entry: FallbackEntry) -> FallbackRun {
+    /// A tier runs its first model the backend offers that isn't at its own limit.
+    func fallbackRun(for entry: FallbackEntry, tracker: BackendLimitTracker = .shared) -> FallbackRun {
         let kind = entry.kind ?? .copilot
+        if let tier = ModelTier(model: entry.model), Self.tierBackends.contains(kind) {
+            let resolved = resolveTier(tier, on: kind, effort: entry.effort, tracker: tracker)
+            // None of the tier's models offered: the Mac's own model for the backend.
+            let defaults = tabModelDefaults(for: kind)
+            let selection = resolved.model.isEmpty
+                ? SessionModelSelection(model: defaults.model, effort: defaults.effort, contextTier: "") : resolved.selection
+            return FallbackRun(backend: kind, selection: selection,
+                               label: "\(kind.rawValue) · \(tierLabel(resolved))" + (resolved.skipped.map { " (\($0))" } ?? ""),
+                               tier: tier)
+        }
         guard Self.fallbackModelBackends.contains(kind), let chosen = entry.selection else {
             return FallbackRun(backend: kind, selection: nil, label: backendLabel(kind))
         }

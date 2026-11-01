@@ -4,7 +4,9 @@ import CryptoKit
 /// `GET/POST /api/v1/usage-fallback`: the Mac-wide backups a run moves through, in order, when
 /// the backend and model it's on report a usage limit, for paired clients. Each entry is a backend
 /// with the model and effort it runs; a backend can be listed again with another model (the Mac's
-/// own backend too, with a model other than its own).
+/// own backend too, with a model other than its own). A model can be a tier ("deep"), listed
+/// first in each choice's models: the backup then runs its backend's model for the tier, and an
+/// entry on its default model follows a tier run's tier.
 ///
 /// POST `{"entries","revision"}` replaces the chain. `{"backends","revision"}` (clients that know
 /// only backends) replaces the order and keeps each entry's model: a backend's entries are reused
@@ -104,7 +106,11 @@ enum UsageFallbackRemote {
             var choice = UsageFallbackSnapshot.Choice(id: kind.rawValue, label: settings.backendLabel(kind))
             guard AppSettings.fallbackModelBackends.contains(kind) else { return choice }
             let catalog = settings.tabModelCatalog(for: kind)
-            choice.models = catalog.models.map {
+            // The tiers first ("deep" runs the backend's deep model), so older clients offer them too.
+            let tiers = settings.tierOptions(for: kind).map { tier -> UsageFallbackSnapshot.ModelChoice in
+                .init(id: tier.id, label: "\(tier.label) (\(tier.modelLabel))", efforts: catalog.info(tier.model)?.reasoningEfforts)
+            }
+            choice.models = tiers + catalog.models.map {
                 .init(id: $0.id, label: settings.fallbackModelLabel(kind, $0.id), efforts: $0.reasoningEfforts)
             }
             let defaults = settings.tabModelDefaults(for: kind)
@@ -120,7 +126,8 @@ enum UsageFallbackRemote {
             var item = UsageFallbackSnapshot.Entry(backend: entry.backend, model: entry.model, effort: entry.effort,
                                                    label: settings.fallbackRun(for: entry).label)
             if let kind = entry.kind,
-               let until = tracker.limitedUntil(kind, model: settings.effectiveModel(kind, chosen: entry.model), now: now) {
+               let until = tracker.limitedUntil(kind, model: settings.effectiveModel(kind, chosen: settings.resolvedModel(kind, chosen: entry.model, tracker: tracker)),
+                                                now: now) {
                 item.limitedUntil = ISODate.string(from: until)
                 item.limitedUntilLabel = BackendFallback.untilLabel(until, now: now)
             }
@@ -215,16 +222,20 @@ enum UsageFallbackRemote {
                   item["model"] == nil || item["model"] is String, item["effort"] == nil || item["effort"] is String else {
                 throw UsageFallbackError(status: 400, message: "Each entry needs a listed backend, and model and effort as text.")
             }
-            let model = (item["model"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            var model = (item["model"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             let effort = (item["effort"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             guard AppSettings.fallbackModelBackends.contains(kind) || (model.isEmpty && effort.isEmpty) else {
                 throw UsageFallbackError(status: 400, message: "\(backend) runs its default model; it has no model or effort to choose.")
             }
             let catalog = settings.tabModelCatalog(for: kind)
-            if !model.isEmpty, !catalog.models.contains(where: { $0.id == model }) {
-                throw UsageFallbackError(status: 400, message: "\(backend) doesn't offer \(model). Choose one of its listed models.")
+            let tier = ModelTier(model: model)
+            if let tier { model = tier.rawValue }
+            if !model.isEmpty, tier == nil, !catalog.models.contains(where: { $0.id == model }) {
+                throw UsageFallbackError(status: 400, message: "\(backend) doesn't offer \(model). Choose one of its listed models or a tier.")
             }
-            let efforts = catalog.info(model.isEmpty ? settings.tabModelDefaults(for: kind).model : model)?.reasoningEfforts
+            // A tier's effort is checked against the model it runs now.
+            let runs = model.isEmpty ? settings.tabModelDefaults(for: kind).model : settings.resolvedModel(kind, chosen: model)
+            let efforts = catalog.info(runs)?.reasoningEfforts
             if !effort.isEmpty, let efforts, !efforts.contains(effort) {
                 throw UsageFallbackError(status: 400, message: "That model doesn't take \(effort) effort.")
             }

@@ -115,7 +115,7 @@ extension SessionTabTests {
         precondition(unauthorized.0 == 401)
         let loaded = try await request()
         precondition(loaded.0 == 200 && loaded.1["usesDefaults"] as? Bool == true)
-        precondition((loaded.1["models"] as? [[String: Any]])?.count == 2)
+        precondition((loaded.1["models"] as? [[String: Any]])?.count == 5, "the three tiers, then the two models")
         let body: [String: Any] = ["revision": loaded.1["revision"]!, "usesDefaults": false,
                                    "model": "model-a", "effort": "high", "contextTier": "long_context"]
         for invalid in [
@@ -132,6 +132,33 @@ extension SessionTabTests {
         precondition(stale.0 == 409)
         let wrongMethod = try await request("DELETE")
         precondition(wrongMethod.0 == 405)
+
+        // Fast, Standard and Deep lead every client's model list; a tier saves by its name and runs
+        // the backend's model for it, and an edit to the tier map reaches the tab's next run.
+        let tierIDs = ((applied.1["models"] as? [[String: Any]]) ?? []).prefix(3).compactMap { $0["id"] as? String }
+        precondition(tierIDs == ["fast", "standard", "deep"], "\(tierIDs)")
+        let savedTiers = settings.modelTiers
+        defer { settings.modelTiers = savedTiers }
+        settings.modelTiers.set([ModelTierChoice(model: "model-a", effort: "high")], for: .deep, on: .copilot)
+        let tierBody: [String: Any] = ["usesDefaults": false, "model": "Deep", "effort": "", "contextTier": ""]
+        let tiered = try await request("POST", body: tierBody.merging(["revision": chat.modelSettingsRevision]) { $1 })
+        precondition(tiered.0 == 200 && chat.modelSelection == SessionModelSelection(model: "deep", effort: "", contextTier: "")
+                     && chat.runTier == .deep, "\(tiered)")
+        precondition(backend.modelOverride == "model-a" && backend.effortOverride == "high" && backend.contextTierOverride == "")
+        let deepOption = (tiered.1["tiers"] as? [[String: Any]])?.last
+        precondition(deepOption?["id"] as? String == "deep" && deepOption?["model"] as? String == "model-a"
+                     && deepOption?["effort"] as? String == "high")
+        precondition((tiered.1["models"] as? [[String: Any]])?[2]["reasoningEfforts"] as? [String] == ["low", "high"],
+                     "A tier offers its model's efforts")
+        settings.modelTiers.set([ModelTierChoice(model: "model-b")], for: .deep, on: .copilot)
+        precondition(chat.modelSettingsRevision == tiered.1["revision"] as? String, "A tier edit doesn't make an open form stale")
+        try chat.updateModelSettings(chat.modelSelection, revision: chat.modelSettingsRevision)
+        precondition(backend.modelOverride == "model-b" && backend.effortOverride == "")
+        let tierWindow = try await request("POST", body: tierBody.merging(["revision": chat.modelSettingsRevision,
+                                                                           "contextTier": "long_context"]) { $1 })
+        precondition(tierWindow.0 == 400)
+        try chat.updateModelSettings(selected, revision: chat.modelSettingsRevision)
+        precondition(backend.modelOverride == "model-a" && chat.runTier == nil)
         chat.isStreaming = true
         let busy = try await request("POST", body: ["revision": chat.modelSettingsRevision, "usesDefaults": true])
         precondition(busy.0 == 409 && chat.modelSelection == selected)
