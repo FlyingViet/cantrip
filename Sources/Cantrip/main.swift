@@ -14,6 +14,9 @@ if let watcherFlag = CommandLine.arguments.firstIndex(of: "--cantrip-crash-watch
     exit(EXIT_SUCCESS)
 }
 
+// Agents' builds (and `cantrip cleanup`) find the build disk in their environment.
+BuildCaches.exportBuildRoot(UserDefaults.standard.string(forKey: "buildRoot"))
+
 // `Cantrip daemon|pair|config|status|doctor …`: a terminal client of the running host.
 let arguments = Array(CommandLine.arguments.dropFirst())
 if let command = arguments.first, CantripCLI.commands.contains(command) {

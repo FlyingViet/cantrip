@@ -128,11 +128,14 @@ final class ChildTabCoordinator {
         let branch = ChildTabGit.branchName(title: title, id: childID)
         forking[itemID] = parentID
         defer { forking[itemID] = nil }
-        let created = try await Task.detached(priority: .userInitiated) { () throws -> (root: String, subpath: String, base: (baseCommit: String, baseBranch: String?))? in
+        let created = try await Task.detached(priority: .userInitiated) { () throws -> (root: String, subpath: String, base: (baseCommit: String, baseBranch: String?), seeded: [String])? in
             guard let repo = Self.repository(workdir: parentWorkdir, planRepo: planRepo, activity: activity,
                                              worktreesRoot: worktreesRoot) else { return nil }
             let base = try ChildTabGit.createWorktree(repo: repo.root, branch: branch, path: path)
-            return (repo.root, repo.subpath, base)
+            // Copy-on-write clones of the parent's installed packages, so the child doesn't fetch them again.
+            let sources = [repo.root] + BuildCaches.checkouts(of: repo.root).filter { $0 != repo.root }
+            let seeded = BuildCaches.seed(worktree: path, from: sources).seeded
+            return (repo.root, repo.subpath, base, seeded)
         }.value
         // The tab may have started the message, or closed, while git worked.
         guard manager.sessions.contains(where: { $0 === parent }), parent.queued.contains(where: { $0.id == itemID }) else {
@@ -150,6 +153,7 @@ final class ChildTabCoordinator {
             record.branch = branch
             record.baseCommit = created.base.baseCommit
             record.baseBranch = created.base.baseBranch
+            if !created.seeded.isEmpty { record.seededFolders = created.seeded }
             workdir = created.subpath.isEmpty ? path : (path as NSString).appendingPathComponent(created.subpath)
         }
         let following = followers.compactMap { id in parent.queued.first { $0.id == id } }
@@ -169,7 +173,8 @@ final class ChildTabCoordinator {
         observeChild(child, record: record)
         updateCard(record, in: parent)
         Log.write("child-tabs: \(automatically ? "auto-forked" : "forked") \"\(title)\" from \(parent.id.uuidString.prefix(8))"
-                  + (record.branch.map { " on \($0)" } ?? " (no repository)"))
+                  + (record.branch.map { " on \($0)" } ?? " (no repository)")
+                  + (record.seededFolders.map { "; cloned \($0.joined(separator: ", "))" } ?? ""))
         child.startChildTask(item.text, preamble: brief(for: record, parent: parent))
         for follower in following {
             parent.removeQueued(id: follower.id)
@@ -195,6 +200,9 @@ final class ChildTabCoordinator {
         if let repo = record.repoRoot, let worktree = record.worktree, let branch = record.branch {
             let base = record.baseBranch ?? "the parent's branch"
             lines.append("Repository: \(repo). Your own checkout is \(worktree), on branch \(branch) (from \(base) at \(record.baseCommit?.prefix(9) ?? "HEAD")). Edit, build and test only there. The parent tab is working in \(repo), so don't change files there. Commit your work on \(branch); Cantrip merges it into \(base) when you finish. Uncommitted changes in the parent's checkout aren't in yours.")
+            if let seeded = record.seededFolders, !seeded.isEmpty {
+                lines.append("Already installed in your checkout (copy-on-write clones of the parent's or another checkout's): \(seeded.joined(separator: ", ")). Skip a fresh install unless you change a lockfile.")
+            }
         } else {
             lines.append("There's no separate checkout for this tab, so avoid editing files the parent tab may be changing.")
         }

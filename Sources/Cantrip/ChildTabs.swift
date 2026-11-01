@@ -62,6 +62,8 @@ struct ChildTab: Codable, Equatable, Identifiable {
     var autoStarted: Bool?
     /// Queued requests that depend on this one, moved from the parent's queue to run after it here.
     var followUps: [String]?
+    /// Dependency folders cloned from the parent's checkout into the worktree (optional: older records lack it).
+    var seededFolders: [String]?
     let createdAt: Date
     var updatedAt: Date
     var finishedAt: Date?

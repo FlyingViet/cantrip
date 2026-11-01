@@ -578,6 +578,14 @@ final class AppSettings: ObservableObject {
     @Published var memoryPath: String {
         didSet { d.set(memoryPath, forKey: "memoryPath") }
     }
+    /// A build disk (a NAS, say) exported to every agent as `CANTRIP_BUILD_ROOT`: build scripts
+    /// put large output there and build locally whenever it isn't mounted. Empty: build locally.
+    @Published var buildRoot: String {
+        didSet {
+            d.set(buildRoot, forKey: "buildRoot")
+            BuildCaches.exportBuildRoot(buildRoot, replacing: true)
+        }
+    }
 
     /// Default model from ~/.copilot/settings.json, if set.
     var copilotFileDefaultModel: String? {
@@ -721,7 +729,7 @@ final class AppSettings: ObservableObject {
             "allowActions": allowActions, "shareLocation": shareLocation,
             "shareCalendar": shareCalendar, "attachScreen": attachScreen,
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
-            "memoryPath": memoryPath, "fileRAGEnabled": fileRAGEnabled,
+            "memoryPath": memoryPath, "buildRoot": buildRoot, "fileRAGEnabled": fileRAGEnabled,
             "panelOpacity": panelOpacity,
             "remoteControlEnabled": remoteControlEnabled,
             "remoteControlPort": remoteControlPort,
@@ -837,6 +845,7 @@ final class AppSettings: ObservableObject {
         bool("voiceMode") { self.voiceMode = $0 }
         bool("memoryEnabled") { self.memoryEnabled = $0 }
         str("memoryPath") { self.memoryPath = $0 }
+        str("buildRoot") { self.buildRoot = $0 }
         bool("fileRAGEnabled") { self.fileRAGEnabled = $0 }
         bool("remoteControlEnabled") { self.remoteControlEnabled = $0 }
         bool("cantripHomeEnabled") { self.cantripHomeEnabled = $0 }
@@ -1032,6 +1041,7 @@ final class AppSettings: ObservableObject {
         panelOpacity = storedOpacity == 0 ? 1.0 : min(max(storedOpacity, 0.5), 1.0)
         memoryEnabled = d.object(forKey: "memoryEnabled") == nil ? true : d.bool(forKey: "memoryEnabled")
         memoryPath = d.string(forKey: "memoryPath") ?? "\(NSHomeDirectory())/Cantrip Memory"
+        buildRoot = d.string(forKey: "buildRoot") ?? ""
     }
 }
 

@@ -328,7 +328,8 @@ Clean up unused agent sessions and worktrees daily**.
   folder, unlocked, unused, unchanged for 3 days, clean, and their commits are
   on a branch (which is kept) or, for a detached worktree, on another branch,
   tag or remote. Checkouts in your own folders, such as `~/Coding`, are never
-  touched. Records of agent worktrees that were already deleted are pruned.
+  removed (only their git-ignored build caches, below). Records of agent
+  worktrees that were already deleted are pruned.
 - **Simulators** from the [shared pool](#shared-simulators): a free pool
   simulator that's been booted for an hour is shut down, one holding more than
   10 GB of data is erased, and a temporary copy without a lease for 24 hours is
@@ -339,6 +340,21 @@ Clean up unused agent sessions and worktrees daily**.
   are deleted. A booted simulator the pool didn't make, one with a lease and
   one a running build or test names (xcodebuild, Maestro, simctl) are never
   touched, and runtimes are never removed.
+- **Build caches**, which the next build makes again: Xcode DerivedData and
+  SwiftPM checkout folders (`.spm`, `SourcePackages`) that agents left in
+  `~/.cache/Cantrip/` and nothing used for 3 days; the same in checkouts in
+  `~/Coding` and `~/Projects` after 7 days, only where git ignores them and
+  nothing inside is tracked; and DerivedData in Xcode's folder or the
+  [build disk](#build-disk) whose project no longer exists (a removed
+  worktree's), after a day. A folder a running process uses stays, and so does
+  one whose project is on a disk that isn't mounted.
+- **Package caches** are measured each run and trimmed only while no build or
+  install uses them: SwiftPM's (`~/Library/Caches/org.swift.swiftpm`, over
+  6 GiB: entries unused for 14 days, oldest first), npm's (over 5 GiB:
+  `npm cache verify`), `npx` packages unused for 14 days, pnpm's store (over
+  3 GiB: `pnpm store prune`), CocoaPods' (over 4 GiB: entries unused for 30
+  days) and Gradle versions no build used for 30 days (their caches and
+  wrapper). `cantrip cleanup` prints each cache's size and cap.
 
 To see what would go, or to clean up now (`--simulators` includes the other
 simulators for this run):
@@ -351,6 +367,31 @@ cantrip cleanup
 Each removal is listed in `~/.cache/Cantrip/storage-upkeep.log`, and the last
 result in Settings and `~/.cache/Cantrip/storage-upkeep.json`. Copilot's own
 search index (`~/.copilot/session-store.db`) is left alone.
+
+### Build disk
+
+Large build output can live on another disk, such as a NAS: set the
+`buildRoot` setting (`cantrip config set buildRoot /Volumes/Builds/projects`)
+and Cantrip gives every agent it starts `CANTRIP_BUILD_ROOT`. Build scripts
+that know it, such as the Home window build (`make home-window`) and Cantrip
+Gateway Mac's `make`, put their DerivedData in a folder per checkout below it.
+Whenever that folder can't be written (the disk isn't mounted), they build in
+the checkout as before and say so; a build never fails because the disk is
+offline.
+
+### New worktrees reuse installed packages
+
+A child tab's worktree starts with copy-on-write clones (`clonefile`) of the
+`node_modules`, `Pods` and SwiftPM `.spm` folders of the parent's checkout, or
+of another checkout of the same repository, so it neither downloads nor stores
+them again. A `node_modules` or `Pods` folder is cloned only when the
+worktree's lockfile (`package-lock.json`, `npm-shrinkwrap.json`,
+`pnpm-lock.yaml`, `Podfile.lock`) and `patches/` are identical and the source
+was installed from that lockfile (npm's `node_modules/.package-lock.json`,
+pnpm's `.pnpm/lock.yaml`, CocoaPods' `Manifest.lock`); SwiftPM checks out its
+own pins. Only folders git ignores in the worktree are cloned, and existing
+ones are never replaced. Worktrees made by hand get the same with
+`cantrip seed-worktree PATH`.
 
 ## Shared simulators
 
