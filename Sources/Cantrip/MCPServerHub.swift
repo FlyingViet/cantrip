@@ -209,17 +209,39 @@ final class MCPServerHub: ObservableObject {
     func server(_ name: String) -> MCPServer? { snapshot.servers.first { $0.name == name } }
 
     func reload() {
-        snapshot = MCPRegistry.load() ?? snapshot
-        revision = UUID()
+        apply(MCPRegistry.load() ?? snapshot)
     }
 
     func update(_ change: (inout MCPRegistry.Snapshot) -> Void) throws {
         var copy = snapshot
         change(&copy)
         try MCPRegistry.save(copy)
-        snapshot = copy
-        revision = UUID()
+        apply(copy)
         do { try MCPMigration.sync(copy) } catch { Log.write("mcp: couldn't update backend configs: \(error.localizedDescription)") }
+    }
+
+    /// Takes a new list. A server whose sign-in setting or address changed drops the state shown
+    /// for the old one (a server switched to no sign-in kept "Not signed in" until Cantrip
+    /// restarted): one without sign-in is ready, one with it is read again from the keychain.
+    private func apply(_ new: MCPRegistry.Snapshot) {
+        let old = snapshot
+        snapshot = new
+        revision = UUID()
+        var recheck = false
+        for name in Set(states.keys).union(flows.keys) {
+            let before = old.servers.first { $0.name == name }, after = new.servers.first { $0.name == name }
+            guard before?.oauth != after?.oauth || before?.url != after?.url else { continue }
+            // A sign-in started for the old setting has nothing left to finish.
+            cancel(name)
+            states[name] = nil
+            MCPHost.shared.resolveAlert(name)
+            if let after, !after.oauth {
+                set(name, State(phase: .ready))
+            } else if after != nil {
+                recheck = true
+            }
+        }
+        if recheck { Task { await refreshStates() } }
     }
 
     /// A tab's own switch for one server.
@@ -241,7 +263,8 @@ final class MCPServerHub: ObservableObject {
     func refreshStates() async {
         for server in snapshot.servers {
             guard server.oauth else {
-                if states[server.name] == nil { set(server.name, State(phase: .ready)) }
+                // Sign-in phases belong to OAuth servers; only a keychain problem the relay reported stays.
+                if ![.ready, .locked].contains(states[server.name]?.phase) { set(server.name, State(phase: .ready)) }
                 continue
             }
             if flows[server.name] != nil { continue }
@@ -261,6 +284,8 @@ final class MCPServerHub: ObservableObject {
     func reportProblem(_ name: String, _ message: String) {
         guard flows[name] == nil else { return }
         let locked = message.contains("keychain")
+        // A server without sign-in can only have a keychain problem (its credential header).
+        guard locked || server(name)?.oauth != false else { return }
         set(name, State(phase: locked ? .locked : .needsSignIn, message: message))
         onNeedsAttention?(name, locked ? .locked : .needsSignIn)
     }
@@ -276,7 +301,7 @@ final class MCPServerHub: ObservableObject {
             do {
                 try await self.signIn(name, address: address)
                 let credential = try await self.signIns.credential(name)
-                self.set(name, State(phase: .ready, message: "Signed in.", expiresAt: credential?.expiresAt))
+                if self.signsIn(name, at: server.url) { self.set(name, State(phase: .ready, message: "Signed in.", expiresAt: credential?.expiresAt)) }
                 Log.write("mcp: \(name) signed in through Cantrip")
             } catch {
                 // Cancel stops the flow wherever it waits (often a network call): that's a cancelled
@@ -284,12 +309,20 @@ final class MCPServerHub: ObservableObject {
                 let cancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
                 let failure = cancelled ? MCPOAuth.Failure(kind: .denied, message: "Sign-in was cancelled.") : error as? MCPOAuth.Failure
                 let message = failure?.message ?? error.localizedDescription
-                self.set(name, State(phase: failure?.kind == .keychain ? .locked : (failure?.kind == .denied ? .needsSignIn : .failed),
-                                     message: message))
+                if self.signsIn(name, at: server.url) {
+                    self.set(name, State(phase: failure?.kind == .keychain ? .locked : (failure?.kind == .denied ? .needsSignIn : .failed),
+                                         message: message))
+                }
                 Log.write("mcp: \(name) sign-in \(cancelled ? "cancelled" : "failed: \(message)")")
             }
             self.flows[name] = nil
         }
+    }
+
+    /// Whether `name` still signs in with OAuth at `url`. A sign-in whose server stopped signing in,
+    /// or moved, while it ran leaves the new state alone.
+    private func signsIn(_ name: String, at url: String?) -> Bool {
+        server(name).map { $0.oauth && $0.url == url } ?? false
     }
 
     /// Approve (or decline) the consent page waiting for `name`.

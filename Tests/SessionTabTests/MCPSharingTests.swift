@@ -14,7 +14,52 @@ extension SessionTabTests {
         try testMCPConsentStep()
         try await testMCPRemoteList()
         try await testMCPClientReuse()
+        try await testMCPSignInSettingChange()
         print("MCP sharing: import, backend configs, OAuth with single-flight refresh, the relay and the remote list passed")
+    }
+
+    /// A server whose sign-in setting changes drops the state shown for the old one at once: one
+    /// switched to no sign-in kept "Not signed in" (and Connect) until Cantrip restarted.
+    @MainActor
+    static func testMCPSignInSettingChange() async throws {
+        requireTemporaryHome()
+        defer { removeMCPMigrationFixture() }
+        let snapshot = MCPRegistry.Snapshot(servers: [
+            MCPServer(name: "flights", url: "https://flights.example.com/mcp", oauth: true),
+            MCPServer(name: "flows", url: "https://flows.example.com/mcp", secretHeaders: ["X-Api-Key"]),
+        ])
+        try MCPRegistry.save(snapshot)
+        let hub = MCPServerHub(signIns: MCPSignIns(secrets: .memory()), snapshot: snapshot)
+        await hub.refreshStates()
+        precondition(hub.states["flights"]?.phase == .needsSignIn && hub.states["flows"]?.phase == .ready)
+
+        // Switched off in the list on disk, which `cantrip mcp migrate --apply` reloads.
+        var edited = snapshot
+        edited.servers[0].oauth = false
+        try MCPRegistry.save(edited)
+        hub.reload()
+        precondition(hub.states["flights"]?.phase == .ready, "Ready without a restart: \(String(describing: hub.states["flights"]))")
+        let listed = HostControl.describe(hub)
+        precondition(listed.contains("flights: remote, via relay, ready") && !listed.contains("Not signed in"), listed)
+        let payload = hub.remotePayload()["servers"] as? [[String: Any]] ?? []
+        let shown = payload.first { $0["name"] as? String == "flights" }
+        precondition(shown?["oauth"] as? Bool == false && (shown?["state"] as? [String: Any])?["phase"] as? String == "ready",
+                     "Remote clients get it too: \(String(describing: shown))")
+        await hub.refreshStates()
+        precondition(hub.states["flights"]?.phase == .ready, "and it stays ready")
+
+        // A server without sign-in never shows one as missing; a keychain problem still shows.
+        hub.reportProblem("flights", "flights isn't signed in. Connect it in Cantrip's MCP Servers settings.")
+        precondition(hub.states["flights"]?.phase == .ready, "No sign-in problem for a server without sign-in")
+        hub.reportProblem("flows", MCPSecrets.Failure.locked.localizedDescription)
+        await hub.refreshStates()
+        precondition(hub.states["flows"]?.phase == .locked, "A keychain problem the relay reported stays")
+
+        // Back to OAuth through the hub: the sign-in is read from the keychain again.
+        try hub.update { $0.servers[0].oauth = true }
+        precondition(hub.states["flights"] == nil, "The old Ready is dropped at once")
+        await hub.refreshStates()
+        precondition(hub.states["flights"]?.phase == .needsSignIn && MCPRegistry.load()?.servers[0].oauth == true)
     }
 
     /// The authorize address carries everything the sign-in server needs, and reaches agent Chrome
