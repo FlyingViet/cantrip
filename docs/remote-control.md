@@ -1376,8 +1376,8 @@ Tailscale-first/LAN-fallback routing as other read-only requests.
 
 ## Live agent browser preview
 
-When a reply uses tools from an MCP server named `browser` that drives a
-dedicated, agent-only Chrome, clients show a card under that reply with a live
+When a reply uses tools from the MCP server named `agent_chrome` (or, in older
+history, `browser`) that drives a dedicated, agent-only Chrome, clients show a card under that reply with a live
 picture of the tab the agent is working in. While the reply is still running the
 card is marked **Live** and refreshes about once a second while it's on screen;
 afterwards it shows the latest view. Tap it for a larger view that refreshes a
@@ -1397,8 +1397,8 @@ few times per second, with the page title and address.
   manager's popup, `chrome://` pages, devtools and local files.
 - Turn it off with `defaults write <bundle id> browserPreviewEnabled -bool false`.
 - Activities from that server carry `"browser": true` in session history, so
-  clients don't have to match backend-specific tool names (`browser-…` on
-  Copilot, `mcp__browser__…` on Claude Code).
+  clients don't have to match backend-specific tool names (`agent_chrome-…` on
+  Copilot, `mcp__agent_chrome__…` on Claude Code; older history used `browser`).
 
 ## Generated image previews in Cantrip Agent and the browser Remote
 
