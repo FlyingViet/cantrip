@@ -82,6 +82,15 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
 - Saved servers live in `ServerProfiles`; each server's credential is stored
   separately in Keychain. Legacy `hermes.apiKey`/Cantrip slots are migrated.
   Settings uses blank add-server drafts, never live bindings to active credentials.
+- Settings is one map on every client (`Sources/Settings`, compiled by Gateway Mac too): a status
+  card, then `SettingsPage` (Macs, Models, Tools & sign-ins, Memory, Voice, Notifications,
+  Appearance, About & Updates). Pages are written once; sheets that double as pages take
+  `embedded: true` (`CantripSheetStack`). Stack on iPhone, side by side on an unfolded Duo and the
+  Mac; the only new key is `cantrip.settings.lastPage`. Keep existing `@AppStorage` keys: settings
+  saved by the previous version must keep their values (`SettingsMapTests`). Each page shows its
+  scope (`SettingsScopeLabel`). Hermes settings show only while a Hermes gateway is saved.
+- The chat menu holds only the open tab's actions (`CantripTabActions` sections); app-wide items
+  belong in Settings or the Tabs drawer (its footer has the Settings gear).
 - The alert `installationID` is bound to the device by a this-device-only Keychain
   marker. A transferred/restored install gets a fresh ID (its alerts become pending
   until re-paired). Removing a server whose token is missing clears only local

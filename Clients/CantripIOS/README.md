@@ -59,9 +59,10 @@ repo's code to do the same in a Mac window.
 
 ### 2. Pair the app
 
-Open **Settings**. Under **Cantrip Remote Servers**, paste the **Pairing token**, add a name
-if you like, fill in the route below, tap **Add Server**, then tap the saved server to
-connect. Allow Local Network access when asked.
+Open **Settings › Macs › Pair a Mac**. Paste the **Pairing token**, add a name if you like,
+fill in the route below (the direct address and Tailscale only are under **Advanced**) and tap
+**Pair**. The first Mac you pair becomes the active one; switch to another from its page in
+**Macs**. Allow Local Network access when asked.
 
 Or run `cantrip pair` on the host (handy on a headless Mac or a codespace) and scan its QR
 code with the iPhone Camera, or open the link it prints on a Mac with Cantrip Gateway. The
@@ -124,7 +125,8 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, usage limits (Copilot at the top level, Claude Code under `claude`, plus `activeBackend`), View Mac |
-| `GET/POST /api/v1/usage-fallback` | Usage limit fallbacks in Model Settings (Mac-wide): `{backends, entries, backend, primary, choices, primaryChoice, limited, limitedModels, revision}`; the section lists the backups in order (each entry's `label`, and "at its limit until" its `limitedUntilLabel`) with **Add a backup**, up/down and **Remove**, plus **Model** and **Effort** menus from `choices[].models` for backends that have them. A backend can be listed again with another model, the Mac's own too (`primaryChoice`): Add offers "<Backend> with another model" while one of its models (`""` = `defaultModelID`) is free, and each row's Model menu leaves out models the backend's other backups (or the Mac itself) run. Rows are edited by position and each change saves right away with POST `{revision, entries}` (the whole chain: each backup's `backend`, `model`, `effort`; a `400` says why, e.g. a duplicate), or `{revision, resetLimits: true}` for **Try every backend again** (whole backends in `limited`, model quotas in `limitedModels`). Macs that send no `limitedModels` list each backend once; Macs that send no `entries` get `{revision, backends}`, and Macs from before the chain send no `backends`: one backup, set with `{revision, backend}` (`""` = off). `supportsUsageFallback` on session lists; older hosts `404` and the section stays hidden |
+| `GET/POST /api/v1/model-tiers` | **Settings › Models › Model tiers** (Mac-wide): `{tiers, backends: [{id, label, models: [{id, label, efforts, price}], cells: [{tier, label, choices: [{model, effort, label, offered, price}], isDefault, model, effort, note}]}], revision}`. A cell's page reorders, removes and adds models and sets each one's effort; each change POSTs `{revision, backend, tier, choices: [{model, effort}]}`, and **Use Cantrip's Defaults** `{revision, backend, tier, reset: true}`. `supportsModelTiers` on session lists; older hosts `404` and the section says to update the Mac |
+| `GET/POST /api/v1/usage-fallback` | Usage-limit backups in **Settings › Models** (Mac-wide): `{backends, entries, backend, primary, choices, primaryChoice, limited, limitedModels, revision}`; the section lists the backups in order (each entry's `label`, and "at its limit until" its `limitedUntilLabel`) with **Add a backup**, up/down and **Remove**, plus **Model** and **Effort** menus from `choices[].models` for backends that have them. A backend can be listed again with another model, the Mac's own too (`primaryChoice`): Add offers "<Backend> with another model" while one of its models (`""` = `defaultModelID`) is free, and each row's Model menu leaves out models the backend's other backups (or the Mac itself) run. Rows are edited by position and each change saves right away with POST `{revision, entries}` (the whole chain: each backup's `backend`, `model`, `effort`; a `400` says why, e.g. a duplicate), or `{revision, resetLimits: true}` for **Try every backend again** (whole backends in `limited`, model quotas in `limitedModels`). Macs that send no `limitedModels` list each backend once; Macs that send no `entries` get `{revision, backends}`, and Macs from before the chain send no `backends`: one backup, set with `{revision, backend}` (`""` = off). `supportsUsageFallback` on session lists; older hosts `404` and the section stays hidden |
 | `GET /api/v1/skills` | Skills & Rules (Mac-wide): `{library, backends, skills, rules, drift, driftCheckedAt, checking}`; each skill has `name`, `description`, `enabled`, the `backends` that see it and `problems`; each rule `folder`, `lines` and optional `mirror`; each drift finding `path` and `problem`. `driftCheckedAt` (ISO 8601) is absent or `null` until the check has run. Older hosts `404` and the sheet says to update Cantrip on the Mac |
 | `POST /api/v1/skills` | `{"action":"setEnabled","name","enabled"}` (on or off for every backend), `{"action":"sync"}` (relink; the reply adds `messages`) or `{"action":"check"}` (starts the drift check; poll `GET` every ~2 s while `checking`). Replies with the same payload as `GET`; a `400 {"error"}` is shown as written and not retried |
 | `GET /api/v1/voice/vocabulary` | Dictation names: project, tab, note, task and tracker terms plus the busiest people (handles, optional names); older hosts reply `404` and the app falls back to tab and task titles |
@@ -176,7 +178,7 @@ left edge. The drawer has **+** for a new tab, **Search tabs**, a pinned **Cantr
 row, a **Background jobs** row (scheduled and automated runs), then every tab with a spinner
 while it works (its live status in orange), its latest outcome when idle, and how long ago
 it last ran. Touch and hold a tab, then drag, to reorder it (no handles; not while searching);
-a still hold opens Rename, Lock, Move, Model Settings, Start Fresh, View Mac and Close. A connection line
+a still hold opens Rename, Lock, Move, Model Settings, Start Fresh, Tools for This Tab and Close. A connection line
 sits at the bottom.
 
 A tab opens full screen with **‹ Home** on the left, its name and **Working / Idle** state in
@@ -193,9 +195,9 @@ the side bar when folded (the sidebar button when unfolded), brings out the tab 
 can switch straight to another tab or pick Cantrip Home, pinned at the top. Tab ages and outcomes need
 Cantrip host e8e5c0b or later; older hosts show names and live status only.
 
-In **Settings → Backends**, choose which execution backends appear in the picker
-and tap **Edit** to drag them into your preferred order. Cantrip Home always stays
-visible because it holds your tabs. A saved Cantrip Remote lane selection opens Home.
+With a Hermes gateway saved, **Settings › Models › Run on › Backends** chooses which execution
+backends appear in the picker; tap **Edit** to drag them into your preferred order. Cantrip Home
+always stays visible because it holds your tabs. A saved Cantrip Remote lane selection opens Home.
 
 The composer mic is **push-to-talk dictation**: recording starts on touch-down,
 and releasing a hold finishes at once (no end-of-speech wait). A quick **tap**
@@ -228,9 +230,9 @@ disconnected or another request is in flight. A failed request is shown in
 the Remote error banner; it is never automatically retried.
 
 Tap the **stacked-tabs icon at the top left** or swipe right from the **left edge**
-to open the Cantrip **Tabs** drawer. The **hamburger menu is at the top right**,
-with **Settings** inside it. You can also choose **hamburger menu > Tabs**. On Duo's vertical toolbar in Home, **Tabs and the
-white hamburger menu sit at the top**, as in Home's iPhone header (Refresh and Settings are in the menu), and Home's Chat,
+to open the Cantrip **Tabs** drawer; **Settings** is the gear in its footer, beside the
+connection line. The **hamburger menu is at the top right**. On Duo's vertical toolbar in Home, **Tabs and the
+white hamburger menu sit at the top**, as in Home's iPhone header, and Home's Chat,
 Tasks, Artifacts and Builds take the bottom of the vertical toolbar. In a project tab, the back pill sits near the bottom, with a separate
 **Settings gear**, Refresh, and the **white hamburger menu at the top**.
 The hamburger stays white when paused, with a small orange pause badge. Select a
@@ -243,10 +245,33 @@ retain 44-point tap targets. New Tab and tab actions live in the
 drawer rather than duplicate top-bar buttons. Resume (when available) and New
 conversation remain in the shared chat's hamburger menu.
 
-The hamburger menu's **Cantrip Mac** section opens **Mac Permissions & View Mac**,
-**Skills & Rules** and **Update & Rebuild Cantrip** directly, without going through Settings. These
-controls use the selected saved Mac and are disabled until Remote is configured.
-Settings keeps connection, notification, voice, and reply preferences.
+The hamburger menu holds only this tab's actions, in labeled sections: **Model &
+conversation** (Model Settings, Start Fresh, Tools for This Tab, Delivery, Resume, Refresh),
+**Tab** (Rename, Lock, Move to Section, Move Up/Down), **Agent** (Pause Agent, Voice Mode)
+and Close Tab. Memory, Usage Limits, the mascot, **Update & rebuild Cantrip**, **Mac permissions &
+View Mac** and **Skills & Rules** are in Settings; Builds and Background jobs are in Home and the
+Tabs drawer.
+
+### Settings
+
+Settings opens on a status card (the Mac in use and how this device reaches it, what new
+tabs run on, and the usage-limit backups), then the same pages as Gateway Mac:
+
+| Page | What's there |
+|---|---|
+| Macs | Each paired Mac with an **Active** badge and when this device last reached it. A Mac's page has **Use This Mac**, **Re-enter Pairing Token**, its addresses under **Advanced**, and **Remove Mac…**. **Pair a Mac** walks through pairing. Hermes gateways show here only while one is saved. |
+| Models | What new tabs run (read-only; change it on the Mac), **Model tiers** (each backend's models for Fast, Standard and Deep, with Copilot's prices), the **Usage-limit backups** and **Usage Limits**. |
+| Tools & sign-ins | One row per shared MCP server with its state and **Connect**; a row opens its sign-in and per-backend switches. |
+| Memory | The Mac's memory files, read-only. |
+| Voice | Speech recognition, dictation vocabulary, the reply voice and the pause before sending. |
+| Notifications | Completion and input alerts, the widget and the Live Activity. |
+| Appearance | The mascot and **Show reasoning steps**. |
+| About & Updates | This app's version, **Update & rebuild Cantrip**, **Mac permissions & View Mac** and **Skills & Rules**. |
+
+Each page says who its settings change: **This device**, **All tabs on <Mac>** or, in a
+tab's Model Settings, **This tab**. Changes save as you make them. On an unfolded iPhone Duo
+the list and the open page sit side by side and the last page opened comes back; folded,
+the page shows alone with its back button.
 
 In regular-width iPad layouts, **Tabs** becomes a native sidebar beside the chat.
 Selecting, creating, or renaming a tab leaves this sidebar open; **Close tabs**
@@ -354,9 +379,9 @@ the Mac (memory preparation and transcript encoding now run off the UI thread).
 
 ### Saved servers
 
-In **Settings**, use **Add Hermes Gateway** or **Add Cantrip Remote** to give
-each server an optional name, its URL, and its own API key or pairing token.
-Tap **Add Server** to save the configuration. The form clears only after a
+Macs are paired from **Settings › Macs › Pair a Mac**. With a Hermes gateway saved, the
+same page also lists Hermes gateways, where **Add Hermes Gateway** gives each one an optional
+name, its URL and its own API key; tap **Add Server** to save it. The form clears only after a
 successful save, ready for another server; adding does not replace or switch
 your current connection. Tap a server in the saved list to select and connect.
 The selected server is marked with a checkmark and restored when the app reopens.
@@ -417,7 +442,7 @@ only** keeps it (that mode skips only Bonjour). A profile can have just a direct
 address. The Home Screen widget and background Live Activity updates fetch only
 through the Tailscale URL, so a direct-only profile doesn't feed them.
 
-Enable **Tailscale only (skip local network)** in Remote settings to bypass
+Enable **Tailscale only (skip the local network)** under **Advanced** when pairing a Mac to bypass
 LAN discovery; this requires a saved Tailscale URL and Tailscale connectivity
 when using a tailnet address. Automatic mode remains the default, and LAN-only
 use still works without a saved URL. Sends and other mutations are never
@@ -922,16 +947,17 @@ also applies. Updated native builds and a host reopen are required.
 ### Per-tab model settings
 
 Open **Chat menu > Model Settings**, or use **Model Settings** in a tab's
-actions, to change its model, reasoning effort and context window. The paired
-Mac provides its Copilot catalog and supported choices. Turn off **Use Mac
-defaults** to create a persistent override for this tab only; turn it back on
-to inherit the Mac's defaults again.
+actions, to change its model, reasoning effort and context window. **Model** opens a
+picker: **Auto (Mac default)** first (it follows the Mac), then the tiers **Fast**,
+**Standard** and **Deep** with what each is for and the model it runs now, then the Mac's
+models grouped by the tier that lists them, each with its context window and Copilot's
+price. **Effort** is a segmented control (a menu when it doesn't fit), and the context window
+is under **Advanced**. The model list is read again from the Mac each time the sheet opens.
 
-This requires the Mac's **Copilot backend with Council mode off** and updated
-Cantrip Agent/Mac builds. Save while the tab, queue and shell are idle. The Mac
-rejects stale or busy changes, and uncertain writes are never automatically
-replayed. Reload settings before retrying an uncertain result. Switching servers
-closes the editor and cannot apply its draft to another Mac.
+Each change saves on the Mac at once, for this tab only, while the tab, queue and shell
+are idle; the Mac rejects busy changes and the sheet shows why. Uncertain writes are never
+replayed. Switching servers closes the sheet. The usage-limit backups, which are for every
+tab, are in **Settings › Models**.
 
 The next prompt uses the saved options without clearing the visible transcript.
 Copilot rebuilds its runtime with recent conversation history, rather than
@@ -1144,7 +1170,7 @@ macOS dialogs may block capture/input and still need local interaction.
 
 ### Cantrip completion and input alerts
 
-Select a saved Mac, then enable **Settings > Cantrip alerts > Completion and
+Select a saved Mac, then enable **Settings › Notifications › Cantrip alerts > Completion and
 input-needed alerts**. Successful completion of a tab's entire queue sends its
 name and a brief final-answer excerpt. Tap the notification to reopen the
 correct saved Mac and conversation. Private, stopped and failed runs do not
