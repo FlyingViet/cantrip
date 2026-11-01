@@ -143,6 +143,7 @@ targets:
       - path: Hermes/Tests/CantripDirectAddressTests.swift
       - path: Hermes/Tests/CantripPairingLinkTests.swift
       - path: Hermes/Tests/CantripGzipTests.swift
+      - path: Hermes/Tests/CantripArtifactDownloadTests.swift
       - path: Hermes/Tests/CantripTabBackTransitionTests.swift
       - path: Hermes/Tests/CantripMCPAppTests.swift
       - path: Hermes/Tests/CantripPromptUsageTests.swift
