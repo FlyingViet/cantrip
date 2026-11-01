@@ -5,7 +5,8 @@ import Foundation
 /// answers with its reply.
 struct AskCantripIntent: AppIntent {
     static let title: LocalizedStringResource = "Ask Cantrip"
-    static let description = IntentDescription("Send a request to Cantrip Home on your Mac and hear its reply.")
+    // App Store validation (ITMS-90626) rejects intent metadata naming Apple products ("Mac", "iPhone", "Watch"...).
+    static let description = IntentDescription("Send a request to Cantrip Home and hear its reply.")
 
     @Parameter(title: "Request", requestValueDialog: "What should I ask Cantrip?")
     var request: String
