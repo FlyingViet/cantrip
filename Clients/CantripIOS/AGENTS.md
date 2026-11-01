@@ -9,6 +9,8 @@ Native SwiftUI iOS client for a self-hosted **Hermes agent** (`~/.hermes`) — v
   `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all`
   so SwiftPM can use its scoped bare-repository cache.
 - The `.xcodeproj` is generated (git-ignored); regenerate after editing `project.yml`.
+- The iOS app embeds the Apple Watch app; build or test it alone with the `CantripWatch` scheme
+  on a watchOS simulator.
 - iOS 26+, universal (`TARGETED_DEVICE_FAMILY "1,2"`). Set your own bundle id +
   signing team in `project.yml` before building to a device.
 - Use the selected Xcode SDK without raising the iOS 26 deployment target.
@@ -103,6 +105,16 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
   Keep UIKit, ActivityKit and AVAudioSession use behind `#if os(iOS)` (imports
   behind `#if canImport(UIKit)`); the Mac repo supplies AppKit equivalents.
   After changing shared code, run `make test` there before bumping its submodule.
+- The Apple Watch app (`CantripWatch` target, `Watch/`, tests in `WatchTests/`) is kept out of
+  `Sources/` and `Shared/` so Gateway Mac never compiles it. It records m4a (AAC mono 16 kHz) for
+  the Mac to transcribe (watchOS has no Speech framework), speaks replies with
+  `AVSpeechSynthesizer`, and signs every request with its own P-256 key (Secure Enclave; software
+  only in the simulator) per the `cantrip-device-v1` scheme in `CantripWatchProtocol.swift`. Routes:
+  the iPhone's Tailscale URL, then the Mac's optional internet URL. Setup goes through
+  `Sources/CantripWatchLink.swift` (iOS only, `#if os(iOS) && canImport(WatchConnectivity)`), which
+  registers the watch's public key with the selected Mac using the pairing token. DEBUG builds read
+  `CANTRIP_WATCH_QA` (base64 JSON, see `WatchQA.swift`) to run in the simulator without an iPhone.
+  watchOS `URLSession` ignores custom `URLProtocol`s, so client tests inject a transport.
 - Never animate `Text` size per frame (Canvas/TimelineView): every new size is a fresh
   glyph rasterization that macOS keeps, so memory grows without bound. Animate shapes, or
   fill a glyph outline (`CantripMascotRenderer.GlyphOutline`) at the frame's size.
