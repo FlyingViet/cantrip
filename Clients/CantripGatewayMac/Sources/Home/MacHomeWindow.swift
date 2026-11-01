@@ -257,13 +257,6 @@ struct MacHomeWindow: View {
                     .disabled(remote.isMutating || vm.sending)
                 MacTerminalButton(navigation: navigation, session: remote.selectedSession)
             }
-            Button {
-                Task { await remote.refreshNow() }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .help("Refresh Cantrip Home (⌘R)")
-            .disabled(!remote.isConfigured || remote.isRefreshing)
             moreMenu
         }
     }
