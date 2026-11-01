@@ -212,6 +212,11 @@ cantrip mcp connect mobbin     # sign in to a remote server
   are imported. Header and environment values that are credentials move to
   the macOS Keychain, so no config file holds them. The originals stay
   restorable with `cantrip mcp restore` (the backups on disk are redacted).
+  Claude Code's own servers are rewritten as relay entries through its CLI
+  (`claude mcp add-json`; the `claude` path in Settings, or `claude` on the
+  PATH when that's blank). If that CLI can't run, `--apply` stops before
+  changing anything; a run that stops partway lists what it already updated,
+  and running it again finishes the rest.
 - From then on Cantrip writes each backend's config from the list:
   Copilot's `mcp-config.json`, a per-tab `--mcp-config` file for Claude Code,
   `-c mcp_servers…` overrides for Codex and Antigravity's

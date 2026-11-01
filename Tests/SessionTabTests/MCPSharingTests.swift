@@ -9,6 +9,7 @@ extension SessionTabTests {
         try await testMCPOAuth()
         try await testMCPRelay()
         try testMCPMigration()
+        try testMCPMigrationClaudeCLI()
         try await testMCPRemoteList()
         try await testMCPClientReuse()
         print("MCP sharing: import, backend configs, OAuth with single-flight refresh, the relay and the remote list passed")
@@ -497,8 +498,8 @@ extension SessionTabTests {
         }
     }
 
-    /// Runs in the suite's temporary home: real config paths, a fake `claude` and an in-memory keychain.
-    static func testMCPMigration() throws {
+    /// The backends' configs at their real paths in the suite's temporary home.
+    static func writeMCPMigrationFixture() throws {
         requireTemporaryHome()
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
@@ -508,21 +509,33 @@ extension SessionTabTests {
         try JSONSerialization.data(withJSONObject: ["numStartups": 3, "mcpServers": (mcpClaudeFixture["mcpServers"] as! [String: Any])])
             .write(to: MCPMigration.claudeConfig)
         try JSONSerialization.data(withJSONObject: ["mcpServers": ["agy-own": ["command": "own"]]]).write(to: MCPBackendConfig.antigravityFile)
+    }
+
+    /// Later tests share this home.
+    static func removeMCPMigrationFixture(_ extra: [URL] = []) {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        for url in [MCPMigration.copilotConfig, MCPMigration.claudeConfig, MCPBackendConfig.antigravityFile,
+                    MCPRegistry.file, MCPMigration.managedFile, CantripPaths.cache("mcp")] + extra {
+            try? fm.removeItem(at: url)
+        }
+        for name in (try? fm.contentsOfDirectory(atPath: home.appendingPathComponent(".copilot").path)) ?? []
+        where name.contains("pre-cantrip") {
+            try? fm.removeItem(at: home.appendingPathComponent(".copilot/\(name)"))
+        }
+    }
+
+    /// Runs in the suite's temporary home: real config paths, a fake `claude` and an in-memory keychain.
+    static func testMCPMigration() throws {
+        requireTemporaryHome()
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        try writeMCPMigrationFixture()
         let log = home.appendingPathComponent("claude-calls.txt")
         let fakeClaude = home.appendingPathComponent("fake-claude.sh")
         try "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '\(log.path)'\n".write(to: fakeClaude, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeClaude.path)
-        defer {
-            // Later tests share this home.
-            for url in [MCPMigration.copilotConfig, MCPMigration.claudeConfig, MCPBackendConfig.antigravityFile,
-                        MCPRegistry.file, MCPMigration.managedFile, log, fakeClaude, CantripPaths.cache("mcp")] {
-                try? fm.removeItem(at: url)
-            }
-            for name in (try? fm.contentsOfDirectory(atPath: home.appendingPathComponent(".copilot").path)) ?? []
-            where name.contains("pre-cantrip") {
-                try? fm.removeItem(at: home.appendingPathComponent(".copilot/\(name)"))
-            }
-        }
+        defer { removeMCPMigrationFixture([log, fakeClaude]) }
         let secrets = MCPSecrets.Store.memory()
         let originalCopilot = try Data(contentsOf: MCPMigration.copilotConfig)
 
@@ -561,5 +574,78 @@ extension SessionTabTests {
         let finalCalls = try String(contentsOf: log, encoding: .utf8)
         precondition(finalCalls.contains("secret-flows"), "and Claude Code's, credentials included")
         precondition(MCPRegistry.load()?.importedAt == nil, "Restoring stops sharing")
+    }
+
+    /// With Claude Code's path left blank in Settings, `migrate --apply` runs the `claude` it finds
+    /// (it used to start "", which fails with "Permission denied" after the other configs were
+    /// written). A run that stops partway says what it wrote and still reloads the list.
+    @MainActor
+    static func testMCPMigrationClaudeCLI() throws {
+        requireTemporaryHome()
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let bin = home.appendingPathComponent("claude-bin")
+        let claude = bin.appendingPathComponent("claude")
+        let log = home.appendingPathComponent("claude-cli-calls.txt")
+        try writeMCPMigrationFixture()
+        try fm.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { removeMCPMigrationFixture([bin, log]) }
+        // Only the fake `claude` can be found: never the real CLI, nor a login shell's PATH.
+        let locator = ToolLocator(home: home.path, inheritedPATH: bin.path, loginShell: { _ in nil })
+        let secrets = MCPSecrets.Store.memory()
+        let hub = MCPServerHub(signIns: MCPSignIns(secrets: secrets), snapshot: MCPRegistry.Snapshot())
+        func migrate() -> [String: Any] {
+            HostControl.migrate(dryRun: false, hub: hub) {
+                try MCPMigration.run(dryRun: $0, secrets: secrets, claudePath: "", locator: locator)
+            }
+        }
+        let originalCopilot = try Data(contentsOf: MCPMigration.copilotConfig)
+        let originalClaude = try Data(contentsOf: MCPMigration.claudeConfig)
+
+        // No `claude` to run: stops before changing anything, and says so.
+        let missing = migrate()
+        let missingText = missing["error"] as? String ?? ""
+        precondition(missingText.hasPrefix("Nothing changed:") && missingText.contains("Claude Code's CLI (claude)"), missingText)
+        let copilotAfterMissing = try Data(contentsOf: MCPMigration.copilotConfig)
+        precondition(MCPRegistry.load() == nil && copilotAfterMissing == originalCopilot, "Nothing is written when Claude Code's CLI can't run")
+        let preview = try MCPMigration.run(dryRun: true, secrets: secrets, claudePath: "", locator: locator)
+        precondition(preview.notes.contains { $0.contains("Claude Code's CLI (claude)") }, "The preview warns too")
+
+        // `claude` is found but won't start: the other configs are already written by then.
+        try "#!/nonexistent/interpreter\n".write(to: claude, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude.path)
+        let partial = migrate()
+        let partialText = partial["error"] as? String ?? ""
+        precondition(partialText.hasPrefix("Stopped partway: couldn't run Claude Code's CLI (\(claude.path))")
+                     && partialText.contains("Already updated: Cantrip's MCP list; ~/.copilot/mcp-config.json; ~/.gemini/config/mcp_config.json.")
+                     && partialText.contains("~/.claude.json still has its own errors, flows, notes")
+                     && !partialText.contains("Nothing changed") && !partialText.contains("secret-"), partialText)
+        precondition(hub.snapshot.servers.map(\.name) == ["errors", "flows", "mobbin", "notes", "vault"] && hub.snapshot.importedAt != nil,
+                     "The list is reloaded after a partial run: \(hub.snapshot.servers.map(\.name))")
+        let claudeAfterPartial = try Data(contentsOf: MCPMigration.claudeConfig)
+        precondition(claudeAfterPartial == originalClaude, "Claude Code's config is untouched")
+
+        // With a working `claude`, running it again finishes: Claude Code's servers become relay entries.
+        try "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '\(log.path)'\n".write(to: claude, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude.path)
+        let done = migrate()
+        let doneText = done["text"] as? String ?? ""
+        precondition(done["error"] == nil && doneText.contains("~/.claude.json: errors; ~/.claude.json: flows; ~/.claude.json: notes"),
+                     "\(done)")
+        let calls = try String(contentsOf: log, encoding: .utf8).split(separator: "\n").map(String.init)
+        let added = Dictionary(calls.compactMap { line -> (String, String)? in
+            let parts = line.split(separator: " ", maxSplits: 4).map(String.init)
+            guard parts.count == 5, parts[0...2] == ["mcp", "add-json", "-s"], parts[3] == "user" else { return nil }
+            let rest = parts[4].split(separator: " ", maxSplits: 1).map(String.init)
+            return rest.count == 2 ? (rest[0], rest[1]) : nil
+        }, uniquingKeysWith: { $1 })
+        precondition(Set(added.keys) == ["errors", "flows", "notes"], "`claude mcp add-json` for each of Claude Code's servers: \(calls)")
+        for name in ["errors", "flows"] {
+            let entry = (try? JSONSerialization.jsonObject(with: Data(added[name]!.utf8))) as? [String: Any]
+            precondition((entry?["command"] as? String)?.hasSuffix("cantrip-mcp") == true && entry?["type"] as? String == "stdio",
+                         "\(name) goes through Cantrip's relay: \(added[name]!)")
+        }
+        precondition(!calls.joined().contains("secret-"), "No credential reaches Claude Code's config")
+        precondition(MCPMigration.claudeExecutable("", locator: locator) == claude.path, "Blank means `claude`, found on the PATH")
     }
 }
