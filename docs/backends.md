@@ -60,6 +60,19 @@ entry to the global file instead of writing into your projects. The entry does
 nothing for `agy` runs Cantrip didn't start. If `agy` ever runs a tool without
 that check, Cantrip stops the session.
 
+On Mac, Codex runs as `codex app-server`, one process per tab (tested with
+Codex 0.166.0). Each tab keeps its Codex thread across restarts, **Stop**
+interrupts the turn and keeps the conversation, and a message sent while Codex
+works steers the running turn. Codex asks Cantrip before every command, file
+edit and MCP tool call: tabs ask you, read-only council seats run in Codex's
+read-only sandbox and may only look, and Cantrip Home and child tabs apply
+their own policy. Codex runs a few plain reads (`cat`, `ls`) without asking;
+under Cantrip Home, a command other than a plain read that runs without
+Cantrip's check stops the run. Settings > Codex > **Permissions** offers **Full
+access**, the same as **Act on my behalf**: no sandbox and no approvals.
+Council seats stay read-only either way. Cantrip never reads or changes Codex's
+sign-in (`codex login`).
+
 On macOS, local Copilot runs through a persistent native SDK session, not a
 one-shot prompt process. Use a recent CLI with its bundled SDK and runtime
 (exercised with 1.0.83), and ensure `node` is available in your login shell.
@@ -81,15 +94,18 @@ be approved by the current action policy are denied rather than left hanging.
 5. Apply the choice to your next request; changing a picker does not rewrite
    an answer already being generated.
 
-On macOS, the backend and its defaults are shared app settings. Copilot and
-Claude Code tabs can override the model and effort (Copilot also the context
-tier) through **Model Settings** in
+On macOS, the backend and its defaults are shared app settings. Copilot,
+Claude Code, Codex and Antigravity tabs can override the model and effort
+(Copilot also the context tier) through **Model Settings** in
 the tab's context menu, Mac/browser Remote or Cantrip Agent. Overrides persist
 per tab, require idle work and Council mode off, and can be removed with
 **Use Mac defaults**. Each backend keeps its own override, since their model
 IDs differ. Claude Code's list comes from the CLI's `initialize` reply (no model
 call); a change restarts that tab's `claude` process, which resumes the same
-conversation. Working directories and conversations are also per-session.
+conversation. Codex's list, with each model's efforts, comes from its app
+server's `model/list` (no model call); a change applies to the tab's next
+message in the same Codex thread. Working directories and conversations are
+also per-session.
 
 On Mac, the refresh button beside the Copilot model picker reads the signed-in
 CLI's live account catalog, including each model's supported efforts and context
@@ -242,7 +258,7 @@ sets them from a terminal (a bare name keeps the saved choice). It's one setting
 the whole Mac, so changing it saves right away and applies to every tab. Those screens also show which backend is at its limit and until when, with
 **Try every backend again** to clear that early. When the backend you use reports that its plan's usage limit
 is reached (Claude's 5-hour or weekly limit, Copilot's premium requests, a
-Codex or Gemini quota), Cantrip:
+Codex's 5-hour, weekly or monthly limit, a Gemini quota), Cantrip:
 
 1. Shows the error and notes which backend takes over.
 2. Continues the same task on the first backup in the list that isn't at its
@@ -260,17 +276,21 @@ Cantrip decides from each backend's own error fields, not the error's wording:
 Copilot's `session.error` category (`quota` or `rate_limit`, with codes such as
 `quota_exceeded` or `user_weekly_rate_limited`), and Claude Code's `rate_limit`
 or `billing_error` message error and `rejected` rate-limit event, which also
-gives the reset time. Matching known phrases in the message is only the last
-resort, for CLIs that don't send a code (Codex and Gemini today); the host log
-notes when a switch relied on it.
+gives the reset time, and Codex's `usageLimitExceeded` or `rateLimitExceeded`
+error code, with the reset time from its rate-limit update. Matching known
+phrases in the message is only the last resort, for CLIs that don't send a code
+(Gemini today); the host log notes when a switch relied on it. Codex and
+Antigravity are also marked limited as soon as the Usage Limits screen (or, for
+Codex, a running tab) shows a full window, so new messages move before the CLI
+refuses one.
 
 Each backup uses its own model and effort settings. It doesn't share the
 original backend's session, so it works from the conversation Cantrip passes
 along. Once every backup is at its limit, the run stops with the error; a
 backend is never tried again before its limit resets, so a run can't go round
 in circles. Council seats and Private Local tabs never switch. Scheduled
-Cantrip Home tasks skip Codex and Copilot Remote in the list and use the next
-backup, because Cantrip can't check those backends' actions one at a time. A full context window ("Context limit reached") isn't a
+Cantrip Home tasks skip Copilot Remote in the list and use the next backup,
+because Cantrip can't check that backend's actions one at a time. A full context window ("Context limit reached") isn't a
 usage limit and doesn't switch backends.
 
 From Terminal: `cantrip config set limitFallbackBackends "copilot, codex, agy"`

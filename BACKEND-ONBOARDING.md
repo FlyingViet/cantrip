@@ -8,7 +8,7 @@ A backend is "onboarded" only when every Cantrip feature that the backend *can* 
 through it, on every surface, and the features it can't support fail clearly. Launching the
 CLI and streaming text is the start, not the finish.
 
-The guide collects what three onboardings taught. Each lesson names the commit that fixed it,
+The guide collects what four onboardings taught. Each lesson names the commit that fixed it,
 so `git show <sha>` gives the details.
 
 - **Copilot** came first, so most features were built for it. Its lessons are mostly about
@@ -18,8 +18,10 @@ so `git show <sha>` gives the details.
   d1549c6 and bb39eeb.
 - **Antigravity** (`agy`) first shipped streaming and tool checks (84827f8), and then needed
   about a dozen fixes to reach parity.
+- **Codex** first ran one `codex exec` per turn, which couldn't check tools, resume or report
+  limits. Moving to `codex app-server` (933def2) gave it all three.
 
-The lesson common to all three: **a feature built for one backend doesn't reach the others
+The lesson common to all of them: **a feature built for one backend doesn't reach the others
 unless someone checks.** Section 5 is that check.
 
 User-facing setup for existing backends is in [docs/backends.md](docs/backends.md).
@@ -31,22 +33,22 @@ Save sample output (JSON lines, errors) as test fixtures. Write down the CLI ver
 tested: Copilot 1.0.88 changed when a turn counts as idle and when background agents start,
 which broke queued messages and subagent cards until Cantrip caught up (a8df390, edd4aba).
 
-| Question | Why Cantrip needs it | Claude Code | Copilot | Antigravity |
-|---|---|---|---|---|
-| Is there a headless, structured stream? | Text, reasoning, tool steps and errors must come from fields, not scraped terminal text. | `-p --input-format stream-json` plus a control protocol | SDK session through a Node bridge (`CopilotSessionBridge`); ACP for Copilot Remote | `--input-format`/`--output-format stream-json` |
-| One process for many turns, or one per turn? | Process lifecycle, idle cleanup, mid-turn input. | Persistent per tab | Persistent runtime per tab (0.5 to 3 GB) | Persistent per tab |
-| How do you resume, and is it tied to a folder? | Tabs survive restarts and folder changes. | `--resume <id>` | `resumeSession(id)` | `--conversation <id>`; tied to the starting folder |
-| How do you stop a turn and keep the session? | Stop must keep the conversation. | `control_request` `interrupt` on stdin | `session.abort()` | `SIGINT` |
-| Can a running turn take new messages? | Live steering and "send now". | Yes | Yes | No |
-| How are models listed, without spending quota? | Pickers must show the account's real catalog. | `initialize` reply | Account models API, with efforts and context tiers | `agy models` |
-| Which effort, reasoning or context options exist? | Per-tab and Home task model settings. | Effort | Reasoning effort, context tiers (from `--help` and the API) | `--effort low/medium/high` |
-| How are usage limits reported, on error and on demand? | Usage limit fallback and the Usage Limits screens. | `rate_limit`/`billing_error` errors and a `rejected` rate-limit event with reset time; usage API | `session.error` `errorType`/`errorCode`; GitHub allowance endpoint | No error code; `agy -p /usage` |
-| Can every tool call be checked before it runs? | Action policy, read-only council seats, Home guardrails. | `PreToolUse` hook and `--permission-prompt-tool stdio` | SDK `onPermissionRequest` | Global `PreToolUse` hook |
-| What runs without asking when no permission flags are set? | You must know what escapes the check. | Its permission mode decides | Each tool asks through `onPermissionRequest` | File edits in the workspace |
-| What is the safest native mode, for read-only seats? | Council advisors must not act. | `--permission-mode plan` | A read-only session with no tools | Cantrip's hook only allows reads |
-| How are subagents and background work reported, and can one be stopped? | Subagent monitor, `watch-`/`side-` agents. | `task_started`, `background_tasks_changed`, `task_notification`; `stop_task` | `subagent.*` events; `tasks.cancel` | Steps plus transcript files |
-| Where do MCP servers, skills and slash commands come from? | Slash command discovery, shared MCP servers. | `initialize` reply; its own MCP config | Throwaway SDK session (`commands.list`, `skills.list`); `~/.copilot/mcp-config.json` | Skill folders under `~/.gemini` |
-| Where are its sign-ins stored? | Features must run the binary that owns the sign-in. | Login keychain | Keychain items of the signed CLI binary | CLI's own store |
+| Question | Why Cantrip needs it | Claude Code | Copilot | Antigravity | Codex (0.166.0) |
+|---|---|---|---|---|---|
+| Is there a headless, structured stream? | Text, reasoning, tool steps and errors must come from fields, not scraped terminal text. | `-p --input-format stream-json` plus a control protocol | SDK session through a Node bridge (`CopilotSessionBridge`); ACP for Copilot Remote | `--input-format`/`--output-format stream-json` | `codex app-server --listen stdio://`: JSON-RPC 2.0 items, deltas and server requests |
+| One process for many turns, or one per turn? | Process lifecycle, idle cleanup, mid-turn input. | Persistent per tab | Persistent runtime per tab (0.5 to 3 GB) | Persistent per tab | Persistent app server per tab |
+| How do you resume, and is it tied to a folder? | Tabs survive restarts and folder changes. | `--resume <id>` | `resumeSession(id)` | `--conversation <id>`; tied to the starting folder | `thread/resume` (`excludeTurns`); a thread keeps its folder, so Cantrip starts a new one when the folder changes |
+| How do you stop a turn and keep the session? | Stop must keep the conversation. | `control_request` `interrupt` on stdin | `session.abort()` | `SIGINT` | `turn/interrupt` |
+| Can a running turn take new messages? | Live steering and "send now". | Yes | Yes | No | Yes, `turn/steer` with `expectedTurnId` |
+| How are models listed, without spending quota? | Pickers must show the account's real catalog. | `initialize` reply | Account models API, with efforts and context tiers | `agy models` | `model/list` (efforts, default effort, default model) |
+| Which effort, reasoning or context options exist? | Per-tab and Home task model settings. | Effort | Reasoning effort, context tiers (from `--help` and the API) | `--effort low/medium/high` | Per-model efforts (`low` to `max`, `ultra` on some) |
+| How are usage limits reported, on error and on demand? | Usage limit fallback and the Usage Limits screens. | `rate_limit`/`billing_error` errors and a `rejected` rate-limit event with reset time; usage API | `session.error` `errorType`/`errorCode`; GitHub allowance endpoint | No error code; `agy -p /usage` | `error` with `codexErrorInfo` `usageLimitExceeded`/`rateLimitExceeded`; `account/rateLimits/read` and `account/rateLimits/updated` with `resetsAt` |
+| Can every tool call be checked before it runs? | Action policy, read-only council seats, Home guardrails. | `PreToolUse` hook and `--permission-prompt-tool stdio` | SDK `onPermissionRequest` | Global `PreToolUse` hook | Under `approvalPolicy: untrusted`: `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `mcpServer/elicitation/request` (`codex_approval_kind: mcp_tool_call`), `item/permissions/requestApproval` |
+| What runs without asking when no permission flags are set? | You must know what escapes the check. | Its permission mode decides | Each tool asks through `onPermissionRequest` | File edits in the workspace | Commands Codex knows are safe reads (`cat`, `ls`) |
+| What is the safest native mode, for read-only seats? | Council advisors must not act. | `--permission-mode plan` | A read-only session with no tools | Cantrip's hook only allows reads | `sandbox: read-only` with `untrusted` |
+| How are subagents and background work reported, and can one be stopped? | Subagent monitor, `watch-`/`side-` agents. | `task_started`, `background_tasks_changed`, `task_notification`; `stop_task` | `subagent.*` events; `tasks.cancel` | Steps plus transcript files | `collabAgentToolCall` and `subAgentActivity` items; none can be stopped alone |
+| Where do MCP servers, skills and slash commands come from? | Slash command discovery, shared MCP servers. | `initialize` reply; its own MCP config | Throwaway SDK session (`commands.list`, `skills.list`); `~/.copilot/mcp-config.json` | Skill folders under `~/.gemini` | `-c mcp_servers.<name>.*` overrides per launch; `skills/list` |
+| Where are its sign-ins stored? | Features must run the binary that owns the sign-in. | Login keychain | Keychain items of the signed CLI binary | CLI's own store | `~/.codex/auth.json` (`codex login`); Cantrip never reads it |
 
 If a question has no answer, mark the feature unsupported and make sure Cantrip says so
 (for example `SubagentCancelError.unsupported`). Don't fake it.
@@ -87,6 +89,21 @@ working or deliberately unsupported with a clear message.
 | Reply visibility | `ReplyVisibility.guidance` in the session's system message | `Backend.swift` | f3ca958, 05b8c08 |
 | Terminal CLI | `cantrip ask --backend <name>` aliases | `CLIServer.swift`, `HostControl.swift` | 84827f8 |
 
+Codex (0.166.0), as wired in `CodexBackend` and `CodexAppServer`:
+
+| Feature | Codex |
+|---|---|
+| Streaming reply and tool steps | `item/agentMessage/delta`, `item/reasoning/summaryTextDelta`; `item/started`/`item/completed` for `commandExecution`, `fileChange`, `mcpToolCall`, `webSearch`, `imageGeneration` and agent items |
+| Token usage and context | `thread/tokenUsage/updated` `last` per model call, summed per turn; `modelContextWindow` |
+| Resume and earlier turns | Thread ID under the tab's `persistKey` plus its folder; turns the thread hasn't seen are replayed (`.seenTurns`) |
+| Stop and live steering | `turn/interrupt`; `turn/steer` |
+| Action policy and Home | Every approval request goes through `CodexBackend.decide`: read-only seats (Codex `read-only` sandbox) allow plain reads only, tabs ask (plain reads allowed), Home and child tabs use `CantripHomeActionPolicy` and child-tab resource turns, full access only with Act on my behalf or Settings > Codex > Permissions. A non-read command that ran without a request stops a Home run |
+| Per-tab, Home task and backup models | `model/list` through a short-lived app server (`CodexModelFetcher`), `codexModelSettings`, `turn/start` `model`/`effort` |
+| Usage limits and screens | `codexErrorInfo` → `.usageLimit` (`codex/usageLimitExceeded`), reset from the last `account/rateLimits/updated`; `account/rateLimits/read` → `CodexUsage`, `copilotUsage.codex` |
+| Shared MCP servers | `MCPBackendConfig.codexArgs` `-c` overrides on the app server; tool calls come back as `mcpServer/elicitation/request` |
+| Subagents | Shown from agent items; `canCancel` is false |
+| Auto routing, queue plans, consolidation | Unavailable: no tool-free one-shot mode |
+
 Context such as memory, location, calendar, files, screen and continuity is added to
 `request.prompt` by `ChatSession.composeContext` and `prepareMemory`, so a backend gets it
 without extra work and must not add it again.
@@ -119,7 +136,7 @@ grep -rn "default:" Sources/Cantrip/ClaudeModels.swift Sources/Cantrip/SessionMo
 5. **Policy.** Add the backend to `CantripHomeApproval.chosen(for:)`, plus a
    `CantripHomeActionRequest` initializer that converts its tool calls. If tools can't be checked
    one at a time, Home must not run unattended on it (see `BackendFallback.target`, which keeps
-   Home runs off Codex and Copilot Remote).
+   Home runs off Copilot Remote).
 6. **Limits and usage.** Emit `.usageLimit` from the CLI's structured error, and add phrases to
    `UsageLimit.phrases` only as a last resort. Add a usage reader and state to
    `UsageTracker`/`CopilotUsage`, and a view in `CopilotUsageView` shown from `LauncherView`.
@@ -153,11 +170,14 @@ live run.
   missing tool folders (91af48f).
 - Read a helper command's output while it runs (`ProcessRunner`). A pipe holds 64 KB, and a
   command that prints more never exits (6b34f7c).
+- Don't look up a missing CLI through a login shell on the main thread. Nothing is cached when
+  it isn't found, so a Mac without the CLI paid seconds on every usage refresh (933def2).
 
 **Turns**
 - Send exactly one `.done` or `.failure` per turn. After a cancel, a dying process must not send
   events into the next run, which SIGKILL can reach seconds late (e4fae56). After an in-band
-  interrupt, drop the stopped turn's trailing events (b74702b).
+  interrupt, drop the stopped turn's trailing events (b74702b). Match them by turn ID: Codex
+  can finish the stopped turn after the next one starts (933def2).
 - Stop in-band when the CLI allows it, so the process and session stay warm (Claude's
   `control_request`, b74702b).
 - Send `.heartbeat` for progress-only events. A Claude build that sent only `tool_progress` for
@@ -179,6 +199,9 @@ live run.
 - A backend that keeps its own session still needs the turns it hasn't seen: a tab that ran on
   another backend, a new or lost session, or turns another backend answered. Count what the
   session has seen and add only the rest (bb39eeb).
+- A session may refuse to resume while another process still has it open (Codex: "already has
+  an active writer"). Fall back to a new session with the turns replayed, not a silent blank
+  one (933def2).
 
 **Prompts and agent guidance**
 - Put fixed instructions (Home's protocol) in the session's system instructions once, and send
@@ -239,6 +262,8 @@ live run.
 - Check text sent into a running task the same way as a command (19ce907).
 - Where a platform has no way to check tools (Windows `agy` today), refuse to run without
   actions on rather than run unchecked (7089526).
+- Know which reads the CLI asks about. Codex under `untrusted` asks even for `cat`, so tabs allow
+  plain reads without a prompt, and Home audits the commands it runs unasked (933def2).
 
 **Models**
 - List models from the CLI or API, never by calling a model, and never ship a guessed list.
@@ -367,15 +392,23 @@ below. When a fix teaches something new, add it to section 4 with its commit.
 
 ## 9. Known gaps in current backends
 
-Checked against `main` on 2026-10-30. Fix these when working on the backend, and update the
+Checked against `main` on 2026-10-31. Fix these when working on the backend, and update the
 table when you do.
 
 | Backend | Missing |
 |---|---|
 | Antigravity | `ReplyVisibility`, `SimulatorPool` and `watch-`/`side-` guidance; per-tab MCP switches for local servers (agy reads MCP servers only from `~/.gemini/config/mcp_config.json`, which Cantrip writes); `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
 | Claude Code | Stopping one foreground Task subagent (the CLI can stop only background agents) |
-| Codex | `SimulatorPool` guidance; shared MCP servers checked only in tests (not against an installed CLI); model discovery; usage screen; structured limit codes; tool-call checks (so no unattended Home); subagents |
+| Codex | `watch-`/`side-` background agents and wake-up turns (Codex's agents end with the turn); stopping one subagent (no API); Auto routing, queue plans, Done-when checks and memory upkeep (no tool-free one-shot mode wired); idle process release (each tab's app server stays up); shared servers that sign in through Cantrip's relay not yet run live (local `-c` servers were); Windows still runs `codex exec` |
 | Windows (all) | Structured events, conversation resume and usage fallback (see PARITY.md) |
+
+Last live check of Codex: 2026-10-31, `codex-cli 0.166.0`, ChatGPT free plan, through
+`CodexBackend` (`CANTRIP_CODEX_LIVE_TEST=1`). Passed: items 1 (three turns, restart, Stop), 2,
+3 (asked and approved, denied and shown as failed, Act on my behalf without prompts), 4, 5, 7
+(`model/list` matches the CLI's three models and efforts; a per-tab model runs), 8 (one 30-day
+window, read without a model call), 10 (Home's policy blocked `sudo` without asking), and a
+shared local MCP server's tool after approval. Not run: 6 (15-minute command), 9 (Auto routing
+is unavailable), 11 (no background agents), 12 (needs the new build in the running app).
 
 ## Done checklist
 

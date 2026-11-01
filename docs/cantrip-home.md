@@ -245,9 +245,11 @@ in browser and Mac Remote, never by opening the hidden run as a tab. See
 Local models keep these pauses whatever the setting. Questions the agent asks
 you always reach you.
 
-Background runs can't create or change tasks. Codex and Copilot Remote (ACP)
-can run commands Cantrip never sees, so on them background runs fail closed
-with an explanation and the Home chat follows the rules on its own.
+Background runs can't create or change tasks. Copilot Remote (ACP) can run
+commands Cantrip never sees, so on it background runs fail closed with an
+explanation and the Home chat follows the rules on its own. Codex asks Cantrip
+before each command, edit and MCP tool, so Home runs on it with the same checks;
+a command other than a plain read that Codex runs without asking stops the run.
 
 ## Artifacts
 

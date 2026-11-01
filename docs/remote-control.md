@@ -108,9 +108,10 @@ The paired API advertises `isLocalPrivate`/`supportsPrivateLocalSettings`, with
 Choose **Model Settings** in the Mac/browser Remote tab's settings menu
 (the three dots). Cantrip Agent exposes the same controls in the chat menu and
 tab actions. On the host Mac, right-click a local tab and choose **Model
-Settings**. These controls apply to the Mac's **Copilot** or **Claude Code**
-backend with Council mode off; they do not reconfigure Codex, Antigravity or ACP
-servers. Claude Code tabs pick a model and effort (no context tier).
+Settings**. These controls apply to the Mac's **Copilot**, **Claude Code**,
+**Codex** or **Antigravity** backend with Council mode off; they do not
+reconfigure ACP servers. Claude Code, Codex and Antigravity tabs pick a model
+and effort (no context tier).
 
 Turn off **Use Mac defaults** to save a model, reasoning effort and context tier
 for just that tab. The choices come from the paired Mac's model list for its
@@ -240,9 +241,10 @@ request on refresh. Requests and secrets are not restored/replayed after a crash
 
 **Act on my behalf** and provider-specific automatic permissions are preserved.
 Turn automatic actions off to require tool approvals. Read-only Council seats
-remain read-only; the Private Local tab remains tool-free. Codex's headless
-`exec` tool-approval protocol, arbitrary programs, manual persistent-terminal
-input, and arbitrary OAuth callback flows are not covered by this bridge.
+remain read-only; the Private Local tab remains tool-free. Codex's approvals for
+commands, edits and MCP tools arrive as ordinary approval requests. Arbitrary
+programs, manual persistent-terminal input, and arbitrary OAuth callback flows
+are not covered by this bridge.
 
 Secure fields are separate from ordinary chat. Non-secret questions and their
 answers become normal saved conversation turns and are sent to the agent;
@@ -859,12 +861,13 @@ Mac, not other hosts or the iPhone app.
 
 Tap the **usage gauge beside the Local/Remote lane picker (antenna)** in
 Cantrip Agent's top header. It leads with the limit your Mac's backend uses:
-on Claude Code or Antigravity, that backend's window closest to its limit (for
+on Claude Code, Antigravity or Codex, that backend's window closest to its limit (for
 example `Week 32%`); on Copilot, **AI credits used / total**. **Usage Limits**
 shows them all: Claude Code's 5-hour session and weekly limits (and per-model
 weekly limits when the plan has them), Antigravity's weekly and 5-hour limits
-for each model group (Gemini, Claude and GPT, Gemini 4 Argon), each with its
-reset time, then the Copilot allowance with its reset time, additional usage
+for each model group (Gemini, Claude and GPT, Gemini 4 Argon), Codex's 5-hour
+and weekly limits (one 30-day limit on the free plan, and any model's own),
+each with its reset time, then the Copilot allowance with its reset time, additional usage
 and account. It is available from every
 chat lane; it does not switch sessions or change which backend receives your
 messages. Cantrip Gateway (Mac and Windows) has the same sheet.
@@ -874,7 +877,8 @@ second: Claude's usage API with Claude Code's sign-in from the login keychain
 (read only, never refreshed, so Claude Code's own sign-in is untouched), and
 GitHub's Copilot allowance endpoint with the `gh` sign-in, and Antigravity's
 own `agy -p /usage` (answered by the CLI without a model call, so checking
-spends no quota). When `gh` isn't
+spends no quota), and Codex's `account/rateLimits/read` from `codex app-server`
+(also no model call; a running Codex tab updates it as it works). When `gh` isn't
 signed in, it falls back to the Copilot SDK reader (Node.js and a recent
 Copilot CLI). It refreshes every five minutes on its own, and a Claude window
 at 100%, or a used-up Antigravity window in the group the Mac's Antigravity
