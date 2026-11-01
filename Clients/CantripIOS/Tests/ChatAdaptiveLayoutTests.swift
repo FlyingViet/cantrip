@@ -146,7 +146,7 @@ final class ChatAdaptiveLayoutTests: XCTestCase {
         XCTAssertGreaterThan(state.detailFrame.width, window.bounds.width - 180)
         XCTAssertEqual(state.detailIdentities.count, 1)
         if state.observedTraits.hasVerticalBar {
-            for frame in [state.tabsFrame, state.refreshFrame, state.settingsFrame, state.menuFrame] {
+            for frame in [state.tabsFrame, state.settingsFrame, state.menuFrame] {
                 if scene.traitCollection.verticalBarEdge == .leading {
                     XCTAssertLessThanOrEqual(frame.maxX, state.detailFrame.minX + 1)
                 } else {
@@ -160,9 +160,9 @@ final class ChatAdaptiveLayoutTests: XCTestCase {
             }
             XCTAssertGreaterThan(state.tabsFrame.minY, window.bounds.height * 0.7,
                                  "Tabs belongs near the bottom of the native side toolbar")
-            for frame in [state.settingsFrame, state.refreshFrame, state.menuFrame] {
+            for frame in [state.settingsFrame, state.menuFrame] {
                 XCTAssertLessThan(frame.maxY, window.bounds.midY,
-                                  "Settings, Refresh and the menu stay in the upper toolbar")
+                                  "Settings and the menu stay in the upper toolbar")
                 XCTAssertLessThan(frame.maxY, state.tabsFrame.minY)
             }
         } else {
@@ -340,7 +340,6 @@ private final class AdaptiveNavigationState: ObservableObject {
     var headerFrame = CGRect.zero
     var composerFrame = CGRect.zero
     var menuFrame = CGRect.zero
-    var refreshFrame = CGRect.zero
     var settingsFrame = CGRect.zero
     var tabsFrame = CGRect.zero
     var sidebarEnabled = true
@@ -426,15 +425,7 @@ private struct AdaptiveDetailProbe: View {
                 Text("Current tab").lineLimit(1)
             } connection: {} lane: {
                 Image(systemName: "antenna.radiowaves.left.and.right").frame(height: 44)
-            } usage: {} delivery: {} refresh: {
-                Button {} label: {
-                    Image(systemName: "arrow.clockwise").frame(width: 44, height: 44)
-                }
-                .accessibilityLabel("Refresh")
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
-                    state.refreshFrame = $0
-                }
-            } settings: {
+            } usage: {} delivery: {} settings: {
                 ChatSettingsButton {}
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                         state.settingsFrame = $0

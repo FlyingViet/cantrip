@@ -214,11 +214,13 @@ state, latest line and age. The **Auto** delivery dropdown is in the tab's **⋯
 choose a manual mode there for a one-message override.
 
 The connected-server indicator sits at the left end of the antenna/usage row,
-with **Refresh** at the right end and Auto still beside usage. On narrow screens
-the server name collapses to a computer/status icon; tap it for the full server
-name and connection state. Refresh shows polling progress in the same fixed
-space, without shifting the controls. Session status and errors remain below
-the header when present.
+with Auto beside usage. On narrow screens the server name collapses to a
+computer/status icon; tap it for the full server name and connection state.
+There is no refresh button: the app polls the Mac every 1.5 seconds while the
+tab you're viewing is working, has queued messages or the connection is down,
+every 5 seconds otherwise, and at once when it comes to the front. Session
+status and errors remain below the header when present; **Retry conversation**
+reloads one that failed to load.
 
 While the selected tab is working, a compact red **Stop** icon is visible inside
 the right side of the message composer, beside Send/microphone. Send remains
@@ -234,7 +236,7 @@ to open the Cantrip **Tabs** drawer; **Settings** is the gear in its footer, bes
 connection line. The **hamburger menu is at the top right**. On Duo's vertical toolbar in Home, **Tabs and the
 white hamburger menu sit at the top**, as in Home's iPhone header, and Home's Chat,
 Tasks, Artifacts and Builds take the bottom of the vertical toolbar. In a project tab, the back pill sits near the bottom, with a separate
-**Settings gear**, Refresh, and the **white hamburger menu at the top**.
+**Settings gear** and the **white hamburger menu at the top**.
 The hamburger stays white when paused, with a small orange pause badge. Select a
 tab to return to chat; swipe left on the drawer header or backdrop, tap outside,
 or use **Close tabs** to dismiss
@@ -246,7 +248,7 @@ drawer rather than duplicate top-bar buttons. Resume (when available) and New
 conversation remain in the shared chat's hamburger menu.
 
 The hamburger menu holds only this tab's actions, in labeled sections: **Model &
-conversation** (Model Settings, Start Fresh, Tools for This Tab, Delivery, Resume, Refresh),
+conversation** (Model Settings, Start Fresh, Tools for This Tab, Delivery, Resume),
 **Tab** (Rename, Lock, Move to Section, Move Up/Down), **Agent** (Pause Agent, Voice Mode)
 and Close Tab. Memory, Usage Limits, the mascot, **Update & rebuild Cantrip**, **Mac permissions &
 View Mac** and **Skills & Rules** are in Settings; Builds and Background jobs are in Home and the

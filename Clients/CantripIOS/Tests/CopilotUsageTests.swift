@@ -499,16 +499,13 @@ final class CopilotUsageTests: XCTestCase {
             }
             for width: CGFloat in [320, 393, 768] {
                 for mode in CantripDeliveryMode.allCases {
-                    let idle = assertHeaderLayout(scene: scene, width: width, size: size, mode: mode)
-                    let polling = assertHeaderLayout(scene: scene, width: width, size: size,
-                                                     mode: mode, isRefreshing: true)
-                    XCTAssertEqual(idle, polling, "Polling must not move header controls")
+                    assertHeaderLayout(scene: scene, width: width, size: size, mode: mode)
                 }
             }
         }
     }
 
-    func testHeaderKeepsConnectionAndRefreshAtTheEdgesWithoutASelectedTab() throws {
+    func testHeaderKeepsConnectionAndUsageAtTheEdgesWithoutASelectedTab() throws {
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
@@ -525,16 +522,10 @@ final class CopilotUsageTests: XCTestCase {
         }
     }
 
-    func testConnectionStatusAndRefreshAvailabilityStayExplicit() {
+    func testConnectionStatusStaysExplicit() {
         for connected in [false, true] {
             let indicator = ChatConnectionIndicator(host: "cantrip.example", isConnected: connected)
             XCTAssertEqual(indicator.status, connected ? "Connected" : "Disconnected")
-        }
-        for configured in [false, true] {
-            for refreshing in [false, true] {
-                let button = ChatRefreshButton(isConfigured: configured, isRefreshing: refreshing) {}
-                XCTAssertEqual(button.isEnabled, configured && !refreshing)
-            }
         }
     }
 
@@ -570,14 +561,13 @@ final class CopilotUsageTests: XCTestCase {
     private func assertHeaderLayout(
         scene: UIWindowScene, width: CGFloat, size: DynamicTypeSize, mode: CantripDeliveryMode,
         lane: ExecutionLane = .cantrip, host: String = "cantrip-mac.tailnet.example",
-        isConnected: Bool = true, isConfigured: Bool = true, isRefreshing: Bool = false,
+        isConnected: Bool = true, isConfigured: Bool = true,
         hasSession: Bool = true, usageText: String = "35.5K / 1M", compact: Bool = false
     ) -> [CGRect] {
         var connectionFrame = CGRect.zero
         var laneFrame = CGRect.zero
         var usageFrame = CGRect.zero
         var deliveryFrame = CGRect.zero
-        var refreshFrame = CGRect.zero
         var leadingFrame = CGRect.zero
         var menuFrame = CGRect.zero
         var titleFrame = CGRect.zero
@@ -644,13 +634,6 @@ final class CopilotUsageTests: XCTestCase {
                                 deliveryFrame = $0
                             }
                     }
-                } refresh: {
-                    if lane.usesCantripRemote {
-                        ChatRefreshButton(isConfigured: isConfigured, isRefreshing: isRefreshing) {}
-                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
-                                refreshFrame = $0
-                            }
-                    }
                 } settings: {
                     ChatSettingsButton {}
                 } leading: {
@@ -691,7 +674,6 @@ final class CopilotUsageTests: XCTestCase {
             XCTAssertEqual(laneFrame, .zero)
             XCTAssertEqual(usageFrame, .zero)
             XCTAssertEqual(deliveryFrame, .zero)
-            XCTAssertEqual(refreshFrame, .zero)
             XCTAssertEqual(titleFrame.height, 44, accuracy: 1, "Cantrip Remote keeps its title")
             XCTAssertEqual(titleFrame.midX, width / 2, accuracy: 1)
             XCTAssertEqual(leadingFrame.size, CGSize(width: 44, height: 44))
@@ -712,11 +694,8 @@ final class CopilotUsageTests: XCTestCase {
             XCTAssertLessThanOrEqual(laneFrame.maxX, usageFrame.minX)
             XCTAssertGreaterThanOrEqual(laneFrame.minX, 12)
             if lane.usesCantripRemote {
-                XCTAssertEqual(refreshFrame.width, 44, accuracy: 0.5)
-                XCTAssertEqual(refreshFrame.height, 44, accuracy: 0.5)
-                XCTAssertEqual(refreshFrame.midY, usageFrame.midY, accuracy: 0.5)
-                XCTAssertEqual(refreshFrame.maxX, width - 12, accuracy: 0.5)
-                XCTAssertLessThanOrEqual(usageFrame.maxX, refreshFrame.minX)
+                // Polling refreshes the sessions; the row ends with the tab's delivery, else usage.
+                XCTAssertEqual((hasSession ? deliveryFrame : usageFrame).maxX, width - 12, accuracy: 0.5)
                 XCTAssertEqual(connectionFrame.height, 44, accuracy: 1)
                 XCTAssertGreaterThanOrEqual(connectionFrame.width, 44)
                 XCTAssertEqual(connectionFrame.midY, usageFrame.midY, accuracy: 0.5)
@@ -727,14 +706,12 @@ final class CopilotUsageTests: XCTestCase {
                     XCTAssertEqual(deliveryFrame.height, 44, accuracy: 0.5)
                     XCTAssertEqual(usageFrame.midY, deliveryFrame.midY, accuracy: 0.5)
                     XCTAssertLessThanOrEqual(usageFrame.maxX, deliveryFrame.minX)
-                    XCTAssertLessThanOrEqual(deliveryFrame.maxX, refreshFrame.minX)
                 } else {
                     XCTAssertEqual(deliveryFrame, .zero)
                 }
             } else {
                 XCTAssertEqual(connectionFrame, .zero)
                 XCTAssertEqual(deliveryFrame, .zero)
-                XCTAssertEqual(refreshFrame, .zero)
             }
             XCTAssertGreaterThanOrEqual(titleFrame.minY, controller.view.safeAreaInsets.top + 8)
             XCTAssertGreaterThanOrEqual(titleFrame.minX, 64)
@@ -746,10 +723,10 @@ final class CopilotUsageTests: XCTestCase {
             let image = UIGraphicsImageRenderer(bounds: CGRect(x: 0, y: 0, width: width, height: 210))
                 .image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
             let attachment = XCTAttachment(image: image)
-            attachment.name = "aligned-header-\(Int(width))-\(size)-\(lane)-\(mode)-\(isRefreshing)-\(host)-\(usageText)"
+            attachment.name = "aligned-header-\(Int(width))-\(size)-\(lane)-\(mode)-\(host)-\(usageText)"
             attachment.lifetime = .keepAlways
             add(attachment)
         }
-        return [connectionFrame, laneFrame, usageFrame, deliveryFrame, refreshFrame]
+        return [connectionFrame, laneFrame, usageFrame, deliveryFrame]
     }
 }
