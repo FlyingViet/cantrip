@@ -163,3 +163,21 @@ checks that Electron's TLS library completes a real TLS-PSK request.
 Not on Windows: push alerts, widgets and Live Activities (iPhone features), the Home
 Builds tab (iPhone install links), Touch ID before approvals, and finding the Mac
 automatically on the network (enter its address or use a pairing link).
+
+## Not yet: the shared settings map
+
+Cantrip Agent (iPhone and Duo) and Gateway Mac share one settings map. Gateway Windows doesn't
+have it yet; to match them it needs:
+
+- A Settings window with a sidebar of the same pages, opening on a status card (the Mac in use
+  and its route, what new tabs run on, and the usage-limit backups): Macs, Models, Tools &
+  sign-ins, Memory, Voice, Appearance, About & Updates.
+- **Macs** as a linked-devices list (Active badge, last seen), a Mac's page with Re-enter
+  Pairing Token, its addresses under Advanced and Remove, and a step-by-step **Pair a Mac**.
+- **Models** with model tiers (`GET/POST /api/v1/model-tiers`), the usage-limit backups moved
+  out of Model Settings, and Usage Limits.
+- Per-tab Model Settings with **Auto (Mac default)** first, the tiers, the models grouped by tier
+  with one-line descriptions, effort as a segmented control, context under Advanced, and changes
+  that save at once.
+- Standard File, View, Tab, Window and Help menus, and one More menu holding only the open
+  tab's actions.

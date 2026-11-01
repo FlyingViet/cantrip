@@ -37,7 +37,7 @@ Only Mac-specific code lives in this repo:
 | --- | --- |
 | `Sources/App` | App entry, window/menu commands, navigation state |
 | `Sources/Home` | Home window: sidebar (Pip, sections, connection), chat, toolbar |
-| `Sources/Settings` | Settings window: pairing and voice |
+| `Sources/Settings` | Settings window: the shared pages (Hermes `Sources/Settings`) beside a sidebar, plus this Mac's local model tools |
 | `Sources/Platform` | AppKit stand-ins for the UIKit/ActivityKit names the shared code uses, and the macOS image viewer |
 | `Tests` | Mac tests; `project.yml` also runs the shared Hermes logic suites |
 
@@ -87,9 +87,10 @@ that same Mac or on another one.
 3. Click **Copy pairing token**. It gives full control of that Mac's agents, so keep it
    private; **Regenerate** disconnects every paired client.
 
-**In Cantrip Gateway Mac:** open **Settings (⌘,) > Connection**. Under **Cantrip Remote
-Servers**, paste the **Pairing token**, fill in a route, click **Add Server**, then select
-the saved server. Or run `cantrip pair` on the host and open the `cantripagent://pair` link
+**In Cantrip Gateway Mac:** open **Settings (⌘,) › Macs › Pair a Mac**, paste the **Pairing
+token**, fill in a route (the direct address and Tailscale only are under **Advanced**) and
+click **Pair**. The first Mac you pair becomes the active one; switch to another from its page
+in **Macs**. Or run `cantrip pair` on the host and open the `cantripagent://pair` link
 it prints on this Mac: Cantrip Gateway shows the host and its routes and saves nothing until
 you click **Pair**.
 
@@ -111,8 +112,8 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   badges for questions waiting and running tasks, then **Tabs · N**: every project tab on
   the Mac with a spinner while it works (or a question mark while it waits for you), an idle
   dot otherwise, and how long ago it last ran. **+** (⌘T) starts a tab; drag to reorder;
-  right-click for Rename, Lock, Move, Move to Section, Model Settings, Start Fresh, View Mac
-  and Close. With sections (made on any device), tabs show under collapsible headers, each
+  right-click for Model Settings, Start Fresh, Tools for This Tab, Rename, Lock, Move to
+  Section, Move Up/Down and Close. With sections (made on any device), tabs show under collapsible headers, each
   with its own **+** and a right-click menu (Rename, New Tab Here, Move Up/Down, Delete, Edit
   Sections); drop a tab on a header to file it there, or drag a header onto another to reorder
   sections. **New Section** (last row) makes an empty section; deleting one with tabs asks
@@ -124,7 +125,7 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
 - **Tabs:** selecting a tab shows its transcript and composer in place. The toolbar shows its
   name and **Working / Idle · folder**, with Stop, delivery (**Auto**) and **⋯** for the tab's
   actions, Resume, voice mode and **Back to Home**. ⌘1–⌘3 or any Home section returns.
-  **Start Fresh** (also in the Home menu) keeps the tab and its messages but starts the next
+  **Start Fresh** (also in the Tab menu) keeps the tab and its messages but starts the next
   prompt in a new model session; a repeated error offers it, and **Change Model**, in place.
 - **Chat:** Return sends; Option-Return adds a line. Drag images onto the chat to
   attach them, or press ⌘V in the message box with a copied screenshot, photo, video or
@@ -157,11 +158,19 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   programs such as `vim` or `top` don't work. Not in Private Local. Needs a Cantrip host with
   `supportsTerminal`.
 - **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS),
-  delivery mode, Refresh (⌘R) and More (model settings, usage limits, voice mode,
-  pause, memory (formatted Markdown or its source), builds, mascot, Cantrip maintenance).
-- **Keyboard:** ⌘1–⌘3 switch sections, ⌘4 opens Local Model, ⌘T opens a new tab and ⌘N
-  focuses a new message. ⇧⌘V opens voice mode, ⇧⌘P pauses the agent and ⌃` shows or hides the
-  terminal.
+  delivery mode, Refresh (⌘R) and one **More** menu everywhere: the open tab's actions (or
+  Home's Model Settings and Start Fresh, or the local model's settings), Pause Agent and Voice
+  Mode, then Back to Home and Settings.
+- **Menus:** **File** has New Tab (⌘T) and New Message (⌘N). **View** has Chat, Tasks and
+  Artifacts (⌘1–⌘3), Local Model on This Mac (⌘4), Background (⌘B), GitHub Builds (⇧⌘B),
+  Toggle Terminal (⌃`) and Refresh (⌘R). **Tab** has Model Settings… (⌘;), Start Fresh, Pause
+  Agent (⇧⌘P) and Voice Mode (⇧⌘V). **Window** and **Help** are the standard ones. The Dock
+  icon's menu has New Message, New Tab, Background, Pause Agent and Settings….
+- **Settings (⌘,):** the same pages as the iPhone app, beside a sidebar, in a window you can
+  resize: Macs, Models (model tiers, usage-limit backups, Usage Limits), Tools & sign-ins (the
+  Mac's shared MCP servers, and this Mac's local model tools), Memory, Voice, Appearance (the
+  mascot) and About & Updates (Update & rebuild Cantrip, Mac permissions). It reopens on the
+  last page you used. Each page says who its settings change.
 
 When a tab Home handed work to finishes, fails, stops or needs an answer, a result card in
 the chat shows its outcome; **Open tab** opens that tab right in the window. Not on the Mac:
@@ -210,7 +219,8 @@ The local model can use tools from the MCP servers already set up for your codin
 this Mac: Copilot CLI's `~/.copilot/mcp-config.json`, then Claude Code's `~/.claude.json`
 (the first file wins a name). Nothing is on until you turn it on:
 
-1. In Local Model **Settings…**, under **Tools from MCP servers**, turn on a server. The app
+1. In **Settings › Tools & sign-ins** (saved as you change it) or Local Model **Settings…**,
+   under **Tools from MCP servers**, turn on a server. The app
    starts it once to list its tools.
 2. Open the tools list to turn individual tools off, and choose **Ask First** (the default) or
    **Run Automatically** for each. Tools the server marks read-only run automatically. A
