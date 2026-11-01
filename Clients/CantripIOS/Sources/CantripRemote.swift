@@ -726,6 +726,9 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     /// The Mac deletes a message and the rest of its exchange (`POST …/delete-message`). Nil from
     /// older Macs, which never offer Delete Message.
     var supportsDeleteMessage: Bool? = nil
+    /// The Mac uses a message's `location` (Settings › Location). Nil from older Macs, which
+    /// answer for the Mac's location.
+    var supportsClientLocation: Bool? = nil
     /// Messages deleted from this tab, on any device. Every cached page drops them.
     var deletedMessageIDs: [String]? = nil
     /// The tab's persistent shell is open to paired clients (`…/terminal`). Nil from older Macs;
@@ -2290,7 +2293,7 @@ struct CantripRemoteAPI {
     fileprivate func prepareMessage(
         _ text: String, mode: CantripDeliveryMode, sessionID: String,
         images: [ChatImageAttachment], videoID: String? = nil, fileIDs: [String] = [],
-        inputRequestID: UUID? = nil
+        inputRequestID: UUID? = nil, location: CantripClientLocation? = nil
     ) async throws -> Data {
         guard images.count <= ImageAttachmentProcessor.maximumCount else {
             throw ImageAttachmentError.tooMany
@@ -2329,7 +2332,7 @@ struct CantripRemoteAPI {
         }
         return try JSONEncoder().encode(CantripMessageBody(text: text, mode: mode, images: images,
                                                          videoID: videoID, fileIDs: fileIDs,
-                                                         inputRequestID: inputRequestID))
+                                                         inputRequestID: inputRequestID, location: location))
     }
 
     func videoStatus(sessionID: String, uploadID: UUID) async throws -> CantripVideoUploadStatus? {
@@ -4586,10 +4589,12 @@ final class CantripRemoteModel: ObservableObject {
             guard await uploadAttachments(video: video, files: files, text: trimmed, mode: mode,
                                           images: images, sessionID: sessionID) else { return false }
         }
+        // Settings › Location: where this device is, for this message only (nil while it's off).
+        let location = question == nil ? await CantripLocationSharing.provider() : nil
         guard let session = await mutate(prepare: { api in
             try await api.prepareMessage(trimmed, mode: mode, sessionID: sessionID, images: images,
                                          videoID: video?.id.uuidString, fileIDs: files.map(\.id.uuidString),
-                                         inputRequestID: question?.id)
+                                         inputRequestID: question?.id, location: location)
         }, { api, body in
             try await api.sendMessage(body, sessionID: sessionID)
         }) else { return false }

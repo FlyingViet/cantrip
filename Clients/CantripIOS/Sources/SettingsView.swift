@@ -171,6 +171,8 @@ struct SettingsView: View {
             SettingsMemoryPage(remote: remote)
         case .voice:
             SettingsVoicePage(env: env, remote: remote, voice: voice)
+        case .location:
+            SettingsLocationPage(remote: remote)
         case .notifications:
             SettingsNotificationsPage(remote: remote)
         case .appearance:

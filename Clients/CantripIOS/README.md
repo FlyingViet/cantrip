@@ -111,7 +111,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | Endpoint | Used for |
 |---|---|
 | `GET /api/v1/sessions`, `GET /api/v1/sessions/{id}` | Tab list; a tab's transcript, status, queue and capability flags |
-| `POST /api/v1/sessions/{id}/messages` | Send; `mode` is `auto` (default), `queue`, `interrupt` (Redirect) or `inject` |
+| `POST /api/v1/sessions/{id}/messages` | Send; `mode` is `auto` (default), `queue`, `interrupt` (Redirect) or `inject`. With Settings › Location on, `location: {latitude, longitude, label, accuracy, precise, timeZone, age, device}` (coarse fixes rounded to 0.01°); the Mac adds a note for that message only and reports `supportsClientLocation` on sessions; a malformed `location` is `400` |
 | `DELETE /api/v1/sessions/{id}/queue/{promptID}`, `POST …/queue/{promptID}/send` | Remove a queued prompt, or Send now |
 | `POST /api/v1/sessions/{id}/queue/{promptID}/fork`, `POST …/children/{childID}/{action}` | Child tabs (`supportsChildTabs`): run a queued prompt in a child tab (`{session, childID}`; `409` with the reason when it can't), and a child card's actions (`open`, `requeue`, `discard`, `resolve`, `keepParent`, `keepChild`, `leave`, `retry`, `merge`); queued prompts carry `plan` (`supportsQueuePlans`), children `parentID` and `child`, the parent's card message `childResult` |
 | `/api/v1/sessions/{id}/input` | Answer approvals, questions and secure input |
@@ -272,6 +272,7 @@ same pages as Gateway Mac:
 | Tools & sign-ins | **GitHub on your Mac**: **Sign In…** runs GitHub's device sign-in for the Mac's GitHub CLI in Cantrip Home, whose chat shows the code to enter at github.com (it was **Sign in to GitHub on Mac** in a tab's menu). Then the Mac's shared MCP servers, in the same words as Cantrip's own Settings: each row shows its state (including "Credentials in Mac keychain" and when a sign-in's token ends), which backends use it, and **Connect** (**Retry** after a failed sign-in, with the Mac's reason); a row opens its sign-in and per-backend switches. Gateway Mac shows the switches in each row, as Cantrip does. Clients see state and send actions; credentials stay on the Mac. |
 | Memory | The Mac's memory files, read-only. |
 | Voice | Speech recognition, dictation vocabulary, the reply voice and the pause before sending. |
+| Location | **Share location with messages** (off by default) and **Precise location**. While on, each message you send carries this device's location (rounded to about 1 km unless Precise is on), a place name and its time zone, so weather and "near me" answers are for where you are; the Mac tells the model to use it and name the place. While off, the Mac's own location stands in and the reply says so. When In Use permission only: one fix when you send, reused for up to 15 minutes, never in the background. It goes only to the paired Mac with that message and isn't saved in Cantrip's memory, the conversation or its logs. **Current location** shows the place it would send. |
 | Notifications | Completion and input alerts, the widget and the Live Activity. |
 | Appearance | The mascot and **Show reasoning steps**. |
 | About & Updates | This app's version, **Update & rebuild Cantrip**, **Mac permissions & View Mac** and **Skills & Rules**. |

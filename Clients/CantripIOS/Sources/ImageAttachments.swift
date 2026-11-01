@@ -136,18 +136,21 @@ struct CantripMessageBody: Encodable {
     /// Uploaded files the Mac attaches to this prompt; omitted when there are none.
     let fileIDs: [String]?
     let inputRequestID: UUID?
+    /// Where this device is (Settings › Location); omitted while sharing is off.
+    let location: CantripClientLocation?
 
     struct ImageUpload: Encodable {
         let data: Data
     }
 
     init(text: String, mode: CantripDeliveryMode, images: [ChatImageAttachment], videoID: String? = nil,
-         fileIDs: [String] = [], inputRequestID: UUID? = nil) {
+         fileIDs: [String] = [], inputRequestID: UUID? = nil, location: CantripClientLocation? = nil) {
         self.text = text
         self.mode = mode.rawValue
         self.images = images.isEmpty ? nil : images.map { ImageUpload(data: $0.data) }
         self.videoID = videoID
         self.fileIDs = fileIDs.isEmpty ? nil : fileIDs
         self.inputRequestID = inputRequestID
+        self.location = location
     }
 }

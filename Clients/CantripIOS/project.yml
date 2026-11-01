@@ -82,6 +82,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSMicrophoneUsageDescription: "Cantrip Agent uses the microphone for voice conversations with your agent."
         NSSpeechRecognitionUsageDescription: "Cantrip Agent transcribes your speech on-device so you can talk to your agent hands-free."
+        NSLocationWhenInUseUsageDescription: "When you turn on Share location in Settings, Cantrip Agent sends your approximate location with each message so answers about weather and places near you are for where you are."
         NSContactsUsageDescription: "Cantrip Agent reads contact names on this iPhone so dictation spells the people you mention correctly. Names stay on your devices."
         NSFaceIDUsageDescription: "Confirm sensitive Cantrip approvals, secure input and remote Mac access with Face ID."
         NSLocalNetworkUsageDescription: "Cantrip Agent discovers and connects securely to your paired Cantrip on the local network."
