@@ -121,6 +121,7 @@ struct SettingsView: View {
     private var homeRows: some View {
         Section {
             SettingsStatusCard(remote: remote, fallback: fallback)
+            SettingsPauseRow()
         }
         Section {
             ForEach(SettingsPage.available) { item in

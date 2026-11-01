@@ -249,15 +249,18 @@ conversation remain in the shared chat's hamburger menu.
 
 The hamburger menu holds only this tab's actions, in labeled sections: **Model &
 conversation** (Model Settings, Start Fresh, Tools for This Tab, Delivery, Resume),
-**Tab** (Rename, Lock, Move to Section, Move Up/Down), **Agent** (Pause Agent, Voice Mode)
-and Close Tab. Memory, Usage Limits, the mascot, **Update & rebuild Cantrip**, **Mac permissions &
-View Mac** and **Skills & Rules** are in Settings; Builds and Background jobs are in Home and the
+**Tab** (Rename, Lock, Move to Section, Move Up/Down), **Agent** (Voice Mode)
+and Close Tab. **Pause Agent**, Memory, Usage Limits, the mascot, **Update & rebuild Cantrip**, **Mac
+permissions & View Mac** and **Skills & Rules** are in Settings; Builds and Background jobs are in Home and the
 Tabs drawer.
 
 ### Settings
 
 Settings opens on a status card (the Mac in use and how this device reaches it, what new
-tabs run on, and the usage-limit backups), then the same pages as Gateway Mac:
+tabs run on, and the usage-limit backups) with the **Pause Agent** switch under it: while
+it's on, this device sends nothing, on any tab, and chat shows **Agent paused** with
+**Resume** in place of the composer (the menu icon keeps an orange pause badge). Then the
+same pages as Gateway Mac:
 
 | Page | What's there |
 |---|---|

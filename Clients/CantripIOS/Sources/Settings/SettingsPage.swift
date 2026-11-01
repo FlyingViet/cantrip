@@ -164,6 +164,28 @@ struct SettingsStatusCard: View {
     }
 }
 
+/// Pause Agent, under the status card: app-wide, so it lives in Settings rather than a tab's menu.
+/// While it's on, chat shows "Agent paused" with Resume in place of the composer.
+struct SettingsPauseRow: View {
+    @AppStorage("hermes.paused") private var paused = false
+
+    var body: some View {
+        Toggle(isOn: $paused) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Pause Agent")
+                Text(paused ? "Paused. This device sends nothing until you turn this off or tap Resume in chat."
+                     : "Stops every request from this device, on every tab, until you turn it off.")
+                    .font(.caption)
+                    .foregroundStyle(paused ? Color.orange : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .toggleStyle(.switch)
+        .tint(.orange)
+        .accessibilityIdentifier("settings.pause")
+    }
+}
+
 private struct SettingsStatusLine: View {
     let title: String
     let value: String
