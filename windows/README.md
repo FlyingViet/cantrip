@@ -20,6 +20,7 @@ capture, updates, and platform limitations.
 - Sanitized GitHub-flavored Markdown responses with fenced code and tables
 - Opt-in multi-monitor screen context with removable previews and per-run cleanup
 - Opt-in location context, so weather and "near me" answers are for where the PC is
+- Weather cards: an Open-Meteo forecast under replies about the weather
 - Hash-approved plugins with sandboxed dashboards, bounded data sources, MCP
   injection, and live reload
 - Safe-by-default plan mode with an explicit **Allow agent actions** switch
@@ -85,6 +86,21 @@ Click **▣** to capture every available display for the next AI prompt. Cantrip
 shows removable previews, materializes PNG files only for that run, passes them
 through each backend’s supported attachment mechanism, and deletes them on
 completion, cancellation, quit, or the next startup after a crash.
+
+## Weather cards
+
+An AI prompt that mentions the weather (weather, forecast, rain, snow, umbrella…)
+also asks the model to end its reply with a fenced `weather` block naming the
+place. Cantrip hides the block, even while the reply streams, and shows a
+forecast card under the reply: the place, now, today's high and low, the next 12
+hours and 10 days, the update time and Open-Meteo's attribution. The main
+process fetches it from Open-Meteo (place names through Open-Meteo's geocoder;
+only coordinates rounded to about 1 km, no cookies), reusing a forecast for 10
+minutes and a place for a day; no key or account is needed. A block without a
+place uses this PC's location while **Settings → Location** is on. When there's
+no place, the place can't be found or Open-Meteo can't be reached, the card says
+**Forecast unavailable** and why; it never shows numbers the model wrote.
+Temperatures are °F in the US and °C elsewhere.
 
 ## Location
 
