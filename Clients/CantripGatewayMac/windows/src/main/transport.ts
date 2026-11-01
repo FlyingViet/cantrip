@@ -54,9 +54,9 @@ export function forwardedHeaders(headers: Iterable<[string, string]>): Record<st
   return result;
 }
 
-const DROPPED_RESPONSE_HEADERS = new Set(["connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding"]);
+export const DROPPED_RESPONSE_HEADERS = new Set(["connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding"]);
 
-function responseHeaders(headers: http.IncomingHttpHeaders): Record<string, string> {
+export function responseHeaders(headers: http.IncomingHttpHeaders): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     if (value === undefined || DROPPED_RESPONSE_HEADERS.has(name)) continue;
@@ -82,10 +82,34 @@ export function sendOverPSK(
   request: HostRequest,
   options: PSKOptions = {},
 ): Promise<HostResponse> {
+  return requestOverPSK(target, token, request, options, async (incoming) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of incoming) chunks.push(chunk as Buffer);
+    let body: Buffer;
+    try {
+      body = decode(Buffer.concat(chunks), incoming.headers["content-encoding"] as string | undefined);
+    } catch (error) {
+      throw new TransportError(`The Mac sent a damaged response: ${(error as Error).message}`, true, "protocol");
+    }
+    return { status: incoming.statusCode ?? 502, headers: responseHeaders(incoming.headers), body };
+  });
+}
+
+/**
+ * Sends `request` over a fresh TLS-PSK connection and hands the response stream to `consume`. The
+ * connection's idle timeout keeps applying while `consume` reads, so a stalled body fails too.
+ */
+export function requestOverPSK<T>(
+  target: { host: string; port: number },
+  token: string,
+  request: HostRequest,
+  options: PSKOptions,
+  consume: (incoming: http.IncomingMessage) => Promise<T>,
+): Promise<T> {
   const connectTimeoutMs = options.connectTimeoutMs ?? 4000;
   const idleTimeoutMs = options.idleTimeoutMs ?? 30000;
   const key = pskKey(token);
-  return new Promise<HostResponse>((resolve, reject) => {
+  return new Promise<T>((resolve, reject) => {
     let secure = false;
     let settled = false;
     const fail = (error: TransportError) => {
@@ -141,26 +165,21 @@ export function sendOverPSK(
       fail(new TransportError(error.message, true, "protocol"));
     });
     outgoing.on("response", (incoming) => {
-      const chunks: Buffer[] = [];
-      incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
-      incoming.on("error", (error) => fail(new TransportError(error.message, true, "protocol")));
-      incoming.on("end", () => {
+      consume(incoming).then((value) => {
         if (settled) return;
-        try {
-          const body = decode(Buffer.concat(chunks), incoming.headers["content-encoding"] as string | undefined);
-          settled = true;
-          socket.destroy();
-          resolve({ status: incoming.statusCode ?? 502, headers: responseHeaders(incoming.headers), body });
-        } catch (error) {
-          fail(new TransportError(`The Mac sent a damaged response: ${(error as Error).message}`, true, "protocol"));
-        }
+        settled = true;
+        clearTimeout(connectTimer);
+        socket.destroy();
+        resolve(value);
+      }, (error: Error) => {
+        fail(error instanceof TransportError ? error : new TransportError(error.message, true, "protocol"));
       });
     });
     outgoing.end(request.body);
   });
 }
 
-const NOT_SENT = /ERR_(NAME_NOT_RESOLVED|CONNECTION_REFUSED|ADDRESS_UNREACHABLE|INTERNET_DISCONNECTED|NETWORK_CHANGED|CONNECTION_TIMED_OUT|NAME_RESOLUTION_FAILED)|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN/;
+export const NOT_SENT = /ERR_(NAME_NOT_RESOLVED|CONNECTION_REFUSED|ADDRESS_UNREACHABLE|INTERNET_DISCONNECTED|NETWORK_CHANGED|CONNECTION_TIMED_OUT|NAME_RESOLUTION_FAILED)|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN/;
 
 /**
  * The Mac's HTTPS address (Tailscale Serve). `fetchImpl` is Electron's net.fetch in the app

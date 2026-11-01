@@ -1344,6 +1344,8 @@ export interface HomeArtifactsSnapshot {
   artifacts: HomeArtifact[];
   /** Same store revision as the tasks list. */
   revision: string;
+  /** The Mac streams original files (`…/<id>/file`) and folder zips (`…/<id>/folder`). */
+  supportsDownloads?: boolean;
 }
 
 export interface HomeArtifactsUnchanged {

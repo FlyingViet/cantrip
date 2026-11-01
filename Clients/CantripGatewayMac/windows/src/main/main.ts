@@ -1,11 +1,12 @@
 import {
-  app, BrowserWindow, Menu, MenuItemConstructorOptions, ipcMain, IpcMainEvent, IpcMainInvokeEvent,
+  app, BrowserWindow, dialog, Menu, MenuItemConstructorOptions, ipcMain, IpcMainEvent, IpcMainInvokeEvent,
   nativeTheme, net, protocol, safeStorage, session, shell,
 } from "electron";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { extname, join, resolve, sep } from "node:path";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, extname, join, resolve, sep } from "node:path";
 import { backendsBridgeRequest } from "./backendsBridge";
+import { artifactSaveRequest, DownloadResult, downloadError, downloadOverHTTPS, downloadOverPSK } from "./download";
 import { mcpBridgeRequest } from "./mcpBridge";
 import { PairingError, ServerConfig, displayName, parsePairingLink, validateServer, validateToken } from "./pairing";
 import { HostRouter, Route, describeRoute, routesFor } from "./router";
@@ -84,6 +85,13 @@ function sendRoute(route: Route, request: HostRequest): Promise<HostResponse> {
   return route.kind === "direct"
     ? sendOverPSK(route, pairing.token, request)
     : sendOverHTTPS(route.origin, request, net.fetch.bind(net));
+}
+
+function downloadRoute(route: Route, request: HostRequest, destination: string): Promise<DownloadResult> {
+  if (!pairing) throw new Error("Not paired.");
+  return route.kind === "direct"
+    ? downloadOverPSK(route, pairing.token, request, destination)
+    : downloadOverHTTPS(route.origin, request, net.fetch.bind(net), destination);
 }
 
 function configureRouter(): void {
@@ -522,6 +530,43 @@ function registerIPC(): void {
     sendCommand("githubSignIn");
     mainWindow.focus();
     return { ok: true };
+  });
+  // Artifacts > Save As…: a Save dialog in Downloads, then the Mac's original file (or the folder's
+  // zip) streamed to disk over the paired routes. The page names only an artifact ID.
+  ipcMain.handle("gateway:save-artifact", async (event, input: unknown) => {
+    const frame = event.senderFrame;
+    if (!mainWindow || event.sender !== mainWindow.webContents || !frame || frame.parent || !isHostURL(frame.url)) {
+      return { error: "Saving isn't available here." };
+    }
+    const request = artifactSaveRequest(input);
+    if ("error" in request) return { error: request.error };
+    if (!router || !pairing) return { error: "This PC isn't paired with a Mac yet." };
+    const choice = await dialog.showSaveDialog(mainWindow, {
+      title: request.folder ? "Save Folder as Zip" : "Save As",
+      defaultPath: join(app.getPath("downloads"), request.name),
+      filters: request.folder ? [{ name: "Zip archive", extensions: ["zip"] }] : undefined,
+    });
+    if (choice.canceled || !choice.filePath) return { canceled: true };
+    const destination = choice.filePath;
+    const partial = `${destination}.cantrip-download`;
+    const hostRequest: HostRequest = {
+      method: "GET", path: request.path, headers: { accept: "*/*", authorization: `Bearer ${pairing.token}` },
+    };
+    try {
+      const result = await router.perform(true, (route) => downloadRoute(route, hostRequest, partial));
+      updateStatus({ connected: true, route: describeRoute(router.current), message: "" });
+      if (result.status < 200 || result.status >= 300) {
+        rmSync(partial, { force: true });
+        return { status: result.status, error: downloadError(result) };
+      }
+      renameSync(partial, destination);
+      return { ok: true, name: basename(destination) };
+    } catch (error) {
+      rmSync(partial, { force: true });
+      const message = error instanceof Error ? error.message : String(error);
+      log(`download failed: ${message}`);
+      return { status: 502, error: `Couldn't download from your Mac. ${message}` };
+    }
   });
   // Settings > Tools & sign-ins: only the shared MCP list and its actions, sent with the token here.
   ipcMain.handle("gateway:mcp", (event, input: unknown) => {

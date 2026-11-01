@@ -412,6 +412,17 @@ export function artifactAccessibilityText(artifact: Pick<HomeArtifact, "title" |
   return parts.join(", ");
 }
 
+/** The top-level artifacts folder holding a multi-file artifact (graph, data, playbook); null at the top level. */
+export function artifactFolder(artifact: Pick<HomeArtifact, "relativePath">): string | null {
+  const parts = artifact.relativePath.split("/").filter(Boolean);
+  return parts.length > 1 ? parts[0] : null;
+}
+
+/** The file's own name on the Mac (what Save As offers, like the other clients). */
+export function artifactOriginalName(artifact: Pick<HomeArtifact, "title" | "relativePath">): string {
+  return artifact.relativePath.split("/").filter(Boolean).pop() || artifact.title || "Artifact";
+}
+
 /** A safe file name: the title, with the file's extension unless the title already ends with it. */
 export function artifactFileName(artifact: Pick<HomeArtifact, "title" | "relativePath">): string {
   const last = artifact.relativePath.split("/").pop() ?? "";

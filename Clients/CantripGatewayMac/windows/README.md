@@ -51,7 +51,10 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   programs such as `vim` don't work. Not in Private Local (needs a Cantrip version that offers
   the terminal).
 - **Tasks and Artifacts.** Scheduled tasks with runs, workspaces and their records;
-  artifacts with thumbnails, the image viewer, Save and Delete.
+  artifacts with thumbnails, the image viewer, Save As and Delete. **Save As…** opens a Save
+  dialog in Downloads and writes the Mac's original file straight to disk; an artifact in a
+  folder also offers **Save "<folder>" Folder as Zip…** for every artifact in that folder.
+  Downloads use the paired routes only (direct TLS-PSK or HTTPS), never a link.
 - **Sheets.** Background runs (answer a waiting run in place), a tab's background tasks and
   queue (each message's suggested plan, **Run in child tab**, Send now, Remove), Model Settings (with the Mac-wide usage limit fallbacks: add, reorder and remove backups, pick each one's model and effort, and list a backend again, the Mac's own included, with another model; and Private Local), Rename, Usage Limits (Claude Code, Antigravity, Codex and Copilot, with each model's own limits), Cantrip Memory (formatted
   Markdown or its source), GitHub Builds, Update & Rebuild Cantrip, Mac Permissions & View Mac, MCP Servers, and Skills & Rules
@@ -176,6 +179,7 @@ checks that Electron's TLS library completes a real TLS-PSK request.
 | `src/main/backendsBridge.ts` | The only backend status requests the Settings window may send (the status, Check now, Sign in, Cancel) |
 | `src/main/transport.ts` | HTTP over TLS-PSK (`ECDHE-PSK-CHACHA20-POLY1305`, identity `cantrip-remote-v1`, key SHA-256 of the token) and over HTTPS |
 | `src/main/router.ts` | Route order and fallback; a send that may have reached the Mac is never repeated |
+| `src/main/download.ts` | Artifact Save As: streams the Mac's file (or folder zip) to disk over either route, validates the page's request (an artifact ID only) and Windows-safe file names |
 | `src/main/pairing.ts`, `store.ts` | Pairing link and address validation; saved Macs with DPAPI-encrypted tokens |
 | `src/preload/` | The main window's and Settings window's bridges to the app |
 | `src/gateway/` | The interface (Preact + TypeScript, bundled by `scripts/build-gateway.mjs`): `api/` (client and API types), `state/` (polling like the Mac's `CantripRemoteModel`, navigation), `ui/` (sidebar, toolbar, chat, Pip, Tasks, Artifacts, sheets, voice), `settings.tsx` |

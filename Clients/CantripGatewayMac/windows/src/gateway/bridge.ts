@@ -12,6 +12,16 @@ export type GatewayCommand =
   | "togglePause" | "modelSettings" | "startFresh" | "usage" | "memory" | "builds" | "mascot" | "toggleTerminal"
   | "githubSignIn";
 
+/** The outcome of Artifacts > Save As… (src/main/main.ts `gateway:save-artifact`). */
+export interface ArtifactSaveResult {
+  ok?: boolean;
+  canceled?: boolean;
+  /** The saved file's name. */
+  name?: string;
+  status?: number;
+  error?: string;
+}
+
 interface Bridge {
   key: string;
   version: string;
@@ -22,6 +32,8 @@ interface Bridge {
   openSettings(): void;
   openExternal(url: string): void;
   showLog(): void;
+  /** Absent outside the app (browser development): the page downloads the older way. */
+  saveArtifact?(request: { id: string; folder: boolean; name: string }): Promise<ArtifactSaveResult>;
   onStatus(callback: (status: HostStatus) => void): void;
   onCommand(callback: (command: GatewayCommand) => void): void;
   onActive(callback: (active: boolean) => void): void;
