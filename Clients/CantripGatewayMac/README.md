@@ -125,12 +125,13 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
 - **Chat:** Return sends; Option-Return adds a line. Drag images onto the chat to
   attach them, or press ⌘V in the message box with a copied screenshot, photo, video or
   Finder file (copied text still pastes as text). Questions from Cantrip appear above the composer.
-- **Delete a message:** right-click a prompt, reply or error in Home's chat or a tab and choose
+- **Delete a message:** right-click a prompt or an error in Home's chat or a tab and choose
   **Delete Message** (beside **Copy**), then **Delete**. Cantrip removes it and the rest of its
   exchange (the prompt and its reply) from the tab's history, so the model doesn't have them
-  anymore; it can't be undone. Not while the tab works, and never on Start Fresh dividers,
-  handoff results or child tab cards. Messages deleted on another device disappear here too.
-  Needs a Cantrip host with `supportsDeleteMessage` (`POST …/delete-message`).
+  anymore; it can't be undone. To delete a reply, delete its prompt: replies have no menu, so
+  their text keeps the system's selection and right-click menu. Not while the tab works, and
+  never on Start Fresh dividers, handoff results or child tab cards. Messages deleted on another
+  device disappear here too. Needs a Cantrip host with `supportsDeleteMessage` (`POST …/delete-message`).
 - **Slash commands:** type `/` in Home's or a tab's composer to list that tab's backend
   commands, custom commands and skills. Up/Down move the highlight (Return runs a command
   without arguments, or inserts one that takes an argument), Tab inserts, Escape hides the list
