@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -28,6 +29,7 @@ struct CantripGatewayMacApp: App {
             MacHomeWindow(env: env, remote: remote, voice: voice, navigation: navigation, directLocal: directLocal)
                 // Cantrip's look is dark on every client (the iOS app sets the same).
                 .preferredColorScheme(.dark)
+                .task { appDelegate.dockMenu.attach(remote: remote, navigation: navigation) }
                 #if DEBUG
                 // Same launch arguments as the iOS UI tests: pair with a local fixture host.
                 .task { await CantripUITestFixtures.pairRemoteIfRequested(remote, env: env) }
@@ -43,14 +45,20 @@ struct CantripGatewayMacApp: App {
         Settings {
             MacSettingsView(env: env, remote: remote, voice: voice, directLocal: directLocal)
                 .preferredColorScheme(.dark)
+                .task { appDelegate.dockMenu.attach(remote: remote, navigation: navigation) }
         }
         .windowResizability(.contentMinSize)
     }
 }
 
+@MainActor
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
+    let dockMenu = MacDockMenu()
+
     /// Home is one conversation in one window; quitting stops polling the Mac host.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { dockMenu.menu() }
 
     /// MCP servers started for the local model end with the app.
     func applicationWillTerminate(_ notification: Notification) {
