@@ -1818,6 +1818,39 @@ names a place. Other links, such as a form or an article, keep their cards, and
 the three-card limit counts only those. The Mac applies this when it builds the
 snapshot, so replies saved before the rule show the same cards on every client.
 
+### Weather cards
+
+When a reply ends with a fenced `weather` or `cantrip-weather` JSON block
+(`{"place": "Santa Clara, CA"}`, or `{}` for where the user is), Cantrip strips
+the block and attaches a `weatherCard` built from [Open-Meteo](https://open-meteo.com/)
+data, never from numbers the model wrote. The place is geocoded on the Mac; with
+no place, the card uses the location the paired device sent with the message,
+then the Mac's own location (**Share my location as context**), and its
+`placeNote` says whose location it is ("Your iPhone's location", "The Mac's
+location"). Open-Meteo only receives coordinates rounded to about 1 km, with no
+cookies; a forecast is reused for 10 minutes and a geocoded place for a day.
+Temperatures follow the Mac's temperature unit setting (°F for US regions).
+
+`weatherCard` has `place`, optional `placeNote`, `status` (`ok` or
+`unavailable`), `unit` (`F` or `C`), `attribution` and `attributionURL`. With
+`status: "unavailable"` it has only a `message` (no place found, or Open-Meteo
+unreachable) and clients show **Forecast unavailable** with it. With `ok` it
+also has `timeZone`, `updatedAt`, `current` (`temperature`, optional `feelsLike`,
+`condition`, `symbol`, `code`, `isDay`, optional `precipitationChance`), `today`
+(`high`, `low`, optional `precipitationChance`), `hourly` (now plus the next 12
+hours: `time`, `label`, `temperature`, `condition`, `symbol`, optional
+`precipitationChance`) and `daily` (10 days: `date`, `label`, `high`, `low`,
+`condition`, `symbol`, optional `precipitationChance`). Labels ("Now", "3 PM",
+"Today", "Mon") are in the place's time zone; `symbol` is an SF Symbol name the
+web and Windows clients map to their own icons.
+
+A reply with a `weatherCard` gets no `linkPreviews` for weather sites (a host
+or path with "weather" or "forecast", or a known forecast site), since the card
+already shows the forecast. Models are taught the block in every tab's system
+message and in Cantrip Home's protocol, and `cantrip weather [PLACE] [--json]`
+prints the same forecast from the same cache, so numbers a reply quotes match
+its card.
+
 ## Use the device's location
 
 Ask "what's the weather today?" or "coffee near me" from a paired device and the

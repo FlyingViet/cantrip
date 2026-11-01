@@ -40,6 +40,8 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var linkPreviews: [LinkPreviewCard] = []
     /// Interactive map card with place pins resolved from this assistant reply.
     var placeCard: PlaceCard?
+    /// Forecast card for this reply's `weather` block (Open-Meteo data, or why there's none).
+    var weatherCard: WeatherCard?
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
     /// `freshStart`: the Start Fresh divider; turns above it are never sent to the model.
     enum Role: String, Codable { case user, assistant, error, handoff, freshStart }
@@ -50,14 +52,16 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
-        case threadID, continuesRunID, linkPreviews, placeCard
+        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard
     }
 }
 
 extension ChatMessage {
-    /// Link previews to show: none for links this reply's map card already covers.
+    /// Link previews to show: none for links this reply's map card already covers, and none for
+    /// weather sites under a weather card.
     var visibleLinkPreviews: [LinkPreviewCard] {
-        PlaceLinkFilter.visible(linkPreviews, placeCard: placeCard, text: text)
+        WeatherLinkFilter.visible(PlaceLinkFilter.visible(linkPreviews, placeCard: placeCard, text: text),
+                                  weatherCard: weatherCard)
     }
 
     /// Appends streamed reasoning. Reasoning after a new tool call or answer text is a new block.
@@ -124,6 +128,7 @@ extension ChatMessage {
         continuesRunID = try? container.decodeIfPresent(UUID.self, forKey: .continuesRunID)
         linkPreviews = (try? container.decodeIfPresent([LinkPreviewCard].self, forKey: .linkPreviews)) ?? []
         placeCard = try? container.decodeIfPresent(PlaceCard.self, forKey: .placeCard)
+        weatherCard = try? container.decodeIfPresent(WeatherCard.self, forKey: .weatherCard)
         if (try? container.decodeIfPresent(Bool.self, forKey: .freshStart)) == true {
             role = .freshStart
         } else {
@@ -159,6 +164,7 @@ extension ChatMessage {
         try container.encodeIfPresent(continuesRunID, forKey: .continuesRunID)
         if !linkPreviews.isEmpty { try container.encode(linkPreviews, forKey: .linkPreviews) }
         try container.encodeIfPresent(placeCard, forKey: .placeCard)
+        try container.encodeIfPresent(weatherCard, forKey: .weatherCard)
     }
 }
 
@@ -1640,6 +1646,9 @@ final class ChatSession: ObservableObject {
         for item in queued where !before.contains(item.id) { noteAutoDelivered(item.id) }
     }
 
+    /// Where the device that sent this turn's message is, for its weather card. In memory only.
+    private(set) var turnClientLocation: RemoteClientLocation?
+
     /// Paired clients' messages by text, with the location each carried (or none). In memory only,
     /// for at most six hours: the note is added to that message's backend prompt when it runs.
     private var clientMessages: [String: (message: RemoteClientMessage, received: Date)] = [:]
@@ -1666,6 +1675,7 @@ final class ChatSession: ObservableObject {
             if found?.location == nil { found = entry.message }
         }
         guard let found, !isLocalPrivate else { return nil }
+        if found.location != nil { turnClientLocation = found.location }
         if found.location == nil, settings.shareLocation { LocationProvider.shared.refresh() }
         return RemoteClientContextNote.note(
             for: found.location, macLocation: settings.shareLocation ? LocationProvider.shared.contextLine : nil
@@ -2273,6 +2283,7 @@ final class ChatSession: ObservableObject {
             preamble = notes + (preamble.map { "\n\n" + $0 } ?? "")
         }
         // A paired device's message says where the device is (or that the Mac's location stands in).
+        if !isResume { turnClientLocation = nil }
         if !isLocalPrivate, !isResume, automatedRun == nil, SlashInvocation(prompt) == nil,
            let note = takeClientContextNote(for: queuedItem.map { [$0.text] + combinedItems.map(\.text) } ?? [prompt]) {
             preamble = note + (preamble.map { "\n\n" + $0 } ?? "")
@@ -3877,24 +3888,34 @@ final class ChatSession: ObservableObject {
         let messageID = messages[idx].id
         var text = messages[idx].text
         let proposal = PlaceCardResolver.extractProposal(from: &text)
+        let weather = WeatherBlock.extract(from: &text)
         if text != messages[idx].text {
             messages[idx].text = text
         }
         // Every link, not just the first three: links the map card covers are dropped
-        // before picking which ones get a preview.
-        let candidateLinks = settings.linkPreviewsEnabled
-            ? LinkPreviewExtractor.extractLinks(from: text, limit: 64) : []
-        guard proposal != nil || !candidateLinks.isEmpty else { return false }
+        // before picking which ones get a preview, and weather sites under a weather card.
+        let candidateLinks = WeatherLinkFilter.uncovered(
+            settings.linkPreviewsEnabled ? LinkPreviewExtractor.extractLinks(from: text, limit: 64) : [],
+            hasWeatherCard: weather != nil
+        )
+        guard proposal != nil || weather != nil || !candidateLinks.isEmpty else { return false }
+        let weatherContext = weather != nil ? weatherContext() : nil
         Task { @MainActor [weak self] in
+            async let forecast = WeatherCardResolver.resolve(weather, context: weatherContext)
             let resolvedPlaces = await (proposal != nil ? PlaceCardResolver.shared.resolve(proposal!) : nil)
             let previewURLs = PlaceLinkFilter.uncovered(candidateLinks, places: resolvedPlaces?.places ?? [])
                 .prefix(LinkPreviewExtractor.maximumLinksPerMessage).map(\.url)
             let resolvedLinks = await (!previewURLs.isEmpty
                 ? LinkPreviewStore.shared.resolve(urls: Array(previewURLs))
                 : [])
+            let resolvedWeather = await forecast
             guard let self,
                   let currentIdx = self.messages.firstIndex(where: { $0.id == messageID }) else { return }
             var changed = false
+            if let resolvedWeather, self.messages[currentIdx].weatherCard != resolvedWeather {
+                self.messages[currentIdx].weatherCard = resolvedWeather
+                changed = true
+            }
             if let resolvedPlaces, self.messages[currentIdx].placeCard != resolvedPlaces {
                 self.messages[currentIdx].placeCard = resolvedPlaces
                 changed = true
@@ -3907,7 +3928,19 @@ final class ChatSession: ObservableObject {
                 self.persistTranscript()
             }
         }
-        return proposal != nil
+        return proposal != nil || weather != nil
+    }
+
+    /// Where a weather block without a place is: the device this turn came from, else the Mac.
+    private func weatherContext() -> WeatherCardResolver.Context {
+        typealias Place = WeatherCardResolver.KnownPlace
+        let device = turnClientLocation.map { location in
+            Place(label: location.label,
+                  coordinate: .init(latitude: location.latitude, longitude: location.longitude),
+                  note: WeatherCardResolver.deviceNote(location.device))
+        }
+        return WeatherCardResolver.Context(device: device, mac: WeatherCardResolver.macPlace(),
+                                           unit: WeatherCardResolver.preferredUnit)
     }
 
     private func finishStream(dequeue: Bool = true, notify: Bool = true,
@@ -3990,6 +4023,7 @@ final class ChatSession: ObservableObject {
            messages[idx].thinking.isEmpty,
            messages[idx].delegations.isEmpty,
            messages[idx].placeCard == nil,
+           messages[idx].weatherCard == nil,
            messages[idx].linkPreviews.isEmpty,
            !hasPendingRichCard {
             messages.remove(at: idx)

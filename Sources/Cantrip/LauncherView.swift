@@ -3550,8 +3550,10 @@ struct MessageRow: View {
             let placed = placedSubagents
             let visibleLinks = (!localOnly && AppSettings.shared.linkPreviewsEnabled) ? message.visibleLinkPreviews : []
             let visiblePlaceCard = localOnly ? nil : message.placeCard
+            let visibleWeatherCard = localOnly ? nil : message.weatherCard
             if message.text.isEmpty && message.thinking.isEmpty && message.author == nil
-                && visibleApps.isEmpty && placed.isEmpty && visibleLinks.isEmpty && visiblePlaceCard == nil {
+                && visibleApps.isEmpty && placed.isEmpty && visibleLinks.isEmpty && visiblePlaceCard == nil
+                && visibleWeatherCard == nil {
                 EmptyView()
             } else {
                 let parts = ReplyBlocks.split(message.text, before: placed.map(\.block))
@@ -3586,6 +3588,10 @@ struct MessageRow: View {
                                     .textSelection(.enabled)
                             }
                         }
+                    }
+                    if let weatherCard = visibleWeatherCard {
+                        WeatherCardView(card: weatherCard)
+                            .padding(.top, 2)
                     }
                     if let placeCard = visiblePlaceCard {
                         PlaceCardView(card: placeCard)

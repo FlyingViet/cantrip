@@ -206,6 +206,7 @@ struct SessionTabTests {
         try await testMCPAppTranscripts()
         try await testMCPAppRemote()
         try await testRichCardsRemote()
+        try await testWeatherCardsRemote()
         try testCantripHomeSchedules()
         try await testCantripHome()
         try await testCantripHomeArtifactThumbnails()
