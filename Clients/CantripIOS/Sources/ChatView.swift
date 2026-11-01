@@ -1636,7 +1636,6 @@ struct ChatView: View {
                 : vm.activeLane == .home ? .mascot
                 : vm.activeLane == .cantrip ? .tab : .standard,
             sidebarToggle: duoSidebarToggle,
-            modelSettings: duoModelSettingsButton,
             // The open sidebar lists Home and the tabs; closed, the toggle takes the Tabs button's place
             // (in a tab too: on the Duo a tab has no "‹ Home", the tab picker leads back).
             hidesLeadingInRail: showsDuoSidebar
@@ -2454,7 +2453,6 @@ struct ChatView: View {
         if showsDuoAppRail {
             CantripDuoAppRail {
                 duoSidebarToggle
-                duoModelSettingsButton
                 ChatSettingsButton { showSettings = true }
                     .disabled(vm.sending || importingImages || submittingRemote)
                 chatMenu.frame(width: 44, height: 44)
@@ -2480,17 +2478,6 @@ struct ChatView: View {
             composerFocused = false
             withAnimation(.snappy) { isDuoSidebarOpen.toggle() }
         })
-    }
-
-    /// The rail's model settings (model and effort) for this chat.
-    private var duoModelSettingsButton: AnyView? {
-        guard vm.activeLane.usesCantripRemote else { return nil }
-        let session = remote.selectedSession
-        return AnyView(CantripRailModelSettingsButton(isLocalPrivate: session?.isLocalPrivate == true) {
-            composerFocused = false
-            if let session { remote.modelSettingsSession = session }
-        }
-        .disabled(session == nil || remote.isMutating || vm.sending || importingImages || submittingRemote))
     }
 
     private var duoSidebar: some View {
@@ -3235,23 +3222,6 @@ struct CantripDuoSidebarToggle: View {
     }
 }
 
-/// The unfolded iPhone Duo rail's Model Settings (or Private Local Settings) for the open chat.
-struct CantripRailModelSettingsButton: View {
-    let isLocalPrivate: Bool
-    let onOpen: () -> Void
-
-    var body: some View {
-        Button(action: onOpen) {
-            Image(systemName: "slider.horizontal.3")
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-        }
-        .accessibilityLabel(isLocalPrivate ? "Private Local Settings" : "Model Settings")
-        .accessibilityHint(isLocalPrivate ? "" : "Model and effort for this tab")
-        .accessibilityIdentifier("duo.rail.modelSettings")
-    }
-}
-
 struct ChatSettingsButton: View {
     let onOpen: () -> Void
 
@@ -3287,7 +3257,6 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     @State private var tabHeaderWidth: CGFloat = 393
     var style = ChatHeaderStyle.standard
     var sidebarToggle: AnyView? = nil
-    var modelSettings: AnyView? = nil
     var hidesLeadingInRail = false
     /// The unfolded iPhone Duo's app-drawn rail (upright) holds the actions instead of the header.
     var actionsInRail = false
@@ -3363,7 +3332,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         .accessibilityIdentifier("chat.header")
         .modifier(ChatNavigationActions(
             sharesVerticalBarWithTabBar: style == .mascot,
-            sidebarToggle: sidebarToggle, modelSettings: modelSettings, hidesLeadingInRail: hidesLeadingInRail,
+            sidebarToggle: sidebarToggle, hidesLeadingInRail: hidesLeadingInRail,
             leading: leading, settings: settings, trailing: trailing
         ))
         // Unfolding adds the sidebar toggle and model settings above the bar's items; the system

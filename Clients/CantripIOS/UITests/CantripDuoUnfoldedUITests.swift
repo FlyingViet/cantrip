@@ -35,8 +35,7 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         guard toggle.waitForExistence(timeout: 15) else {
             throw XCTSkip("Unfold the Duo: the rail's sidebar toggle shows only unfolded")
         }
-        let modelSettings = app.buttons["duo.rail.modelSettings"].firstMatch
-        XCTAssertTrue(modelSettings.exists, "The rail has Model Settings")
+        XCTAssertFalse(app.buttons["duo.rail.modelSettings"].exists, "Model Settings is in the menu, not the rail")
         XCTAssertTrue(app.buttons["chat.settings"].firstMatch.exists, "The rail has Settings")
         XCTAssertFalse(app.buttons["home.tabs"].exists, "The toggle takes the tabs button's place")
 
@@ -76,6 +75,13 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         XCTAssertTrue(sidebar.exists, "The sidebar stays open while typing")
         save(app, "sidebar-open-typing")
 
+        // The rail is the sidebar toggle, Settings and the menu; Model Settings is the menu's first item.
+        // By label: the menu's identifier is masked in the rail.
+        let menu = app.buttons.matching(NSPredicate(format: "label IN %@", ["Chat menu", "Tab menu"])).firstMatch
+        XCTAssertTrue(menu.exists, "The rail has the menu")
+        menu.tap()
+        let modelSettings = app.buttons["Model Settings"].firstMatch
+        XCTAssertTrue(modelSettings.waitForExistence(timeout: 5), "The menu has Model Settings")
         modelSettings.tap()
         XCTAssertTrue(app.navigationBars["Model Settings"].waitForExistence(timeout: 10),
                       "Model Settings opens the existing sheet")

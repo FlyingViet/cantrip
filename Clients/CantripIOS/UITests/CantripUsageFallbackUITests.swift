@@ -34,7 +34,7 @@ final class CantripUsageFallbackUITests: XCTestCase {
         let models = app.navigationBars["Models"].firstMatch
         if !models.waitForExistence(timeout: 40) { save(app, "no-settings") }
         XCTAssertTrue(models.exists, "Settings opens on Models")
-        unfolded = app.buttons["duo.rail.modelSettings"].firstMatch.exists
+        unfolded = app.buttons["duo.rail.sidebar"].firstMatch.exists
 
         let add = app.buttons["usageFallback.add"].firstMatch
         // The backups sit below New tabs and the tiers; the list loads rows as they scroll in.
