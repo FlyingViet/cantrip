@@ -118,6 +118,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `/api/v1/sections`, `/api/v1/sections/{id}` | Tab sections: list, add (`name`), rename or reorder (`PATCH name/position`), delete; only when the list has `supportsTabSections` |
 | `POST /api/v1/sessions/{id}/start-fresh` | Start Fresh (no body): the next prompt starts a new model session, history stays; `409` while the tab is busy or for Cantrip Home |
 | `POST /api/v1/sessions/{id}/resume` | Without a body, resumes the tab's paused run (`canResume`). With `{"messageID"}` (`supportsContinueFromMessage`), continues the failed run whose error row is in `continuableMessageIDs`; `409` with the reason while the tab works, while the Mac is offline, or when the row no longer offers it |
+| `POST /api/v1/sessions/{id}/delete-message` | Delete Message (`supportsDeleteMessage`): `{"messageID"}` deletes the whole exchange that message belongs to (the prompt and its replies) from the tab's history and the model's context, and returns the tab's (paged) snapshot. `400` for a bad body, `404` when the message is no longer in the conversation, `409` while the tab works. Works in every tab, Cantrip Home's chat and Private Local |
 | `GET /api/v1/sessions/{id}/commands` | The tab's (or Home's) backend slash commands, custom commands and skills for `/` suggestions; called only when the snapshot has `supportsBackendCommands` |
 | (fields) `supportsTabMentions`, `mentionable` | `@` suggestions in that composer; which tabs may be suggested. Picked tabs travel in the message text as `@[Title](cantrip-tab:<UUID>)` |
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
@@ -137,7 +138,9 @@ New features are gated by capability flags in session snapshots (for example
 `supportsQueueSendNow`, `supportsTabReordering` or `supportsStartFresh`), so an older Mac
 shows an update notice instead of failing. Snapshots may also carry `repeatedErrorMessageID`,
 the latest error when it repeats the one before it; that error row offers **Start Fresh** and
-**Change Model**. `continuableMessageIDs` lists the error rows that offer **Continue**. A message with role `freshStart` is Cantrip's Start Fresh divider, never a
+**Change Model**. `continuableMessageIDs` lists the error rows that offer **Continue**.
+`deletedMessageIDs` lists messages deleted from the tab (on any device); the app drops them from
+every page it holds, including older pages it loaded. A message with role `freshStart` is Cantrip's Start Fresh divider, never a
 model reply. When an app feature needs a newer host, update and relaunch Cantrip on
 the Mac. Sends are never replayed automatically after a connection failure. The full
 reference is Cantrip's
@@ -993,6 +996,19 @@ Continue checks with the Mac first, so a row that no longer offers it (the task 
 or the tab is working) is refused with the Mac's reason, and nothing is sent. Macs without
 `supportsContinueFromMessage` keep the tab's **Resume** instead; the tab's Resume is hidden while
 an error row offers Continue.
+
+### Delete a message
+
+Long-press a prompt, reply or error in a tab or Cantrip Home's chat (right-click on Gateway Mac)
+and choose **Delete Message**, then **Delete** to confirm. Cantrip on the Mac removes the message
+and the rest of its exchange (the prompt and its reply) from the tab's history, so the model
+doesn't have them anymore; this can't be undone. The same menu has **Copy**, since it takes the
+long press from text selection. It shows only while the tab isn't working, on Macs with
+`supportsDeleteMessage`, and never on Start Fresh dividers, handoff results or child tab cards.
+Messages deleted on another device disappear here too, from loaded older messages and open
+threads as well. If the Mac refuses (the tab started working, or the message is already gone),
+its reason is shown and nothing changes. Logic and the menu are in
+[`Sources/CantripDeleteMessage.swift`](Sources/CantripDeleteMessage.swift).
 
 ### Update and rebuild the Cantrip Mac
 
