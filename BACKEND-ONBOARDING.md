@@ -109,8 +109,9 @@ Codex (0.166.0), as wired in `CodexBackend` and `CodexAppServer`:
 | Auto routing, queue plans, consolidation, OpenAI-compatible API | Unavailable: no tool-free one-shot mode (the shell can't be turned off) |
 
 Context such as memory, location, calendar, files, screen and continuity is added to
-`request.prompt` by `ChatSession.composeContext` and `prepareMemory`, so a backend gets it
-without extra work and must not add it again.
+`request.prompt` by `ChatSession.composeContext` and `prepareMemory`, and a paired device's
+location note (`takeClientContextNote`) goes into `send()`'s hidden preamble, so a backend gets
+it without extra work and must not add it again.
 
 ## 3. Wire it in on macOS
 
