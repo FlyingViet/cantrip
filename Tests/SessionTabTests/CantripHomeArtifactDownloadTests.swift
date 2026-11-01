@@ -139,6 +139,20 @@ extension SessionTabTests {
         var failed = false
         do { while try body.next(maxBytes: 1 << 20) != nil {} } catch { failed = true }
         precondition(failed, "a truncated source must fail the stream")
+
+        // A registered file that grew past the zip limit (sparse, so nothing is written) is refused
+        // up front, without reading it.
+        let grown = folder.appendingPathComponent("grown.bin")
+        try Data("small".utf8).write(to: grown)
+        let grownArtifact = try store.register(.init(title: "Grown", path: "download-test-folder/grown.bin", kind: nil))
+        defer { try? store.deleteArtifact(id: grownArtifact.id) }
+        let sparse = try FileHandle(forWritingTo: grown)
+        try sparse.truncate(atOffset: 5 * 1024 * 1024 * 1024)
+        try sparse.close()
+        let started = Date()
+        let oversized = try await raw("\(base)/\(grownArtifact.id.uuidString)/folder")
+        precondition(oversized.0 == 413 && Date().timeIntervalSince(started) < 5,
+                     "an oversized folder is refused before reading it: \(oversized.0)")
         print("Cantrip Home artifact downloads: streamed files, folder zips and link guards passed")
     }
 

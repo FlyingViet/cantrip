@@ -162,6 +162,10 @@ enum CantripHomeArtifactZip {
         for entry in entries {
             let handle = try CantripHomeArtifactDownload.open(entry.url, realRoot: realRoot)
             let size = try CantripHomeArtifactDownload.size(of: handle)
+            // A registered file may have grown since; refuse before reading it or narrowing its size.
+            guard size <= CantripHomeArtifactDownload.maximumFolderBytes - offset else {
+                throw CantripHomeError(413, "This folder is too large to download as one zip.")
+            }
             var crc: UInt32 = 0
             var measured = 0
             while measured < size {
