@@ -497,6 +497,8 @@ struct OneShotCompletion: OneShotRunning {
     static func environment() -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = ToolPath.value(inherited: environment["PATH"])
+        // No project: the Default profile, if there is one.
+        EnvironmentProfiles.apply(to: &environment, workdir: nil)
         environment["NO_COLOR"] = "1"
         environment["TERM"] = "dumb"
         environment[AntigravityHook.socketVariable] = nil

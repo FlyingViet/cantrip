@@ -232,7 +232,7 @@ def inspect_runs(identifier=None):
     return 0
 
 
-HOST_COMMANDS = {"daemon", "pair", "config", "status", "doctor", "cleanup", "secret", "secrets", "help"}
+HOST_COMMANDS = {"daemon", "pair", "config", "status", "doctor", "cleanup", "secret", "secrets", "env", "help"}
 TAB_ACTIONS = {"list", "read", "ask", "reply"}
 
 

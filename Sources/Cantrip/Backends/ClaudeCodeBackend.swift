@@ -180,7 +180,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
 
     private func launchSignature(workdir: String) -> String {
         [workdir, String(settings.allowActions), settings.claudePermissionMode, model, effort, guardrail?.rawValue ?? "",
-         String(readOnly), homeProtocol ?? ""].map { "\($0.utf8.count):\($0)" }.joined()
+         String(readOnly), homeProtocol ?? "", EnvironmentProfiles.resolved(for: workdir)?.fingerprint ?? ""].map { "\($0.utf8.count):\($0)" }.joined()
     }
 
     /// Claude-style mid-turn injection: append a user message into the
@@ -778,6 +778,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         p.currentDirectoryURL = URL(fileURLWithPath: workdir)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = ToolPath.value(inherited: env["PATH"])
+        EnvironmentProfiles.apply(to: &env, workdir: workdir)
         if let tabID { env[TabInsight.tabIDVariable] = tabID.uuidString }
         if !readOnly {
             do {
