@@ -1826,7 +1826,10 @@ answer can be for where that device is, not where the Mac is. Each client has a
 Duo) and Cantrip Gateway for Mac in Settings, Cantrip Gateway for Windows in
 Settings, and the browser Remote under **Location** next to **Unpair** (the
 browser needs the Mac's secure Tailscale address). Clients ask for location only
-while the app is in use, never in the background.
+while the app is in use, never in the background. The Mac app's own Remote tab
+shows the browser setting, but its embedded web view may not get a location from
+macOS; its messages then go without one. Cantrip for Windows, which runs backends
+on the PC itself, has its own **Settings → Location** (see `windows/README.md`).
 
 While it's on, each message you send carries the device's location, rounded to
 about 1 km unless you also turn on **Precise location**, its time zone, and a
