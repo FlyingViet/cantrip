@@ -1941,6 +1941,21 @@ final class RemoteControlServer {
         case "resumeQueue":
             session.resumeQueue()
             sendSession(session, recentExchanges: recentExchanges, on: connection)
+        case "delete-message":
+            // Deletes a prompt and its replies everywhere the Mac keeps them (ChatSession.deleteExchange).
+            guard request.body.count <= 1024, let body = json, Set(body.keys) == ["messageID"],
+                  let messageID = (body["messageID"] as? String).flatMap(UUID.init(uuidString:)) else {
+                sendError(400, "Send {\"messageID\": <message UUID>}.", on: connection)
+                return
+            }
+            do {
+                try session.deleteExchange(containing: messageID)
+                sendSession(session, recentExchanges: recentExchanges, on: connection)
+            } catch let error as SessionModelSettingsError {
+                sendError(error.status, error.message, on: connection)
+            } catch {
+                sendError(500, "Could not delete the message on the Mac.", on: connection)
+            }
         case "resume":
             // Continue on a failed run's message: {"messageID": …} from `continuableMessageIDs`.
             if let raw = json?["messageID"] {
@@ -2519,6 +2534,12 @@ final class RemoteControlServer {
         result["supportsTerminal"] = !session.isLocalPrivate
         result["terminalBusy"] = session.shell.isRunning || session.shell.hasAgentCommandRunning
         result["continuableMessageIDs"] = session.continuableMessageIDs.map(\.uuidString).sorted()
+        // POST …/delete-message {"messageID"} deletes a prompt and its reply; clients drop
+        // cached copies of every message listed in deletedMessageIDs.
+        result["supportsDeleteMessage"] = !session.isCantripHomeRun
+        if !session.deletedMessageIDs.isEmpty {
+            result["deletedMessageIDs"] = session.deletedMessageIDs.map(\.uuidString)
+        }
         if session.isCantripHome {
             // Drives the Background button badge without fetching the run list.
             result["supportsBackgroundRuns"] = true
@@ -3017,6 +3038,7 @@ private extension RemoteControlServer {
     details{min-width:0}summary{list-style:none;cursor:pointer}summary::-webkit-details-marker{display:none}.disclosure{margin-top:7px;color:var(--secondary)}.disclosure>summary{display:flex;align-items:center;gap:7px;width:max-content;max-width:100%;font-size:12px}.disclosure>summary:before{content:"›";width:12px;color:var(--tertiary);font-size:17px;line-height:12px;transition:transform .12s}.disclosure[open]>summary:before{transform:rotate(90deg)}.disclosure-body{margin:7px 0 2px 18px;padding-left:10px;border-left:2px solid rgba(107,140,255,.22)}
     .subagents{display:grid;gap:6px;margin:8px 0}
     .fresh-start{display:flex;align-items:center;gap:10px;margin:2px 0;color:var(--secondary);font-size:12px;text-align:center;overflow-wrap:anywhere}.fresh-start:before,.fresh-start:after{content:"";flex:1 1 24px;border-top:1px solid var(--line)}
+    .message-tools{display:flex;justify-content:flex-end;margin-top:4px;opacity:0;transition:opacity .15s}.message:hover>.message-tools,.message:focus-within>.message-tools{opacity:1}@media (hover:none){.message-tools{opacity:1}}.message-tools .control{min-height:0;padding:2px 8px;font-size:12px}
     .error-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.message.error .muted{margin:6px 0 0;color:var(--secondary)}
     .handoffs{display:grid;gap:6px;margin:8px 0}
     .handoff-card{padding:9px 11px 4px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:13px}
@@ -3461,6 +3483,8 @@ private extension RemoteControlServer {
       if(merge&&session.historyStartID&&previous?.historyStartID===session.historyStartID){
         const overlap=previous.messages.findIndex(m=>m.id===session.messages[0]?.id);
         if(overlap>=0)session={...session,messages:[...previous.messages.slice(0,overlap),...session.messages],hasOlderMessages:previous.hasOlderMessages}}
+      // Messages deleted on any device leave older pages loaded earlier too.
+      if(session.deletedMessageIDs?.length){const gone=new Set(session.deletedMessageIDs);session={...session,messages:session.messages.filter(m=>!gone.has(m.id))}}
       if(!expandedHistory.has(session.id)&&session.supportsPagedHistory){const bounded=historySuffix(session.messages,initialHistoryGroups);
         if(bounded.length<session.messages.length)session={...session,messages:bounded,hasOlderMessages:true}}
       if(!expandedHistory.has(session.id)&&session.supportsPagedHistory&&session.messages.length>120&&(!sidebarLayout||!session.messages.some(m=>m.role==="user"))){
@@ -3830,6 +3854,11 @@ private extension RemoteControlServer {
     function appendContinue(row,session,messageID){const actions=document.createElement("div"),button=document.createElement("button");actions.className="error-actions";button.className="control";button.textContent="Continue";button.title="Pick this task up from where it stopped";
       button.onclick=async()=>{button.disabled=true;$("actionError").textContent="";try{await api(`/api/v1/sessions/${session.id}/resume`,{method:"POST",body:JSON.stringify({messageID})});await refresh()}catch(error){$("actionError").textContent=`Continue failed: ${error.message}`;button.disabled=false}};
       actions.append(button);row.append(actions)}
+    // Delete removes the prompt and its reply everywhere the Mac keeps them (POST …/delete-message).
+    function canDeleteMessage(session,message){return Boolean(session?.supportsDeleteMessage)&&!session.isStreaming&&["user","assistant","error"].includes(message.role)&&!message.isPreview}
+    function appendDeleteMessage(row,session,message){const tools=document.createElement("div"),button=document.createElement("button");tools.className="message-tools";button.type="button";button.className="control quiet";button.textContent="Delete…";button.title="Delete this message and its reply";button.setAttribute("aria-label",message.role==="user"?"Delete this message and its reply":"Delete this reply and its message");
+      button.onclick=async()=>{if(!confirm("Delete this message?\\n\\nThis removes the message and its reply from this tab's history on the Mac, and the model won't have them anymore. This can't be undone."))return;button.disabled=true;$("actionError").textContent="";try{await api(`/api/v1/sessions/${session.id}/delete-message`,{method:"POST",body:JSON.stringify({messageID:message.id})});renderedPayload="";await refresh()}catch(error){$("actionError").textContent=`Delete failed: ${error.message}`;button.disabled=false}};
+      tools.append(button);row.append(tools)}
     function appendErrorRecovery(row,session){const note=document.createElement("p"),actions=document.createElement("div"),fresh=document.createElement("button"),model=document.createElement("button"),busy=Boolean(session.isStreaming||session.queuedCount);
       note.className="muted";note.textContent="This error happened twice in a row. Start fresh to drop the earlier context, or try another model.";actions.className="error-actions";
       fresh.className="control";fresh.textContent="Start Fresh";fresh.disabled=busy;model.className="control";model.textContent=session.isLocalPrivate?"Private Local Settings":"Change Model";model.disabled=busy;
@@ -4608,6 +4637,7 @@ private extension RemoteControlServer {
           appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);const replies=session.threadReplies?.[message.id];if(replies>0)row.append(threadRepliesButton(session.id,message,replies));if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
           if(message.role==="error"&&session.supportsStartFresh&&message.id===session.repeatedErrorMessageID)appendErrorRecovery(row,session);
           if(message.role==="error"&&session.continuableMessageIDs?.includes(message.id))appendContinue(row,session,message.id);
+          if(canDeleteMessage(session,message))appendDeleteMessage(row,session,message);
           if(handoffs.length){const stack=document.createElement("div");stack.className="handoffs";for(const handoff of handoffs)stack.append(handoffCard(handoff));row.append(stack)}appendActivities(row,activities,message.id);
           if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
             const requestToken=token;button.disabled=true;try{const data=await api(`/api/v1/sessions/${session.id}/messages/${message.id}`);if(token!==requestToken||selected!==session.id)return;

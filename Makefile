@@ -9,14 +9,14 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards test-agent-policy test-skills cert artwork icon app run clean
+.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards test-agent-policy test-skills cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-rich-cards test-agent-policy test-skills
+test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-rich-cards test-agent-policy test-skills
 
 test-agent-policy:
 	@BIN="/tmp/cantrip-agent-policy-tests-$$$$"; HOME_DIR="$$(mktemp -d)"; \
@@ -150,6 +150,13 @@ test-skills:
 	@BIN="/tmp/cantrip-skills-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc -parse-as-library Sources/Cantrip/SecretScan.swift Sources/Cantrip/SkillsLibrary.swift Sources/Cantrip/FolderInstructions.swift Sources/Cantrip/PrivateFile.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/CantripPaths.swift Tests/SkillsTests/main.swift -o "$$BIN" && "$$BIN"
+
+# Delete message: memory log, backend transcript and Cantrip log scrubbing (temporary home).
+test-message-deletion:
+	@BIN="/tmp/cantrip-message-deletion-tests-$$$$"; H="$$(mktemp -d)"; \
+	trap 'rm -f "$$BIN"; rm -rf "$$H"' EXIT; \
+	swiftc Sources/Cantrip/MessageDeletion.swift Sources/Cantrip/Log.swift Tests/MessageDeletionTests/main.swift -o "$$BIN" && \
+	CFFIXED_USER_HOME="$$H" "$$BIN"
 
 test-run-journal:
 	@BIN="/tmp/cantrip-run-journal-tests-$$$$"; \

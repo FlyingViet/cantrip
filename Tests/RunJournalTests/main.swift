@@ -454,6 +454,56 @@ do {
     fputs("FAIL: unexpected error: \(error)\n", stderr)
 }
 
+// Delete message: a deleted run's records and the queue item it started go; a queued item that
+// was added while that run was current (so it carries the run's ID) stays queued.
+do {
+    let sessionID = UUID()
+    let deletedRun = UUID()
+    let keptRun = UUID()
+    let prompt = UUID()
+    let reply = UUID()
+    let started = RunJournal.QueueItem(id: UUID(), text: "deleted prompt", includesAmbientContext: true)
+    let waiting = RunJournal.QueueItem(id: UUID(), text: "still queued", includesAmbientContext: true)
+    let journal = try RunJournal(sessionID: sessionID, directory: directory)
+    func add(_ kind: RunJournal.EventKind, run: UUID, _ edit: (inout RunJournal.Event) -> Void = { _ in }) throws {
+        var event = RunJournal.Event(sessionID: sessionID, runID: run, kind: kind)
+        edit(&event)
+        try journal.append(event)
+    }
+    try add(.queueAdded, run: keptRun) { $0.queueItem = started }
+    try add(.turnStarted, run: deletedRun) { $0.prompt = "deleted prompt"; $0.queueItemID = started.id }
+    try add(.messageStarted, run: deletedRun) { $0.messageID = prompt; $0.role = "user"; $0.text = "deleted prompt" }
+    try add(.queueAdded, run: deletedRun) { $0.queueItem = waiting }
+    try add(.toolActivity, run: deletedRun) { $0.messageID = reply }
+    try add(.output, run: deletedRun) { $0.messageID = reply; $0.text = "deleted reply" }
+    try add(.result, run: deletedRun) { $0.status = "succeeded" }
+    try add(.turnStarted, run: keptRun) { $0.prompt = "kept prompt" }
+    try add(.result, run: keptRun) { $0.status = "succeeded" }
+    let before = journal.recoveryState()
+
+    let done = DispatchSemaphore(value: 0)
+    var removed = 0
+    journal.removeEvents(where: { $0.runID == deletedRun || [prompt, reply].contains($0.messageID) }) {
+        removed = (try? $0.get()) ?? -1
+        done.signal()
+    }
+    done.wait()
+    let events = RunJournal.loadEvents(from: journal.fileURL)
+    expect(removed == 6, "the deleted run's records and its queue item's record are removed")
+    expect(!events.contains { $0.runID == deletedRun && $0.kind != .queueAdded },
+           "nothing of the deleted run is left but the other queued item")
+    let rewritten = String(decoding: try Data(contentsOf: journal.fileURL), as: UTF8.self)
+    expect(!rewritten.contains("deleted"), "no deleted text stays in the journal")
+    expect(journal.recoveryState()?.queued == [waiting] && before?.queued == [waiting],
+           "the item still waiting in the queue survives")
+    try add(.turnStarted, run: UUID()) { $0.prompt = "after deletion" }
+    expect(RunJournal.loadEvents(from: journal.fileURL).last?.prompt == "after deletion",
+           "appends continue after the rewrite")
+} catch {
+    failures += 1
+    fputs("FAIL: unexpected error in deletion: \(error)\n", stderr)
+}
+
 if failures == 0 {
     print("Run journal tests passed")
 } else {
