@@ -1,4 +1,5 @@
-// The Settings window's only access to the app (saved Macs, pairing links, the log).
+// The Settings window's only access to the app (saved Macs, pairing links, the log, and the Mac's
+// shared MCP list through the main process, which holds the token).
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("gatewaySettings", {
@@ -9,6 +10,7 @@ contextBridge.exposeInMainWorld("gatewaySettings", {
   select: (id: string) => ipcRenderer.invoke("gateway:select", id),
   remove: (id: string) => ipcRenderer.invoke("gateway:remove", id),
   openLog: () => ipcRenderer.invoke("gateway:open-log"),
+  mcp: (request: unknown) => ipcRenderer.invoke("gateway:mcp", request),
   openExternal: (url: string) => ipcRenderer.send("gateway:open-external", url),
   onStatus: (callback: (status: unknown) => void) => {
     ipcRenderer.on("gateway:status", (_event, status) => callback(status));

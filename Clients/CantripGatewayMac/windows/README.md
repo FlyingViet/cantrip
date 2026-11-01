@@ -63,6 +63,12 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   pairing token) on your home network or over Tailscale, with no certificates and no open
   port on the PC, and falls back to the Mac's Tailscale HTTPS address.
 - **Several Macs.** Settings keeps a list of Macs, like the Mac app; pick one to connect.
+- **Tools & sign-ins.** Settings lists the MCP servers Cantrip on the Mac shares with every
+  backend, as the Mac's Settings does: each server's state ("Credentials in Mac keychain", when
+  a sign-in's token ends), **Connect** (**Reconnect** after a failed sign-in), **Approve** for
+  a sign-in waiting on you, and switches for the server and each backend, saved on the Mac at
+  once. The Settings window asks the app for exactly these requests; it never sees the token.
+  A tab's own switches are in the toolbar's **MCP Servers**.
 - **Token kept out of reach.** Pairing tokens are encrypted with Windows' DPAPI for your
   account. The window's page never sees them; the app adds them to each request itself.
 
@@ -154,6 +160,7 @@ checks that Electron's TLS library completes a real TLS-PSK request.
 | Path | What |
 | --- | --- |
 | `src/main/main.ts` | Windows, the private `cantrip-host://mac/` scheme (serves the bundled interface and carries API calls to the Mac, adding the token), Settings IPC |
+| `src/main/mcpBridge.ts` | The only MCP requests the Settings window may send (the list and its actions) |
 | `src/main/transport.ts` | HTTP over TLS-PSK (`ECDHE-PSK-CHACHA20-POLY1305`, identity `cantrip-remote-v1`, key SHA-256 of the token) and over HTTPS |
 | `src/main/router.ts` | Route order and fallback; a send that may have reached the Mac is never repeated |
 | `src/main/pairing.ts`, `store.ts` | Pairing link and address validation; saved Macs with DPAPI-encrypted tokens |
@@ -171,7 +178,8 @@ have it yet; to match them it needs:
 
 - A Settings window with a sidebar of the same pages, opening on a status card (the Mac in use
   and its route, what new tabs run on, and the usage-limit backups): Macs, Models, Tools &
-  sign-ins, Memory, Voice, Appearance, About & Updates.
+  sign-ins (a tab so far, with the shared MCP servers), Memory, Voice, Appearance, About &
+  Updates.
 - **Macs** as a linked-devices list (Active badge, last seen), a Mac's page with Re-enter
   Pairing Token, its addresses under Advanced and Remove, and a step-by-step **Pair a Mac**.
 - **Models** with model tiers (`GET/POST /api/v1/model-tiers`), the usage-limit backups moved
