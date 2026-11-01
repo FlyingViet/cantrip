@@ -3,6 +3,7 @@ import Foundation
 extension SessionTabTests {
     @MainActor
     static func testMCPSharing() async throws {
+        requireTemporaryHome()
         try testMCPImport()
         testMCPBackendConfigs()
         try await testMCPOAuth()
@@ -346,8 +347,20 @@ extension SessionTabTests {
         _ = problems
     }
 
+    /// These tests write and delete the backends' configs at their real paths, so a run outside the
+    /// suite's temporary home (a hand-built focused binary, say) must stop before touching anything.
+    static func requireTemporaryHome() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        let real = getpwuid(getuid()).map { URL(fileURLWithPath: String(cString: $0.pointee.pw_dir)).standardizedFileURL.path }
+        guard let testHome = ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"],
+              URL(fileURLWithPath: testHome).standardizedFileURL.path == home, home != real else {
+            fatalError("MCP tests rewrite and delete config files in the home folder; run them in the suite's temporary home")
+        }
+    }
+
     /// Runs in the suite's temporary home: real config paths, a fake `claude` and an in-memory keychain.
     static func testMCPMigration() throws {
+        requireTemporaryHome()
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
         try fm.createDirectory(at: home.appendingPathComponent(".copilot"), withIntermediateDirectories: true)
