@@ -39,7 +39,6 @@ export function runCommand(command: GatewayCommand): void {
     case "background": nav.showBackground(); break;
     case "newTab": void nav.createTab(); break;
     case "newMessage": nav.openChat(); break;
-    case "refresh": void remote.refreshNow(); break;
     case "voiceMode": if (!nav.paused.value && remote.selectedID.value) nav.sheet.value = { kind: "voiceMode" }; break;
     case "togglePause": nav.paused.value = !nav.paused.value; break;
     case "modelSettings": nav.openModelSettings(remote.selectedSession.value); break;
@@ -61,12 +60,11 @@ export function runCommand(command: GatewayCommand): void {
 /** Windows has no menu bar in this window, so the page owns the Mac menu's shortcuts. */
 function shortcutCommand(event: KeyboardEvent): GatewayCommand | null {
   const primary = bridge.platform === "darwin" ? event.metaKey : event.ctrlKey;
-  if (event.key === "F5") return "refresh";
   if (event.key === "`" && event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) return "toggleTerminal";
   if (!primary || event.altKey) return null;
   const key = event.key.toLowerCase();
   if (event.shiftKey) return key === "v" ? "voiceMode" : key === "p" ? "togglePause" : null;
-  return ({ "1": "chat", "2": "tasks", "3": "artifacts", b: "background", t: "newTab", n: "newMessage", r: "refresh", ";": "modelSettings" } as Record<string, GatewayCommand>)[key] ?? null;
+  return ({ "1": "chat", "2": "tasks", "3": "artifacts", b: "background", t: "newTab", n: "newMessage", ";": "modelSettings" } as Record<string, GatewayCommand>)[key] ?? null;
 }
 
 export function App(): JSX.Element {
@@ -79,7 +77,7 @@ export function App(): JSX.Element {
       remote.setFrontmost(active);
     });
     const onKey = (event: KeyboardEvent) => {
-      if (bridge.platform === "darwin" && event.key !== "F5") return; // the menu bar handles these on macOS
+      if (bridge.platform === "darwin") return; // the menu bar handles these on macOS
       const command = shortcutCommand(event);
       if (!command) return;
       event.preventDefault();

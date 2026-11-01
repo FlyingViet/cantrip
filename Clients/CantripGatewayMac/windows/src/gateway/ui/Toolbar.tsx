@@ -66,16 +66,6 @@ function DeliveryPicker(props: { disabled?: boolean }): JSX.Element {
   );
 }
 
-function RefreshButton(): JSX.Element {
-  const refreshing = remote.isRefreshing.value;
-  return (
-    <button type="button" class="glass-btn" title={`Refresh Cantrip Home (${shortcut("Ctrl+R")})`} aria-label="Refresh"
-      disabled={refreshing} onClick={() => void remote.refreshNow()}>
-      <Icon name="arrow.clockwise" size={16} class={refreshing ? "spinning" : undefined} />
-    </button>
-  );
-}
-
 /** Background-run requests waiting on the user (same rule as iOS Home's header). */
 export function backgroundInputCount(): number {
   const session = remote.selectedSession.value;
@@ -112,7 +102,6 @@ function HomeToolbar(): JSX.Element {
         <BackgroundButton />
         {chat && session ? <DeliveryPicker disabled={remote.isMutating.value} /> : null}
         {chat && session ? <TerminalButton session={session} /> : null}
-        <RefreshButton />
       </div>
       <div class="glass-group">
         <MenuButton label={nav.paused.value ? "More — agent paused" : "More"} entries={homeMoreMenu}>
@@ -228,7 +217,6 @@ export function tabMoreMenu(): MenuEntry[] {
     });
   }
   entries.push(
-    { label: "Refresh", icon: "arrow.clockwise", shortcut: shortcut("Ctrl+R"), disabled: remote.isRefreshing.value, onSelect: () => void remote.refreshNow() },
     ...commonEntries(),
     { kind: "separator" },
     { label: "Back to Home", icon: "house", onSelect: () => nav.showHome() },

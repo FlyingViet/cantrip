@@ -14,7 +14,9 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   and press Alt+↑/↓, to reorder sections; **New Section** at the end makes an empty one; deleting
   a section with tabs asks first and keeps its tabs). Child tabs sit indented under their
   parent with a branch mark. A unified toolbar with Background, delivery (Auto, Queue,
-  Redirect, Inject), Refresh and More.
+  Redirect, Inject) and More. No refresh button: like the Mac app, it polls the Mac every
+  1.5 seconds while the tab you're viewing is working, has queued messages or the connection
+  is down, every 5 seconds otherwise, and at once when the window comes to the front.
 - **Chat.** Replies with Markdown and the Mac's image previews, reasoning steps, MCP App
   views, a live agent browser card (click for a larger view; Escape closes it), subagent cards (running ones pinned above the composer), handoff cards with
   **Open tab**, child tab cards (the request, replies and files; merge state; the merge
@@ -120,7 +122,6 @@ The sidebar's footer shows the Mac's address on the route in use.
 | Ctrl+B | Background |
 | Ctrl+T | New tab |
 | Ctrl+N | New message (Home chat) |
-| Ctrl+R or F5 | Refresh |
 | Ctrl+; | Model Settings |
 | Ctrl+Shift+V | Voice Mode |
 | Ctrl+Shift+P | Pause or resume the agent |
