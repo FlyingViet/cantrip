@@ -130,6 +130,21 @@ recent turns). The Copilot CLI's local MCP servers (`~/.copilot/mcp-config.json`
 homelab and the agent vault) are passed to Claude too, unless Claude Code already has a server
 with that name; remote servers that sign in through Copilot aren't shared.
 
+## Same skills and project rules on every backend
+
+A tab that falls back to another backend, or that you switch, keeps the same skills and rules:
+
+| | Claude Code | Copilot | Codex | Antigravity |
+|---|---|---|---|---|
+| Cantrip's skills library | `~/.claude/skills` links | `~/.agents/skills` links | `~/.agents/skills` links | `~/.agents/skills` links |
+| A repository's rules (AGENTS.md) | CLAUDE.md imports it (`@AGENTS.md`) | read directly | read directly | read directly |
+| Folder rules kept in Cantrip | appended system prompt; their CLAUDE.md mirror is skipped (`claudeMdExcludes`) | system message | developer instructions | ahead of the conversation's first message, and again when they change |
+
+Folder rules apply to everything under their folder, including a child tab's worktree of a
+repository there. Editing them (or turning a skill off) reaches a tab at its next message:
+Claude Code, Copilot and Codex restart their process and resume the session. See
+[Share skills with every backend](extensions-and-skills.md#share-skills-and-rules-with-every-backend).
+
 ## Claude Code background agents
 
 Claude Code tabs follow the same watcher and parallel-request conventions.

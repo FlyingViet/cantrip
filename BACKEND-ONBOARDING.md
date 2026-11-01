@@ -79,6 +79,8 @@ working or deliberately unsupported with a clear message.
 | OpenAI-compatible API | A stateless, tool-free one-shot call with images, structured limit errors and token or premium-request counts | `OneShotCompletion.swift`, `OpenAIEndpoint.swift` | this guide's section 4, "Routing and other helper calls" |
 | Memory consolidation (optional) | Same one-shot call, with write limits | `ConsolidationPolicy.swift`, `Consolidator.swift` | 6b2942f, 291336e |
 | Slash commands and skills | Built-ins plus discovered skills | `BackendCommands.swift`, `BackendCommandDiscovery.swift`, `BackendCommandCatalog.swift` | 2a2272c |
+| Shared skills library | Read skills from `~/.agents/skills` (or a folder Cantrip links into) | `SkillsLibrary.swift` (`targets`) | this guide's "Skills and project rules" |
+| Folder rules and repo rules | AGENTS.md read by the CLI; Cantrip's folder rules in the session's system instructions | `FolderInstructions.swift`, backend guidance | this guide's "Skills and project rules" |
 | Subagent monitor | `ToolActivity.subagent` (`SubagentInfo`); `canCancel` only if it really can | `SubagentMonitorView.swift`, `RemoteHistory.swift` | c70aaa8, edd4aba, 21b114d |
 | Background watchers and parallel requests | `watch-*` and `side-*` background agents, `.backgroundWake`, `supportsParallelSubagents` | backend system guidance | 29f4f46, d1549c6 |
 | Long commands | `.heartbeat` while a step runs without output | backend | 751f6eb |
@@ -220,6 +222,23 @@ live run.
   Credentials stay in the Keychain; a backend config only ever names `Scripts/cantrip-mcp`.
 - If the backend runs background agents, add the `watch-`/`side-` conventions in its own terms
   (see `ClaudeCodeBackend` and `CopilotBackend`).
+
+**Skills and project rules** (one source for every backend, so a tab that falls back or switches
+backend keeps the same abilities and rules)
+- Skills: Cantrip's library (`~/Library/Application Support/Cantrip/skills`) is linked into
+  `~/.agents/skills` (Copilot, Codex, Antigravity) and `~/.claude/skills` (Claude Code). A new
+  backend that reads `~/.agents/skills` needs nothing; one that reads another folder gets a
+  `SkillsLibrary.Target` for it, so `cantrip skills sync` links the library there too. Check
+  that the CLI follows symlinked skill folders and add it to `BackendCommandDiscovery`.
+- Repository rules: AGENTS.md is each repository's single source (CLAUDE.md only imports it).
+  Check which instruction files the CLI reads; if it doesn't read AGENTS.md, add it to the
+  CLI's fallback file names (Codex: `project_doc_fallback_filenames`) rather than copying rules.
+- Folder rules kept in Cantrip (`FolderInstructions.guidance(for: workdir)`) go in the session's
+  system instructions once, like Home's protocol, and in its launch signature so an edit reaches
+  the next message. A CLI without a system-prompt option gets them ahead of the conversation's
+  first message, and again when they change (`AntigravityBackend.withFolderRules`). If the CLI
+  also reads parent-folder CLAUDE.md files, exclude the rules' mirrors (Claude:
+  `--settings {"claudeMdExcludes": …}`) so nothing loads twice.
 - Slash commands reach the backend exactly as typed, with no memory or context added. Refuse
   commands that bypass Cantrip's approvals or break remotely, including aliases. Map the CLI's
   `/model` to the tab's model settings and its `/clear` to Start fresh (2a2272c).
@@ -345,6 +364,7 @@ either matches or the gap goes in section 9.
 - Context window size and token breakdown
 - Live steering and "send now"
 - Slash commands and skills
+- Shared skills library (`cantrip skills list` shows the backend) and folder rules in the guidance
 - Usage reading, limit codes and fallback
 - Reply visibility guidance
 - `CANTRIP_TAB_ID` and `RemoteAskpass`
@@ -415,7 +435,7 @@ table when you do.
 
 | Backend | Missing |
 |---|---|
-| Antigravity | `ReplyVisibility`, `SimulatorPool` and `watch-`/`side-` guidance; per-tab MCP switches for local servers (agy reads MCP servers only from `~/.gemini/config/mcp_config.json`, which Cantrip writes); `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
+| Antigravity | A system prompt: `ReplyVisibility`, `SimulatorPool` and `watch-`/`side-` guidance are missing, and Cantrip's folder rules go ahead of a conversation's first message instead (again when they change); per-tab MCP switches for local servers (agy reads MCP servers only from `~/.gemini/config/mcp_config.json`, which Cantrip writes); `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
 | Claude Code | Stopping one foreground Task subagent (the CLI can stop only background agents) |
 | Codex | `watch-`/`side-` background agents and wake-up turns (Codex's agents end with the turn); stopping one subagent (no API); Auto routing, queue plans, Done-when checks and memory upkeep (no tool-free one-shot mode wired); idle process release (each tab's app server stays up); shared servers that sign in through Cantrip's relay not yet run live (local `-c` servers were); Windows still runs `codex exec` |
 | Windows (all) | Structured events, conversation resume and usage fallback (see PARITY.md) |
