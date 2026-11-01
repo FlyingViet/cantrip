@@ -87,8 +87,9 @@ enum HTTPCompression {
         return crc32(output) == expectedCRC ? output : nil
     }
 
-    static func crc32(_ data: Data) -> UInt32 {
-        var crc: UInt32 = 0xFFFF_FFFF
+    /// Pass the previous result as `continuing` to checksum data that arrives in pieces.
+    static func crc32(_ data: Data, continuing previous: UInt32 = 0) -> UInt32 {
+        var crc: UInt32 = previous ^ 0xFFFF_FFFF
         data.withUnsafeBytes { buffer in
             for byte in buffer {
                 crc = crcTable[Int((crc ^ UInt32(byte)) & 0xFF)] ^ (crc >> 8)

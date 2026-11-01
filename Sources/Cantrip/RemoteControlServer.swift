@@ -2304,6 +2304,29 @@ final class RemoteControlServer {
                 sendEncoded(on: connection) { try JSONEncoder().encode(value) }
                 return
             }
+            if parts.count == 6, parts[5] == "file" || parts[5] == "folder" {
+                // GET /api/v1/home/artifacts/<id>/file: the artifact's original bytes, streamed.
+                // GET /api/v1/home/artifacts/<id>/folder: the registered artifacts in its folder, as a zip.
+                guard request.method == "GET" else {
+                    sendError(405, "method not allowed", on: connection)
+                    return
+                }
+                guard let id = UUID(uuidString: String(parts[4])) else {
+                    sendError(404, "artifact not found", on: connection)
+                    return
+                }
+                do {
+                    let download = parts[5] == "file"
+                        ? try store.artifactDownload(id: id)
+                        : try store.artifactFolderDownload(id: id)
+                    sendDownload(download, on: connection)
+                } catch let error as CantripHomeError {
+                    sendError(error.status, error.message, on: connection)
+                } catch {
+                    sendError(404, "Artifact is no longer available on the Mac.", on: connection)
+                }
+                return
+            }
             if parts.count == 6, parts[5] == "thumbnail" {
                 // GET /api/v1/home/artifacts/<id>/thumbnail: a cached JPEG for images and videos.
                 guard request.method == "GET" else {
@@ -3192,6 +3215,34 @@ final class RemoteControlServer {
 
     private func sendError(_ status: Int, _ message: String, on connection: RemoteRequestConnection) {
         sendJSON(["error": message], status: status, on: connection)
+    }
+
+    /// Streams an artifact (or a folder zip) from disk; files are opened and measured off the
+    /// main actor, and an error before the first byte still gets a JSON error response.
+    private func sendDownload(_ download: CantripHomeArtifactDownload, on connection: RemoteRequestConnection) {
+        connection.trace.enter(.encodeWait)
+        DispatchQueue.global(qos: .userInitiated).async {
+            connection.trace.enter(.encode)
+            let body: RemoteStreamBody
+            do {
+                body = try download.makeBody()
+            } catch {
+                let failure = error as? CantripHomeError ?? CantripHomeArtifactDownload.unavailable
+                self.sendError(failure.status, failure.message, on: connection)
+                return
+            }
+            let head = "HTTP/1.1 200 OK\r\n"
+                + "Content-Type: \(download.contentType)\r\n"
+                + "Content-Length: \(body.length)\r\n"
+                + "Content-Disposition: \(download.contentDisposition)\r\n"
+                + "Cache-Control: no-store\r\n"
+                + "X-Content-Type-Options: nosniff\r\n"
+                + "X-Cantrip-Request-ID: \(connection.trace.id)\r\n"
+                + "Content-Security-Policy: default-src 'none'; sandbox; frame-ancestors 'none'\r\n"
+                + "Referrer-Policy: no-referrer\r\n"
+                + "Connection: close\r\n\r\n"
+            connection.sendStream(head: Data(head.utf8), body: body, status: 200)
+        }
     }
 
     private func send(
