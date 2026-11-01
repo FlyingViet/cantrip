@@ -723,6 +723,11 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsContinueFromMessage: Bool? = nil
     /// Error rows that offer Continue: each failed run's latest error; empty while the tab works.
     var continuableMessageIDs: [String]? = nil
+    /// The Mac deletes a message and the rest of its exchange (`POST …/delete-message`). Nil from
+    /// older Macs, which never offer Delete Message.
+    var supportsDeleteMessage: Bool? = nil
+    /// Messages deleted from this tab, on any device. Every cached page drops them.
+    var deletedMessageIDs: [String]? = nil
     /// The tab's persistent shell is open to paired clients (`…/terminal`). Nil from older Macs;
     /// false for Private Local.
     var supportsTerminal: Bool? = nil
@@ -2591,6 +2596,31 @@ struct CantripRemoteAPI {
     fileprivate func postContinue(messageID: String, sessionID: String) async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
             path: "/api/v1/sessions/\(try Self.pathComponent(sessionID))/resume",
+            method: "POST", body: try JSONSerialization.data(withJSONObject: ["messageID": messageID]),
+            includeRecentExchanges: true
+        )
+        return response.session
+    }
+
+    /// Deletes a message and the rest of its exchange (the prompt and its replies) from the tab.
+    func deleteMessage(messageID: String, sessionID: String) async throws -> CantripRemoteSession {
+        try await prepareDeleteMessage(sessionID: sessionID)
+        return try await postDeleteMessage(messageID: messageID, sessionID: sessionID)
+    }
+
+    fileprivate func prepareDeleteMessage(sessionID: String) async throws {
+        let host = try await session(id: sessionID)
+        guard host.supportsDeleteMessage == true else {
+            throw CantripRemoteError.http(409, CantripDeleteMessage.unsupported)
+        }
+        guard !host.isStreaming else {
+            throw CantripRemoteError.http(409, CantripDeleteMessage.busy)
+        }
+    }
+
+    fileprivate func postDeleteMessage(messageID: String, sessionID: String) async throws -> CantripRemoteSession {
+        let response: CantripSessionResponse = try await request(
+            path: "/api/v1/sessions/\(try Self.pathComponent(sessionID))/delete-message",
             method: "POST", body: try JSONSerialization.data(withJSONObject: ["messageID": messageID]),
             includeRecentExchanges: true
         )
@@ -4593,6 +4623,32 @@ final class CantripRemoteModel: ObservableObject {
         return true
     }
 
+    /// Delete Message: the Mac removes the message's whole exchange (the prompt and its replies)
+    /// from the tab's history and the model's context. The returned tab drops them right away.
+    @discardableResult
+    func deleteMessage(_ messageID: String, sessionID: String) async -> Bool {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish, then try deleting the message again."
+            return false
+        }
+        guard let session = await mutate(prepare: { api in
+            try await api.prepareDeleteMessage(sessionID: sessionID)
+        }, { api, _ in
+            try await api.postDeleteMessage(messageID: messageID, sessionID: sessionID)
+        }) else { return false }
+        if selectedSessionID == sessionID {
+            apply(session)
+        } else {
+            if let index = sessions.firstIndex(where: { $0.id == sessionID }) { sessions[index] = session }
+            if var cached = detailCache[sessionID] {
+                cached.deletedMessageIDs = session.deletedMessageIDs
+                CantripDeleteMessage.dropDeleted(from: &cached)
+                detailCache[sessionID] = cached
+            }
+        }
+        return true
+    }
+
     @discardableResult
     func newConversation() async -> Bool {
         await sessionAction("new-conversation")
@@ -5059,6 +5115,8 @@ final class CantripRemoteModel: ObservableObject {
             session.messages = Array(previous.transcript.prefix(overlap)) + session.transcript
             session.hasOlderMessages = previous.hasOlderMessages
         }
+        // A message deleted on any device leaves every page held here, including older ones.
+        CantripDeleteMessage.dropDeleted(from: &session)
         if !expandedHistory.contains(session.id), session.supportsPagedHistory == true {
             let bounded = Self.historySuffix(session.transcript, groups: CantripHistoryWindow.recentExchanges)
             if bounded.count < session.transcript.count {

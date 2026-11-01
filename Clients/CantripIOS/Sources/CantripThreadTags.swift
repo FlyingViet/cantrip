@@ -407,6 +407,12 @@ struct CantripThreadView: View {
 
     private var thread: CantripRemoteThread? { store.threads[focus.threadID] }
 
+    /// Messages deleted from this tab (`CantripDeleteMessage`), on any device, until the thread reloads.
+    private var deletedMessageIDs: Set<String> {
+        guard let session = remote.selectedSession, session.id == focus.sessionID else { return [] }
+        return Set(session.deletedMessageIDs ?? [])
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -425,6 +431,10 @@ struct CantripThreadView: View {
         }
         // New replies show up while it's open; another tab closes it.
         .onChange(of: remote.selectedSession?.historyRevision) { _, _ in store.load(focus, remote: remote) }
+        // A deleted message leaves the thread; deleting its prompt deletes the thread.
+        .onChange(of: deletedMessageIDs) { _, deleted in
+            if deleted.contains(focus.threadID) { store.close() } else { store.load(focus, remote: remote) }
+        }
         .onChange(of: remote.selectedSessionID) { _, id in if id != focus.sessionID { store.close() } }
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
@@ -467,7 +477,7 @@ struct CantripThreadView: View {
         if let thread {
             bubble(thread.prompt.text).id(thread.prompt.id)
             if thread.hasEarlier { note("Earlier messages in this thread aren't shown.") }
-            ForEach(thread.messages) { message in
+            ForEach(thread.messages.filter { !deletedMessageIDs.contains($0.id) }) { message in
                 Group {
                     if message.role == "user" { bubble(message.text) } else { reply(message) }
                 }

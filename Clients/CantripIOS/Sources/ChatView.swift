@@ -3866,6 +3866,8 @@ struct TurnView: View {
                         .padding(.horizontal, 14).padding(.vertical, 9)
                         .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
                         .foregroundStyle(.white)
+                        .modifier(CantripMessageMenu(model: remote, target: deleteMessageTarget, copyText: menuCopyText,
+                                                     previewCornerRadius: 18))
                 }
                 if let message = remoteMessage, let sessionID = cantripSessionID,
                    let count = threadReplies(of: message.id) {
@@ -3994,6 +3996,7 @@ struct TurnView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(CantripMessageMenu(model: remote, target: deleteMessageTarget, copyText: menuCopyText))
         }
     }
 
