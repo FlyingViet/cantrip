@@ -33,8 +33,8 @@ enum SimulatorPool {
         var duoOS = "27.1"
         /// Pool and temporary simulators booted at once; a leased one counts before it boots.
         var maxBooted = 2
-        /// Nothing new boots while free plus compressible memory is below this (GB; 0 turns it off)
-        /// or macOS reports memory pressure.
+        /// Nothing new boots while macOS reports memory pressure or free plus compressible memory
+        /// is below this (GB); 0 turns the memory check off.
         var minFreeMemoryGB = 4
         /// How long `acquire` waits in line for room before giving up.
         var waitMinutes = 10
@@ -701,7 +701,7 @@ enum SimulatorPool {
             if !swapping {
                 let memory = c.memory()
                 let needed = Int64(c.policy.minFreeMemoryGB) * 1_000_000_000
-                if memory.isUnderPressure || (needed > 0 && memory.availableBytes < needed) {
+                if needed > 0, memory.isUnderPressure || memory.availableBytes < needed {
                     reasons.append("memory is short (\(StorageUpkeep.format(memory.availableBytes)) free or compressible, "
                         + "needs \(StorageUpkeep.format(needed))\(memory.isUnderPressure ? ", and macOS reports memory pressure" : ""))")
                 }

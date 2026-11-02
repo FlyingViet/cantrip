@@ -442,7 +442,7 @@ Simulators take a lot of memory, so only a couple run at once:
   SECONDS` for one request, 0 to fail at once) instead of making another copy.
 - **Enough memory.** Nothing new is leased while macOS reports memory pressure
   or free plus compressible memory (`memory_pressure`'s "free percentage") is
-  under 4 GB (`simulatorPoolMinFreeMemoryGB`, 0 turns it off). A tab swapping
+  under 4 GB (`simulatorPoolMinFreeMemoryGB`; 0 turns the memory check off). A tab swapping
   kinds boots nothing new, so it goes ahead.
 
 Child tabs that need a Simulator wait to auto-fork while that many are leased.
