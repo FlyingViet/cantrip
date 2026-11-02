@@ -201,7 +201,8 @@ struct SettingsMemoryPage: View {
     }
 }
 
-/// The Mac's shared MCP servers and their sign-ins; on Gateway Mac also its local model's tools.
+/// The Mac's agent backends and their sign-ins, its shared MCP servers; on Gateway Mac also its
+/// local model's tools.
 struct SettingsToolsPage: View {
     @ObservedObject var remote: CantripRemoteModel
     var macTools: AnyView? = nil
@@ -210,7 +211,10 @@ struct SettingsToolsPage: View {
 
     var body: some View {
         CantripMCPServersView(remote: remote, tabID: nil, embedded: true, extra: macTools,
-                              leading: AnyView(SettingsGitHubSection(remote: remote, onOpenHome: onOpenHome)))
+                              leading: AnyView(Group {
+                                  CantripBackendsSection(remote: remote)
+                                  SettingsGitHubSection(remote: remote, onOpenHome: onOpenHome)
+                              }))
             .safeAreaInset(edge: .top, spacing: 0) {
                 SettingsScopeLabel.allTabs(on: remote.macName)
                     .frame(maxWidth: .infinity, alignment: .leading)

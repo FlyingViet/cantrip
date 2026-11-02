@@ -1083,6 +1083,7 @@ enum CantripRemoteError: LocalizedError {
     case usageFallbackUnsupported
     case modelTiersUnsupported
     case mcpUnsupported
+    case backendsUnsupported
     case skillsUnsupported
     /// A `400` whose reason is shown as the Mac wrote it.
     case rejected(String)
@@ -1154,6 +1155,8 @@ enum CantripRemoteError: LocalizedError {
             return "Update and reopen Cantrip on your Mac to edit its model tiers."
         case .mcpUnsupported:
             return "Update and reopen Cantrip on your Mac to manage its shared MCP servers."
+        case .backendsUnsupported:
+            return CantripBackendText.unsupported
         case .skillsUnsupported:
             return CantripSkills.unsupported
         case .rejected(let message):
@@ -1776,6 +1779,18 @@ struct CantripRemoteAPI {
 
     fileprivate func mcpAction(body: Data) async throws -> CantripMCPSnapshot {
         try await request(path: "/api/v1/mcp", method: "POST", body: body)
+    }
+
+    func backends() async throws -> CantripBackendsSnapshot {
+        do {
+            return try await request(path: "/api/v1/backends")
+        } catch CantripRemoteError.http(let status, _) where status == 404 || status == 405 {
+            throw CantripRemoteError.backendsUnsupported
+        }
+    }
+
+    fileprivate func backendsAction(body: Data) async throws -> CantripBackendsSnapshot {
+        try await request(path: "/api/v1/backends", method: "POST", body: body)
     }
 
     func skills() async throws -> CantripSkillsSnapshot {
@@ -2824,6 +2839,8 @@ final class CantripRemoteModel: ObservableObject {
     var mcpServersTab: String?
     /// The Skills & Rules sheet (Mac-wide, not per tab).
     @Published var showingSkills = false
+    /// The Backends sheet, opened by the alert that a backend went signed out or came back.
+    @Published var showingBackends = false
     /// Sections the Mac groups its tabs into, in order (empty: one flat list).
     @Published private(set) var tabSections: [CantripTabSection] = []
     @Published private(set) var supportsTabSections = false
@@ -3354,6 +3371,10 @@ final class CantripRemoteModel: ObservableObject {
                 inputRequestsSession = nil
                 mcpServersTab = nil
                 showingMCPServers = true
+            }
+            if target.kind == "backendStatus" {
+                inputRequestsSession = nil
+                showingBackends = true
             }
             notificationNavigationID = UUID()
         } catch {
@@ -4213,6 +4234,18 @@ final class CantripRemoteModel: ObservableObject {
     func mcpAction(_ action: [String: Any]) async -> CantripMCPSnapshot? {
         await mutate(prepare: { _ in try JSONSerialization.data(withJSONObject: action) }, { api, body in
             try await api.mcpAction(body: body)
+        })
+    }
+
+    /// Each agent CLI on the Mac: installed, signed in, its limits and last run.
+    func backends() async throws -> CantripBackendsSnapshot {
+        try await performHistoryRead { try await $0.backends() }
+    }
+
+    /// Check now, Sign In or Cancel a sign-in; nil when it didn't go through (`errorMessage` says why).
+    func backendsAction(_ action: [String: Any]) async -> CantripBackendsSnapshot? {
+        await mutate(prepare: { _ in try JSONSerialization.data(withJSONObject: action) }, { api, body in
+            try await api.backendsAction(body: body)
         })
     }
 
@@ -5472,6 +5505,9 @@ struct CantripRemoteView: View {
             }
             .sheet(isPresented: $model.showingSkills) {
                 CantripSkillsView(remote: model)
+            }
+            .sheet(isPresented: $model.showingBackends) {
+                CantripBackendsView(remote: model)
             }
             .sheet(isPresented: $model.showingMacAccess) {
                 NavigationStack { CantripMacAccessView(remote: model) }
