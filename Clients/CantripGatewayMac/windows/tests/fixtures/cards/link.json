@@ -1,0 +1,25 @@
+{
+  "accessibilityLabel" : "Mac Studio - Apple, apple.com",
+  "action" : {
+    "kind" : "open",
+    "label" : "Open",
+    "url" : "https:\/\/www.apple.com\/mac-studio\/"
+  },
+  "blocks" : [
+    {
+      "subtitle" : "apple.com",
+      "symbol" : "link",
+      "title" : "Mac Studio - Apple",
+      "type" : "header"
+    }
+  ],
+  "fallbackText" : "Mac Studio - Apple — apple.com",
+  "id" : "l1",
+  "source" : {
+    "kind" : "preview",
+    "name" : "Apple"
+  },
+  "style" : "link",
+  "type" : "link",
+  "version" : 1
+}

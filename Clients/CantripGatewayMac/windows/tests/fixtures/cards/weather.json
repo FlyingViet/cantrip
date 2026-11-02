@@ -1,0 +1,222 @@
+{
+  "accessibilityLabel" : "Weather for Seattle, WA",
+  "blocks" : [
+    {
+      "lines" : [
+        "Clear",
+        "H 48°  L 38° · 1% precip. · Feels like 45°"
+      ],
+      "stat" : {
+        "accessibilityLabel" : "Now 48 degrees Fahrenheit, Clear",
+        "symbol" : "sun.max.fill",
+        "value" : "48°"
+      },
+      "subtitle" : "Your iPhone's location",
+      "subtitleSymbol" : "location.fill",
+      "title" : "Seattle, WA",
+      "type" : "header"
+    },
+    {
+      "accessibilityLabel" : "Hourly forecast",
+      "items" : [
+        {
+          "accessibilityLabel" : "Now, 48 degrees Fahrenheit, Clear",
+          "label" : "Now",
+          "symbol" : "sun.max.fill",
+          "value" : "48°"
+        },
+        {
+          "accessibilityLabel" : "3 PM, 48 degrees Fahrenheit, Mostly clear",
+          "label" : "3 PM",
+          "symbol" : "cloud.sun.fill",
+          "value" : "48°"
+        },
+        {
+          "accessibilityLabel" : "4 PM, 47 degrees Fahrenheit, Clear",
+          "label" : "4 PM",
+          "symbol" : "sun.max.fill",
+          "value" : "47°"
+        },
+        {
+          "accessibilityLabel" : "5 PM, 44 degrees Fahrenheit, Clear",
+          "label" : "5 PM",
+          "symbol" : "moon.stars.fill",
+          "value" : "44°"
+        },
+        {
+          "accessibilityLabel" : "6 PM, 42 degrees Fahrenheit, Clear",
+          "label" : "6 PM",
+          "symbol" : "moon.stars.fill",
+          "value" : "42°"
+        },
+        {
+          "accessibilityLabel" : "7 PM, 41 degrees Fahrenheit, Clear",
+          "label" : "7 PM",
+          "symbol" : "moon.stars.fill",
+          "value" : "41°"
+        },
+        {
+          "accessibilityLabel" : "8 PM, 40 degrees Fahrenheit, Clear",
+          "label" : "8 PM",
+          "symbol" : "moon.stars.fill",
+          "value" : "40°"
+        },
+        {
+          "accessibilityLabel" : "9 PM, 40 degrees Fahrenheit, Clear",
+          "label" : "9 PM",
+          "symbol" : "moon.stars.fill",
+          "value" : "40°"
+        },
+        {
+          "accessibilityLabel" : "10 PM, 39 degrees Fahrenheit, Clear",
+          "label" : "10 PM",
+          "symbol" : "moon.stars.fill",
+          "value" : "39°"
+        },
+        {
+          "accessibilityLabel" : "11 PM, 39 degrees Fahrenheit, Clear",
+          "label" : "11 PM",
+          "symbol" : "moon.stars.fill",
+          "value" : "39°"
+        },
+        {
+          "accessibilityLabel" : "12 AM, 38 degrees Fahrenheit, Clear",
+          "label" : "12 AM",
+          "symbol" : "moon.stars.fill",
+          "value" : "38°"
+        },
+        {
+          "accessibilityLabel" : "1 AM, 38 degrees Fahrenheit, Clear",
+          "label" : "1 AM",
+          "symbol" : "moon.stars.fill",
+          "value" : "38°"
+        },
+        {
+          "accessibilityLabel" : "2 AM, 37 degrees Fahrenheit, Mostly clear",
+          "label" : "2 AM",
+          "symbol" : "cloud.moon.fill",
+          "value" : "37°"
+        }
+      ],
+      "type" : "strip"
+    },
+    {
+      "accessibilityLabel" : "10-day forecast",
+      "items" : [
+        {
+          "accessibilityLabel" : "Today, Fog, high 48, low 38 degrees Fahrenheit",
+          "high" : 48,
+          "highText" : "48°",
+          "label" : "Today",
+          "low" : 38,
+          "lowText" : "38°",
+          "symbol" : "cloud.fog.fill"
+        },
+        {
+          "accessibilityLabel" : "Mon, Cloudy, high 53, low 35 degrees Fahrenheit",
+          "high" : 53,
+          "highText" : "53°",
+          "label" : "Mon",
+          "low" : 35,
+          "lowText" : "35°",
+          "symbol" : "cloud.fill"
+        },
+        {
+          "accessibilityLabel" : "Tue, Cloudy, high 55, low 43 degrees Fahrenheit, 14 percent chance of precipitation",
+          "high" : 55,
+          "highText" : "55°",
+          "label" : "Tue",
+          "low" : 43,
+          "lowText" : "43°",
+          "note" : "14%",
+          "symbol" : "cloud.fill"
+        },
+        {
+          "accessibilityLabel" : "Wed, Light drizzle, high 55, low 43 degrees Fahrenheit, 62 percent chance of precipitation",
+          "high" : 55,
+          "highText" : "55°",
+          "label" : "Wed",
+          "low" : 43,
+          "lowText" : "43°",
+          "note" : "62%",
+          "symbol" : "cloud.drizzle.fill"
+        },
+        {
+          "accessibilityLabel" : "Thu, Heavy drizzle, high 57, low 45 degrees Fahrenheit, 62 percent chance of precipitation",
+          "high" : 57,
+          "highText" : "57°",
+          "label" : "Thu",
+          "low" : 45,
+          "lowText" : "45°",
+          "note" : "62%",
+          "symbol" : "cloud.drizzle.fill"
+        },
+        {
+          "accessibilityLabel" : "Fri, Heavy drizzle, high 55, low 46 degrees Fahrenheit, 53 percent chance of precipitation",
+          "high" : 55,
+          "highText" : "55°",
+          "label" : "Fri",
+          "low" : 46,
+          "lowText" : "46°",
+          "note" : "53%",
+          "symbol" : "cloud.drizzle.fill"
+        },
+        {
+          "accessibilityLabel" : "Sat, Rain, high 57, low 47 degrees Fahrenheit, 56 percent chance of precipitation",
+          "high" : 57,
+          "highText" : "57°",
+          "label" : "Sat",
+          "low" : 47,
+          "lowText" : "47°",
+          "note" : "56%",
+          "symbol" : "cloud.rain.fill"
+        },
+        {
+          "accessibilityLabel" : "Sun, Rain, high 56, low 45 degrees Fahrenheit, 56 percent chance of precipitation",
+          "high" : 56,
+          "highText" : "56°",
+          "label" : "Sun",
+          "low" : 45,
+          "lowText" : "45°",
+          "note" : "56%",
+          "symbol" : "cloud.rain.fill"
+        },
+        {
+          "accessibilityLabel" : "Mon, Cloudy, high 52, low 44 degrees Fahrenheit, 52 percent chance of precipitation",
+          "high" : 52,
+          "highText" : "52°",
+          "label" : "Mon",
+          "low" : 44,
+          "lowText" : "44°",
+          "note" : "52%",
+          "symbol" : "cloud.fill"
+        },
+        {
+          "accessibilityLabel" : "Tue, Light drizzle, high 59, low 45 degrees Fahrenheit, 60 percent chance of precipitation",
+          "high" : 59,
+          "highText" : "59°",
+          "label" : "Tue",
+          "low" : 45,
+          "lowText" : "45°",
+          "note" : "60%",
+          "symbol" : "cloud.drizzle.fill"
+        }
+      ],
+      "kind" : "range",
+      "max" : 59,
+      "min" : 35,
+      "type" : "chart"
+    }
+  ],
+  "fallbackText" : "Seattle, WA — Your iPhone's location\nClear\nH 48°  L 38° · 1% precip. · Feels like 45°\n48°\nNow 48° · 3 PM 48° · 4 PM 47° · 5 PM 44° · 6 PM 42° · 7 PM 41° · 8 PM 40° · 9 PM 40° · 10 PM 39° · 11 PM 39° · 12 AM 38° · 1 AM 38° · 2 AM 37°\nToday 38°–48°\nMon 35°–53°\nTue 14% 43°–55°\nWed 62% 43°–55°\nThu 62% 45°–57°\nFri 53% 46°–55°\nSat 56% 47°–57°\nSun 56% 45°–56°\nMon 52% 44°–52°\nTue 60% 45°–59°",
+  "id" : "weather-seattle, wa",
+  "source" : {
+    "attribution" : "Weather data by Open-Meteo.com",
+    "kind" : "resolver",
+    "name" : "Open-Meteo",
+    "updatedAt" : "2026-11-01T22:15:00Z",
+    "url" : "https:\/\/open-meteo.com\/"
+  },
+  "type" : "weather",
+  "version" : 1
+}

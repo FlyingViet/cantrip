@@ -1,0 +1,208 @@
+/* Customize Mascot sheet body (CantripMascotCustomizationView): the Mac's dark grouped-form look. */
+.pip-custom {
+  --pip-accent: var(--accent, #0a84ff);
+  --pip-text: #f2f2f7;
+  --pip-secondary: rgba(235, 235, 245, 0.6);
+  --pip-surface: rgba(255, 255, 255, 0.06);
+  --pip-surface-hover: rgba(255, 255, 255, 0.09);
+  --pip-separator: rgba(255, 255, 255, 0.09);
+  --pip-focus: 0 0 0 3px rgba(10, 132, 255, 0.55);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--pip-text);
+  font: 13px/1.38 "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.pip-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  /* Room for focus rings at the edges, without moving the content. */
+  margin: 0 -4px;
+  padding: 8px 4px 24px;
+}
+.pip-scroll > * { flex: none; }
+
+/* Live preview */
+.pip-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding-top: 8px;
+  text-align: center;
+}
+.pip-preview canvas { margin-bottom: 2px; }
+.pip-preview-name {
+  font: 700 19px/1.25 "Segoe UI Variable Display", "Segoe UI", -apple-system, system-ui, sans-serif;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.pip-preview-outfit { margin-top: -6px; font-size: 12px; color: var(--pip-secondary); }
+
+/* Mood row: one horizontally scrolling line of capsules, like the Mac. */
+.pip-moods {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px;
+  margin: -4px;
+  scroll-padding-inline: 4px;
+  scrollbar-width: none;
+}
+.pip-moods::-webkit-scrollbar { display: none; }
+.pip-mood {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--pip-surface);
+  color: var(--pip-text);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: inset 0 0 0 1.5px transparent;
+  transition: background-color 0.12s ease;
+}
+.pip-mood:hover { background: var(--pip-surface-hover); }
+.pip-mood.is-selected {
+  background: rgba(10, 132, 255, 0.22);
+  box-shadow: inset 0 0 0 1.5px var(--pip-accent);
+}
+.pip-icon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pip-mood.is-selected .pip-icon { color: var(--pip-accent); }
+
+/* Sections */
+.pip-section { display: flex; flex-direction: column; gap: 8px; }
+.pip-section + .pip-section { gap: 12px; }
+.pip-heading { margin: 0; font-size: 13px; font-weight: 600; color: var(--pip-text); }
+.pip-footnote { margin: 0; font-size: 11px; color: var(--pip-secondary); }
+
+/* Name */
+.pip-name-row { display: flex; align-items: center; gap: 10px; }
+.pip-name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--pip-surface);
+  color: var(--pip-text);
+  font-family: inherit;
+  font-size: 13px;
+  user-select: text;
+  cursor: text;
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+}
+.pip-name-input::placeholder { color: rgba(235, 235, 245, 0.3); }
+.pip-reset {
+  flex: none;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--pip-accent);
+  font: inherit;
+}
+.pip-reset:hover { background: var(--pip-surface); }
+
+/* Looks: an adaptive grid of outfit cards (SwiftUI `GridItem(.adaptive(minimum: 150))`). */
+.pip-outfits {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+.pip-outfit {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 190px;
+  padding: 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--pip-surface);
+  color: var(--pip-text);
+  font: inherit;
+  text-align: center;
+  box-shadow: inset 0 0 0 2px transparent;
+  transition: background-color 0.12s ease;
+}
+.pip-outfit:hover { background: var(--pip-surface-hover); }
+.pip-outfit.is-selected { box-shadow: inset 0 0 0 2px var(--pip-accent); }
+.pip-outfit canvas { flex: none; }
+.pip-outfit-title { font-size: 12px; font-weight: 600; }
+.pip-outfit-summary { font-size: 11px; line-height: 1.3; color: var(--pip-secondary); }
+.pip-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 20px;
+  height: 20px;
+  color: var(--pip-accent);
+}
+
+/* Footer: the sheet's confirmation action, bottom trailing as in macOS sheets. */
+.pip-footer {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--pip-separator);
+}
+.pip-done {
+  min-width: 76px;
+  min-height: 28px;
+  padding: 3px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--pip-accent);
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+.pip-done:hover { background: var(--accent-hover, #3395ff); }
+
+/* Keyboard focus: the Mac's blue ring, kept off mouse clicks. */
+.pip-custom button:focus { outline: none; }
+.pip-custom .pip-mood:focus-visible { border-radius: 999px; box-shadow: inset 0 0 0 1.5px var(--pip-accent), var(--pip-focus); }
+.pip-custom .pip-outfit:focus-visible { border-radius: 12px; box-shadow: inset 0 0 0 2px var(--pip-accent), var(--pip-focus); }
+.pip-custom .pip-outfit:not(.is-selected):focus-visible { box-shadow: var(--pip-focus); }
+.pip-custom .pip-mood:not(.is-selected):focus-visible { box-shadow: var(--pip-focus); }
+.pip-custom .pip-name-input:focus { outline: none; border-radius: 10px; box-shadow: var(--pip-focus); }
+.pip-custom .pip-reset:focus-visible,
+.pip-custom .pip-done:focus-visible { border-radius: 7px; box-shadow: var(--pip-focus); }
+.pip-custom .pip-reset:focus-visible { border-radius: 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pip-mood, .pip-outfit { transition: none; }
+}
