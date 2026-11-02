@@ -1,13 +1,14 @@
 name: iOS · TestFlight
-# Hermes → App Store Connect / TestFlight.
+# Cantrip Agent (Clients/CantripIOS, scheme Hermes) → App Store Connect / TestFlight.
 
 # Manual only. Builds Hermes (native Xcode archive) and uploads it to TestFlight
 # via the App Store Connect API. Nothing runs on push.
 #
-# Run it:  gh workflow run ios-testflight.yml --ref master
+# Run it:  gh workflow run ios-testflight.yml --ref main -R FlyingViet/cantrip
 #
-# One-time setup this depends on: the 4 secrets below + an App Store Connect app
-# record for the app's bundle id + a self-hosted runner registered to this repo.
+# One-time setup this depends on: the 4 secrets below (in the testflight environment) + an App
+# Store Connect app record for the app's bundle id + a self-hosted runner registered to this repo.
+# Only people with write access can dispatch it; it never runs for pull requests.
 
 on:
   workflow_dispatch:
@@ -22,8 +23,10 @@ env:
   PROJECT: Hermes.xcodeproj
   CONFIGURATION: Release
   TEAM_ID: "9M3XNFG4J7"
-  # CFBundleVersion = 100000 + run number → strictly increasing (all ASC needs).
-  BUILD_NUMBER_BASE: "100000"
+  # CFBundleVersion = base + run number → strictly increasing (all ASC needs). Builds 100001-100187
+  # came from FlyingViet/CantripIOS, whose run numbers this repo's don't continue: the base starts
+  # above its last build.
+  BUILD_NUMBER_BASE: "100200"
   # SwiftPM uses bare repositories for its cache. Keep this scoped to CI
   # instead of relaxing the runner's global Git security setting.
   GIT_CONFIG_COUNT: "1"
@@ -38,9 +41,15 @@ jobs:
     # login keychain).
     runs-on: [self-hosted, macOS]
     timeout-minutes: 40
+    environment: testflight
+    defaults:
+      run:
+        working-directory: Clients/CantripIOS
 
     steps:
       - name: Use job-local temporary storage
+        # Before checkout, so not in Clients/CantripIOS yet.
+        working-directory: .
         run: echo "TMPDIR=$RUNNER_TEMP/" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v5
