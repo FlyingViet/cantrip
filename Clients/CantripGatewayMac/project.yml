@@ -39,13 +39,13 @@ targets:
     platform: macOS
     sources:
       - path: Sources
-      - path: Hermes/Sources
+      - path: ../CantripIOS/Sources
         excludes:
           - App.swift
           - Info.plist
           - Hermes.entitlements
           - Assets.xcassets
-      - path: Hermes/Shared
+      - path: ../CantripIOS/Shared
       - path: Resources
     info:
       path: Sources/Info.plist
@@ -104,13 +104,13 @@ targets:
           - App/CantripGatewayMacApp.swift
           - App/CantripGatewayMac.entitlements
           - Info.plist
-      - path: Hermes/Sources
+      - path: ../CantripIOS/Sources
         excludes:
           - App.swift
           - Info.plist
           - Hermes.entitlements
           - Assets.xcassets
-      - path: Hermes/Shared
+      - path: ../CantripIOS/Shared
     info:
       path: Embedded/Info.plist
       properties:
@@ -137,39 +137,39 @@ targets:
       - path: Tests
       # Shared logic suites that do not render UIKit views run against the Mac build.
       # Push-alert registration is iOS-only (no APNs environment on the Mac).
-      - path: Hermes/Tests/CantripRoutingTests.swift
-      - path: Hermes/Tests/CantripHistoryTests.swift
-      - path: Hermes/Tests/CantripMutationTests.swift
-      - path: Hermes/Tests/CantripImageTransportTests.swift
-      - path: Hermes/Tests/ServerProfilesTests.swift
-      - path: Hermes/Tests/CantripDirectAddressTests.swift
-      - path: Hermes/Tests/CantripPairingLinkTests.swift
-      - path: Hermes/Tests/CantripGzipTests.swift
-      - path: Hermes/Tests/CantripArtifactDownloadTests.swift
-      - path: Hermes/Tests/CantripLocationSharingTests.swift
-      - path: Hermes/Tests/CantripTabBackTransitionTests.swift
-      - path: Hermes/Tests/CantripMCPAppTests.swift
-      - path: Hermes/Tests/CantripPromptUsageTests.swift
-      - path: Hermes/Tests/CantripQueueTests.swift
-      - path: Hermes/Tests/CantripStartFreshTests.swift
-      - path: Hermes/Tests/ChatTabTests.swift
-      - path: Hermes/Tests/CantripHomeWorkspaceGroupTests.swift
-      - path: Hermes/Tests/DictationTextTests.swift
-      - path: Hermes/Tests/DictationPipelineTests.swift
-      - path: Hermes/Tests/BackendSlashCommandsTests.swift
-      - path: Hermes/Tests/ComposerPasteTests.swift
-      - path: Hermes/Tests/CantripTabSectionsTests.swift
-      - path: Hermes/Tests/CantripChildTabsTests.swift
-      - path: Hermes/Tests/CantripThreadTagsTests.swift
-      - path: Hermes/Tests/CantripTabMentionsTests.swift
-      - path: Hermes/Tests/CantripTerminalTests.swift
-      - path: Hermes/Tests/CantripRichCardTests.swift
-      - path: Hermes/Tests/CantripWeatherCardTests.swift
-      - path: Hermes/Tests/CantripCardTests.swift
-      - path: Hermes/Tests/CantripHomeCardTests.swift
-      - path: Hermes/Tests/CantripDeleteMessageTests.swift
-      - path: Hermes/Tests/CantripSkillsTests.swift
-      - path: Hermes/Tests/CantripBackendsTests.swift
+      - path: ../CantripIOS/Tests/CantripRoutingTests.swift
+      - path: ../CantripIOS/Tests/CantripHistoryTests.swift
+      - path: ../CantripIOS/Tests/CantripMutationTests.swift
+      - path: ../CantripIOS/Tests/CantripImageTransportTests.swift
+      - path: ../CantripIOS/Tests/ServerProfilesTests.swift
+      - path: ../CantripIOS/Tests/CantripDirectAddressTests.swift
+      - path: ../CantripIOS/Tests/CantripPairingLinkTests.swift
+      - path: ../CantripIOS/Tests/CantripGzipTests.swift
+      - path: ../CantripIOS/Tests/CantripArtifactDownloadTests.swift
+      - path: ../CantripIOS/Tests/CantripLocationSharingTests.swift
+      - path: ../CantripIOS/Tests/CantripTabBackTransitionTests.swift
+      - path: ../CantripIOS/Tests/CantripMCPAppTests.swift
+      - path: ../CantripIOS/Tests/CantripPromptUsageTests.swift
+      - path: ../CantripIOS/Tests/CantripQueueTests.swift
+      - path: ../CantripIOS/Tests/CantripStartFreshTests.swift
+      - path: ../CantripIOS/Tests/ChatTabTests.swift
+      - path: ../CantripIOS/Tests/CantripHomeWorkspaceGroupTests.swift
+      - path: ../CantripIOS/Tests/DictationTextTests.swift
+      - path: ../CantripIOS/Tests/DictationPipelineTests.swift
+      - path: ../CantripIOS/Tests/BackendSlashCommandsTests.swift
+      - path: ../CantripIOS/Tests/ComposerPasteTests.swift
+      - path: ../CantripIOS/Tests/CantripTabSectionsTests.swift
+      - path: ../CantripIOS/Tests/CantripChildTabsTests.swift
+      - path: ../CantripIOS/Tests/CantripThreadTagsTests.swift
+      - path: ../CantripIOS/Tests/CantripTabMentionsTests.swift
+      - path: ../CantripIOS/Tests/CantripTerminalTests.swift
+      - path: ../CantripIOS/Tests/CantripRichCardTests.swift
+      - path: ../CantripIOS/Tests/CantripWeatherCardTests.swift
+      - path: ../CantripIOS/Tests/CantripCardTests.swift
+      - path: ../CantripIOS/Tests/CantripHomeCardTests.swift
+      - path: ../CantripIOS/Tests/CantripDeleteMessageTests.swift
+      - path: ../CantripIOS/Tests/CantripSkillsTests.swift
+      - path: ../CantripIOS/Tests/CantripBackendsTests.swift
     dependencies:
       - target: CantripGatewayMac
     settings:
