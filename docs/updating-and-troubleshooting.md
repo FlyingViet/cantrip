@@ -395,18 +395,27 @@ ones are never replaced. Worktrees made by hand get the same with
 
 ## Shared simulators
 
-Tabs that test iOS apps share a small pool of simulators, one per device type
-and iOS version, instead of making their own:
+Tabs that test iOS apps share a small pool of simulators instead of making
+their own. iPhone apps have one layout, so every iPhone request shares one
+iPhone (iPhone 17 Pro on the newest iOS that runs it; the `simulatorPoolPhone`
+and `simulatorPoolPhoneOS` settings). The iPhone Duo folds, so it keeps one
+simulator per iOS version (iOS 27.1 unless `--os` names another; the
+`simulatorPoolDuoOS` setting). There is one iPad, one Apple Watch and one
+Apple TV.
 
 ```sh
-UDID=$(cantrip sim acquire --device 'iPhone 17 Pro' --os 27.0)
+UDID=$(cantrip sim acquire --device iPhone)
 xcodebuild test -scheme App -destination "id=$UDID"
 cantrip sim release
 ```
 
 `acquire` prints the UDID of the pool's simulator for that kind, leased to the
-tab (`CANTRIP_TAB_ID`). The first time, it adopts the most recently used
-existing simulator of that kind (a project's own one takes the name
+tab (`CANTRIP_TAB_ID`). Any other iPhone model or iOS version (`--device
+'iPhone 18 Pro' --os 26.5`) gets the pool's iPhone, and `acquire` says so on
+standard error; for a bug only one model or version shows, add `--exact` to get
+that one as a temporary copy that's deleted on release (never a new pool
+simulator). The first time, it adopts the most recently used existing
+simulator of that kind (a project's own one takes the name
 `Cantrip Pool · …`) or makes one. While another tab holds it, you get a
 temporary copy (`Cantrip Temp · …`), cloned from the pool's when it's shut
 down so it keeps its apps. A lease ends when the tab's turn ends or with

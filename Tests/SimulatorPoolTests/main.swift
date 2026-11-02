@@ -2,8 +2,14 @@ import Foundation
 
 private var failures = 0
 
-private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
-    if !condition() {
+private func expect(_ condition: @autoclosure () throws -> Bool, _ message: String) {
+    let passed: Bool
+    do { passed = try condition() } catch {
+        failures += 1
+        fputs("FAIL: \(message) (threw \(error))\n", stderr)
+        return
+    }
+    if !passed {
         failures += 1
         fputs("FAIL: \(message)\n", stderr)
     }
@@ -28,16 +34,42 @@ final class FakeSimctl: @unchecked Sendable {
     let types = [("com.apple.CoreSimulator.SimDeviceType.iPhone-Duo", "iPhone Duo"),
                  ("com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "iPhone 17 Pro"),
                  ("com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max", "iPhone 17 Pro Max"),
-                 ("com.apple.CoreSimulator.SimDeviceType.iPad-A16", "iPad (A16)")]
-    let runtimes = [("com.apple.CoreSimulator.SimRuntime.iOS-26-5", "26.5"),
-                    ("com.apple.CoreSimulator.SimRuntime.iOS-27-0", "27.0"),
-                    ("com.apple.CoreSimulator.SimRuntime.iOS-27-2", "27.2")]
+                 ("com.apple.CoreSimulator.SimDeviceType.iPhone-17", "iPhone 17"),
+                 ("com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro", "iPhone 18 Pro"),
+                 ("com.apple.CoreSimulator.SimDeviceType.iPad-A16", "iPad (A16)"),
+                 ("com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB", "iPad Pro 11-inch (M5)"),
+                 ("com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-11-46mm", "Apple Watch Series 11 (46mm)"),
+                 ("com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-3rd-generation-4K", "Apple TV 4K (3rd generation)")]
+    /// As installed on the Mac: iOS 27.1 and 27.2 (betas) run only the iPhone Duo, which 26.5 and 27.0 don't.
+    let runtimes = [("com.apple.CoreSimulator.SimRuntime.iOS-26-5", "26.5", "iOS"),
+                    ("com.apple.CoreSimulator.SimRuntime.iOS-27-0", "27.0", "iOS"),
+                    ("com.apple.CoreSimulator.SimRuntime.iOS-27-1", "27.1", "iOS"),
+                    ("com.apple.CoreSimulator.SimRuntime.iOS-27-2", "27.2", "iOS"),
+                    ("com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "27.0", "watchOS"),
+                    ("com.apple.CoreSimulator.SimRuntime.tvOS-27-0", "27.0", "tvOS")]
     private var counter = 0
 
     static let duo = "com.apple.CoreSimulator.SimDeviceType.iPhone-Duo"
     static let pro = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
+    static let proMax = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max"
+    static let iPhone17 = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
+    static let iPadPro = "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB"
     static let ios272 = "com.apple.CoreSimulator.SimRuntime.iOS-27-2"
+    static let ios271 = "com.apple.CoreSimulator.SimRuntime.iOS-27-1"
     static let ios270 = "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+    static let ios265 = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+
+    func supported(by runtime: (String, String, String)) -> [String] {
+        types.map(\.0).filter { type in
+            switch runtime.2 {
+            case "watchOS": return type.contains("Watch")
+            case "tvOS": return type.contains("TV")
+            default:
+                guard type.contains("iPhone") || type.contains("iPad") else { return false }
+                return type == FakeSimctl.duo ? runtime.1 >= "27.1" : runtime.1 < "27.1"
+            }
+        }
+    }
 
     func entry(_ udid: String) -> Entry? { lock.withLock { devices.first { $0.udid == udid } } }
     func mutations() -> [[String]] { lock.withLock { calls.filter { $0.first != "list" } } }
@@ -68,10 +100,9 @@ final class FakeSimctl: @unchecked Sendable {
                 case "devicetypes":
                     return try json(["devicetypes": types.map { ["identifier": $0.0, "name": $0.1] }])
                 default:
-                    let typeIDs = types.map { ["identifier": $0.0] }
-                    return try json(["runtimes": runtimes.map {
-                        ["identifier": $0.0, "version": $0.1, "name": "iOS \($0.1)", "isAvailable": true,
-                         "supportedDeviceTypes": typeIDs] as [String: Any]
+                    return try json(["runtimes": runtimes.map { runtime in
+                        ["identifier": runtime.0, "version": runtime.1, "name": "\(runtime.2) \(runtime.1)", "isAvailable": true,
+                         "supportedDeviceTypes": supported(by: runtime).map { ["identifier": $0] }] as [String: Any]
                     }])
                 }
             case "create":
@@ -129,6 +160,7 @@ func context(_ fake: FakeSimctl, lines: [String] = [], at time: Date = now, fold
     context.simctl = fake.simctl
     context.commandLines = { lines }
     context.now = { time }
+    context.policy = SimulatorPool.Policy()
     return context
 }
 
@@ -139,18 +171,75 @@ do {
     let types = try fake.simctl.deviceTypes(), runtimes = try fake.simctl.runtimes()
     let duo = try SimulatorPool.resolveType("iphone duo", in: types)
     expect(duo.name == "iPhone Duo", "device types match by name, any case")
-    expect((try? SimulatorPool.resolveType("iPhone 17", in: types)) == nil, "an ambiguous name is refused")
-    let ipad = try SimulatorPool.resolveType("iPad", in: types)
+    expect((try? SimulatorPool.resolveType("17 Pro", in: types)) == nil, "an ambiguous name is refused")
+    let ipad = try SimulatorPool.resolveType("iPad (", in: types)
     expect(ipad.name == "iPad (A16)", "a unique partial name matches")
     let newest = try SimulatorPool.resolveRuntime(nil, for: duo, in: runtimes)
     expect(newest.version == "27.2", "the newest runtime by default")
-    let named = try SimulatorPool.resolveRuntime("iOS 27.0", for: duo, in: runtimes)
+    let pro = try SimulatorPool.resolveType("iPhone 17 Pro", in: types)
+    let named = try SimulatorPool.resolveRuntime("iOS 27.0", for: pro, in: runtimes)
     expect(named.version == "27.0", "runtimes match by name")
+    expect(try SimulatorPool.resolveRuntime(nil, for: pro, in: runtimes).version == "27.0",
+           "the newest runtime that runs the device, not a Duo-only beta")
     let major = try SimulatorPool.resolveRuntime("27", for: duo, in: runtimes)
     expect(major.version == "27.2", "a major version takes its newest")
     expect((try? SimulatorPool.resolveRuntime("25.0", for: duo, in: runtimes)) == nil, "a missing runtime is refused")
 } catch {
     expect(false, "resolving threw \(error)")
+}
+
+// MARK: - Mapping requests onto the pool
+
+do {
+    let fake = FakeSimctl()
+    let types = try fake.simctl.deviceTypes(), runtimes = try fake.simctl.runtimes()
+    let policy = SimulatorPool.Policy()
+    func resolve(_ device: String, _ os: String? = nil, exact: Bool = false,
+                 pool: [SimulatorPool.Member] = []) throws -> SimulatorPool.Target {
+        try SimulatorPool.resolve(device: device, os: os, exact: exact, types: types, runtimes: runtimes, pool: pool, policy: policy)
+    }
+    for (device, os) in [("iPhone 18 Pro", nil), ("iPhone 17", "26.5"), ("iPhone 17 Pro Max", "27.0"), ("iPhone 12", nil),
+                         ("iPhone 17 Pro", "26.5")] as [(String, String?)] {
+        let target = try resolve(device, os)
+        expect(target.key == "iPhone 17 Pro|27.0" && !target.temporaryOnly,
+               "\(device) \(os ?? "") resolves to the pool's iPhone 17 Pro on iOS 27.0; got \(target.key)")
+        expect(target.note?.contains("one layout") == true && target.note?.contains("--exact") == true,
+               "and says which simulator it got and how to get that model: \(target.note ?? "nil")")
+    }
+    expect(try resolve("iPhone 17 Pro").note == nil && (try resolve("iphone", "27.0")).note == nil,
+           "asking for the pool's iPhone itself needs no note")
+    var bigPhone = policy
+    bigPhone.phone = "iPhone 17 Pro Max"
+    let configured = try SimulatorPool.resolve(device: "iPhone 17", os: nil, exact: false, types: types, runtimes: runtimes,
+                                               pool: [], policy: bigPhone)
+    expect(configured.key == "iPhone 17 Pro Max|27.0", "the pool's iPhone is a setting")
+    var missing = policy
+    missing.phone = "iPhone 99"
+    expect((try? SimulatorPool.resolve(device: "iPhone", os: nil, exact: false, types: types, runtimes: runtimes,
+                                       pool: [], policy: missing)) == nil, "a pool iPhone that isn't installed is refused")
+
+    expect(try resolve("iPhone Duo").key == "iPhone Duo|27.1", "the Duo defaults to iOS 27.1")
+    expect(try resolve("iPhone Duo", "27.2").key == "iPhone Duo|27.2", "and keeps a simulator per iOS version")
+    var newDuo = policy
+    newDuo.duoOS = "26.0"
+    expect(try SimulatorPool.resolve(device: "Duo", os: nil, exact: false, types: types, runtimes: runtimes, pool: [],
+                                     policy: newDuo).key == "iPhone Duo|27.2", "a Duo default that isn't installed takes the newest")
+
+    let iPadMember = SimulatorPool.Member(key: "iPad Pro 11-inch (M5)|27.0", udid: "IPAD")
+    let air = try resolve("iPad (A16)", "26.5", pool: [iPadMember])
+    expect(air.key == iPadMember.key && air.note?.contains("one iPad") == true, "an iPad request gets the pool's one iPad")
+    expect(try resolve("iPad", pool: [iPadMember]).note == nil, "a plain “iPad” gets it without a note")
+    expect(try resolve("iPad (A16)").key == "iPad (A16)|27.0", "with no iPad yet, the one asked for becomes the pool's")
+    expect(try resolve("Apple Watch Series 11 (46mm)").key == "Apple Watch Series 11 (46mm)|27.0", "watches resolve to watchOS")
+    expect(SimulatorPool.describe("Apple TV 4K (3rd generation)|27.0") == "Apple TV 4K (3rd generation), tvOS 27.0",
+           "descriptions name the platform")
+
+    let exact = try resolve("iPhone 18 Pro", "26.5", exact: true)
+    expect(exact.key == "iPhone 18 Pro|26.5" && exact.temporaryOnly && exact.note == nil, "--exact keeps the model and OS asked for")
+    let exactPooled = try resolve("iPhone Duo", "27.2", exact: true, pool: [.init(key: "iPhone Duo|27.2", udid: "DUO")])
+    expect(!exactPooled.temporaryOnly, "--exact for a kind the pool keeps uses the pool's")
+} catch {
+    expect(false, "mapping threw \(error)")
 }
 
 // MARK: - Leasing
@@ -222,6 +311,46 @@ do {
     expect(fake.entry("AAAA4778-0000-0000-0000-000000000000")?.name == "iPhone Duo", "Xcode's default names stay")
 } catch {
     expect(false, "leasing threw \(error)")
+}
+
+// MARK: - One iPhone for every iPhone request
+
+do {
+    let fake = FakeSimctl()
+    fake.devices = [
+        .init(udid: "CANON000-0000-0000-0000-000000000000", name: "Cantrip Pool · iPhone 17 Pro · iOS 27.0", type: FakeSimctl.pro,
+              runtime: FakeSimctl.ios270, bytes: 5_000_000_000, lastUsed: now.addingTimeInterval(-3_600)),
+        .init(udid: "PRO18000-0000-0000-0000-000000000000", name: "iPhone 18 Pro",
+              type: "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro", runtime: FakeSimctl.ios270, lastUsed: now),
+    ]
+    let c = context(fake, folder: "canonical")
+    let eighteen = try SimulatorPool.acquire(device: "iPhone 18 Pro", os: nil, tab: "tab-a", context: c)
+    expect(eighteen.lease.udid.hasPrefix("CANON000") && !eighteen.lease.temporary,
+           "an iPhone 18 Pro request gets the pool's iPhone 17 Pro; got \(eighteen.lease.udid)")
+    expect(eighteen.description == "iPhone 17 Pro, iOS 27.0" && eighteen.note?.contains("iPhone 18 Pro") == true,
+           "and the reply says which simulator it got: \(eighteen.note ?? "nil")")
+    try SimulatorPool.release(tab: "tab-a", context: c)
+    let seventeen = try SimulatorPool.acquire(device: "iPhone 17", os: "26.5", tab: "tab-b", context: c)
+    expect(seventeen.lease.udid.hasPrefix("CANON000"), "an iPhone 17 request on iOS 26.5 gets the same simulator")
+    try SimulatorPool.release(tab: "tab-b", context: c)
+    expect(c.store.read().pool == [.init(key: "iPhone 17 Pro|27.0", udid: "CANON000-0000-0000-0000-000000000000")],
+           "the pool keeps one iPhone; got \(c.store.read().pool)")
+
+    let exact = try SimulatorPool.acquire(device: "iPhone 17 Pro Max", os: "26.5", exact: true, tab: "tab-c", context: c)
+    expect(exact.lease.temporary && exact.lease.key == "iPhone 17 Pro Max|26.5", "--exact gives that model and OS")
+    expect(fake.entry(exact.lease.udid)?.name.hasPrefix(SimulatorPool.temporaryPrefix) == true
+           && fake.entry(exact.lease.udid)?.runtime == FakeSimctl.ios265, "as a temporary copy")
+    expect(c.store.read().pool.count == 1, "never as a new pool member")
+    let again = try SimulatorPool.acquire(device: "iPhone 17 Pro Max", os: "26.5", exact: true, tab: "tab-c", context: c)
+    expect(again.renewed && again.lease.udid == exact.lease.udid, "asking again keeps the same copy")
+    try SimulatorPool.release(tab: "tab-c", context: c)
+    expect(fake.entry(exact.lease.udid) == nil && c.store.read().temporaries.isEmpty, "the copy is deleted on release")
+
+    expect((try? SimulatorPool.adopt("PRO18000-0000-0000-0000-000000000000", context: c)) == nil,
+           "another iPhone can't become the pool's")
+    expect(c.store.read().pool.count == 1, "so the pool still has one iPhone")
+} catch {
+    expect(false, "one iPhone threw \(error)")
 }
 
 // MARK: - Two tabs at once

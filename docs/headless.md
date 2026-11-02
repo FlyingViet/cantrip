@@ -74,6 +74,10 @@ config` shows them as `limitFallbackEntries`; see [usage limit fallbacks](backen
 `openAIEndpointEnabled`, `openAIEndpointPort` (default 11439), `openAIEndpointModel`
 (`backend:model`, or empty for the tabs' model), `openAIEndpointEffort` and
 `openAIEndpointContextTier` (see [OpenAI-compatible API](backends.md#serve-your-backends-to-other-apps-openai-compatible-api)).
+The simulator pool's `simulatorPoolPhone` (default `iPhone 17 Pro`),
+`simulatorPoolPhoneOS` (empty: the newest iOS that runs it) and
+`simulatorPoolDuoOS` (default `27.1`) are described in
+[Shared simulators](updating-and-troubleshooting.md#shared-simulators).
 Run `cantrip config` for the full list.
 
 ## Good to know

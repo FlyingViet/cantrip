@@ -65,15 +65,18 @@ enum CantripCLI {
                                   Clone node_modules, Pods and SwiftPM folders into a new git worktree, copy-on-write,
                                   from a checkout installed from the same lockfiles (default: the repository's others)
       cantrip sim acquire --device NAME [--os VERSION]
-                                  Lease a simulator to this tab and print its UDID: the pool's for that device and
-                                  iOS version, or a temporary copy while another tab has it
+                                  Lease a simulator to this tab and print its UDID: the pool's for that kind, or a
+                                  temporary copy while another tab has it. Every iPhone but the Duo shares the pool's
+                                  one iPhone (simulatorPoolPhone); the Duo has one per iOS version (default
+                                  simulatorPoolDuoOS); iPad, Apple Watch and Apple TV have one each
+          --exact                 That exact model and iOS version (a temporary copy unless the pool keeps it)
           --hours N               How long the lease lasts (default: until this tab's turn ends; 4 outside a tab)
           --json
       cantrip sim release [LEASE|UDID | --all]
                                   End a lease (default: all of this tab's). Shuts the simulator down; a temporary
                                   copy is deleted
       cantrip sim list [--json]   The pool's simulators, leases and temporary copies
-      cantrip sim adopt UDID      Make an existing simulator the pool's for its device type and iOS version
+      cantrip sim adopt UDID      Make an existing simulator the pool's for its kind
       cantrip api [--json]        The OpenAI-compatible API: where it listens, its backends and calls per consumer
       cantrip api key new         Make a key for requests that come through a proxy (printed once)
       cantrip api key clear       Remove it: proxied requests are refused again
@@ -365,7 +368,7 @@ enum CantripCLI {
     // MARK: - sim
 
     enum SimCommand: Equatable {
-        case acquire(device: String, os: String?, hours: Double?, json: Bool)
+        case acquire(device: String, os: String?, exact: Bool, hours: Double?, json: Bool)
         case release(target: String?, all: Bool)
         case list(json: Bool)
         case adopt(udid: String)
@@ -373,7 +376,7 @@ enum CantripCLI {
         static func parse(_ arguments: [String]) throws -> SimCommand {
             var words: [String] = []
             var device: String?, os: String?, hours: Double?
-            var json = false, all = false
+            var json = false, all = false, exact = false
             var index = 0
             func value(_ option: String) throws -> String {
                 index += 1
@@ -394,19 +397,20 @@ enum CantripCLI {
                     hours = number
                 case "--json": json = true
                 case "--all": all = true
+                case "--exact": exact = true
                 default:
                     guard !argument.hasPrefix("--") else { throw Failure(message: "Unknown option \(argument).", code: 2) }
                     words.append(argument)
                 }
                 index += 1
             }
-            let usage = "Usage: cantrip sim acquire --device NAME [--os VERSION] | release [LEASE|UDID|--all] | list | adopt UDID (see `cantrip help`)."
+            let usage = "Usage: cantrip sim acquire --device NAME [--os VERSION] [--exact] | release [LEASE|UDID|--all] | list | adopt UDID (see `cantrip help`)."
             switch words.first {
             case "acquire":
                 guard words.count == 1, let device, !device.isEmpty else {
-                    throw Failure(message: "Name the device: cantrip sim acquire --device 'iPhone 17 Pro' [--os 27.0].", code: 2)
+                    throw Failure(message: "Name the device: cantrip sim acquire --device iPhone (or 'iPhone Duo' [--os 27.1]).", code: 2)
                 }
-                return .acquire(device: device, os: os, hours: hours, json: json)
+                return .acquire(device: device, os: os, exact: exact, hours: hours, json: json)
             case "release":
                 guard words.count <= 2, !(all && words.count == 2) else { throw Failure(message: usage, code: 2) }
                 return .release(target: words.count == 2 ? words[1] : nil, all: all)
@@ -426,8 +430,8 @@ enum CantripCLI {
         let tab = ProcessInfo.processInfo.environment[TabInsight.tabIDVariable].flatMap { $0.isEmpty ? nil : $0 }
         func standardError(_ text: String) { FileHandle.standardError.write(Data((text + "\n").utf8)) }
         switch try SimCommand.parse(arguments) {
-        case .acquire(let device, let os, let hours, let json):
-            let acquired = try SimulatorPool.acquire(device: device, os: os, tab: tab, hours: hours)
+        case .acquire(let device, let os, let exact, let hours, let json):
+            let acquired = try SimulatorPool.acquire(device: device, os: os, exact: exact, tab: tab, hours: hours)
             let lease = acquired.lease
             if json {
                 let encoder = JSONEncoder()
@@ -438,9 +442,11 @@ enum CantripCLI {
             }
             // The UDID alone on standard output, so `UDID=$(cantrip sim acquire ...)` works.
             print(lease.udid)
-            let kind = lease.temporary ? "a temporary copy (the pool's is busy; it's deleted on release)" : "the pool's simulator"
+            let kind = !lease.temporary ? "the pool's simulator"
+                : exact ? "a temporary copy (deleted on release)" : "a temporary copy (the pool's is busy; it's deleted on release)"
             let until = tab != nil && hours == nil ? "until this tab's turn ends"
                 : "until \(lease.expiresAt.formatted(date: .omitted, time: .shortened))"
+            if let note = acquired.note { standardError(note) }
             standardError("\(acquired.renewed ? "Still yours" : "Leased"): \(acquired.name) (\(acquired.description)), \(kind), \(until).")
             standardError("Use it by UDID: xcodebuild -destination 'id=\(lease.udid)', xcrun simctl boot \(lease.udid), maestro --device \(lease.udid).")
             standardError("When done: cantrip sim release \(lease.shortID)")

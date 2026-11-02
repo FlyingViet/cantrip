@@ -78,6 +78,17 @@ final class AppSettings: ObservableObject {
     @Published var storageSimulatorCleanup: Bool {
         didSet { d.set(storageSimulatorCleanup, forKey: "storageSimulatorCleanup") }
     }
+    /// The simulator pool's one iPhone and its iOS version (empty: the newest that runs it), and the
+    /// iPhone Duo's iOS version when a lease names none (`SimulatorPool.Policy`).
+    @Published var simulatorPoolPhone: String {
+        didSet { d.set(simulatorPoolPhone, forKey: SimulatorPool.Policy.Key.phone) }
+    }
+    @Published var simulatorPoolPhoneOS: String {
+        didSet { d.set(simulatorPoolPhoneOS, forKey: SimulatorPool.Policy.Key.phoneOS) }
+    }
+    @Published var simulatorPoolDuoOS: String {
+        didSet { d.set(simulatorPoolDuoOS, forKey: SimulatorPool.Policy.Key.duoOS) }
+    }
     /// Days an unused Copilot session folder is kept before the cleanup removes it.
     @Published var storageSessionRetentionDays: Int {
         didSet {
@@ -819,6 +830,9 @@ final class AppSettings: ObservableObject {
             "storageUpkeepEnabled": storageUpkeepEnabled,
             "storageSessionRetentionDays": storageSessionRetentionDays,
             "storageSimulatorCleanup": storageSimulatorCleanup,
+            "simulatorPoolPhone": simulatorPoolPhone,
+            "simulatorPoolPhoneOS": simulatorPoolPhoneOS,
+            "simulatorPoolDuoOS": simulatorPoolDuoOS,
             "openAIEndpointEnabled": openAIEndpointEnabled,
             "openAIEndpointPort": openAIEndpointPort,
             "openAIEndpointModel": openAIEndpointModel,
@@ -951,6 +965,12 @@ final class AppSettings: ObservableObject {
             self.storageSessionRetentionDays = $0
         }
         bool("storageSimulatorCleanup") { self.storageSimulatorCleanup = $0 }
+        if let phone = (dict["simulatorPoolPhone"] as? String)?.trimmingCharacters(in: .whitespaces), !phone.isEmpty {
+            simulatorPoolPhone = phone
+            applied.append("simulatorPoolPhone")
+        }
+        str("simulatorPoolPhoneOS") { self.simulatorPoolPhoneOS = $0.trimmingCharacters(in: .whitespaces) }
+        str("simulatorPoolDuoOS") { self.simulatorPoolDuoOS = $0.trimmingCharacters(in: .whitespaces) }
         bool("openAIEndpointEnabled") { self.openAIEndpointEnabled = $0 }
         int("openAIEndpointPort", 1...65535) { self.openAIEndpointPort = $0 }
         // "copilot:gpt-5.6-sol", a bare backend name, or empty for the backend's default.
@@ -1045,6 +1065,10 @@ final class AppSettings: ObservableObject {
         storageUpkeepEnabled = d.object(forKey: "storageUpkeepEnabled") == nil ? true : d.bool(forKey: "storageUpkeepEnabled")
         storageSessionRetentionDays = StorageUpkeep.Configuration.retentionDays(d)
         storageSimulatorCleanup = d.bool(forKey: "storageSimulatorCleanup")
+        let simulatorPolicy = SimulatorPool.Policy.standard(d)
+        simulatorPoolPhone = simulatorPolicy.phone
+        simulatorPoolPhoneOS = simulatorPolicy.phoneOS
+        simulatorPoolDuoOS = simulatorPolicy.duoOS
         openAIEndpointEnabled = d.bool(forKey: "openAIEndpointEnabled")
         let storedEndpointPort = d.integer(forKey: "openAIEndpointPort")
         openAIEndpointPort = (1...65535).contains(storedEndpointPort) ? storedEndpointPort : OpenAIEndpoint.defaultPort
