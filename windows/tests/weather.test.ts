@@ -110,6 +110,11 @@ describe("weather card", () => {
     expect(here).toMatchObject({ status: "ok", place: "Your location", placeNote: "This PC's location" });
     expect(await service.card("nonsense")).toMatchObject({ status: "unavailable" });
 
+    const document = await service.document({ place: "Seattle, WA" });
+    expect(document).toMatchObject({ version: 1, type: "weather", id: "weather-seattle, wa", accessibilityLabel: "Weather for Seattle, WA" });
+    expect(document.blocks.map((block) => block.type)).toEqual(["header", "strip", "chart"]);
+    expect((await service.document({ place: "Atlantis" })).blocks[1]).toMatchObject({ type: "notice", title: "Forecast unavailable" });
+
     const down = new WeatherService(async () => { throw new Error("offline"); }, () => fixtureNow, () => "F");
     const failed = await down.card({ place: "47.61, -122.33" });
     expect(failed).toEqual({

@@ -1,6 +1,6 @@
 import type { PluginSummary } from "./pluginTypes";
 import type { ClientLocation } from "./location";
-import type { WeatherCard } from "./weather";
+import type { CardDocument } from "./cards";
 
 export interface WeatherCardRequest {
   /** The block's place; null for "where I am". */
@@ -126,8 +126,8 @@ export interface CantripApi {
   checkForUpdates(): Promise<UpdateState>;
   downloadUpdate(): Promise<UpdateState>;
   installUpdate(): Promise<{ ok: boolean; error?: string }>;
-  /** A reply's weather block: the forecast card for its place, or for this PC (Settings → Location). */
-  weatherCard(request: WeatherCardRequest): Promise<WeatherCard>;
+  /** A reply's weather block: the forecast card (a card document) for its place, or for this PC (Settings → Location). */
+  weatherCard(request: WeatherCardRequest): Promise<CardDocument>;
   setWindowOpacity(opacity: number): void;
   setExpanded(expanded: boolean): void;
   hide(): void;

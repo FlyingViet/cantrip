@@ -8,3 +8,4 @@
 | `update.ts` | Safe user-facing updater error sanitization |
 | `pluginTypes.ts` | Cross-process plugin manifest, summary, MCP, and bridge contracts |
 | `plugins.ts` | Plugin manifest validation, capability summaries, and MCP merging |
+| `cards.ts` | Card document types, plain-text fallback, and the weather forecast as a card document |

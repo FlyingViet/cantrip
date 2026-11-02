@@ -1,4 +1,5 @@
 import { app, ipcMain } from "electron";
+import { weatherDocument, type CardDocument } from "../shared/cards";
 import { checkLocation } from "../shared/location";
 import {
   buildCard, cleanPlace, displayName, forecastUrls, geocodeUrl, parseCoordinate, pickGeocode, unavailableCard, type WeatherCard,
@@ -82,6 +83,11 @@ export class WeatherService {
     }
   }
 
+  /** The forecast as a card document (docs/cards.md), which the renderer draws block by block. */
+  async document(request: unknown): Promise<CardDocument> {
+    return weatherDocument(await this.card(request));
+  }
+
   private async geocode(place: string): Promise<{ latitude: number; longitude: number } | null> {
     const key = place.toLowerCase();
     const hit = this.places.get(key);
@@ -97,5 +103,5 @@ export class WeatherService {
 }
 
 export function registerWeatherIPC(service = new WeatherService()): void {
-  ipcMain.handle("weather:card", (_event, request: unknown) => service.card(request));
+  ipcMain.handle("weather:card", (_event, request: unknown) => service.document(request));
 }
