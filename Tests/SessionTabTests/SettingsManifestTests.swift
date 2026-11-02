@@ -179,5 +179,6 @@ extension SessionTabTests {
             !["action", "info", "secret"].contains($0.value["type"] as? String) }.keys)
         let notInConfig = manifestKeys.subtracting(configKeys).subtracting(["remoteDesktopEnabled", "launchAtLogin"])
         precondition(notInConfig.isEmpty, "Every manifest setting is a `cantrip config` name: \(notInConfig.sorted())")
+        try testSettingsManifestWeb()
     }
 }

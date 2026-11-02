@@ -243,6 +243,10 @@ storage upkeep, simulator pool). Changes save as you make them and other
 devices showing Settings refresh within seconds. Model tiers, backups, MCP
 servers, skills, the agent policy and secrets keep their own screens.
 
+In the browser Remote (and the Mac's Remote tab), open a tab's menu and choose
+**Mac Settings**; sections that open as their own screen elsewhere expand in
+place there.
+
 Some settings only change at the Mac: CLI paths and folders (a phone can't
 browse the Mac), Remote control itself, View Mac access, and making an
 OpenAI-endpoint key (it's shown once). Paired devices show them read-only.
