@@ -412,6 +412,10 @@ struct CantripHomeTasksView: View {
         .onReceive(remote.$detailError.removeDuplicates()) { detailError = $0 }
         .sheet(item: $editing) { task in
             CantripHomeTaskEditView(remote: remote, task: task, openChat: openChat)
+                #if os(macOS)
+                // A Mac sheet sizes to its content; a run's cards would push it past the window.
+                .frame(minWidth: 480, idealWidth: 580, minHeight: 420, idealHeight: 680, maxHeight: 760)
+                #endif
         }
         .confirmationDialog(
             "Delete \(deleting?.title ?? "task")?",
@@ -845,6 +849,9 @@ struct CantripHomeTaskWorkspaceView: View {
                 CantripHomeTaskEditView(
                     remote: remote, task: task, openChat: openChat
                 )
+                #if os(macOS)
+                .frame(minWidth: 480, idealWidth: 580, minHeight: 420, idealHeight: 680, maxHeight: 760)
+                #endif
             }
         }
         .confirmationDialog(
