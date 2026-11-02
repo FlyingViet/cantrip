@@ -9,6 +9,8 @@ import { FormRow, FormSection, Sheet } from "../kit";
 import {
   canSaveRecord, capitalized, formatDayTime, fromLocalInput, initialRecordValues, isScheduled, taskModelSummary, toLocalInput,
 } from "./homeLogic";
+import { runCards } from "./homeCardLogic";
+import { HomeCardStack } from "./HomeCards";
 import { homeDataError, mutationError, saveRecord, updateTask } from "./homeState";
 import { ErrorLine, RunSummary } from "./parts";
 
@@ -18,6 +20,7 @@ export function TaskEditSheet(props: { task: HomeTask; onClose: () => void }): J
   const [prompt, setPrompt] = useState(props.task.prompt);
   const [saving, setSaving] = useState(false);
   const run = task.runs[0];
+  const latestCards = runCards(run);
   const earlier = task.runs.slice(1, 5);
   const workspace = task.workspace;
   const canSave = !saving && title.trim() !== "" && prompt.trim() !== "";
@@ -75,6 +78,7 @@ export function TaskEditSheet(props: { task: HomeTask; onClose: () => void }): J
             <FormRow label="Status"><span class="form-value">{capitalized(run.status)}</span></FormRow>
             {run.model ? <FormRow label="Model"><span class="form-value selectable">{run.model}</span></FormRow> : null}
             {run.summary ? <FormRow><RunSummary summary={run.summary} class="selectable hm-sheet-summary" /></FormRow> : null}
+            {latestCards.length ? <FormRow stack class="hm-run-cards"><HomeCardStack cards={latestCards} /></FormRow> : null}
           </FormSection>
         ) : null}
         {earlier.length ? (
@@ -83,6 +87,7 @@ export function TaskEditSheet(props: { task: HomeTask; onClose: () => void }): J
               <FormRow key={item.id} stack>
                 <span class="hm-run-meta">{formatDayTime(appleDate(item.finishedAt))} · {capitalized(item.status)}</span>
                 {item.summary ? <RunSummary summary={item.summary} lineLimit={3} class="selectable hm-sheet-summary" /> : null}
+                <HomeCardStack cards={runCards(item)} />
               </FormRow>
             ))}
           </FormSection>

@@ -1,0 +1,604 @@
+{
+ "revision": "6C38834A-0DDF-4058-8BD1-5C1E3E7EBB8E",
+ "supportsReordering": true,
+ "workspaceCards": {
+  "47F05EF6-D35B-45C5-8078-C8DB135638F5": [
+   {
+    "id": "records-47F05EF6-D35B-45C5-8078-C8DB135638F5-0",
+    "fallbackText": "Due in the next 7 days — 3 bills · in the next 7 days\n• Water and sewer — Sat, Oct 31 — $64.20\n• Internet — Sun, Nov 1 — $80.00\n• Car insurance — Wed, Nov 4 — $142.50",
+    "version": 1,
+    "type": "records",
+    "blocks": [
+     {
+      "subtitle": "3 bills · in the next 7 days",
+      "type": "header",
+      "title": "Due in the next 7 days",
+      "symbol": "creditcard"
+     },
+     {
+      "type": "list",
+      "items": [
+       {
+        "accessibilityLabel": "Water and sewer, Sat, Oct 31, $64.20, 1 day overdue",
+        "id": "04EAE441-E9A0-490B-89EF-3775EE03FDB8",
+        "title": "Water and sewer",
+        "trailing": "$64.20",
+        "badges": [
+         {
+          "tone": "negative",
+          "text": "1 day overdue"
+         }
+        ],
+        "subtitle": "Sat, Oct 31"
+       },
+       {
+        "accessibilityLabel": "Internet, Sun, Nov 1, $80.00, Today",
+        "id": "8D58F294-F6B2-4701-A7C0-5C6625110E3C",
+        "title": "Internet",
+        "trailing": "$80.00",
+        "badges": [
+         {
+          "tone": "warning",
+          "text": "Today"
+         }
+        ],
+        "subtitle": "Sun, Nov 1"
+       },
+       {
+        "accessibilityLabel": "Car insurance, Wed, Nov 4, $142.50",
+        "id": "BFBCE61D-F3A8-4A8C-85A6-6B94A7187ECD",
+        "title": "Car insurance",
+        "trailing": "$142.50",
+        "subtitle": "Wed, Nov 4"
+       }
+      ]
+     }
+    ],
+    "source": {
+     "kind": "records",
+     "name": "Bills and subscriptions",
+     "updatedAt": "2026-11-02T05:57:23Z"
+    },
+    "accessibilityLabel": "Due in the next 7 days, 3 bills · in the next 7 days"
+   }
+  ]
+ },
+ "supportsRecordCards": true,
+ "tasks": [
+  {
+   "createdAt": 815291843.123875,
+   "enabled": false,
+   "schedule": {
+    "summary": "No schedule",
+    "timeZone": "America/Los_Angeles",
+    "kind": "once"
+   },
+   "state": "ready",
+   "workspace": {
+    "recordLabel": "Festival",
+    "detailSections": [
+     {
+      "fields": [
+       "name",
+       "venue",
+       "city",
+       "start",
+       "end"
+      ]
+     }
+    ],
+    "recordLabelPlural": "Festivals",
+    "list": {
+     "dateField": "start",
+     "titleField": "name",
+     "subtitleFields": [
+      "venue"
+     ]
+    },
+    "cards": [
+     {
+      "placeField": "city",
+      "endDateField": "end",
+      "dateField": "start",
+      "kind": "weather"
+     },
+     {
+      "placeField": "venue",
+      "nearField": "city",
+      "kind": "map"
+     }
+    ],
+    "icon": "music.note",
+    "fields": [
+     {
+      "kind": "text",
+      "required": true,
+      "key": "name",
+      "label": "Festival"
+     },
+     {
+      "kind": "text",
+      "required": false,
+      "key": "venue",
+      "label": "Venue"
+     },
+     {
+      "kind": "text",
+      "required": false,
+      "key": "city",
+      "label": "City"
+     },
+     {
+      "kind": "date",
+      "required": false,
+      "key": "start",
+      "label": "Starts"
+     },
+     {
+      "kind": "date",
+      "required": false,
+      "key": "end",
+      "label": "Ends"
+     }
+    ],
+    "records": [
+     {
+      "values": {
+       "end": "2026-11-07",
+       "city": "Seattle, WA",
+       "name": "Winter Lights Weekend",
+       "start": "2026-11-05",
+       "venue": "Climate Pledge Arena"
+      },
+      "createdAt": 815291843.12352,
+      "updatedAt": 815291843.12352,
+      "id": "A0AC3AA5-E310-49D3-8F71-24F46CE97542"
+     },
+     {
+      "values": {
+       "end": "2026-12-13",
+       "city": "George, WA",
+       "name": "Spring Bass Gathering",
+       "start": "2026-12-11",
+       "venue": "Gorge Amphitheatre"
+      },
+      "createdAt": 815291843.123872,
+      "updatedAt": 815291843.123872,
+      "id": "BC80F99F-CCB7-4721-AB9C-8AEC4C73E7E3"
+     }
+    ]
+   },
+   "hasSchedule": false,
+   "title": "Bass Compass festival readiness",
+   "updatedAt": 815291843.123875,
+   "runs": [],
+   "prompt": "Track festivals.",
+   "id": "7498B1C2-F15C-4312-A403-D568DDD1433E"
+  },
+  {
+   "createdAt": 815291843.121585,
+   "enabled": false,
+   "schedule": {
+    "summary": "No schedule",
+    "timeZone": "America/Los_Angeles",
+    "kind": "once"
+   },
+   "state": "ready",
+   "workspace": {
+    "recordLabel": "Bill",
+    "detailSections": [
+     {
+      "fields": [
+       "name",
+       "due",
+       "amount",
+       "status"
+      ]
+     }
+    ],
+    "recordLabelPlural": "Bills",
+    "list": {
+     "dateField": "due",
+     "titleField": "name",
+     "subtitleFields": [
+      "amount"
+     ],
+     "badgeField": "status"
+    },
+    "cards": [
+     {
+      "includeOverdue": true,
+      "dateField": "due",
+      "filter": {
+       "status": [
+        "Unpaid"
+       ]
+      },
+      "title": "Due in the next 7 days",
+      "trailingField": "amount",
+      "kind": "list",
+      "withinDays": 7
+     }
+    ],
+    "icon": "creditcard",
+    "fields": [
+     {
+      "kind": "text",
+      "required": true,
+      "key": "name",
+      "label": "Name"
+     },
+     {
+      "kind": "date",
+      "required": false,
+      "key": "due",
+      "label": "Due"
+     },
+     {
+      "kind": "text",
+      "required": false,
+      "key": "amount",
+      "label": "Amount"
+     },
+     {
+      "kind": "choice",
+      "required": false,
+      "options": [
+       "Unpaid",
+       "Paid",
+       "Autopay"
+      ],
+      "key": "status",
+      "label": "Status"
+     }
+    ],
+    "records": [
+     {
+      "values": {
+       "due": "2026-10-31",
+       "status": "Unpaid",
+       "name": "Water and sewer",
+       "amount": "$64.20"
+      },
+      "createdAt": 815291843.120718,
+      "updatedAt": 815291843.120718,
+      "id": "04EAE441-E9A0-490B-89EF-3775EE03FDB8"
+     },
+     {
+      "values": {
+       "due": "2026-11-01",
+       "status": "Unpaid",
+       "name": "Internet",
+       "amount": "$80.00"
+      },
+      "createdAt": 815291843.120906,
+      "updatedAt": 815291843.120906,
+      "id": "8D58F294-F6B2-4701-A7C0-5C6625110E3C"
+     },
+     {
+      "values": {
+       "due": "2026-11-04",
+       "status": "Unpaid",
+       "name": "Car insurance",
+       "amount": "$142.50"
+      },
+      "createdAt": 815291843.121083,
+      "updatedAt": 815291843.121083,
+      "id": "BFBCE61D-F3A8-4A8C-85A6-6B94A7187ECD"
+     },
+     {
+      "values": {
+       "due": "2026-11-06",
+       "status": "Autopay",
+       "name": "Phone",
+       "amount": "$45.00"
+      },
+      "createdAt": 815291843.121375,
+      "updatedAt": 815291843.121375,
+      "id": "5AD2FF0F-3211-4447-AE5D-B36A80FB780C"
+     },
+     {
+      "values": {
+       "due": "2026-11-13",
+       "status": "Unpaid",
+       "name": "Rent",
+       "amount": "$2,100.00"
+      },
+      "createdAt": 815291843.121582,
+      "updatedAt": 815291843.121582,
+      "id": "6FF31C38-BAD3-4488-8587-A15F6662E351"
+     }
+    ]
+   },
+   "hasSchedule": false,
+   "title": "Bills and subscriptions",
+   "updatedAt": 815291843.121585,
+   "runs": [],
+   "prompt": "Track bills.",
+   "id": "47F05EF6-D35B-45C5-8078-C8DB135638F5"
+  },
+  {
+   "nextRunAt": 815378248.088698,
+   "createdAt": 815291843.118923,
+   "enabled": true,
+   "schedule": {
+    "summary": "Every day",
+    "startAt": 815291848.088698,
+    "timeZone": "America/Los_Angeles",
+    "intervalMinutes": 1440,
+    "kind": "interval"
+   },
+   "state": "succeeded",
+   "runs": [
+    {
+     "startedAt": 815291851.528767,
+     "id": "D13394FA-93E6-487D-837D-25DA55EC62D3",
+     "finishedAt": 815291853.005356,
+     "summary": "Two things on the calendar today; clear and cool in Seattle.",
+     "status": "succeeded",
+     "model": "Copilot's default model",
+     "cards": [
+      {
+       "id": "weather-seattle, wa",
+       "fallbackText": "Seattle, WA\nClear\nH 49°  L 39° · 1% precip. · Feels like 35°\n40°\nNow 40° · 11 PM 39° · 12 AM 39° · 1 AM 38° · 2 AM 37° · 3 AM 37° · 4 AM 37° · 5 AM 36° · 6 AM 37° · 7 AM 37° · 8 AM 37° · 9 AM 42° · 10 AM 46°\nToday 39°–49°\nMon 36°–53°\nTue 14% 44°–58°\nWed 74% 42°–56°\nThu 62% 46°–56°\nFri 62% 49°–59°\nSat 39% 50°–61°\nSun 47% 48°–55°\nMon 53% 49°–58°\nTue 62% 53°–63°",
+       "version": 1,
+       "type": "weather",
+       "blocks": [
+        {
+         "type": "header",
+         "title": "Seattle, WA",
+         "stat": {
+          "accessibilityLabel": "Now 40 degrees Fahrenheit, Clear",
+          "symbol": "moon.stars.fill",
+          "value": "40°"
+         },
+         "lines": [
+          "Clear",
+          "H 49°  L 39° · 1% precip. · Feels like 35°"
+         ]
+        },
+        {
+         "type": "strip",
+         "accessibilityLabel": "Hourly forecast",
+         "items": [
+          {
+           "value": "40°",
+           "accessibilityLabel": "Now, 40 degrees Fahrenheit, Clear",
+           "symbol": "moon.stars.fill",
+           "label": "Now"
+          },
+          {
+           "value": "39°",
+           "accessibilityLabel": "11 PM, 39 degrees Fahrenheit, Clear",
+           "symbol": "moon.stars.fill",
+           "label": "11 PM"
+          },
+          {
+           "value": "39°",
+           "accessibilityLabel": "12 AM, 39 degrees Fahrenheit, Clear",
+           "symbol": "moon.stars.fill",
+           "label": "12 AM"
+          },
+          {
+           "value": "38°",
+           "accessibilityLabel": "1 AM, 38 degrees Fahrenheit, Clear",
+           "symbol": "moon.stars.fill",
+           "label": "1 AM"
+          },
+          {
+           "value": "37°",
+           "accessibilityLabel": "2 AM, 37 degrees Fahrenheit, Clear",
+           "symbol": "moon.stars.fill",
+           "label": "2 AM"
+          },
+          {
+           "value": "37°",
+           "accessibilityLabel": "3 AM, 37 degrees Fahrenheit, Clear",
+           "symbol": "moon.stars.fill",
+           "label": "3 AM"
+          },
+          {
+           "value": "37°",
+           "accessibilityLabel": "4 AM, 37 degrees Fahrenheit, Clear",
+           "symbol": "moon.stars.fill",
+           "label": "4 AM"
+          },
+          {
+           "value": "36°",
+           "accessibilityLabel": "5 AM, 36 degrees Fahrenheit, Clear",
+           "symbol": "moon.stars.fill",
+           "label": "5 AM"
+          },
+          {
+           "value": "37°",
+           "accessibilityLabel": "6 AM, 37 degrees Fahrenheit, Cloudy",
+           "symbol": "cloud.fill",
+           "label": "6 AM"
+          },
+          {
+           "value": "37°",
+           "accessibilityLabel": "7 AM, 37 degrees Fahrenheit, Partly cloudy",
+           "symbol": "cloud.sun.fill",
+           "label": "7 AM"
+          },
+          {
+           "value": "37°",
+           "accessibilityLabel": "8 AM, 37 degrees Fahrenheit, Cloudy",
+           "symbol": "cloud.fill",
+           "label": "8 AM"
+          },
+          {
+           "value": "42°",
+           "accessibilityLabel": "9 AM, 42 degrees Fahrenheit, Cloudy",
+           "symbol": "cloud.fill",
+           "label": "9 AM"
+          },
+          {
+           "value": "46°",
+           "accessibilityLabel": "10 AM, 46 degrees Fahrenheit, Cloudy",
+           "symbol": "cloud.fill",
+           "label": "10 AM"
+          }
+         ]
+        },
+        {
+         "kind": "range",
+         "type": "chart",
+         "accessibilityLabel": "10-day forecast",
+         "items": [
+          {
+           "low": 39,
+           "highText": "49°",
+           "lowText": "39°",
+           "label": "Today",
+           "symbol": "cloud.fog.fill",
+           "high": 49,
+           "accessibilityLabel": "Today, Fog, high 49, low 39 degrees Fahrenheit"
+          },
+          {
+           "low": 36,
+           "highText": "53°",
+           "lowText": "36°",
+           "label": "Mon",
+           "symbol": "cloud.fill",
+           "high": 53,
+           "accessibilityLabel": "Mon, Cloudy, high 53, low 36 degrees Fahrenheit"
+          },
+          {
+           "note": "14%",
+           "low": 44,
+           "lowText": "44°",
+           "highText": "58°",
+           "label": "Tue",
+           "symbol": "cloud.fill",
+           "high": 58,
+           "accessibilityLabel": "Tue, Cloudy, high 58, low 44 degrees Fahrenheit, 14 percent chance of precipitation"
+          },
+          {
+           "note": "74%",
+           "low": 42,
+           "lowText": "42°",
+           "highText": "56°",
+           "label": "Wed",
+           "symbol": "cloud.rain.fill",
+           "high": 56,
+           "accessibilityLabel": "Wed, Light rain, high 56, low 42 degrees Fahrenheit, 74 percent chance of precipitation"
+          },
+          {
+           "note": "62%",
+           "low": 46,
+           "lowText": "46°",
+           "highText": "56°",
+           "label": "Thu",
+           "symbol": "cloud.fill",
+           "high": 56,
+           "accessibilityLabel": "Thu, Cloudy, high 56, low 46 degrees Fahrenheit, 62 percent chance of precipitation"
+          },
+          {
+           "note": "62%",
+           "low": 49,
+           "lowText": "49°",
+           "highText": "59°",
+           "label": "Fri",
+           "symbol": "cloud.fill",
+           "high": 59,
+           "accessibilityLabel": "Fri, Cloudy, high 59, low 49 degrees Fahrenheit, 62 percent chance of precipitation"
+          },
+          {
+           "note": "39%",
+           "low": 50,
+           "lowText": "50°",
+           "highText": "61°",
+           "label": "Sat",
+           "symbol": "cloud.fill",
+           "high": 61,
+           "accessibilityLabel": "Sat, Cloudy, high 61, low 50 degrees Fahrenheit, 39 percent chance of precipitation"
+          },
+          {
+           "note": "47%",
+           "low": 48,
+           "lowText": "48°",
+           "highText": "55°",
+           "label": "Sun",
+           "symbol": "cloud.drizzle.fill",
+           "high": 55,
+           "accessibilityLabel": "Sun, Light drizzle, high 55, low 48 degrees Fahrenheit, 47 percent chance of precipitation"
+          },
+          {
+           "note": "53%",
+           "low": 49,
+           "lowText": "49°",
+           "highText": "58°",
+           "label": "Mon",
+           "symbol": "cloud.drizzle.fill",
+           "high": 58,
+           "accessibilityLabel": "Mon, Light drizzle, high 58, low 49 degrees Fahrenheit, 53 percent chance of precipitation"
+          },
+          {
+           "note": "62%",
+           "low": 53,
+           "lowText": "53°",
+           "highText": "63°",
+           "label": "Tue",
+           "symbol": "cloud.drizzle.fill",
+           "high": 63,
+           "accessibilityLabel": "Tue, Light drizzle, high 63, low 53 degrees Fahrenheit, 62 percent chance of precipitation"
+          }
+         ],
+         "min": 36,
+         "max": 63
+        }
+       ],
+       "source": {
+        "kind": "resolver",
+        "name": "Open-Meteo",
+        "url": "https://open-meteo.com/",
+        "updatedAt": "2026-11-02T06:14:58Z",
+        "attribution": "Weather data by Open-Meteo.com"
+       },
+       "accessibilityLabel": "Weather for Seattle, WA"
+      },
+      {
+       "blocks": [
+        {
+         "subtitle": "Calendar",
+         "type": "header",
+         "title": "Today"
+        },
+        {
+         "type": "list",
+         "items": [
+          {
+           "title": "Team standup",
+           "subtitle": "9:30 AM – 9:45 AM"
+          },
+          {
+           "title": "Dentist",
+           "subtitle": "2:00 PM – 3:00 PM"
+          }
+         ]
+        }
+       ],
+       "fallbackText": "Today — Calendar\n• Team standup — 9:30 AM – 9:45 AM\n• Dentist — 2:00 PM – 3:00 PM",
+       "id": "run-card-1",
+       "accessibilityLabel": "Today",
+       "source": {
+        "kind": "tool",
+        "name": "calendar_events",
+        "updatedAt": "2026-11-02T05:57:32Z"
+       },
+       "version": 1,
+       "type": "custom"
+      }
+     ]
+    }
+   ],
+   "hasSchedule": true,
+   "title": "Personal operations briefing",
+   "updatedAt": 815291853.005356,
+   "prompt": "BRIEFING-QA: today's weather and calendar.",
+   "id": "25F62850-F6ED-4BBB-9403-1C8EBEA6B9E7",
+   "lastRunAt": 815291851.528767
+  }
+ ]
+}

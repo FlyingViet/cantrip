@@ -172,9 +172,37 @@ const FOCUSABLE = "button:not(:disabled), [href], input:not(:disabled), select:n
 /** Open sheets, topmost last: Escape and focus belong to the top one even when focus fell to the page. */
 const sheetStack: { node: () => HTMLElement | null; close: () => void; locked: () => boolean }[] = [];
 
+/**
+ * What to make inert behind open sheets: each pane, except the way down to a sheet drawn inside it (Tasks'
+ * Edit Task and record sheets live in the detail pane), whose other branches go inert instead.
+ */
+export function inertTargets<T extends { contains(other: T): boolean; readonly children: ArrayLike<unknown> }>(panes: T[], sheets: T[]): T[] {
+  const targets: T[] = [];
+  const visit = (element: T) => {
+    if (sheets.includes(element)) return;
+    if (!sheets.some((sheet) => element.contains(sheet))) {
+      targets.push(element);
+      return;
+    }
+    for (const child of Array.from(element.children)) visit(child as T);
+  };
+  panes.forEach(visit);
+  return targets;
+}
+
+let inertElements: HTMLElement[] = [];
+
 function setBackgroundInert(inert: boolean): void {
-  for (const element of document.querySelectorAll<HTMLElement>(".window > .sidebar, .window > .detail, .settings-window > .settings-titlebar, .settings-window > .settings-body")) {
-    element.inert = inert;
+  for (const element of inertElements) element.inert = false;
+  inertElements = [];
+  if (!inert) return;
+  const panes = Array.from(document.querySelectorAll<HTMLElement>(".window > .sidebar, .window > .detail, .settings-window > .settings-titlebar, .settings-window > .settings-body"));
+  const sheets = sheetStack.map((entry) => entry.node()).filter((node): node is HTMLElement => node !== null);
+  for (const element of inertTargets<Element>(panes, sheets)) {
+    if (element instanceof HTMLElement && !element.inert) {
+      element.inert = true;
+      inertElements.push(element);
+    }
   }
 }
 
@@ -229,7 +257,7 @@ export function Sheet(props: {
     });
     return () => {
       sheetStack.splice(sheetStack.indexOf(entry), 1);
-      if (!sheetStack.length) setBackgroundInert(false);
+      setBackgroundInert(sheetStack.length > 0);
       if (restore.current?.isConnected) restore.current.focus();
     };
   }, []);

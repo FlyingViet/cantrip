@@ -13,6 +13,8 @@ import {
   pluralLabel, recordBadge, recordDate, recordNoun, recordSubtitle, recordTitle, saveGroupState, workspaceSections,
   type WorkspaceSection,
 } from "./homeLogic";
+import { wantsRecordCards, workspaceCardsView } from "./homeCardLogic";
+import { RecordCards, WorkspaceCards } from "./HomeCards";
 import { deleteRecord, homeDataError } from "./homeState";
 import { contextMenuAt, ErrorLine, PaneBar, ScrollArea, Unavailable } from "./parts";
 import { SymbolIcon } from "./symbols";
@@ -78,6 +80,7 @@ export function WorkspaceView(props: { taskID: string }): JSX.Element {
 
   const records = filterRecords(workspace.records, query);
   const sections = workspaceSections(workspace, records, searching);
+  const cards = workspaceCardsView(remote.homeTasks.value, task, searching);
   const toggle = (section: WorkspaceSection) => {
     const next = { ...collapsed, [section.id]: !isSectionCollapsed(section, collapsed) };
     setCollapsed(next);
@@ -97,6 +100,7 @@ export function WorkspaceView(props: { taskID: string }): JSX.Element {
         <div class="sr-only" role="status" aria-live="polite">
           {searching ? `${records.length} ${recordNoun(workspace, records.length)} found` : ""}
         </div>
+        {cards ? <WorkspaceCards view={cards} /> : null}
         {searching && !records.length ? <p class="hm-no-matches">No {pluralLabel(workspace)} match.</p> : null}
         {sections ? sections.map((section) => {
           const expanded = searching || !isSectionCollapsed(section, collapsed);
@@ -186,6 +190,9 @@ export function RecordDetailView(props: { taskID: string; recordID: string }): J
       {bar}
       <ScrollArea scrollKey={`record:${props.taskID}:${props.recordID}`} saved={tasksNav.savedScroll} onSave={tasksNav.saveScroll} class="hm-detail">
         <ErrorLine text={homeDataError.value} class="hm-error-banner" />
+        {wantsRecordCards(workspace) ? (
+          <RecordCards taskID={props.taskID} recordID={props.recordID} workspace={workspace} title={title} revision={record.updatedAt} />
+        ) : null}
         {detailSections(workspace).map((section, index) => (
           <FormSection key={`${section.title ?? ""}:${index}`} header={section.title || undefined}>
             {section.fields.map((key) => {

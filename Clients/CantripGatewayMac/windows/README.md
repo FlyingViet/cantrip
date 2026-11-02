@@ -64,6 +64,13 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   source's attribution; buttons open only public web pages (a place's phone number is shown, not
   dialed), and every row has a screen reader label. Replies from older Macs keep their weather,
   map and link cards.
+- **Cards on Home's tasks.** The same cards show under a finished run's result in the Background
+  list and under each run's summary in a task's Edit Task sheet. A workspace shows the cards the Mac
+  builds from its records above the list (for example bills due in the next 7 days; hidden while
+  searching), then its latest run's time, summary and cards. A record in a workspace with weather or
+  map cards opens with the event's forecast and venue map on top, refreshed every `refreshAfter`
+  seconds while it stays open (the last cards stay through a failed refresh, retried a minute
+  later) and never once it closes. Older Macs that send no cards show runs and records as before.
 - **Sheets.** Background runs (answer a waiting run in place), a tab's background tasks and
   queue (each message's suggested plan, **Run in child tab**, Send now, Remove), Model Settings (with the Mac-wide usage limit fallbacks: add, reorder and remove backups, pick each one's model and effort, and list a backend again, the Mac's own included, with another model; and Private Local), Rename, Usage Limits (Claude Code, Antigravity, Codex and Copilot, with each model's own limits), Cantrip Memory (formatted
   Markdown or its source), GitHub Builds, Update & Rebuild Cantrip, Mac Permissions & View Mac, MCP Servers, and Skills & Rules
