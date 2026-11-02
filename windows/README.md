@@ -78,6 +78,30 @@ The same panel controls agent actions, panel opacity, launch at login, and
 shows the active global shortcut. Model availability still depends on the
 installed CLI and your provider account.
 
+### Backends
+
+**Settings › Backends** lists Copilot CLI, Claude Code, Antigravity and Codex
+(named as on Cantrip's Mac host) with their installed path and version (or "Not installed"),
+whether each is signed in (account and sign-in method, never a token), each
+Antigravity quota window's use and reset time, the last successful run, the
+last sign-in error from a real run, and when each was last checked. The checks
+make no model calls and use no quota (`--version`, `claude auth status`,
+`codex login status`, Copilot's `.copilot\config.json`, and
+`agy -p /usage --output-format json`), each with a time limit; one that is slow
+or fails shows **Unknown**, never signed out. They run 20 seconds after launch,
+every 30 minutes, right after a run fails with a sign-in error, and on
+**Check now**; the last results are kept in the app's data folder so nothing
+waits for them.
+
+A backend is only called signed out after a second check a few seconds later
+agrees. While it's signed out, its summary reads "Skipped by routing: your
+backups run until you sign in.", the backend picker skips it and Cantrip uses
+the next available backend as its backup, and one Windows notification says so;
+another says when it's back. **Sign in** runs `copilot login --device-code` or
+`codex login --device-auth` in the background and shows the link and code
+(**Open link**, **Copy code**, **Cancel**); Claude Code (`claude auth login`)
+and Antigravity (`agy`) open a terminal window to finish signing in.
+
 ## Screen context
 
 Click **▣** to capture every available display for the next AI prompt. Cantrip

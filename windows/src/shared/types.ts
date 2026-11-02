@@ -26,6 +26,66 @@ export interface BackendStatus {
   detail: string;
 }
 
+/** Install, sign-in and quota of one backend's CLI on this PC (the Mac host's GET /api/v1/backends shape). */
+export type BackendState = "ready" | "signedOut" | "outOfQuota" | "notInstalled" | "unknown";
+
+export interface BackendQuota {
+  name: string;
+  usedPercent?: number;
+  resetsAt?: string;
+}
+
+export interface BackendSignIn {
+  /** `deviceCode`: a link and a code shown in Settings; `terminal`: finished in a terminal window. */
+  mode: "deviceCode" | "terminal";
+  command: string;
+  hint: string;
+  url?: string;
+  code?: string;
+  startedAt?: string;
+  /** How the last sign-in attempt ended, or where it continues. */
+  message?: string;
+}
+
+export interface BackendHealth {
+  id: BackendId;
+  name: string;
+  state: BackendState;
+  summary: string;
+  path?: string;
+  version?: string;
+  /** Absent when the check couldn't tell. */
+  signedIn?: boolean;
+  account?: string;
+  authMethod?: string;
+  plan?: string;
+  quota: BackendQuota[];
+  /** When a used-up limit lifts. */
+  limitedUntil?: string;
+  lastSuccessAt?: string;
+  lastAuthError?: { message: string; at: string };
+  checkedAt?: string;
+  checking: boolean;
+  /** Routing skips it (signed out) and uses a backup. */
+  unavailable: boolean;
+  problem?: string;
+  signIn: BackendSignIn;
+}
+
+export interface BackendsSnapshot {
+  backends: BackendHealth[];
+  /** Seconds between scheduled checks. */
+  checkInterval: number;
+  revision: number;
+  /** What a signIn or cancelSignIn did. */
+  message?: string;
+}
+
+export type BackendsAction =
+  | { action: "check"; id?: BackendId }
+  | { action: "signIn"; id: BackendId }
+  | { action: "cancelSignIn"; id: BackendId };
+
 export interface ShortcutStatus {
   accelerator: string | null;
   displayName: string;
@@ -93,6 +153,8 @@ export interface CantripApi {
   searchApps(query: string): Promise<AppMatch[]>;
   launchApp(id: string): Promise<{ ok: boolean; error?: string }>;
   getBackendStatus(): Promise<BackendStatus[]>;
+  getBackendHealth(): Promise<BackendsSnapshot>;
+  backendAction(action: BackendsAction): Promise<BackendsSnapshot>;
   getShortcutStatus(): Promise<ShortcutStatus>;
   retryShortcut(): Promise<ShortcutStatus>;
   getDefaultWorkdir(): Promise<string>;
@@ -124,4 +186,6 @@ export interface CantripApi {
   onUpdateState(callback: (state: UpdateState) => void): () => void;
   onPluginsChanged(callback: (plugins: PluginSummary[]) => void): () => void;
   onPluginPrompt(callback: (prompt: string) => void): () => void;
+  onBackendHealth(callback: (snapshot: BackendsSnapshot) => void): () => void;
+  onOpenBackends(callback: () => void): () => void;
 }

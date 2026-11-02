@@ -3,6 +3,7 @@
 | File | Purpose |
 |------|---------|
 | `types.ts` | IPC and domain contracts |
+| `backendHealth.ts` | Backend status rows, Settings action validation, and signed-out routing |
 | `search.ts` | Fuzzy app matching and ranking |
 | `instantAnswers.ts` | Safe arithmetic and unit conversion |
 | `update.ts` | Safe user-facing updater error sanitization |

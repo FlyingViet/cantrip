@@ -119,6 +119,21 @@
             </button>
           </section>
 
+          <section id="settings-backends-section" class="settings-section" aria-labelledby="backends-heading">
+            <div class="section-heading">
+              <h2 id="backends-heading">Backends</h2>
+              <span>
+                <button id="backends-check-all" type="button" aria-label="Check all backends now">Check all</button>
+              </span>
+            </div>
+            <p class="backends-intro">
+              Whether each CLI is installed and signed in on this PC, and its quota. Checks make no
+              model calls and use no quota.
+            </p>
+            <p id="backends-error" class="settings-error hidden" role="alert"></p>
+            <div id="backends-list" class="backends-list"></div>
+          </section>
+
           <section class="settings-section">
             <h2>General</h2>
             <label class="settings-check">
