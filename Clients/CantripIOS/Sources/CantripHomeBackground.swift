@@ -72,6 +72,13 @@ struct CantripHomeBackgroundButton: View {
 }
 
 struct CantripHomeBackgroundView: View {
+    /// A Mac sheet draws no navigation-bar items; Full Log sits beside Done there.
+    #if os(macOS)
+    static let logPlacement = ToolbarItemPlacement.cancellationAction
+    #else
+    static let logPlacement = ToolbarItemPlacement.topBarLeading
+    #endif
+
     @ObservedObject var remote: CantripRemoteModel
     /// Opens the background log as a Remote tab; clients without Remote tabs pass nil.
     var openLog: (() -> Void)?
@@ -131,7 +138,7 @@ struct CantripHomeBackgroundView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if snapshot != nil, let openLog {
-                    ToolbarItem(placement: .topBarLeading) {
+                    ToolbarItem(placement: Self.logPlacement) {
                         Button("Full Log", action: openLog)
                             .accessibilityHint("Opens the conversation that keeps finished background reports")
                     }
