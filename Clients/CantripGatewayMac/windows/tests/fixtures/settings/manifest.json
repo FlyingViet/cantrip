@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "revision": "0a1b2c3d4e5f",
+  "mac": "Studio Mac",
+  "local": false,
+  "pages": [
+    {
+      "id": "macs",
+      "title": "Macs",
+      "sections": [
+        {
+          "id": "remote",
+          "title": "Remote control on Studio Mac",
+          "footer": "Tailscale Serve reaches the HTTP port from anywhere on your tailnet.",
+          "fields": [
+            { "key": "remoteControlEnabled", "type": "toggle", "label": "Remote control", "value": true, "readOnly": true, "readOnlyReason": "Change this in Cantrip's Settings on the Mac." },
+            { "key": "remoteControlPort", "type": "port", "label": "HTTP port", "value": 8765, "min": 1024, "max": 65535, "placeholder": "8765", "guarded": true, "visibleWhen": { "key": "remoteControlEnabled", "values": [true] } },
+            { "key": "remoteLANPort", "type": "port", "label": "Direct port", "value": 0, "min": 0, "max": 65535, "zeroLabel": "Automatic", "placeholder": "Automatic", "guarded": true, "visibleWhen": { "key": "remoteControlEnabled", "values": [true] } },
+            { "key": "remoteLANStatus", "type": "info", "label": "Local network", "value": "Listening on port 51022", "tone": "warning", "visibleWhen": { "key": "remoteControlEnabled", "values": [true] } },
+            { "key": "rotatePairingToken", "type": "action", "label": "Replace Pairing Token", "destructive": true, "guarded": true, "confirmation": "Every other device paired with Studio Mac has to pair again. This one stays paired.", "visibleWhen": { "key": "remoteControlEnabled", "values": [true] } }
+          ]
+        },
+        {
+          "id": "watch",
+          "title": "Apple Watch",
+          "fields": [
+            { "key": "watchInternetRouteEnabled", "type": "toggle", "label": "Reach Home from Apple Watch over the internet", "value": false, "visibleWhen": { "key": "cantripHomeEnabled", "values": [true] } }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "models",
+      "title": "Models",
+      "sections": [
+        {
+          "id": "defaults",
+          "title": "New tabs on Studio Mac",
+          "fields": [
+            { "key": "backend", "type": "choice", "label": "Backend", "value": "Copilot", "choices": [{ "value": "Copilot", "label": "Copilot" }, { "value": "Claude Code", "label": "Claude Code" }] },
+            { "key": "allowActions", "type": "toggle", "label": "Act on my behalf", "value": false }
+          ]
+        },
+        {
+          "id": "claude",
+          "title": "Claude Code",
+          "link": true,
+          "summary": "high",
+          "fields": [
+            { "key": "claudeEffort", "type": "choice", "label": "Effort", "value": "high", "choices": [{ "value": "", "label": "Default" }, { "value": "high", "label": "High" }, { "value": "max", "label": "Max", "disabled": true }] }
+          ]
+        },
+        {
+          "id": "local",
+          "title": "Local model",
+          "link": true,
+          "summary": "hermes",
+          "fields": [
+            { "key": "localAPIKey", "type": "secret", "label": "API key", "isSet": true, "maxLength": 8 },
+            { "key": "localSystemPrompt", "type": "text", "label": "System prompt", "value": "", "multiline": true, "maxLength": 16000 },
+            { "key": "futureWidget", "type": "hologram", "label": "Not drawn here" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "title": "Tools & sign-ins",
+      "sections": [
+        {
+          "id": "cli",
+          "title": "Command-line tools",
+          "link": true,
+          "summary": "Paths to claude, copilot, codex and agy",
+          "fields": [
+            { "key": "claudePath", "type": "path", "label": "claude", "value": "", "placeholder": "Automatic (/usr/local/bin/claude)", "readOnly": true, "readOnlyReason": "Change this in Cantrip's Settings on the Mac.", "maxLength": 1024 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "home",
+      "title": "Home & tabs",
+      "sections": [
+        {
+          "id": "home",
+          "title": "Cantrip Home",
+          "fields": [
+            { "key": "cantripHomeEnabled", "type": "toggle", "label": "Cantrip Home", "value": true },
+            { "key": "cantripHomeParallelRuns", "type": "integer", "label": "Background jobs at once", "value": 2, "min": 1, "max": 8, "step": 1, "visibleWhen": { "key": "cantripHomeEnabled", "values": [true] } }
+          ]
+        },
+        {
+          "id": "tabs",
+          "title": "Tabs",
+          "fields": [
+            { "key": "copilotIdleReleaseMinutes", "type": "choice", "label": "Free an idle Copilot tab's memory after", "value": 30, "choices": [{ "value": 0, "label": "Never" }, { "value": 15, "label": "15 minutes" }, { "value": 30, "label": "30 minutes" }] },
+            { "key": "simulatorPoolPhone", "type": "text", "label": "iPhone model", "value": "iPhone 17 Pro", "maxLength": 1024 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "memory",
+      "title": "Memory",
+      "sections": [
+        {
+          "id": "memory",
+          "title": "Memory on Studio Mac",
+          "fields": [
+            { "key": "memoryEnabled", "type": "toggle", "label": "Memory vault", "value": false },
+            { "key": "memoryPath", "type": "path", "label": "Vault folder", "value": "", "readOnly": true, "readOnlyReason": "Change this in Cantrip's Settings on the Mac.", "visibleWhen": { "key": "memoryEnabled", "values": [true] } }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "about",
+      "title": "About & Updates",
+      "sections": [
+        {
+          "id": "storage",
+          "title": "Storage upkeep",
+          "fields": [
+            { "key": "storageSessionRetentionDays", "type": "integer", "label": "Keep unused sessions for", "value": 14, "min": 3, "max": 90, "step": 1, "unit": "days" },
+            { "key": "panelOpacity", "type": "number", "label": "Panel opacity", "value": 0.85, "min": 0.5, "max": 1, "step": 0.05, "format": "percent" }
+          ]
+        }
+      ]
+    }
+  ],
+  "pending": { "id": "6F1C2B0E-2E55-4C59-9A7B-8E0D5C1F0A11", "keys": ["remoteLANPort"], "summary": "Direct port 8766", "secondsLeft": 52, "revertsAt": "2026-11-02T23:10:00Z" }
+}

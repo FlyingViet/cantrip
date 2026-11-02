@@ -186,6 +186,7 @@ async function refreshOnce(): Promise<void> {
     }
     dropDeleted(list.home ? [...list.sessions, list.home] : list.sessions);
   });
+  reportSettings(list);
   const id = selectedID.value;
   if (id) {
     const summary = id === list.home?.id ? list.home : list.sessions.find((item) => item.id === id);
@@ -193,6 +194,17 @@ async function refreshOnce(): Promise<void> {
     if (!cached || !summary || cached.historyRevision !== summary.historyRevision) await fetchDetail(id, cached?.historyRevision);
   }
   if (homeDataWanted && list.home) await refreshHomeData();
+}
+
+let reportedSettings = "";
+
+/** An open Settings window reloads the Mac's settings when their revision moves (or hides them on an older Mac). */
+function reportSettings(list: SessionsListResponse): void {
+  const info = { supportsSettings: list.supportsSettings === true, settingsRevision: list.settingsRevision ?? "" };
+  const key = JSON.stringify(info);
+  if (key === reportedSettings) return;
+  reportedSettings = key;
+  bridge.reportSettings?.(info);
 }
 
 /** Titles (a tab's can come from its first message), previews and labels read tab mentions as "@Label". */
@@ -666,4 +678,5 @@ export function reset(): void {
   resetThreads();
   tasksRevision = null;
   artifactsRevision = null;
+  reportedSettings = "";
 }

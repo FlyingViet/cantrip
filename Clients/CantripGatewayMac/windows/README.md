@@ -93,6 +93,16 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   pairing token) on your home network or over Tailscale, with no certificates and no open
   port on the PC, and falls back to the Mac's Tailscale HTTPS address.
 - **Several Macs.** Settings keeps a list of Macs, like the Mac app; pick one to connect.
+- **The Mac's settings.** Settings draws the Mac's own settings from the list it serves
+  (`/api/v1/settings`), as Cantrip Agent does: Remote control, ports and **Replace Pairing Token**
+  at the top of Connection, the OpenAI-compatible API and CLI paths on Tools & sign-ins, and pages
+  for Models, Home & tabs, Memory and About & Updates. Changes save as you make them (typed ones on
+  Enter or leaving the box), sections such as each backend's model open in place, and Settings
+  reloads when another device changes something. A change that could cut this PC off (a port, the
+  pairing token) shows **Keep** and **Undo** with a countdown; the Mac undoes it by itself if it
+  isn't kept. Replacing the pairing token saves the new one for this Mac and keeps the change with
+  it; the window never sees it. Paths, Remote control and View Mac show read-only (they change at
+  the Mac). Older Macs show none of this.
 - **Pause Agent.** A switch under the connection status in Settings (or Ctrl+Shift+P) stops
   every request from this PC until you turn it off; chat shows **Agent paused** with **Resume**.
 - **Tools & sign-ins.** **Backends** lists Copilot CLI, Claude Code, Antigravity and Codex on the Mac:
@@ -202,12 +212,13 @@ checks that Electron's TLS library completes a real TLS-PSK request.
 | `src/main/main.ts` | Windows, the private `cantrip-host://mac/` scheme (serves the bundled interface and carries API calls to the Mac, adding the token), Settings IPC |
 | `src/main/mcpBridge.ts` | The only MCP requests the Settings window may send (the list and its actions) |
 | `src/main/backendsBridge.ts` | The only backend status requests the Settings window may send (the status, Check now, Sign in, Cancel) |
+| `src/main/settingsBridge.ts` | The only Mac settings requests the Settings window may send (the list, changes, buttons, Keep, Undo), and keeping a replaced pairing token |
 | `src/main/transport.ts` | HTTP over TLS-PSK (`ECDHE-PSK-CHACHA20-POLY1305`, identity `cantrip-remote-v1`, key SHA-256 of the token) and over HTTPS |
 | `src/main/router.ts` | Route order and fallback; a send that may have reached the Mac is never repeated |
 | `src/main/download.ts` | Artifact Save As: streams the Mac's file (or folder zip) to disk over either route, validates the page's request (an artifact ID only) and Windows-safe file names |
 | `src/main/pairing.ts`, `store.ts` | Pairing link and address validation; saved Macs with DPAPI-encrypted tokens |
 | `src/preload/` | The main window's and Settings window's bridges to the app |
-| `src/gateway/` | The interface (Preact + TypeScript, bundled by `scripts/build-gateway.mjs`): `api/` (client and API types), `state/` (polling like the Mac's `CantripRemoteModel`, navigation), `ui/` (sidebar, toolbar, chat, Pip, Tasks, Artifacts, sheets, voice), `settings.tsx` |
+| `src/gateway/` | The interface (Preact + TypeScript, bundled by `scripts/build-gateway.mjs`): `api/` (client and API types), `state/` (polling like the Mac's `CantripRemoteModel`, navigation), `ui/` (sidebar, toolbar, chat, Pip, Tasks, Artifacts, sheets, voice, the Mac's settings), `settings.tsx` |
 
 Not on Windows: push alerts, widgets and Live Activities (iPhone features), the Home
 Builds tab (iPhone install links), Touch ID before approvals, and finding the Mac
@@ -218,10 +229,9 @@ automatically on the network (enter its address or use a pairing link).
 Cantrip Agent (iPhone and Duo) and Gateway Mac share one settings map. Gateway Windows doesn't
 have it yet; to match them it needs:
 
-- A Settings window with a sidebar of the same pages, opening on a status card (the Mac in use
-  and its route, what new tabs run on, and the usage-limit backups): Macs, Models, Tools &
-  sign-ins (a tab so far, with the shared MCP servers), Memory, Voice, Appearance, About &
-  Updates.
+- A Settings window with a sidebar of the same pages (tabs so far, with the Mac's settings on
+  them), opening on a status card (the Mac in use and its route, what new tabs run on, and the
+  usage-limit backups), and an Appearance page.
 - **Macs** as a linked-devices list (Active badge, last seen), a Mac's page with Re-enter
   Pairing Token, its addresses under Advanced and Remove, and a step-by-step **Pair a Mac**.
 - **Models** with model tiers (`GET/POST /api/v1/model-tiers`), the usage-limit backups moved
