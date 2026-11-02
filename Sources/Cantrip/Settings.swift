@@ -100,6 +100,10 @@ final class AppSettings: ObservableObject {
     @Published var simulatorPoolWaitMinutes: Int {
         didSet { d.set(simulatorPoolWaitMinutes, forKey: SimulatorPool.Policy.Key.waitMinutes) }
     }
+    /// Minutes a pool simulator stays booted with no lease before it's shut down.
+    @Published var simulatorPoolIdleMinutes: Int {
+        didSet { d.set(simulatorPoolIdleMinutes, forKey: SimulatorPool.Policy.Key.idleMinutes) }
+    }
     /// Days an unused Copilot session folder is kept before the cleanup removes it.
     @Published var storageSessionRetentionDays: Int {
         didSet {
@@ -847,6 +851,7 @@ final class AppSettings: ObservableObject {
             "simulatorPoolMaxBooted": simulatorPoolMaxBooted,
             "simulatorPoolMinFreeMemoryGB": simulatorPoolMinFreeMemoryGB,
             "simulatorPoolWaitMinutes": simulatorPoolWaitMinutes,
+            "simulatorPoolIdleMinutes": simulatorPoolIdleMinutes,
             "openAIEndpointEnabled": openAIEndpointEnabled,
             "openAIEndpointPort": openAIEndpointPort,
             "openAIEndpointModel": openAIEndpointModel,
@@ -988,6 +993,7 @@ final class AppSettings: ObservableObject {
         int("simulatorPoolMaxBooted", SimulatorPool.Policy.maxBootedRange) { self.simulatorPoolMaxBooted = $0 }
         int("simulatorPoolMinFreeMemoryGB", SimulatorPool.Policy.minFreeMemoryRange) { self.simulatorPoolMinFreeMemoryGB = $0 }
         int("simulatorPoolWaitMinutes", SimulatorPool.Policy.waitRange) { self.simulatorPoolWaitMinutes = $0 }
+        int("simulatorPoolIdleMinutes", SimulatorPool.Policy.idleRange) { self.simulatorPoolIdleMinutes = $0 }
         bool("openAIEndpointEnabled") { self.openAIEndpointEnabled = $0 }
         int("openAIEndpointPort", 1...65535) { self.openAIEndpointPort = $0 }
         // "copilot:gpt-5.6-sol", a bare backend name, or empty for the backend's default.
@@ -1089,6 +1095,7 @@ final class AppSettings: ObservableObject {
         simulatorPoolMaxBooted = simulatorPolicy.maxBooted
         simulatorPoolMinFreeMemoryGB = simulatorPolicy.minFreeMemoryGB
         simulatorPoolWaitMinutes = simulatorPolicy.waitMinutes
+        simulatorPoolIdleMinutes = simulatorPolicy.idleMinutes
         openAIEndpointEnabled = d.bool(forKey: "openAIEndpointEnabled")
         let storedEndpointPort = d.integer(forKey: "openAIEndpointPort")
         openAIEndpointPort = (1...65535).contains(storedEndpointPort) ? storedEndpointPort : OpenAIEndpoint.defaultPort

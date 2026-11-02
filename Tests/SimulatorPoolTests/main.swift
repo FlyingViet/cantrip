@@ -169,6 +169,11 @@ func context(_ fake: FakeSimctl, lines: [String] = [], at time: Date = now, fold
     return context
 }
 
+func XCTUnwrapLike<T>(_ value: T?) throws -> T {
+    guard let value else { throw SimulatorPool.Failure(message: "unexpected nil") }
+    return value
+}
+
 // MARK: - Resolving device types and runtimes
 
 do {
@@ -243,6 +248,25 @@ do {
     expect(exact.key == "iPhone 18 Pro|26.5" && exact.temporaryOnly && exact.note == nil, "--exact keeps the model and OS asked for")
     let exactPooled = try resolve("iPhone Duo", "27.2", exact: true, pool: [.init(key: "iPhone Duo|27.2", udid: "DUO")])
     expect(!exactPooled.temporaryOnly, "--exact for a kind the pool keeps uses the pool's")
+
+    // One rule picks a family's simulator, here and in `leaving`: the first available in pool order.
+    let a16 = SimulatorPool.Member(key: "iPad (A16)|27.0", udid: "A16")
+    let twoIPads = [a16, iPadMember]
+    expect(try resolve("iPad", pool: twoIPads).key == a16.key, "the first iPad in the pool is handed out")
+    let devices = [SimulatorPool.Device(udid: "A16", name: "iPad (A16)", state: "Shutdown", typeIdentifier: "x", runtimeIdentifier: "y",
+                                        isAvailable: true, dataBytes: 0, lastUsed: now.addingTimeInterval(-9 * day)),
+                   SimulatorPool.Device(udid: "IPAD", name: "iPad Pro", state: "Shutdown", typeIdentifier: "x", runtimeIdentifier: "y",
+                                        isAvailable: true, dataBytes: 0, lastUsed: now)]
+    var twoState = SimulatorPool.State()
+    twoState.pool = twoIPads
+    expect(Array(SimulatorPool.leaving(twoState, devices: devices, phoneKey: nil).keys) == ["IPAD"],
+           "and the other one leaves, however recently it was used")
+    expect(try resolve("iPad (A16)", exact: true, pool: twoIPads).temporaryOnly == false
+           && (try resolve("iPad Pro 11-inch (M5)", exact: true, pool: twoIPads)).temporaryOnly,
+           "--exact never hands out a member on its way out")
+    let gone = SimulatorPool.Member(key: "iPad (A16)|25.0", udid: "OLD")
+    expect(try resolve("iPad", pool: [gone, iPadMember]).key == iPadMember.key,
+           "an iPad whose runtime is gone is skipped, not an error")
 } catch {
     expect(false, "mapping threw \(error)")
 }
@@ -577,6 +601,117 @@ do {
 } catch {
     expect(false, "sweep threw \(error)")
 }
+
+// MARK: - Pruning to one iPhone, one iPad, watch and TV, and a Duo per iOS version
+
+do {
+    let fake = FakeSimctl()
+    let gb: Int64 = 1_000_000_000
+    let watch = "com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-11-46mm"
+    let tv = "com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-3rd-generation-4K"
+    func device(_ udid: String, _ name: String, _ type: String, _ runtime: String, bytes: Int64 = gb,
+                booted: Bool = false, used: TimeInterval = -day) -> FakeSimctl.Entry {
+        .init(udid: udid + "-0000-0000-0000-000000000000", name: name, state: booted ? "Booted" : "Shutdown", type: type,
+              runtime: runtime, bytes: bytes, lastUsed: now.addingTimeInterval(used))
+    }
+    fake.devices = [
+        device("CANON000", "Cantrip Pool · iPhone 17 Pro · iOS 27.0", FakeSimctl.pro, FakeSimctl.ios270, bytes: 5 * gb),
+        device("P17X2700", "iPhone 17", FakeSimctl.iPhone17, FakeSimctl.ios270, bytes: 4 * gb),
+        device("PMAX2700", "Cantrip Pool · iPhone 17 Pro Max · iOS 27.0", FakeSimctl.proMax, FakeSimctl.ios270,
+               bytes: 2 * gb, booted: true, used: -3_600),
+        device("P18X2700", "iPhone 18 Pro", "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro", FakeSimctl.ios270,
+               bytes: 4 * gb, booted: true, used: -300),
+        device("PRO26500", "iPhone 17 Pro", FakeSimctl.pro, FakeSimctl.ios265, bytes: 4 * gb),
+        device("DUO27100", "iPhone Duo", FakeSimctl.duo, FakeSimctl.ios271, bytes: 12 * gb),
+        device("DUO27200", "iPhone Duo", FakeSimctl.duo, FakeSimctl.ios272, bytes: 4 * gb),
+        device("IPADPRO0", "iPad Pro 11-inch (M5)", FakeSimctl.iPadPro, FakeSimctl.ios270, used: -3_600),
+        device("IPADA160", "iPad (A16)", "com.apple.CoreSimulator.SimDeviceType.iPad-A16", FakeSimctl.ios270, used: -2 * day),
+        device("WATCH000", "Apple Watch Series 11 (46mm)", watch, "com.apple.CoreSimulator.SimRuntime.watchOS-27-0"),
+        device("TV000000", "Apple TV 4K (3rd generation)", tv, "com.apple.CoreSimulator.SimRuntime.tvOS-27-0"),
+        device("TEMPBOOT", "Cantrip Temp · iPhone Duo · iOS 27.1 · ab12", FakeSimctl.duo, FakeSimctl.ios271,
+               booted: true, used: -20 * 60),
+    ]
+    func udid(_ prefix: String) -> String { prefix + "-0000-0000-0000-000000000000" }
+    let c = context(fake, folder: "prune")
+    try c.store.locked { state in
+        state.pool = [("iPhone 17 Pro|27.0", "CANON000"), ("iPhone 17|27.0", "P17X2700"), ("iPhone 17 Pro Max|27.0", "PMAX2700"),
+                      ("iPhone 18 Pro|27.0", "P18X2700"), ("iPhone 17 Pro|26.5", "PRO26500"), ("iPhone Duo|27.1", "DUO27100"),
+                      ("iPhone Duo|27.2", "DUO27200"), ("iPad Pro 11-inch (M5)|27.0", "IPADPRO0"), ("iPad (A16)|27.0", "IPADA160"),
+                      ("Apple Watch Series 11 (46mm)|27.0", "WATCH000"), ("Apple TV 4K (3rd generation)|27.0", "TV000000")]
+            .map { SimulatorPool.Member(key: $0.0, udid: udid($0.1)) }
+        state.leases = [.init(id: "lease-max", udid: udid("PMAX2700"), key: "iPhone 17 Pro Max|27.0", temporary: false,
+                              tab: "tab-x", acquiredAt: now, expiresAt: now.addingTimeInterval(3_600))]
+        state.temporaries = [udid("TEMPBOOT"): now.addingTimeInterval(-20 * 60)]
+    }
+    func actions(_ report: SimulatorPool.SweepReport) -> [String: SimulatorPool.Action.Kind] {
+        Dictionary(report.actions.map { (String($0.udid.prefix(8)), $0.kind) }, uniquingKeysWith: { a, _ in a })
+    }
+    let leaving = SimulatorPool.leaving(c.store.read(), devices: try fake.simctl.devices(), phoneKey: "iPhone 17 Pro|27.0")
+    expect(Set(leaving.keys.map { String($0.prefix(8)) }) == ["P17X2700", "PMAX2700", "P18X2700", "PRO26500", "IPADA160"],
+           "other iPhones and the second iPad leave the pool; got \(leaving.keys.sorted())")
+
+    let preview = try XCTUnwrapLike(SimulatorPool.tidy(dryRun: true, context: c))
+    expect(actions(preview) == ["P17X2700": .deleted, "PRO26500": .deleted, "IPADA160": .deleted, "TEMPBOOT": .shutDown],
+           "free leavers are deleted, an idle copy shut down; the leased and just-booted ones wait; got \(actions(preview))")
+    expect(preview.bytesRemoved == 9 * gb, "the space freed is counted")
+    expect(fake.mutations().isEmpty, "a dry run changes nothing")
+
+    let real = try XCTUnwrapLike(SimulatorPool.tidy(context: c))
+    expect(actions(real) == actions(preview) && real.errors.isEmpty, "the real run does the same: \(real.errors)")
+    expect(fake.entry(udid("P17X2700")) == nil && fake.entry(udid("PRO26500")) == nil, "the extra iPhones are deleted")
+    expect(fake.entry(udid("PMAX2700"))?.state == "Booted", "a leased one isn't touched")
+    expect(fake.entry(udid("DUO27100"))?.bytes == 12 * gb, "a Duo over the size cap keeps its apps")
+    expect(c.store.read().pool.count == 8, "deleted members leave the pool: \(c.store.read().pool.map(\.key))")
+
+    try SimulatorPool.release(tab: "tab-x", context: c)
+    let later = context(fake, at: now.addingTimeInterval(20 * 60), folder: "prune")
+    let after = try XCTUnwrapLike(SimulatorPool.tidy(context: later))
+    expect(actions(after) == ["PMAX2700": .deleted, "P18X2700": .deleted], "after release and idle time, the rest go: \(actions(after))")
+    let pool = Set(c.store.read().pool.map(\.key))
+    expect(pool == ["iPhone 17 Pro|27.0", "iPhone Duo|27.1", "iPhone Duo|27.2", "iPad Pro 11-inch (M5)|27.0",
+                    "Apple Watch Series 11 (46mm)|27.0", "Apple TV 4K (3rd generation)|27.0"],
+           "six members are left: \(pool.sorted())")
+
+    // A runtime that's briefly unavailable can't make the wrong iPhone leave.
+    var unavailable = c.store.read()
+    unavailable.pool.append(.init(key: "iPhone 17|26.5", udid: "OTHER"))
+    var devices = try fake.simctl.devices()
+    devices.append(.init(udid: "OTHER", name: "iPhone 17", state: "Shutdown", typeIdentifier: FakeSimctl.iPhone17,
+                         runtimeIdentifier: FakeSimctl.ios265, isAvailable: true, dataBytes: 0, lastUsed: nil))
+    expect(SimulatorPool.leaving(unavailable, devices: devices, phoneKey: "iPhone 17|26.5")[udid("CANON000")] != nil,
+           "(control) another pool iPhone makes the old one leave")
+    devices.removeAll { $0.udid == "OTHER" }
+    expect(SimulatorPool.leaving(unavailable, devices: devices, phoneKey: "iPhone 17|26.5").isEmpty,
+           "but not while the new one isn't there")
+    expect(SimulatorPool.leaving(c.store.read(), devices: devices, phoneKey: nil).isEmpty, "nor when the pool's iPhone is unknown")
+} catch {
+    expect(false, "pruning threw \(error)")
+}
+
+// MARK: - Idle simulators give their room back
+
+do {
+    let fake = FakeSimctl()
+    fake.devices = [
+        .init(udid: "IDLEPHON-0000-0000-0000-000000000000", name: "Cantrip Pool · iPhone 17 Pro · iOS 27.0", state: "Booted",
+              type: FakeSimctl.pro, runtime: FakeSimctl.ios270, lastUsed: now.addingTimeInterval(-5 * 60)),
+        .init(udid: "DUO27100-0000-0000-0000-000000000000", name: "iPhone Duo", type: FakeSimctl.duo,
+              runtime: FakeSimctl.ios271, lastUsed: now),
+    ]
+    var c = context(fake, folder: "idle")
+    c.policy.maxBooted = 1
+    try c.store.locked { $0.pool = [.init(key: "iPhone 17 Pro|27.0", udid: "IDLEPHON-0000-0000-0000-000000000000")] }
+    expect((try? SimulatorPool.acquire(device: "iPhone Duo", os: nil, tab: "tab-a", wait: 0, context: c)) == nil,
+           "a simulator booted 5 minutes ago without a lease still holds its room")
+    let later = { var later = c; later.now = { now.addingTimeInterval(20 * 60) }; return later }()
+    let duo = try SimulatorPool.acquire(device: "iPhone Duo", os: nil, tab: "tab-a", wait: 0, context: later)
+    expect(duo.lease.udid.hasPrefix("DUO27100"), "after the idle time it's shut down to make room")
+    expect(fake.entry("IDLEPHON-0000-0000-0000-000000000000")?.state == "Shutdown", "the idle one was shut down")
+    expect(SimulatorPool.SweepOptions().idleBootMinutes == 15, "idle simulators shut down after 15 minutes by default")
+} catch {
+    expect(false, "idle threw \(error)")
+}
+
 
 if failures > 0 {
     fputs("\(failures) simulator pool test(s) failed\n", stderr)

@@ -330,10 +330,14 @@ Clean up unused agent sessions and worktrees daily**.
   tag or remote. Checkouts in your own folders, such as `~/Coding`, are never
   removed (only their git-ignored build caches, below). Records of agent
   worktrees that were already deleted are pruned.
-- **Simulators** from the [shared pool](#shared-simulators): a free pool
-  simulator that's been booted for an hour is shut down, one holding more than
-  10 GB of data is erased, and a temporary copy without a lease for 24 hours is
-  deleted. With **Also remove simulators unused for 3 days** (the
+- **Simulators** from the [shared pool](#shared-simulators): a pool simulator
+  or temporary copy booted for 15 minutes without a lease
+  (`simulatorPoolIdleMinutes`, 5–1440) is shut down (the pool checks every 5
+  minutes, whether or not this cleanup is on), one holding more than 10 GB of
+  data is erased (never an iPhone Duo's, whose installed apps stay), a member
+  the pool no longer keeps (an iPhone other than the pool's one, a second iPad,
+  watch or TV) is deleted once no lease or process uses it, and a temporary
+  copy without a lease for 24 hours is deleted. With **Also remove simulators unused for 3 days** (the
   `storageSimulatorCleanup` setting, off by default), other simulators go too:
   named ones nobody used for 3 days are deleted, Xcode's default ones are
   erased instead (they stay in Xcode's list) and ones whose iOS runtime is gone
@@ -442,6 +446,14 @@ Simulators take a lot of memory, so only a couple run at once:
   kinds boots nothing new, so it goes ahead.
 
 Child tabs that need a Simulator wait to auto-fork while that many are leased.
+
+The pool shrinks on its own: a member it no longer keeps (an iPhone other
+than the pool's one, say after `simulatorPoolPhone` changes, or a second iPad,
+watch or TV) is listed under **Leaving the pool** in `cantrip sim list` and
+deleted by the pool's upkeep once no lease or running process uses it; a booted
+one goes after the idle time. `cantrip sim list` also shows how many are
+booted and who waits in line. `cantrip sim tidy` runs the upkeep now and
+prints the space it freed (`--dry-run` to preview).
 
 ## Find diagnostics for a bug report
 
