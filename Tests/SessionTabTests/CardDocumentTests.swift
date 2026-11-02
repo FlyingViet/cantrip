@@ -164,10 +164,11 @@ extension SessionTabTests {
         settings.memoryEnabled = false
         settings.backend = .copilot
         defer { (settings.linkPreviewsEnabled, settings.memoryEnabled, settings.backend) = saved }
+        // Let earlier tests' deferred stub resets land first, or one could clear this stub mid-test.
+        try await Task.sleep(for: .milliseconds(200))
         await LinkPreviewStore.shared.setCustomFetcher { url in
             (Data("<html><head><meta property=\"og:title\" content=\"Page \(url.host ?? "")\"></head></html>".utf8), url, "text/html")
         }
-        defer { Task { await LinkPreviewStore.shared.setCustomFetcher(nil) } }
         let output = try String(contentsOf: cardFixtures.appendingPathComponent("kiwi-search-flight.txt"), encoding: .utf8)
 
         let backend = CardBackendFixture()
@@ -214,5 +215,6 @@ extension SessionTabTests {
                      "old clients keep the legacy key, new ones get cards")
 
         precondition(CantripHomeProtocol.visibleText("Done.\n```card\n{\"title\":\"x\"", streaming: true) == "Done.")
+        await LinkPreviewStore.shared.setCustomFetcher(nil)
     }
 }
