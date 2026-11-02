@@ -1,10 +1,10 @@
 // Pure rules behind the tool sheets, ported from the shared Hermes Swift views so they can be unit
 // tested: model settings (CantripModelSettings.swift), tab names (ChatTabMetadata.swift), Copilot
 // usage (CopilotUsageView.swift), memory paging (CantripMemoryView.swift), GitHub builds
-// (GitHubBuildsView.swift), maintenance (CantripMaintenanceView.swift), Skills & Rules (CantripSkills.swift)
-// and View Mac's AES-GCM framing (CantripMacAccess.swift). No DOM or API client imports, so it runs under Node.
+// (GitHubBuildsView.swift), maintenance (CantripMaintenanceView.swift), Skills & Rules (CantripSkills.swift),
+// backend status (BackendStatus.swift) and View Mac's AES-GCM framing (CantripMacAccess.swift). No DOM or API client imports, so it runs under Node.
 import type {
-  CopilotQuotaBucket, CopilotUsageSnapshot, MCPServer, SkillEntry, SkillsDrift, SkillsRule, SkillsSnapshot, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
+  BackendHealth, BackendState, BackendsSnapshot, CopilotQuotaBucket, CopilotUsageSnapshot, MCPServer, SkillEntry, SkillsDrift, SkillsRule, SkillsSnapshot, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
   ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackChoice, UsageFallbackEntryChange, UsageFallbackRequest,
@@ -1200,4 +1200,123 @@ export function mcpConnectLabel(server: MCPServer): string {
 /** "Remote · via Cantrip", the way the Mac tags a server. */
 export function mcpKind(server: MCPServer): string {
   return [server.remote ? "Remote" : "Local", server.relayed ? "via Cantrip" : null].filter(Boolean).join(" · ");
+}
+
+// MARK: Backends (BackendStatus.swift, GET/POST /api/v1/backends)
+
+export const BACKENDS_UNSUPPORTED = "Update Cantrip on the Mac to see backend status.";
+
+/** A failed load or action; an older Mac (404/405) is asked to update. */
+export function backendsErrorText(error: unknown): string {
+  return isUnsupported(error) ? BACKENDS_UNSUPPORTED : errorText(error);
+}
+
+const BACKEND_STATE_LABELS: Record<BackendState, string> = {
+  ready: "Ready", signedOut: "Signed out", outOfQuota: "Out of quota", notInstalled: "Not installed", unknown: "Unknown",
+};
+
+/** A 200 without a `backends` list is `INVALID_RESPONSE`; entries without an id or name are dropped. */
+export function normalizeBackends(value: unknown): BackendsSnapshot {
+  const raw = value as Partial<BackendsSnapshot> | null;
+  if (!raw || !Array.isArray(raw.backends)) throw new InvalidResponseError();
+  const backends = raw.backends.filter((backend): backend is BackendHealth =>
+    Boolean(backend) && typeof backend.id === "string" && typeof backend.name === "string");
+  return { ...raw, backends };
+}
+
+/** The row's state as text (never color alone), toned like an MCP server's status; "Checking…" while a check runs. */
+export function backendStatus(backend: Pick<BackendHealth, "state" | "checking">): { text: string; tone: "" | "attention" | "warning" } {
+  if (backend.checking) return { text: "Checking…", tone: "" };
+  const text = BACKEND_STATE_LABELS[backend.state as BackendState] ?? "Unknown";
+  return { text, tone: backend.state === "signedOut" || backend.state === "outOfQuota" ? "warning" : "" };
+}
+
+/** A device sign-in is under way: its link and code (or its start) are showing, with Cancel. */
+export function backendSignInPending(backend: Pick<BackendHealth, "signIn">): boolean {
+  const signIn = backend.signIn;
+  return Boolean(signIn && (signIn.url || signIn.code || signIn.startedAt));
+}
+
+/** Sign in is offered when the CLI is signed out, couldn't be checked or says it isn't signed in. */
+export function backendOffersSignIn(backend: Pick<BackendHealth, "state" | "signedIn" | "signIn">): boolean {
+  if (backend.state === "notInstalled" || !backend.signIn || backendSignInPending(backend)) return false;
+  return backend.state === "signedOut" || backend.state === "unknown" || backend.signedIn === false;
+}
+
+/** A device sign-in's link and code are showing; their box carries the instructions. */
+export function backendShowsCode(backend: Pick<BackendHealth, "signIn">): boolean {
+  return Boolean(backend.signIn?.url && backend.signIn.code);
+}
+
+/**
+ * The row's one sign-in line (as on the Mac and iPhone): none while a code shows, else the sign-in's own
+ * message, else the Terminal hint while a terminal-only backend needs a sign-in.
+ */
+export function backendSignInLine(backend: Pick<BackendHealth, "state" | "signedIn" | "signIn">): string | null {
+  const signIn = backend.signIn;
+  if (!signIn || backendShowsCode(backend)) return null;
+  if (signIn.message) return signIn.message;
+  return signIn.mode === "terminal" && signIn.hint && backendOffersSignIn(backend) ? signIn.hint : null;
+}
+
+/** Every 1.5 s while a check or a device sign-in runs, otherwise every 8 s. */
+export function backendsPollDelay(snapshot: Pick<BackendsSnapshot, "backends"> | null | undefined): number {
+  const busy = snapshot?.backends.some((backend) => backend.checking === true || backendSignInPending(backend)) ?? false;
+  return busy ? 1500 : 8000;
+}
+
+/** "8:41 PM" today, "Fri 6:31 PM" within a week either way, else "Oct 30, 2026, 8:41 PM"; null when unreadable. */
+export function backendTime(iso: string | undefined, now = Date.now(), locale?: string): string | null {
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return null;
+  const time = date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+  if (date.toDateString() === new Date(now).toDateString()) return time;
+  if (Math.abs(date.getTime() - now) < 6 * 86400_000) {
+    return `${date.toLocaleDateString(locale, { weekday: "short" })} ${time}`;
+  }
+  return formatDateTime(date, locale);
+}
+
+export interface BackendLine {
+  key: string;
+  text: string;
+  tone?: "warning";
+}
+
+/** The row's detail lines; `where` is "on the Mac" (Gateway) or "on this PC". */
+export function backendLines(backend: BackendHealth, where: string, now = Date.now(), locale?: string): BackendLine[] {
+  const lines: BackendLine[] = [];
+  if (backend.summary) lines.push({ key: "summary", text: backend.summary });
+  if (backend.state === "notInstalled") {
+    lines.push({ key: "install", text: `Install ${backend.name} ${where} to use it.` });
+  } else if (backend.path || backend.version) {
+    lines.push({ key: "installed", text: `Installed: ${[backend.path, backend.version].filter(Boolean).join(" · ")}` });
+  }
+  const account = [backend.account, backend.authMethod, backend.plan].filter(Boolean);
+  if (account.length) lines.push({ key: "account", text: `Account: ${account.join(" · ")}` });
+  (backend.quota ?? []).forEach((quota, index) => {
+    const used = typeof quota.usedPercent === "number" && Number.isFinite(quota.usedPercent)
+      ? `${Math.round(Math.min(100, Math.max(0, quota.usedPercent)))}% used` : null;
+    const reset = backendTime(quota.resetsAt, now, locale);
+    const parts = [used, reset ? `resets ${reset}` : null].filter(Boolean);
+    lines.push({ key: `quota${index}`, text: parts.length ? `${quota.name}: ${parts.join(" · ")}` : quota.name });
+  });
+  const success = backendTime(backend.lastSuccessAt, now, locale);
+  if (success) lines.push({ key: "success", text: `Last successful run: ${success}` });
+  if (backend.lastAuthError?.message) {
+    const at = backendTime(backend.lastAuthError.at, now, locale);
+    lines.push({ key: "authError", text: `Last sign-in error: ${backend.lastAuthError.message}${at ? ` (${at})` : ""}`, tone: "warning" });
+  }
+  // Why a check couldn't tell; any other state's summary already says what's wrong.
+  if (backend.state === "unknown" && backend.problem && backend.problem !== backend.summary) {
+    lines.push({ key: "problem", text: backend.problem, tone: "warning" });
+  }
+  return lines;
+}
+
+/** The row's live status line: "Checking…", "Checked 8:41 PM" or "Not checked yet". */
+export function backendCheckLine(backend: Pick<BackendHealth, "checking" | "checkedAt">, now = Date.now(), locale?: string): string {
+  if (backend.checking) return "Checking…";
+  const checked = backendTime(backend.checkedAt, now, locale);
+  return checked ? `Checked ${checked}` : "Not checked yet";
 }

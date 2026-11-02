@@ -67,7 +67,15 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 - **Several Macs.** Settings keeps a list of Macs, like the Mac app; pick one to connect.
 - **Pause Agent.** A switch under the connection status in Settings (or Ctrl+Shift+P) stops
   every request from this PC until you turn it off; chat shows **Agent paused** with **Resume**.
-- **Tools & sign-ins.** **GitHub on your Mac › Sign In…** runs GitHub's device sign-in in Cantrip
+- **Tools & sign-ins.** **Backends** lists Copilot CLI, Claude Code, Antigravity and Codex on the Mac:
+  installed path and version (or "Not installed"), signed in or not with the account and sign-in
+  method (never a token), each quota window's use and reset time, the last successful run, the last
+  sign-in error from a real run and when it was last checked (the Mac checks without model calls,
+  so no quota is spent). A signed-out backend's summary says routing skips it. **Check now** checks
+  one again (**Check all** checks every one), and **Sign in** starts that CLI's sign-in: Copilot and
+  Codex show a link and a code here (**Open link**, **Copy code**, **Cancel**), while Claude Code and
+  Antigravity can only finish in Terminal on the Mac, which the row explains. Older Macs say to
+  update Cantrip. **GitHub on your Mac › Sign In…** runs GitHub's device sign-in in Cantrip
   Home, whose chat shows the code (it used to be in a tab's actions). Then Settings lists the MCP servers Cantrip on the Mac shares with every
   backend, as the Mac's Settings does: each server's state ("Credentials in Mac keychain", when
   a sign-in's token ends), **Connect** (**Retry** after a failed sign-in, with the Mac's reason), **Approve** for
@@ -165,6 +173,7 @@ checks that Electron's TLS library completes a real TLS-PSK request.
 | --- | --- |
 | `src/main/main.ts` | Windows, the private `cantrip-host://mac/` scheme (serves the bundled interface and carries API calls to the Mac, adding the token), Settings IPC |
 | `src/main/mcpBridge.ts` | The only MCP requests the Settings window may send (the list and its actions) |
+| `src/main/backendsBridge.ts` | The only backend status requests the Settings window may send (the status, Check now, Sign in, Cancel) |
 | `src/main/transport.ts` | HTTP over TLS-PSK (`ECDHE-PSK-CHACHA20-POLY1305`, identity `cantrip-remote-v1`, key SHA-256 of the token) and over HTTPS |
 | `src/main/router.ts` | Route order and fallback; a send that may have reached the Mac is never repeated |
 | `src/main/pairing.ts`, `store.ts` | Pairing link and address validation; saved Macs with DPAPI-encrypted tokens |

@@ -5,6 +5,7 @@ import {
 import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
+import { backendsBridgeRequest } from "./backendsBridge";
 import { mcpBridgeRequest } from "./mcpBridge";
 import { PairingError, ServerConfig, displayName, parsePairingLink, validateServer, validateToken } from "./pairing";
 import { HostRouter, Route, describeRoute, routesFor } from "./router";
@@ -523,30 +524,41 @@ function registerIPC(): void {
     return { ok: true };
   });
   // Settings > Tools & sign-ins: only the shared MCP list and its actions, sent with the token here.
-  ipcMain.handle("gateway:mcp", async (event, input: unknown) => {
+  ipcMain.handle("gateway:mcp", (event, input: unknown) => {
     fromSettings(event);
-    const request = mcpBridgeRequest(input);
-    if ("error" in request) return { status: 400, error: request.error };
-    if (!router || !pairing) return { status: 503, error: "This PC isn't paired with a Mac yet." };
-    const headers: Record<string, string> = { accept: "application/json", authorization: `Bearer ${pairing.token}` };
-    if (request.body) headers["content-type"] = "application/json";
-    try {
-      const response = await router.request({
-        method: request.method, path: "/api/v1/mcp", headers,
-        body: request.body ? Buffer.from(request.body) : undefined,
-      });
-      updateStatus({ connected: true, route: describeRoute(router.current), message: "" });
-      let body: unknown = null;
-      try { body = JSON.parse(response.body.toString("utf8")); } catch { /* not JSON */ }
-      const error = (body as { error?: unknown } | null)?.error;
-      return response.status < 300 ? { status: response.status, body }
-        : { status: response.status, error: typeof error === "string" ? error : `The Mac answered with HTTP ${response.status}.` };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      updateStatus({ connected: false, message });
-      return { status: 502, error: `Can't reach your Mac. ${message}` };
-    }
+    return settingsHostRequest("/api/v1/mcp", mcpBridgeRequest(input));
   });
+  // Settings > Tools & sign-ins: only the backend status and its actions (check, sign in, cancel).
+  ipcMain.handle("gateway:backends", (event, input: unknown) => {
+    fromSettings(event);
+    return settingsHostRequest("/api/v1/backends", backendsBridgeRequest(input));
+  });
+}
+
+/** Sends a checked Settings request to one fixed API path with the token; the reply carries no token. */
+async function settingsHostRequest(
+  path: string, request: { method: "GET" | "POST"; body?: string } | { error: string },
+): Promise<{ status: number; body?: unknown; error?: string }> {
+  if ("error" in request) return { status: 400, error: request.error };
+  if (!router || !pairing) return { status: 503, error: "This PC isn't paired with a Mac yet." };
+  const headers: Record<string, string> = { accept: "application/json", authorization: `Bearer ${pairing.token}` };
+  if (request.body) headers["content-type"] = "application/json";
+  try {
+    const response = await router.request({
+      method: request.method, path, headers,
+      body: request.body ? Buffer.from(request.body) : undefined,
+    });
+    updateStatus({ connected: true, route: describeRoute(router.current), message: "" });
+    let body: unknown = null;
+    try { body = JSON.parse(response.body.toString("utf8")); } catch { /* not JSON */ }
+    const error = (body as { error?: unknown } | null)?.error;
+    return response.status < 300 ? { status: response.status, body }
+      : { status: response.status, error: typeof error === "string" ? error : `The Mac answered with HTTP ${response.status}.` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    updateStatus({ connected: false, message });
+    return { status: 502, error: `Can't reach your Mac. ${message}` };
+  }
 }
 
 // MARK: - App
@@ -644,7 +656,7 @@ if (!app.requestSingleInstanceLock()) {
     const hostSession = session.fromPartition(HOST_PARTITION);
     hostSession.protocol.handle(HOST_SCHEME, handleHostRequest);
     // The Gateway page may use the microphone (dictation, Voice Mode; audio only) and read the
-    // clipboard (Paste Image). MCP App frames get neither.
+    // clipboard (Paste Image). MCP App frames get neither. Settings may only write (Copy code).
     hostSession.setPermissionRequestHandler((contents, permission, callback, details) => {
       const topFrame = contents === mainWindow?.webContents && details.isMainFrame !== false
         && isHostURL(details.requestingUrl ?? "");
@@ -658,7 +670,9 @@ if (!app.requestSingleInstanceLock()) {
     });
     hostSession.setPermissionCheckHandler((contents, permission, origin) =>
       ["media", "clipboard-read", "clipboard-sanitized-write"].includes(permission)
-        ? contents === mainWindow?.webContents && origin.startsWith(HOST_ORIGIN.slice(0, -1))
+        ? (contents === mainWindow?.webContents
+          || (permission === "clipboard-sanitized-write" && contents === settingsWindow?.webContents))
+          && origin.startsWith(HOST_ORIGIN.slice(0, -1))
         : ["notifications", "fullscreen"].includes(permission));
     registerIPC();
     buildMenu();
