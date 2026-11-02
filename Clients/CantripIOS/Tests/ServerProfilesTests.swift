@@ -409,6 +409,24 @@ final class ServerProfilesTests: XCTestCase {
         XCTAssertThrowsError(try store.select(a))
     }
 
+    func testThisMacsOwnCantripCannotBeRemovedOrRekeyed() async throws {
+        let (store, _, credentials) = try fixture(.cantrip)
+        let local = try store.add(draft("This Mac", url: "http://127.0.0.1:8765"))
+        let other = try store.add(draft("Studio"))
+        let model = CantripRemoteModel(servers: store)
+        model.localServerID = local.id
+        XCTAssertThrowsError(try model.removeServer(local))
+        do {
+            try await model.reenterCredential("another-token", for: local)
+            XCTFail("This Mac's token comes from Cantrip, not the form")
+        } catch {}
+        XCTAssertEqual(store.servers.map(\.id), [local.id, other.id])
+        XCTAssertEqual(try store.credential(for: local), "This Mac-test-credential")
+        try model.removeServer(other)
+        XCTAssertEqual(store.servers.map(\.id), [local.id])
+        XCTAssertEqual(credentials.values.count, 1)
+    }
+
     func testHermesSelectionRestoresCredentialsHistoryAndMemoryNamespaces() throws {
         try preserveLegacyConfiguration()
         let (store, defaults, credentials) = try fixture(.hermes)
