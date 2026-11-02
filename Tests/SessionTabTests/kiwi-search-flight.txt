@@ -1,0 +1,568 @@
+{
+  "query": "SFO → SEA on 15/11/2026, 1 adult [≤0 stops/sector]",
+  "currency": "USD",
+  "passengers": {
+    "adults": 1,
+    "children": 0,
+    "infants": 0
+  },
+  "resultsCount": 12,
+  "itineraries": [
+    {
+      "id": "0f9c204351240000ebd40c5b_0",
+      "price": 258.0,
+      "priceFormatted": "258 USD",
+      "totalDurationSeconds": 7980,
+      "bookingUrl": "https://kiwi.com/u/hqtj9x",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T15:08:00",
+        "arrivalTime": "2026-11-15T17:21:00",
+        "durationSeconds": 7980,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T15:08:00",
+            "arrivalTime": "2026-11-15T17:21:00",
+            "durationSeconds": 7980,
+            "carrier": "AS",
+            "carrierName": "Alaska Airlines",
+            "flightNumber": "AS630",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    },
+    {
+      "id": "0f9c2043512400004282cd5b_0",
+      "price": 258.0,
+      "priceFormatted": "258 USD",
+      "totalDurationSeconds": 8040,
+      "bookingUrl": "https://kiwi.com/u/6v4yvhb",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T06:08:00",
+        "arrivalTime": "2026-11-15T08:22:00",
+        "durationSeconds": 8040,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T06:08:00",
+            "arrivalTime": "2026-11-15T08:22:00",
+            "durationSeconds": 8040,
+            "carrier": "AS",
+            "carrierName": "Alaska Airlines",
+            "flightNumber": "AS68",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    },
+    {
+      "id": "0f9c204351240000f2cf3d1a_0",
+      "price": 258.0,
+      "priceFormatted": "258 USD",
+      "totalDurationSeconds": 8100,
+      "bookingUrl": "https://kiwi.com/u/nw9r2qu",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T20:58:00",
+        "arrivalTime": "2026-11-15T23:13:00",
+        "durationSeconds": 8100,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T20:58:00",
+            "arrivalTime": "2026-11-15T23:13:00",
+            "durationSeconds": 8100,
+            "carrier": "AS",
+            "carrierName": "Alaska Airlines",
+            "flightNumber": "AS620",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    },
+    {
+      "id": "0f9c204351240000647a6a1e_0",
+      "price": 258.0,
+      "priceFormatted": "258 USD",
+      "totalDurationSeconds": 8100,
+      "bookingUrl": "https://kiwi.com/u/sg5x9vu",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T18:48:00",
+        "arrivalTime": "2026-11-15T21:03:00",
+        "durationSeconds": 8100,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T18:48:00",
+            "arrivalTime": "2026-11-15T21:03:00",
+            "durationSeconds": 8100,
+            "carrier": "AS",
+            "carrierName": "Alaska Airlines",
+            "flightNumber": "AS591",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    },
+    {
+      "id": "0f9c2043512400000a666bc9_0",
+      "price": 258.0,
+      "priceFormatted": "258 USD",
+      "totalDurationSeconds": 8220,
+      "bookingUrl": "https://kiwi.com/u/bnfhby",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T10:39:00",
+        "arrivalTime": "2026-11-15T12:56:00",
+        "durationSeconds": 8220,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T10:39:00",
+            "arrivalTime": "2026-11-15T12:56:00",
+            "durationSeconds": 8220,
+            "carrier": "AS",
+            "carrierName": "Alaska Airlines",
+            "flightNumber": "AS580",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    },
+    {
+      "id": "0f9c204351240000390c4cc9_0",
+      "price": 258.0,
+      "priceFormatted": "258 USD",
+      "totalDurationSeconds": 8340,
+      "bookingUrl": "https://kiwi.com/u/f7ctth",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T08:33:00",
+        "arrivalTime": "2026-11-15T10:52:00",
+        "durationSeconds": 8340,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T08:33:00",
+            "arrivalTime": "2026-11-15T10:52:00",
+            "durationSeconds": 8340,
+            "carrier": "AS",
+            "carrierName": "Alaska Airlines",
+            "flightNumber": "AS1327",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    },
+    {
+      "id": "0f9c20435124000054ed0ee8_0",
+      "price": 308.0,
+      "priceFormatted": "308 USD",
+      "totalDurationSeconds": 8100,
+      "bookingUrl": "https://kiwi.com/u/7rq28p8",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T12:13:00",
+        "arrivalTime": "2026-11-15T14:28:00",
+        "durationSeconds": 8100,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T12:13:00",
+            "arrivalTime": "2026-11-15T14:28:00",
+            "durationSeconds": 8100,
+            "carrier": "AS",
+            "carrierName": "Alaska Airlines",
+            "flightNumber": "AS656",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    },
+    {
+      "id": "0f9c2043512400006f65d1e6_0",
+      "price": 320.0,
+      "priceFormatted": "320 USD",
+      "totalDurationSeconds": 8040,
+      "bookingUrl": "https://kiwi.com/u/cd5kuhg",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T06:08:00",
+        "arrivalTime": "2026-11-15T08:22:00",
+        "durationSeconds": 8040,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T06:08:00",
+            "arrivalTime": "2026-11-15T08:22:00",
+            "durationSeconds": 8040,
+            "carrier": "AA",
+            "carrierName": "American Airlines",
+            "flightNumber": "AA7530",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    },
+    {
+      "id": "0f9c20435124000008048a49_0",
+      "price": 373.0,
+      "priceFormatted": "373 USD",
+      "totalDurationSeconds": 7980,
+      "bookingUrl": "https://kiwi.com/u/5gsw96",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T15:08:00",
+        "arrivalTime": "2026-11-15T17:21:00",
+        "durationSeconds": 7980,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T15:08:00",
+            "arrivalTime": "2026-11-15T17:21:00",
+            "durationSeconds": 7980,
+            "carrier": "AA",
+            "carrierName": "American Airlines",
+            "flightNumber": "AA9399",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    },
+    {
+      "id": "0f9c204351240000aa46e309_0",
+      "price": 373.0,
+      "priceFormatted": "373 USD",
+      "totalDurationSeconds": 8100,
+      "bookingUrl": "https://kiwi.com/u/rsz6mk",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T18:48:00",
+        "arrivalTime": "2026-11-15T21:03:00",
+        "durationSeconds": 8100,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T18:48:00",
+            "arrivalTime": "2026-11-15T21:03:00",
+            "durationSeconds": 8100,
+            "carrier": "AA",
+            "carrierName": "American Airlines",
+            "flightNumber": "AA7502",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    },
+    {
+      "id": "0f9c204351240000f1327eec_0",
+      "price": 518.0,
+      "priceFormatted": "518 USD",
+      "totalDurationSeconds": 7920,
+      "bookingUrl": "https://kiwi.com/u/zbju8dc",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T17:42:00",
+        "arrivalTime": "2026-11-15T19:54:00",
+        "durationSeconds": 7920,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T17:42:00",
+            "arrivalTime": "2026-11-15T19:54:00",
+            "durationSeconds": 7920,
+            "carrier": "AS",
+            "carrierName": "Alaska Airlines",
+            "flightNumber": "AS1340",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    },
+    {
+      "id": "0f9c20435124000072d5ac46_0",
+      "price": 598.0,
+      "priceFormatted": "598 USD",
+      "totalDurationSeconds": 7920,
+      "bookingUrl": "https://kiwi.com/u/shfq8g",
+      "imageId": "seattle_wa_us",
+      "baggage": {
+        "personalItem": 0,
+        "cabinBag": 1,
+        "checkedBag": 0
+      },
+      "outbound": {
+        "from": "SFO",
+        "to": "SEA",
+        "departureTime": "2026-11-15T17:42:00",
+        "arrivalTime": "2026-11-15T19:54:00",
+        "durationSeconds": 7920,
+        "stops": 0,
+        "route": [
+          "SFO",
+          "SEA"
+        ],
+        "cabinClass": "Economy",
+        "segments": [
+          {
+            "from": "SFO",
+            "to": "SEA",
+            "fromCity": "San Francisco",
+            "toCity": "Seattle",
+            "fromName": "San Francisco International",
+            "toName": "Seattle–Tacoma International",
+            "fromCountry": "United States",
+            "toCountry": "United States",
+            "departureTime": "2026-11-15T17:42:00",
+            "arrivalTime": "2026-11-15T19:54:00",
+            "durationSeconds": 7920,
+            "carrier": "AA",
+            "carrierName": "American Airlines",
+            "flightNumber": "AA7579",
+            "cabinClass": "Economy"
+          }
+        ]
+      },
+      "inbound": null
+    }
+  ],
+  "searchTimeMs": 2383,
+  "error": null
+}
+
+{"query":"SFO → SEA on 15/11/2026, 1 adult [≤0 stops/sector]","currency":"USD","passengers":{"adults":1,"children":0,"infants":0},"resultsCount":12,"itineraries":[{"id":"0f9c204351240000ebd40c5b_0","price":258.0,"priceFormatted":"258 USD","totalDurationSeconds":7980,"bookingUrl":"https://kiwi.com/u/hqtj9x","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T15:08:00","arrivalTime":"2026-11-15T17:21:00","durationSeconds":7980,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T15:08:00","arrivalTime":"2026-11-15T17:21:00","durationSeconds":7980,"carrier":"AS","carrierName":"Alaska Airlines","flightNumber":"AS630","cabinClass":"Economy"}]},"inbound":null},{"id":"0f9c2043512400004282cd5b_0","price":258.0,"priceFormatted":"258 USD","totalDurationSeconds":8040,"bookingUrl":"https://kiwi.com/u/6v4yvhb","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T06:08:00","arrivalTime":"2026-11-15T08:22:00","durationSeconds":8040,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T06:08:00","arrivalTime":"2026-11-15T08:22:00","durationSeconds":8040,"carrier":"AS","carrierName":"Alaska Airlines","flightNumber":"AS68","cabinClass":"Economy"}]},"inbound":null},{"id":"0f9c204351240000f2cf3d1a_0","price":258.0,"priceFormatted":"258 USD","totalDurationSeconds":8100,"bookingUrl":"https://kiwi.com/u/nw9r2qu","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T20:58:00","arrivalTime":"2026-11-15T23:13:00","durationSeconds":8100,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T20:58:00","arrivalTime":"2026-11-15T23:13:00","durationSeconds":8100,"carrier":"AS","carrierName":"Alaska Airlines","flightNumber":"AS620","cabinClass":"Economy"}]},"inbound":null},{"id":"0f9c204351240000647a6a1e_0","price":258.0,"priceFormatted":"258 USD","totalDurationSeconds":8100,"bookingUrl":"https://kiwi.com/u/sg5x9vu","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T18:48:00","arrivalTime":"2026-11-15T21:03:00","durationSeconds":8100,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T18:48:00","arrivalTime":"2026-11-15T21:03:00","durationSeconds":8100,"carrier":"AS","carrierName":"Alaska Airlines","flightNumber":"AS591","cabinClass":"Economy"}]},"inbound":null},{"id":"0f9c2043512400000a666bc9_0","price":258.0,"priceFormatted":"258 USD","totalDurationSeconds":8220,"bookingUrl":"https://kiwi.com/u/bnfhby","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T10:39:00","arrivalTime":"2026-11-15T12:56:00","durationSeconds":8220,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T10:39:00","arrivalTime":"2026-11-15T12:56:00","durationSeconds":8220,"carrier":"AS","carrierName":"Alaska Airlines","flightNumber":"AS580","cabinClass":"Economy"}]},"inbound":null},{"id":"0f9c204351240000390c4cc9_0","price":258.0,"priceFormatted":"258 USD","totalDurationSeconds":8340,"bookingUrl":"https://kiwi.com/u/f7ctth","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T08:33:00","arrivalTime":"2026-11-15T10:52:00","durationSeconds":8340,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T08:33:00","arrivalTime":"2026-11-15T10:52:00","durationSeconds":8340,"carrier":"AS","carrierName":"Alaska Airlines","flightNumber":"AS1327","cabinClass":"Economy"}]},"inbound":null},{"id":"0f9c20435124000054ed0ee8_0","price":308.0,"priceFormatted":"308 USD","totalDurationSeconds":8100,"bookingUrl":"https://kiwi.com/u/7rq28p8","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T12:13:00","arrivalTime":"2026-11-15T14:28:00","durationSeconds":8100,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T12:13:00","arrivalTime":"2026-11-15T14:28:00","durationSeconds":8100,"carrier":"AS","carrierName":"Alaska Airlines","flightNumber":"AS656","cabinClass":"Economy"}]},"inbound":null},{"id":"0f9c2043512400006f65d1e6_0","price":320.0,"priceFormatted":"320 USD","totalDurationSeconds":8040,"bookingUrl":"https://kiwi.com/u/cd5kuhg","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T06:08:00","arrivalTime":"2026-11-15T08:22:00","durationSeconds":8040,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T06:08:00","arrivalTime":"2026-11-15T08:22:00","durationSeconds":8040,"carrier":"AA","carrierName":"American Airlines","flightNumber":"AA7530","cabinClass":"Economy"}]},"inbound":null},{"id":"0f9c20435124000008048a49_0","price":373.0,"priceFormatted":"373 USD","totalDurationSeconds":7980,"bookingUrl":"https://kiwi.com/u/5gsw96","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T15:08:00","arrivalTime":"2026-11-15T17:21:00","durationSeconds":7980,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T15:08:00","arrivalTime":"2026-11-15T17:21:00","durationSeconds":7980,"carrier":"AA","carrierName":"American Airlines","flightNumber":"AA9399","cabinClass":"Economy"}]},"inbound":null},{"id":"0f9c204351240000aa46e309_0","price":373.0,"priceFormatted":"373 USD","totalDurationSeconds":8100,"bookingUrl":"https://kiwi.com/u/rsz6mk","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T18:48:00","arrivalTime":"2026-11-15T21:03:00","durationSeconds":8100,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T18:48:00","arrivalTime":"2026-11-15T21:03:00","durationSeconds":8100,"carrier":"AA","carrierName":"American Airlines","flightNumber":"AA7502","cabinClass":"Economy"}]},"inbound":null},{"id":"0f9c204351240000f1327eec_0","price":518.0,"priceFormatted":"518 USD","totalDurationSeconds":7920,"bookingUrl":"https://kiwi.com/u/zbju8dc","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T17:42:00","arrivalTime":"2026-11-15T19:54:00","durationSeconds":7920,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T17:42:00","arrivalTime":"2026-11-15T19:54:00","durationSeconds":7920,"carrier":"AS","carrierName":"Alaska Airlines","flightNumber":"AS1340","cabinClass":"Economy"}]},"inbound":null},{"id":"0f9c20435124000072d5ac46_0","price":598.0,"priceFormatted":"598 USD","totalDurationSeconds":7920,"bookingUrl":"https://kiwi.com/u/shfq8g","imageId":"seattle_wa_us","baggage":{"personalItem":0,"cabinBag":1,"checkedBag":0},"outbound":{"from":"SFO","to":"SEA","departureTime":"2026-11-15T17:42:00","arrivalTime":"2026-11-15T19:54:00","durationSeconds":7920,"stops":0,"route":["SFO","SEA"],"cabinClass":"Economy","segments":[{"from":"SFO","to":"SEA","fromCity":"San Francisco","toCity":"Seattle","fromName":"San Francisco International","toName":"Seattle–Tacoma International","fromCountry":"United States","toCountry":"United States","departureTime":"2026-11-15T17:42:00","arrivalTime":"2026-11-15T19:54:00","durationSeconds":7920,"carrier":"AA","carrierName":"American Airlines","flightNumber":"AA7579","cabinClass":"Economy"}]},"inbound":null}],"searchTimeMs":2383,"error":null}

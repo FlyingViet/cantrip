@@ -42,6 +42,8 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var placeCard: PlaceCard?
     /// Forecast card for this reply's `weather` block (Open-Meteo data, or why there's none).
     var weatherCard: WeatherCard?
+    /// A card from a tool result (built by Cantrip, or a model's `card` block verified against it).
+    var cards: [CardDocument] = []
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
     /// `freshStart`: the Start Fresh divider; turns above it are never sent to the model.
     enum Role: String, Codable { case user, assistant, error, handoff, freshStart }
@@ -52,7 +54,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
-        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard
+        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards
     }
 }
 
@@ -60,8 +62,17 @@ extension ChatMessage {
     /// Link previews to show: none for links this reply's map card already covers, and none for
     /// weather sites under a weather card.
     var visibleLinkPreviews: [LinkPreviewCard] {
-        WeatherLinkFilter.visible(PlaceLinkFilter.visible(linkPreviews, placeCard: placeCard, text: text),
-                                  weatherCard: weatherCard)
+        CardComposer.visibleLinks(PlaceLinkFilter.visible(linkPreviews, placeCard: placeCard, text: text), main: mainCard)
+    }
+
+    /// The reply's one main card, from whichever source it has.
+    var mainCard: CardDocument? {
+        CardComposer.mainCard(weather: weatherCard, places: placeCard, cards: cards)
+    }
+
+    /// Every card under the reply, as generic blocks: the main card, then link cards.
+    func cardDocuments(linkPreviews showsLinks: Bool) -> [CardDocument] {
+        CardComposer.documents(main: mainCard, links: showsLinks ? visibleLinkPreviews : [])
     }
 
     /// Appends streamed reasoning. Reasoning after a new tool call or answer text is a new block.
@@ -129,6 +140,7 @@ extension ChatMessage {
         linkPreviews = (try? container.decodeIfPresent([LinkPreviewCard].self, forKey: .linkPreviews)) ?? []
         placeCard = try? container.decodeIfPresent(PlaceCard.self, forKey: .placeCard)
         weatherCard = try? container.decodeIfPresent(WeatherCard.self, forKey: .weatherCard)
+        cards = (try? container.decodeIfPresent([CardDocument].self, forKey: .cards)) ?? []
         if (try? container.decodeIfPresent(Bool.self, forKey: .freshStart)) == true {
             role = .freshStart
         } else {
@@ -165,6 +177,7 @@ extension ChatMessage {
         if !linkPreviews.isEmpty { try container.encode(linkPreviews, forKey: .linkPreviews) }
         try container.encodeIfPresent(placeCard, forKey: .placeCard)
         try container.encodeIfPresent(weatherCard, forKey: .weatherCard)
+        if !cards.isEmpty { try container.encode(cards, forKey: .cards) }
     }
 }
 
@@ -3889,16 +3902,30 @@ final class ChatSession: ObservableObject {
         var text = messages[idx].text
         let proposal = PlaceCardResolver.extractProposal(from: &text)
         let weather = WeatherBlock.extract(from: &text)
+        // One main card: a places or weather block, else a model's card verified against the tool
+        // it cites, else a card Cantrip builds from a tool result. Anything else stays as text.
+        var proposals = ModelCards.extract(from: &text)
+        var toolCard: CardDocument?
+        if proposal == nil, weather == nil {
+            if let last = proposals.popLast() {
+                toolCard = ModelCards.verified(last, activities: messages[idx].activities)
+                if toolCard == nil { proposals.append(last) }
+            }
+            if toolCard == nil { toolCard = ToolCards.card(from: messages[idx].activities) }
+        }
+        let unshown = proposals.map(\.card.plainText).filter { !$0.isEmpty }
+        if !unshown.isEmpty { text = ([text] + unshown).filter { !$0.isEmpty }.joined(separator: "\n\n") }
         if text != messages[idx].text {
             messages[idx].text = text
         }
+        if let toolCard { messages[idx].cards = [toolCard] }
         // Every link, not just the first three: links the map card covers are dropped
         // before picking which ones get a preview, and weather sites under a weather card.
-        let candidateLinks = WeatherLinkFilter.uncovered(
+        let candidateLinks = CardComposer.uncovered(WeatherLinkFilter.uncovered(
             settings.linkPreviewsEnabled ? LinkPreviewExtractor.extractLinks(from: text, limit: 64) : [],
             hasWeatherCard: weather != nil
-        )
-        guard proposal != nil || weather != nil || !candidateLinks.isEmpty else { return false }
+        ), main: toolCard)
+        guard proposal != nil || weather != nil || !candidateLinks.isEmpty else { return toolCard != nil }
         let weatherContext = weather != nil ? weatherContext() : nil
         Task { @MainActor [weak self] in
             async let forecast = WeatherCardResolver.resolve(weather, context: weatherContext)
@@ -4024,6 +4051,7 @@ final class ChatSession: ObservableObject {
            messages[idx].delegations.isEmpty,
            messages[idx].placeCard == nil,
            messages[idx].weatherCard == nil,
+           messages[idx].cards.isEmpty,
            messages[idx].linkPreviews.isEmpty,
            !hasPendingRichCard {
             messages.remove(at: idx)

@@ -116,13 +116,16 @@ enum CantripHomeProtocol {
         if visible.range(of: "weather", options: .caseInsensitive) != nil {
             _ = WeatherBlock.extract(from: &visible)
         }
+        if visible.range(of: "card", options: .caseInsensitive) != nil {
+            _ = ModelCards.extract(from: &visible)
+        }
         return streaming ? trimmingPendingFence(trimmingOpenCardBlock(visible)) : visible
     }
 
     /// While streaming, a `places` or `weather` block whose closing fence hasn't arrived yet.
     private static func trimmingOpenCardBlock(_ text: String) -> String {
         guard let regex = try? NSRegularExpression(
-            pattern: #"(?:^|\n)[ \t]*```[ \t]*(?:json[ \t]+)?(?:cantrip-)?(?:places|weather)[ \t]*\r?\n"#,
+            pattern: #"(?:^|\n)[ \t]*```[ \t]*(?:json[ \t]+)?(?:cantrip-)?(?:places|weather|card)[ \t]*\r?\n"#,
             options: [.caseInsensitive]
         ), let open = regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)).last,
               let range = Range(open.range, in: text),
@@ -148,7 +151,8 @@ enum CantripHomeProtocol {
         if tag.hasPrefix("json") { tag = tag.dropFirst(4).drop { $0 == " " || $0 == "\t" } }
         guard "json".hasPrefix(info) || "cantrip".hasPrefix(tag) || tag.hasPrefix("cantrip")
                 || "places".hasPrefix(tag) || tag.hasPrefix("places")
-                || "weather".hasPrefix(tag) || tag.hasPrefix("weather") else {
+                || "weather".hasPrefix(tag) || tag.hasPrefix("weather")
+                || "card".hasPrefix(tag) || tag.hasPrefix("card") else {
             return text
         }
         return String(text[..<start]).replacingOccurrences(

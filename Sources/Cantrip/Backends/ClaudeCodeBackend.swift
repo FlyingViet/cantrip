@@ -732,7 +732,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         if let sessionID { args += ["--resume", sessionID] }
         // Claude Code has no per-session files folder, so images go to Cantrip's output folder.
         var guidance = RemoteGeneratedImages.agentGuidance(sessionFilesFolder: false) + "\n\n" + ReplyVisibility.guidance
-            + "\n\n" + WeatherCardResolver.agentGuidance(command: TabInsight.command)
+            + "\n\n" + CardComposer.richCardGuidance(command: TabInsight.command)
         if !readOnly {
             guidance += "\n\n" + Self.subagentGuidance
             guidance += "\n\n" + SimulatorPool.agentGuidance(command: TabInsight.command)

@@ -155,7 +155,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
 
     static func systemGuidance(allowSubagents: Bool) -> String {
         let base = previewGuidance + "\n\n" + ReplyVisibility.guidance + "\n\n"
-            + WeatherCardResolver.agentGuidance(command: TabInsight.command) + "\n\n"
+            + CardComposer.richCardGuidance(command: TabInsight.command) + "\n\n"
             + SimulatorPool.agentGuidance(command: TabInsight.command)
         return allowSubagents ? base + "\n\n" + subagentGuidance : base
     }
