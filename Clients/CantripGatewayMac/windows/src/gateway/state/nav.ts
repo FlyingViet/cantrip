@@ -1,7 +1,8 @@
 // Window navigation (MacHomeNavigation.swift): Home's sections, the open project tab, and sheets.
-import { effect, signal } from "@preact/signals";
+import { batch, effect, signal } from "@preact/signals";
 import type { DeliveryMode, RemoteSessionSummary } from "../api/types";
 import { toast } from "../ui/kit";
+import { closeBackgroundLog, openBackgroundLog, shownSessionID } from "./backgroundLog";
 import * as remote from "./remote";
 
 export type Section = "chat" | "tasks" | "artifacts";
@@ -53,6 +54,8 @@ function persisted<T>(key: string, initial: T) {
 export const section = signal<Section>("chat");
 /** The project tab shown in the detail pane; null shows Home's section. */
 export const openTabID = signal<string | null>(null);
+/** Home's background log (Background › Full Log), shown read-only in the detail pane; never a tab, as the Mac never lists it. */
+export const logID = signal<string | null>(null);
 export const sheet = signal<SheetState | null>(null);
 export const sidebarHidden = persisted("gateway.sidebarHidden", false);
 /** The open tab's terminal pane under its conversation (Ctrl+`). */
@@ -69,10 +72,10 @@ export const composerFocusRequest = signal(0);
 /** The question a chat reply answers, when the user picked one (else the first). */
 export const chosenQuestion = signal<{ sessionID: string; requestID: string } | null>(null);
 
-// The chat shows the open tab, else Home; Home's tasks/artifacts refresh only while Home shows.
+// The chat shows the background log or the open tab, else Home; Home's tasks/artifacts refresh only while Home shows.
 effect(() => {
-  const target = openTabID.value ?? remote.homeID.value ?? null;
-  remote.setHomeDataWanted(openTabID.value === null);
+  const target = shownSessionID(logID.value, openTabID.value, remote.homeID.value ?? null);
+  remote.setHomeDataWanted(openTabID.value === null && logID.value === null);
   remote.select(target);
 });
 
@@ -100,6 +103,7 @@ export function closeAll(): void {
 
 export function openTab(id: string): void {
   closeAll();
+  logID.value = null;
   if (openTabID.value !== id) deliveryMode.value = "auto";
   openTabID.value = id;
   composerFocusRequest.value++;
@@ -107,6 +111,7 @@ export function openTab(id: string): void {
 
 export function showHome(target?: Section): void {
   if (target) section.value = target;
+  logID.value = null;
   if (openTabID.value !== null) {
     openTabID.value = null;
     deliveryMode.value = "auto";
@@ -122,6 +127,20 @@ export function openChat(prefill?: string): void {
 export function showBackground(focusSessionID?: string): void {
   showHome();
   sheet.value = { kind: "background", focusSessionID };
+}
+
+/** Whether the log's transcript shows a focus ring when it takes focus: only when Full Log was pressed from the keyboard. */
+export const logFocus = { visible: false };
+
+/** Background › Full Log: the background runs' reports, from the Mac's background log session. */
+export function openFullLog(fromKeyboard = false): boolean {
+  logFocus.visible = fromKeyboard;
+  return batch(() => openBackgroundLog({ sheet, openTabID, logID }, remote.homeBackground.peek()));
+}
+
+/** Back from the log: to the Background sheet it came from, or to Home. */
+export function closeFullLog(toBackground = true): void {
+  batch(() => closeBackgroundLog({ sheet, openTabID, logID }, toBackground));
 }
 
 export async function createTab(): Promise<void> {

@@ -193,6 +193,7 @@ button.reasoning-step:hover { background: rgba(255, 255, 255, 0.09); }
 .input-bar { flex: none; padding: 10px 16px 14px; }
 .input-column { max-width: var(--readable); margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
 .paused-bar { display: flex; align-items: center; gap: 12px; padding: 6px 4px; }
+.log-footer { display: flex; align-items: center; gap: 6px; margin: 0; padding: 2px 4px; }
 .work-status { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
 .composer { position: relative; background: #1c1c1e; border: 0.5px solid rgba(255, 255, 255, 0.08); border-radius: 12px; display: flex; flex-direction: column; }
 .composer:focus-within { border-color: rgba(255, 255, 255, 0.16); }

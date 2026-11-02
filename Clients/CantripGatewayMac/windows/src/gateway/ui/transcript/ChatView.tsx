@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import type { RemoteMessage, RemoteSessionSummary, SendMessageRequest } from "../../api/types";
 import { bridge, shortcut } from "../../bridge";
 import { formatBytes, liveBackgroundSubagents, liveForegroundSubagents } from "../../state/format";
+import { readOnlySession } from "../../state/backgroundLog";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
 import {
@@ -45,8 +46,10 @@ interface Draft {
 const drafts = new Map<string, Draft>();
 const emptyDraft = (): Draft => ({ text: "", mentions: [], images: [], files: [], video: null });
 
-export function ChatView(props: { isTab: boolean }): JSX.Element {
-  const session = remote.selectedSession.value;
+/** `log`: Cantrip Home's background log (Background › Full Log), read-only: no composer, terminal or drops. */
+export function ChatView(props: { isTab: boolean; log?: boolean }): JSX.Element {
+  const shown = remote.selectedSession.value;
+  const session = useMemo(() => (props.log && shown ? readOnlySession(shown) : shown), [shown, props.log]);
   const detail = remote.selectedDetail.value;
   const [height, setHeight] = useState(700);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -61,11 +64,11 @@ export function ChatView(props: { isTab: boolean }): JSX.Element {
     return () => observer.disconnect();
   }, []);
 
-  const pinned = useMemo(() => liveForegroundSubagents(detail?.messages ?? []), [detail]);
+  const pinned = useMemo(() => (props.log ? [] : liveForegroundSubagents(detail?.messages ?? [])), [detail, props.log]);
   return (
     <div ref={rootRef} class={`chat${dropping ? " dropping" : ""}`}
       onDragOver={(event) => {
-        if (!event.dataTransfer?.types.includes("Files")) return;
+        if (props.log || !event.dataTransfer?.types.includes("Files")) return;
         event.preventDefault();
         setDropping(true);
       }}
@@ -77,12 +80,12 @@ export function ChatView(props: { isTab: boolean }): JSX.Element {
         void composer.current?.addFiles(Array.from(event.dataTransfer.files));
       }}>
       <Notices />
-      <Transcript session={session} messages={detail?.messages ?? []} isTab={props.isTab} detailLoaded={detail !== null} />
+      <Transcript session={session} messages={detail?.messages ?? []} isTab={props.isTab} log={props.log} detailLoaded={detail !== null} />
       {session && pinned.length ? (
         <div class="pinned-column"><PinnedSubagents sessionID={session.id} subagents={pinned} maxHeight={Math.max(120, height * 0.35)} /></div>
       ) : null}
-      <InputBar session={session} isTab={props.isTab} height={height} handle={composer} />
-      {nav.terminalOpen.value && session ? <TerminalPane session={session} /> : null}
+      {props.log ? <LogFooter /> : <InputBar session={session} isTab={props.isTab} height={height} handle={composer} />}
+      {nav.terminalOpen.value && session && !props.log ? <TerminalPane session={session} /> : null}
     </div>
   );
 }
@@ -113,7 +116,21 @@ function Notices(): JSX.Element | null {
 
 // MARK: Transcript
 
-function Transcript(props: { session: RemoteSessionSummary | null; messages: RemoteMessage[]; isTab: boolean; detailLoaded: boolean }): JSX.Element {
+/** Under the log instead of a composer: what it is (Cantrip writes it; nothing is sent from here). */
+function LogFooter(): JSX.Element {
+  return (
+    <div class="input-bar">
+      <div class="input-column">
+        <p class="log-footer caption muted">
+          <Icon name="doc.text" size={14} />
+          Cantrip Home's background log: each scheduled task and incident run's report. Read-only.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function Transcript(props: { session: RemoteSessionSummary | null; messages: RemoteMessage[]; isTab: boolean; log?: boolean; detailLoaded: boolean }): JSX.Element {
   const { session, messages } = props;
   const scroller = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
@@ -133,6 +150,24 @@ function Transcript(props: { session: RemoteSessionSummary | null; messages: Rem
     }
     return null;
   }, [messages]);
+
+  // Full Log takes focus from the closing Background sheet, so a screen reader starts in the log. The window behind
+  // the sheet stays inert (unfocusable) until the sheet goes, so keep trying for a moment unless focus moved on.
+  useEffect(() => {
+    if (!props.log) return;
+    const started = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = () => {
+      const node = scroller.current;
+      const active = document.activeElement;
+      const free = !active || active === document.body || active.closest(".sheet-backdrop") !== null;
+      if (!node || active === node || !free) return;
+      node.focus({ preventScroll: true, focusVisible: nav.logFocus.visible });
+      if (document.activeElement !== node && Date.now() - started < 2000) timer = setTimeout(attempt, 50);
+    };
+    timer = setTimeout(attempt, 0);
+    return () => clearTimeout(timer);
+  }, []);
 
   // A new session opens at its latest message.
   useLayoutEffect(() => {
@@ -194,9 +229,10 @@ function Transcript(props: { session: RemoteSessionSummary | null; messages: Rem
   };
 
   const lane = props.isTab ? "tab" : "home";
+  const label = props.log ? "Background log" : "Conversation";
   return (
     <div class="transcript-wrap">
-      <div ref={scroller} class="transcript" onScroll={onScroll} tabIndex={-1} aria-label="Conversation">
+      <div ref={scroller} class="transcript" onScroll={onScroll} tabIndex={-1} aria-label={label}>
         <div class="transcript-column">
           {session?.supportsPagedHistory ? (
             <div class="history-row" role="status">
@@ -216,12 +252,12 @@ function Transcript(props: { session: RemoteSessionSummary | null; messages: Rem
             </div>
           ) : null}
           {props.isTab && session?.parentID && session.child ? <ChildBanner parentID={session.parentID} child={session.child} /> : null}
-          {!messages.length ? <EmptyState isTab={props.isTab} loaded={props.detailLoaded} /> : null}
+          {!messages.length ? <EmptyState isTab={props.isTab} log={props.log} loaded={props.detailLoaded} /> : null}
           {session ? messages.map((message) => (
             <MessageRow key={message.id} message={message} session={session} lane={lane}
               streaming={Boolean(session.isStreaming && message.id === lastAssistantID)} reported={reported} threadLine={lines.get(message.id)} />
           )) : null}
-          {session ? <InputTranscript session={session} /> : null}
+          {session && !props.log ? <InputTranscript session={session} /> : null}
         </div>
       </div>
       {!atBottom ? (
@@ -235,7 +271,7 @@ function Transcript(props: { session: RemoteSessionSummary | null; messages: Rem
   );
 }
 
-function EmptyState(props: { isTab: boolean; loaded: boolean }): JSX.Element {
+function EmptyState(props: { isTab: boolean; log?: boolean; loaded: boolean }): JSX.Element {
   const session = remote.selectedSession.value;
   const connection = remote.connection.value;
   if (!remote.listed.value) {
@@ -250,6 +286,15 @@ function EmptyState(props: { isTab: boolean; loaded: boolean }): JSX.Element {
             <button type="button" class="btn" onClick={() => bridge.openSettings()}>Connection Settings…</button>
           </div>
         ) : <Spinner />}
+      </div>
+    );
+  }
+  if (props.log) {
+    return (
+      <div class="empty-state">
+        <Icon name="doc.text" size={56} />
+        <div class="title3">{props.loaded ? "No reports yet" : "Opening the background log…"}</div>
+        {props.loaded ? <p>Finished scheduled task and incident runs leave their reports here.</p> : <Spinner />}
       </div>
     );
   }
