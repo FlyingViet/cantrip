@@ -3545,6 +3545,7 @@ private extension RemoteControlServer {
     .link-card.compact{flex-direction:row;align-items:center;gap:12px;padding:10px 14px}.link-card.compact .link-card-body{padding:0;min-width:0;flex:1}
     .link-card-icon{display:grid;place-items:center;width:36px;height:36px;border-radius:10px;background:var(--surface-2);color:var(--secondary);font-size:16px;flex:none}
     .link-card-icon svg{width:18px;height:18px}
+    .workspace-cards,.workspace-run{margin-bottom:14px}.workspace-run{display:grid;gap:4px}.record-cards{padding:0 12px}.record-cards:empty{display:none}.run-list .cd-card,.run-list .place-card{max-width:100%}
     .cd-card{margin-top:10px;max-width:760px;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:linear-gradient(180deg,#21304a 0%,#1c232d 60%);color:#f3f4f6}.cd-card.has-map{background:#1c232d}
     .cd-card>.cd-strip,.cd-card>.cd-chart,.cd-card>.cd-list,.cd-card>.cd-kv,.cd-card>.place-card,.cd-card>.cd-foot{border-top:1px solid rgba(255,255,255,.1)}.cd-card>:first-child{border-top:0}
     .cd-card .place-card{margin-top:0;max-width:none;border-left:0;border-right:0;border-bottom:0;border-radius:0}.place-card.no-legend{min-height:260px}
@@ -5339,14 +5340,14 @@ private extension RemoteControlServer {
       return value}
     function badgeTone(value){const text=value.trim().toLowerCase();
       return text.includes("reject")||text.includes("declin")?"rejected":text.includes("offer")?"offer":text==="applied"||text==="application received"?"applied":""}
-    function openTasks(){closeTasks();tasksState={token,taskID:null,tasks:[],revision:null,loaded:false,failed:false,loading:false,openRecords:new Set(),timer:setInterval(()=>loadTasks(),10000)};
+    function openTasks(){closeTasks();tasksState={token,taskID:null,tasks:[],workspaceCards:{},recordCards:new Map(),revision:null,loaded:false,failed:false,loading:false,openRecords:new Set(),timer:setInterval(()=>{loadTasks();refreshOpenRecordCards()},10000)};
       $("tasksSearch").value="";setText($("tasksError"),"");renderTasks();$("tasksPanel").showModal();loadTasks()}
     function closeTasks(){if(tasksState)clearInterval(tasksState.timer);tasksState=null}
     async function loadTasks(){const state=tasksState;if(!state||state.loading)return;state.loading=true;
       try{const data=await api("/api/v1/home/tasks"+(state.loaded&&state.revision?`?revision=${encodeURIComponent(state.revision)}`:""));if(state!==tasksState)return;state.failed=false;
         if(data.unchanged){setText($("tasksError"),"");return}
         setText($("tasksError"),data.error||"");
-        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.tasks=data.tasks||[];state.loaded=true;renderTasks()}}
+        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.tasks=data.tasks||[];state.workspaceCards=data.workspaceCards||{};state.loaded=true;renderTasks()}}
       catch(error){if(state===tasksState){setText($("tasksError"),`Couldn't load tasks: ${error.message}`);if(!state.loaded){state.loaded=true;state.failed=true;renderTasks()}}}
       finally{state.loading=false}}
     // Polling re-renders in place: scroll, open records, collapsed sections and the focused row survive.
@@ -5377,7 +5378,8 @@ private extension RemoteControlServer {
       if(task.enabled&&task.nextRunAt!==null&&task.nextRunAt!==undefined)fact("Next run",homeTime(task.nextRunAt));
       view.append(facts,homeNode("h3","","Recent runs"));
       if(!task.runs?.length)view.append(homeNode("p","muted","No runs yet."));
-      else{const runs=homeNode("ul","run-list");for(const run of task.runs.slice(0,5)){const item=homeNode("li");item.append(homeNode("span","task-meta",`${homeTime(run.finishedAt)} · ${run.status}${run.model?` · ${run.model}`:""}`),homeNode("span","run-summary",run.summary||"No summary"));runs.append(item)}view.append(runs)}
+      else{const runs=homeNode("ul","run-list");for(const run of task.runs.slice(0,5)){const item=homeNode("li");item.append(homeNode("span","task-meta",`${homeTime(run.finishedAt)} · ${run.status}${run.model?` · ${run.model}`:""}`),homeNode("span","run-summary",run.summary||"No summary"));
+        if(Array.isArray(run.cards)&&run.cards.length)appendCards(item,run.cards,`run:${run.id}`);runs.append(item)}view.append(runs)}
       const prompt=homeNode("details","disclosure");prompt.append(homeNode("summary","","Instructions"),homeNode("p","run-summary",task.prompt));view.append(prompt);
       return view}
     function workspaceView(task){const workspace=task.workspace,query=$("tasksSearch").value.trim().toLowerCase(),searching=Boolean(query);
@@ -5385,6 +5387,10 @@ private extension RemoteControlServer {
       const records=searching?workspace.records.filter(record=>Object.values(record.values).some(value=>String(value).toLowerCase().includes(query))):workspace.records;
       setText($("tasksStatus"),searching?`${records.length} ${homeNoun(workspace,records.length)} found`:"");
       const view=homeNode("div","workspace-records"),sections=workspaceSections(workspace,records,searching);
+      // Cards built from the records (bills due this week), and the latest run's cards, above the list.
+      if(!searching){const cards=tasksState?.workspaceCards?.[task.id]||[],run=task.runs?.[0];
+        if(cards.length){const box=homeNode("div","workspace-cards");appendCards(box,cards,`workspace:${task.id}`);view.append(box)}
+        if(Array.isArray(run?.cards)&&run.cards.length){const box=homeNode("section","workspace-run");box.append(homeNode("span","task-meta",`Latest run · ${homeTime(run.finishedAt)}`),homeNode("span","run-summary",run.summary||""));appendCards(box,run.cards,`run:${run.id}`);view.append(box)}}
       if(searching&&!records.length)view.append(homeNode("p","muted tasks-empty",`No ${homeNoun(workspace,2)} match.`));
       if(!sections){if(records.length)view.append(recordList(task,records));return view}
       const remembered=loadWorkspaceGroups(task.id);
@@ -5405,8 +5411,22 @@ private extension RemoteControlServer {
         if(subtitles.length)summary.append(homeNode("span","record-subtitle",subtitles.join(" · ")));
         const dateField=layout.dateField&&fields.get(layout.dateField),date=dateField&&record.values[dateField.key];
         if(date)summary.append(homeNode("span","record-date",`${dateField.label}: ${formatHomeValue(dateField,date)}`));
-        details.append(summary,recordDetails(workspace,record,fields));item.append(details);list.append(item)}
+        const cards=recordCardsNode(task,record);details.append(summary,...(cards?[cards]:[]),recordDetails(workspace,record,fields));item.append(details);list.append(item)
+        if(cards){if(details.open)loadRecordCards(task,record,cards);details.addEventListener("toggle",()=>{if(details.open)loadRecordCards(task,record,cards)})}}
       return list}
+    // A record's weather and map cards: fetched while its detail is open, again every refreshAfter seconds.
+    function hasRecordCards(workspace){return (workspace?.cards||[]).some(spec=>spec.kind==="weather"||spec.kind==="map")}
+    function recordCardsNode(task,record){if(!hasRecordCards(task.workspace))return null;const box=homeNode("div","record-cards");box.dataset.record=record.id;
+      const cached=tasksState?.recordCards.get(record.id);if(cached?.cards?.length)appendCards(box,cached.cards,`record:${record.id}`);return box}
+    async function loadRecordCards(task,record,box){const state=tasksState;if(!state)return;const entry=state.recordCards.get(record.id);
+      if(entry&&(entry.loading||Date.now()-entry.at<(entry.refreshAfter||300)*1000))return;
+      state.recordCards.set(record.id,{cards:entry?.cards||[],at:entry?.at||0,refreshAfter:entry?.refreshAfter||300,loading:true});
+      try{const data=await api(`/api/v1/home/tasks/${encodeURIComponent(task.id)}/records/${encodeURIComponent(record.id)}/cards`);if(state!==tasksState)return;
+        const cards=Array.isArray(data.cards)?data.cards:[];state.recordCards.set(record.id,{cards,at:Date.now(),refreshAfter:Number(data.refreshAfter)||300,loading:false});
+        const live=box.isConnected?box:document.querySelector(`#tasksBody .record-cards[data-record="${record.id}"]`);if(live){live.replaceChildren();appendCards(live,cards,`record:${record.id}`)}}
+      catch{if(state===tasksState)state.recordCards.set(record.id,{cards:entry?.cards||[],at:Date.now(),refreshAfter:60,loading:false})}}
+    function refreshOpenRecordCards(){const state=tasksState,task=state?.tasks.find(item=>item.id===state.taskID);if(!task?.workspace)return;
+      for(const box of document.querySelectorAll("#tasksBody details.record[open] .record-cards")){const record=task.workspace.records.find(item=>item.id===box.dataset.record);if(record)loadRecordCards(task,record,box)}}
     function recordDetails(workspace,record,fields){const body=homeNode("div","record-details");
       const sections=workspace.detailSections.length?workspace.detailSections:[{title:null,fields:workspace.fields.map(field=>field.key)}];
       for(const section of sections){if(section.title)body.append(homeNode("h3","",section.title));const list=homeNode("dl");
