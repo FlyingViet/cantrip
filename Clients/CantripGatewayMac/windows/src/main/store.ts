@@ -139,6 +139,15 @@ export class SettingsStore {
     return { id: entry.id, server: config, token: validateToken(token) };
   }
 
+  /** Replaces a saved Mac's token, keeping its addresses and ID (the Mac replaced its pairing token). */
+  setToken(id: string, token: string): void {
+    const stored = this.readFile();
+    const entry = stored.servers.find((item) => item.id === id);
+    if (!entry) throw new Error("That saved Mac no longer exists.");
+    entry.token = this.encrypt(token);
+    this.writeFile(stored);
+  }
+
   select(id: string | null): void {
     const stored = this.readFile();
     if (id !== null && !stored.servers.some((item) => item.id === id)) throw new Error("That saved Mac no longer exists.");

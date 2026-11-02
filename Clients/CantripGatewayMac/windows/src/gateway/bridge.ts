@@ -32,6 +32,8 @@ interface Bridge {
   openSettings(): void;
   openExternal(url: string): void;
   showLog(): void;
+  /** Tells an open Settings window whether the Mac serves its settings and their revision (from each tab-list poll). */
+  reportSettings?(info: { supportsSettings: boolean; settingsRevision: string }): void;
   /** Absent outside the app (browser development): the page downloads the older way. */
   saveArtifact?(request: { id: string; folder: boolean; name: string }): Promise<ArtifactSaveResult>;
   onStatus(callback: (status: HostStatus) => void): void;

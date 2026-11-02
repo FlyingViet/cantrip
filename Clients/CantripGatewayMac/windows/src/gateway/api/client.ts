@@ -4,7 +4,8 @@ import { bridge } from "../bridge";
 import type { BrowserFrame, ImageDataResponse, RemoteThread, ThreadResponse } from "./types";
 
 export class APIError extends Error {
-  constructor(message: string, readonly status: number) {
+  /** `body`: the error's JSON when the Mac sent one (e.g. Settings' 409 `settings` and 422 `fields`). */
+  constructor(message: string, readonly status: number, readonly body?: unknown) {
     super(message);
   }
   /** The Mac couldn't be reached (the main process answers 502/503 for route failures). */
@@ -79,7 +80,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     }
     if (!response.ok) {
       const message = (data as { error?: string } | null)?.error ?? `The Mac answered with HTTP ${response.status}.`;
-      throw new APIError(message, response.status);
+      throw new APIError(message, response.status, data ?? undefined);
     }
     return data as T;
   } finally {

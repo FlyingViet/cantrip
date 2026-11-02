@@ -2,8 +2,10 @@
 .settings-window { height: 100%; display: flex; flex-direction: column; background: var(--window); }
 .settings-titlebar { flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0 8px; -webkit-app-region: drag; border-bottom: 0.5px solid var(--separator); background: #252628; }
 .settings-title { height: 26px; display: grid; place-items: center; font: 600 13px var(--font-display); color: var(--secondary); }
-.settings-tabs { display: flex; gap: 6px; -webkit-app-region: no-drag; }
-.settings-tab { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 76px; padding: 6px 10px 5px; border: 0; border-radius: 8px; background: transparent; color: var(--secondary); font-size: 11.5px; }
+.settings-tabs { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px; max-width: 100%; padding: 0 10px; -webkit-app-region: no-drag; }
+.settings-tab { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 60px; padding: 6px 6px 5px; border: 0; border-radius: 8px; background: transparent; color: var(--secondary); font-size: 11.5px; white-space: nowrap; }
+/* Clear of Windows' caption buttons (a 44 px overlay) now that the tabs can span the window. */
+.platform-win32 .settings-tabs { margin-top: 8px; }
 .settings-tab:hover { background: rgba(255, 255, 255, 0.06); }
 .settings-tab[aria-selected="true"] { background: rgba(255, 255, 255, 0.1); color: var(--accent); }
 .settings-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 20px 24px; user-select: text; }
@@ -19,3 +21,33 @@
 .route-check { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12.5px; }
 .route-check .caption { grid-column: 2; }
 .form-footer code { font-family: var(--mono); font-size: 11px; }
+
+/* The Mac's own settings, drawn from its manifest (ui/settings/MacSettings.tsx). */
+.mac-banners { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.mac-pending { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; background: rgba(255, 159, 10, 0.12); border: 0.5px solid rgba(255, 159, 10, 0.35); font-variant-numeric: tabular-nums; }
+.mac-notice { align-items: center; padding: 0 10px; font-size: 12px; }
+.mac-notice .icon-btn { width: 22px; height: 22px; }
+.mac-field { gap: 4px; }
+.mac-line { min-height: 24px; gap: 10px; }
+.mac-label { min-width: 0; }
+.mac-help, .mac-reason { padding-right: 48px; }
+.mac-reason { gap: 5px; }
+.mac-field.read-only .mac-label { color: var(--secondary); }
+.mac-select { max-width: 60%; min-width: 0; text-overflow: ellipsis; }
+.mac-integer { gap: 6px; flex: none; }
+.mac-number { width: 84px; text-align: right; }
+.mac-port { width: 110px; text-align: right; }
+.mac-text { width: 55%; min-width: 160px; }
+.mac-textarea { width: 100%; min-height: 84px; }
+.mac-slider { gap: 10px; width: 48%; flex: none; }
+.mac-range { flex: 1; min-width: 0; accent-color: var(--accent); }
+.mac-range-value { min-width: 44px; text-align: right; color: var(--secondary); font-variant-numeric: tabular-nums; }
+.mac-info { max-width: 65%; text-align: right; overflow-wrap: anywhere; }
+.mac-secret { gap: 8px; }
+.mac-link + .mac-link { border-top: 0.5px solid var(--separator); }
+.mac-link-row { width: 100%; border: 0; background: transparent; color: var(--text); text-align: left; font: inherit; border-radius: 0; }
+.mac-link-row:hover { background: var(--row-hover); }
+.mac-summary { max-width: 55%; }
+.mac-link-body { border-top: 0.5px solid var(--separator); background: rgba(0, 0, 0, 0.12); padding-left: 10px; }
+.mac-result { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; padding: 8px 10px; border-radius: 8px; background: var(--field); }
+.mac-copy { min-width: 0; overflow-wrap: anywhere; font-size: 11.5px; }

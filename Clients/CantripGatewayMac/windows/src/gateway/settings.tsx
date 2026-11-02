@@ -1,17 +1,22 @@
 // The Settings window (MacSettingsView.swift): Connection (saved Macs, add one, pairing links), Tools
-// & sign-ins (the Mac's backends and shared MCP servers) and Voice. Runs on the Gateway origin and storage
+// & sign-ins (the Mac's backends and shared MCP servers), Voice and Location, with the Mac's own settings
+// (its manifest, ui/settings/MacSettings.tsx) at the top of the page with the same id and the pages only the
+// Mac has (Models, Home & tabs, Memory, About) among them. Runs on the Gateway origin and storage
 // partition, so voice settings and the downloaded speech model are shared with the main window.
 import { render, type JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import "./styles/app.css";
 import "./settings.css";
-import { Icon } from "./ui/icons";
-import type { BackendsAction, BackendsSnapshot, MCPSnapshot } from "./api/types";
+import { Icon, type IconName } from "./ui/icons";
+import { APIError } from "./api/client";
+import type { BackendsAction, BackendsSnapshot, MCPSnapshot, SettingsManifest, SettingsRequest } from "./api/types";
 import { ConfirmLayer, confirmDialog, FormRow, FormSection, MenuLayer, openMenu, Spinner, ToastLayer } from "./ui/kit";
 import { BackendStatusList, type BackendsTransport } from "./ui/sheets/BackendStatusList";
 import { MCPServerList, type MCPTransport } from "./ui/sheets/MCPServerList";
 import { VoiceSettingsPanel } from "./ui/voice/VoiceControls";
 import { forgetFix, PRECISE_KEY, readFlag, readPosition, SHARE_KEY, writeFlag } from "./state/location";
+import { MacSettingsBanner, MacSettingsPage, useMacSettings, type MacSettingsTransport } from "./ui/settings/MacSettings";
+import { normalizeManifest, settingsTabs, type SettingsRevisionInfo } from "./ui/settings/macSettingsLogic";
 
 interface SavedMac {
   id: string;
@@ -35,6 +40,8 @@ interface State {
   platform: string;
   link?: string | null;
   notice?: string | null;
+  /** From the main window's last tab-list poll; null until it has polled the selected Mac. */
+  macSettings?: SettingsRevisionInfo | null;
 }
 
 interface Check { route: string; ok: boolean; message: string; milliseconds: number }
@@ -55,12 +62,16 @@ interface SettingsBridge {
   mcp(request: { method: "GET" } | { method: "POST"; body: Record<string, unknown> }): Promise<HostReply>;
   /** GET or POST /api/v1/backends the same way (check, signIn, cancelSignIn). */
   backends(request: { method: "GET" } | { method: "POST"; body: BackendsAction }): Promise<HostReply>;
+  /** GET or POST /api/v1/settings the same way. A replaced pairing token is saved by the app and never comes here. */
+  settings(request: { method: "GET" } | { method: "POST"; body: SettingsRequest }): Promise<HostReply>;
   /** Runs GitHub's device sign-in in Cantrip Home, in the main window. */
   githubSignIn(): Promise<{ ok?: boolean; error?: string }>;
   openExternal(url: string): void;
   onStatus(callback: (status: Status) => void): void;
   onServers(callback: (state: State) => void): void;
   onLink(callback: (link: string) => void): void;
+  /** The Mac's settings revision moved (or the selected Mac changed: null). */
+  onSettingsRevision(callback: (info: SettingsRevisionInfo | null) => void): void;
 }
 
 declare global {
@@ -89,54 +100,100 @@ const backendsTransport: BackendsTransport = {
   openLink: (url) => settings.openExternal(url),
 };
 
-type SettingsTab = "connection" | "tools" | "voice" | "location";
-const TAB_TITLES: Record<SettingsTab, string> = { connection: "Connection", tools: "Tools & sign-ins", voice: "Voice", location: "Location" };
+/** A settings reply as the Mac's manifest; a refusal keeps its status and JSON (409 `settings`, 422 `fields`). */
+async function manifestBody(pending: Promise<HostReply>): Promise<SettingsManifest> {
+  const reply = await pending;
+  if (reply.status >= 300 || reply.error !== undefined) {
+    throw new APIError(reply.error ?? `The Mac answered with HTTP ${reply.status}.`, reply.status, reply.body);
+  }
+  const manifest = normalizeManifest(reply.body);
+  if (!manifest) throw new APIError("The Mac sent settings this version of Cantrip Gateway can't read.", reply.status);
+  return manifest;
+}
+
+const macSettingsTransport: MacSettingsTransport = {
+  load: () => manifestBody(settings.settings({ method: "GET" })),
+  send: (body) => manifestBody(settings.settings({ method: "POST", body })),
+  openLink: (url) => settings.openExternal(url),
+};
+
+/** This window's own pages, by the ids of iPhone's pages they match (Connection is `macs`). */
+const OWN_PAGES = [
+  { id: "macs", title: "Connection" },
+  { id: "tools", title: "Tools & sign-ins" },
+  { id: "voice", title: "Voice" },
+  { id: "location", title: "Location" },
+];
+const PAGE_ICONS: Record<string, IconName> = {
+  macs: "antenna.radiowaves.left.and.right", models: "cpu", tools: "point.3.connected", home: "house", memory: "brain",
+  voice: "waveform", location: "location", notifications: "bell", appearance: "eye", about: "info.circle",
+};
 
 function SettingsApp(): JSX.Element {
-  const [tab, setTab] = useState<SettingsTab>("connection");
+  const [tab, setTab] = useState("macs");
   const [state, setState] = useState<State | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [link, setLink] = useState<string | null>(null);
+  const [polled, setPolled] = useState<SettingsRevisionInfo | null>(null);
+  const tabList = useRef<HTMLElement>(null);
 
   useEffect(() => {
     void settings.state().then((value) => {
       setState(value);
+      setPolled((current) => current ?? value.macSettings ?? null);
       if (value.notice) setNotice(value.notice);
       if (value.link) setLink(value.link);
     });
     settings.onServers((value) => setState((previous) => ({ ...previous, ...value })));
     settings.onStatus((status) => setState((previous) => (previous ? { ...previous, status } : previous)));
-    settings.onLink((value) => { setTab("connection"); setLink(value); });
+    settings.onLink((value) => { setTab("macs"); setLink(value); });
+    settings.onSettingsRevision((info) => setPolled(info));
     document.documentElement.classList.add(`platform-${navigator.userAgent.includes("Windows") ? "win32" : "darwin"}`);
   }, []);
+
+  const mac = useMacSettings(macSettingsTransport, {
+    server: state?.selectedID ?? null, polled, connected: state?.status.connected ?? false,
+  });
+  const tabs = settingsTabs(OWN_PAGES, mac.manifest?.pages ?? []);
+  const current = tabs.find((item) => item.id === tab) ?? tabs[0];
+  const choose = (id: string, focus = false) => {
+    setTab(id);
+    if (focus) requestAnimationFrame(() => tabList.current?.querySelector<HTMLElement>(`[data-tab="${id}"]`)?.focus());
+  };
+  const onTabKey = (event: KeyboardEvent) => {
+    const index = tabs.findIndex((item) => item.id === current.id);
+    const next = event.key === "ArrowRight" ? index + 1 : event.key === "ArrowLeft" ? index - 1
+      : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
+    if (next === null) return;
+    event.preventDefault();
+    choose(tabs[(next + tabs.length) % tabs.length].id, true);
+  };
 
   return (
     <div class="settings-window">
       <header class="settings-titlebar">
-        <div class="settings-title">{TAB_TITLES[tab]}</div>
-        <nav class="settings-tabs" role="tablist" aria-label="Settings">
-          <button type="button" role="tab" aria-selected={tab === "connection"} class="settings-tab" onClick={() => setTab("connection")}>
-            <Icon name="antenna.radiowaves.left.and.right" size={20} /><span>Connection</span>
-          </button>
-          <button type="button" role="tab" aria-selected={tab === "tools"} class="settings-tab" onClick={() => setTab("tools")}>
-            <Icon name="point.3.connected" size={20} /><span>Tools &amp; sign-ins</span>
-          </button>
-          <button type="button" role="tab" aria-selected={tab === "voice"} class="settings-tab" onClick={() => setTab("voice")}>
-            <Icon name="waveform" size={20} /><span>Voice</span>
-          </button>
-          <button type="button" role="tab" aria-selected={tab === "location"} class="settings-tab" onClick={() => setTab("location")}>
-            <Icon name="location" size={20} /><span>Location</span>
-          </button>
+        <div class="settings-title">{current.title}</div>
+        <nav ref={tabList} class="settings-tabs" role="tablist" aria-label="Settings" onKeyDown={onTabKey}>
+          {tabs.map((item) => (
+            <button key={item.id} type="button" role="tab" id={`settings-tab-${item.id}`} data-tab={item.id} class="settings-tab"
+              aria-selected={item.id === current.id} aria-controls="settings-panel" tabIndex={item.id === current.id ? 0 : -1}
+              onClick={() => choose(item.id)}>
+              <Icon name={PAGE_ICONS[item.id] ?? "gearshape"} size={20} /><span>{item.title}</span>
+            </button>
+          ))}
         </nav>
       </header>
-      <div class="settings-body" role="tabpanel">
-        {tab === "connection"
+      <div class="settings-body" role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${current.id}`}>
+        <MacSettingsBanner model={mac} showLoadError={current.id === "macs"} />
+        {current.page ? <MacSettingsPage key={current.id} model={mac} page={current.page} /> : null}
+        {current.id === "macs"
           ? (state ? <Connection state={state} setState={setState} notice={notice} link={link} clearLink={() => setLink(null)} /> : <Spinner />)
-          : tab === "tools"
+          : current.id === "tools"
             ? (state?.selectedID
               ? <><BackendStatusList transport={backendsTransport} /><GitHubSignIn /><MCPServerList transport={mcpTransport} /></>
               : <p class="callout muted">Pair a Mac on Connection first.</p>)
-            : tab === "location" ? <LocationSettings /> : <VoiceSettingsPanel />}
+            : current.id === "location" ? <LocationSettings />
+              : current.id === "voice" ? <VoiceSettingsPanel /> : null}
       </div>
       <MenuLayer />
       <ConfirmLayer />

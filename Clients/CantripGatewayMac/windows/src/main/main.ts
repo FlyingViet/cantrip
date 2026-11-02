@@ -10,6 +10,7 @@ import { artifactSaveRequest, DownloadResult, downloadError, downloadOverHTTPS, 
 import { mcpBridgeRequest } from "./mcpBridge";
 import { PairingError, ServerConfig, displayName, parsePairingLink, validateServer, validateToken } from "./pairing";
 import { HostRouter, Route, describeRoute, routesFor } from "./router";
+import { keepNewToken, settingsBridgeRequest, settingsRevisionInfo, takePairingToken } from "./settingsBridge";
 import { Pairing, SettingsStore } from "./store";
 import { HostRequest, HostResponse, LocalFileError, forwardedHeaders, sendOverHTTPS, sendOverPSK } from "./transport";
 
@@ -60,6 +61,8 @@ let settingsWindow: BrowserWindow | null = null;
 let pendingLink: string | null = null;
 let pendingNotice: string | null = null;
 let status = { connected: false, route: "", message: "", server: "" };
+/** The selected Mac's settings support and revision from the main window's tab-list poll (null until it polls). */
+let macSettings: { supportsSettings: boolean; settingsRevision: string } | null = null;
 
 // MARK: - Log (content-free: routes and errors, never tokens or messages)
 
@@ -400,6 +403,7 @@ function settingsState() {
     status,
     version: app.getVersion(),
     platform: process.platform,
+    macSettings,
   };
 }
 
@@ -411,6 +415,8 @@ function pushSettingsState(): void {
 function activateSelection(source: string): void {
   pairing = store.load();
   configureRouter();
+  macSettings = null;
+  settingsWindow?.webContents.send("gateway:settings-revision", null);
   log(`${source}: ${pairing ? `routes ${routesFor(pairing.server).map(describeRoute).join(", ")}` : "no Mac selected"}`);
   if (pairing) {
     if (mainWindow) {
@@ -448,6 +454,16 @@ function registerIPC(): void {
   });
   ipcMain.on("gateway:show-log", (event: IpcMainEvent) => {
     if (mainWindow && event.sender === mainWindow.webContents) shell.showItemInFolder(logFile());
+  });
+  // The main window's tab-list poll: whether the Mac serves its settings and their revision, so an
+  // open Settings window reloads them when they change on another device.
+  ipcMain.on("gateway:settings-revision", (event: IpcMainEvent, input: unknown) => {
+    const frame = event.senderFrame;
+    if (!mainWindow || event.sender !== mainWindow.webContents || !frame || frame.parent || !isHostURL(frame.url)) return;
+    const info = settingsRevisionInfo(input);
+    if (!info) return;
+    macSettings = info;
+    settingsWindow?.webContents.send("gateway:settings-revision", info);
   });
   ipcMain.handle("gateway:state", (event) => {
     fromSettings(event);
@@ -587,6 +603,15 @@ function registerIPC(): void {
     fromSettings(event);
     return settingsHostRequest("/api/v1/backends", backendsBridgeRequest(input));
   });
+  // Settings: the Mac's own settings (the manifest, changes, buttons, keep and undo). A replaced pairing
+  // token is saved and kept here and never reaches the window.
+  ipcMain.handle("gateway:settings", async (event, input: unknown) => {
+    fromSettings(event);
+    const reply = await settingsHostRequest("/api/v1/settings", settingsBridgeRequest(input));
+    if (reply.body === undefined) return reply;
+    const { body, token } = takePairingToken(reply.body);
+    return token === null ? { ...reply, body } : adoptPairingToken(token, body);
+  });
 }
 
 /** Sends a checked Settings request to one fixed API path with the token; the reply carries no token. */
@@ -595,24 +620,74 @@ async function settingsHostRequest(
 ): Promise<{ status: number; body?: unknown; error?: string }> {
   if ("error" in request) return { status: 400, error: request.error };
   if (!router || !pairing) return { status: 503, error: "This PC isn't paired with a Mac yet." };
-  const headers: Record<string, string> = { accept: "application/json", authorization: `Bearer ${pairing.token}` };
-  if (request.body) headers["content-type"] = "application/json";
   try {
-    const response = await router.request({
-      method: request.method, path, headers,
-      body: request.body ? Buffer.from(request.body) : undefined,
-    });
-    updateStatus({ connected: true, route: describeRoute(router.current), message: "" });
-    let body: unknown = null;
-    try { body = JSON.parse(response.body.toString("utf8")); } catch { /* not JSON */ }
+    const { status, body } = await sendToMac(path, request);
     const error = (body as { error?: unknown } | null)?.error;
-    return response.status < 300 ? { status: response.status, body }
-      : { status: response.status, error: typeof error === "string" ? error : `The Mac answered with HTTP ${response.status}.` };
+    return status < 300 ? { status, body }
+      : { status, body, error: typeof error === "string" ? error : `The Mac answered with HTTP ${status}.` };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     updateStatus({ connected: false, message });
     return { status: 502, error: `Can't reach your Mac. ${message}` };
   }
+}
+
+/** One request to the Mac with the current token: its status and JSON (null when it isn't JSON). Throws when no route reaches it. */
+async function sendToMac(path: string, request: { method: "GET" | "POST"; body?: string }): Promise<{ status: number; body: unknown }> {
+  if (!router || !pairing) throw new Error("This PC isn't paired with a Mac yet.");
+  const headers: Record<string, string> = { accept: "application/json", authorization: `Bearer ${pairing.token}` };
+  if (request.body) headers["content-type"] = "application/json";
+  const response = await router.request({
+    method: request.method, path, headers,
+    body: request.body ? Buffer.from(request.body) : undefined,
+  });
+  updateStatus({ connected: true, route: describeRoute(router.current), message: "" });
+  let body: unknown = null;
+  try { body = JSON.parse(response.body.toString("utf8")); } catch { /* not JSON */ }
+  return { status: response.status, body };
+}
+
+/**
+ * Settings replaced the Mac's pairing token from this PC: save the new one for this Mac (the requests that
+ * follow use it), then keep the change with it before the Mac undoes it. When the Mac can't be reached with
+ * it, this PC goes back to the old token, which the Mac returns to by itself within a minute.
+ */
+async function adoptPairingToken(token: string, body: unknown): Promise<{ status: number; body?: unknown; error?: string }> {
+  const reply = (body ?? {}) as { pending?: { id?: unknown }; result?: Record<string, unknown> };
+  const result = reply.result ?? {};
+  const selectedID = store.list().selectedID;
+  const previous = pairing;
+  try {
+    if (!selectedID || !previous) throw new Error("No Mac is selected.");
+    store.setToken(selectedID, validateToken(token));
+    pairing = { server: previous.server, token };
+  } catch (error) {
+    log("settings: couldn't save the replaced pairing token");
+    const message = error instanceof Error ? error.message : String(error);
+    // Not kept: the Mac goes back to the old token by itself.
+    return { status: 200, body: { ...reply, pending: undefined, result: { message: `This PC couldn't save the new pairing token (${message}), so the Mac goes back to the old one within a minute.` } } };
+  }
+  pushSettingsState();
+  const pendingID = typeof reply.pending?.id === "string" ? reply.pending.id : null;
+  if (!pendingID) return { status: 200, body };
+  const outcome = await keepNewToken(pendingID, {
+    send: (request) => sendToMac("/api/v1/settings", request),
+    sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    now: Date.now,
+  });
+  if (outcome.kept) {
+    log("settings: replaced the pairing token and kept it");
+    const kept = outcome.manifest && typeof outcome.manifest === "object" ? outcome.manifest : { ...reply, pending: undefined };
+    return { status: 200, body: { ...kept, result } };
+  }
+  log(`settings: the replaced pairing token wasn't kept (${outcome.reason}); back to the previous token`);
+  try { store.setToken(selectedID, previous.token); } catch { /* the token in memory still works */ }
+  if (pairing?.token === token) pairing = previous;
+  pushSettingsState();
+  const message = outcome.reason === "undone"
+    ? "The Mac undid the new pairing token, so this PC still uses the old one."
+    : "Cantrip Gateway couldn't reach the Mac with the new pairing token, so this PC kept the old one. The Mac goes back to it within a minute.";
+  return { status: 200, body: { ...reply, pending: undefined, result: { message } } };
 }
 
 // MARK: - App

@@ -950,12 +950,18 @@ export interface SessionsListResponse {
   /** Named groups for the tab list, in order. Absent on hosts without sections. */
   sections?: TabSection[];
   supportsTabSections?: boolean;
+  /** The Mac serves its settings manifest (`GET/POST /api/v1/settings`); absent on older Macs. */
+  supportsSettings?: boolean;
+  /** Moves whenever a Mac setting changes: an open Settings screen reloads the manifest when it differs. */
+  settingsRevision?: string;
 }
 
 /** GET /api/v1/ready. */
 export interface ReadyResponse {
   status: 'ready';
   sessions: RemoteSessionSummary[];
+  supportsSettings?: boolean;
+  settingsRevision?: string;
 }
 
 /** POST /api/v1/sessions/<id>/move response. */
@@ -2364,3 +2370,130 @@ export type SkillsAction =
   | { action: "setEnabled"; name: string; enabled: boolean }
   | { action: "sync" }
   | { action: "check" };
+
+// MARK: - Mac settings (SettingsManifest.swift)
+
+/** A setting's value as JSON carries it: booleans stay booleans and whole numbers stay integers. */
+export type SettingsValue = boolean | number | string;
+
+/** What a field draws: a switch, a picker, a stepper, a port box, a slider, text, a folder or file
+ * on the Mac, write-only text, a button (POST `{action: key}`) or a read-only status line. */
+export type SettingsFieldType =
+  | "toggle" | "choice" | "integer" | "port" | "number" | "text" | "path" | "secret" | "action" | "info";
+
+/** One of a `choice` field's options; `disabled` ones show but can't be picked. */
+export interface SettingsChoice {
+  value: SettingsValue;
+  label: string;
+  disabled?: boolean;
+}
+
+/** One setting (`key` is its `cantrip config` name). Optional members are omitted when they don't apply. */
+export interface SettingsField {
+  key: string;
+  type: SettingsFieldType;
+  label: string;
+  help?: string;
+  /** Missing for secrets (see `isSet`), actions and fields with no value yet. */
+  value?: SettingsValue;
+  /** Secrets: whether one is saved. Their value never leaves the Mac. */
+  isSet?: boolean;
+  choices?: SettingsChoice[];
+  /** Integers and ports: whole numbers; `number`: decimals. */
+  min?: number;
+  max?: number;
+  step?: number;
+  /** "days", "GB", "minutes". */
+  unit?: string;
+  /** "percent": a 0–1 number shown as a percentage. */
+  format?: "percent" | string;
+  placeholder?: string;
+  /** Ports: what 0 (an empty box) means, e.g. "Automatic". */
+  zeroLabel?: string;
+  /** Shown only while the field `key` (on any page) has one of `values`. */
+  visibleWhen?: { key: string; values: SettingsValue[] };
+  /** Shown but not changeable from this device (`readOnlyReason` says where it can be). */
+  readOnly?: boolean;
+  readOnlyReason?: string;
+  /** A change that could cut this device off: it's undone after a minute unless kept (see `pending`). */
+  guarded?: boolean;
+  destructive?: boolean;
+  /** Actions: asked before they run. */
+  confirmation?: string;
+  /** Text: several lines. */
+  multiline?: boolean;
+  /** Text, paths and secrets. */
+  maxLength?: number;
+  /** Info lines. */
+  tone?: "warning" | "error" | string;
+}
+
+/** A group of fields. `link` sections open on their own (a row showing `summary`) instead of inline. */
+export interface SettingsSection {
+  id: string;
+  title: string;
+  footer?: string;
+  link?: boolean;
+  summary?: string;
+  fields: SettingsField[];
+}
+
+/** One Settings page: `macs`, `models`, `tools`, `home`, `memory`, `location`, `appearance`, `about`
+ * (only Cantrip's own windows on the Mac get `location` and `appearance`). */
+export interface SettingsPage {
+  id: string;
+  title: string;
+  sections: SettingsSection[];
+}
+
+/** A guarded change waiting to be kept: the Mac undoes it at `revertsAt` unless this device keeps it. */
+export interface SettingsPending {
+  id: string;
+  keys: string[];
+  /** "Direct port 8766", "the new pairing token". */
+  summary: string;
+  secondsLeft: Int;
+  revertsAt: ISO8601String;
+}
+
+/** GET/POST /api/v1/settings (`SettingsManifest`): everything about the Mac that any client can change,
+ * as pages of fields every client draws the same way. Older Macs answer 404. */
+export interface SettingsManifest {
+  /** 1. */
+  version: Int;
+  /** Send back with changes (stale → 409); it moves with every change, and session lists carry it as `settingsRevision`. */
+  revision: string;
+  /** The Mac's name. */
+  mac: string;
+  /** True only for Cantrip's own windows on the Mac. */
+  local: boolean;
+  pages: SettingsPage[];
+  pending?: SettingsPending;
+  /** Only in the reply to an action. */
+  result?: SettingsActionResult;
+}
+
+/** What an action's button did. `copy` is shown once (a new key); `link` may be drawn as a QR code (`qr`). */
+export interface SettingsActionResult {
+  message?: string;
+  copy?: string;
+  link?: string;
+  qr?: boolean;
+  title?: string;
+  /** After a paired device replaces the pairing token: the device saves it, then keeps the change. */
+  pairingToken?: string;
+}
+
+/** POST /api/v1/settings: save `changes` (every one is checked before any is saved), run a button, or keep or undo `pending`. */
+export type SettingsChangeRequest = { revision: string; changes: Record<string, SettingsValue> };
+export type SettingsActionRequest = { action: string };
+export type SettingsKeepRequest = { keep: string };
+export type SettingsRevertRequest = { revert: string };
+export type SettingsRequest = SettingsChangeRequest | SettingsActionRequest | SettingsKeepRequest | SettingsRevertRequest;
+
+/** A refused POST: 409 (stale revision, or a guarded change already waiting) carries the current
+ * manifest in `settings`; 422 names each refused key in `fields` (nothing was saved). */
+export interface SettingsErrorResponse extends ApiErrorResponse {
+  fields?: Record<string, string>;
+  settings?: SettingsManifest;
+}

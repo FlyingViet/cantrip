@@ -23,6 +23,8 @@ if (hello) {
     openSettings: () => ipcRenderer.send("gateway:open-settings"),
     openExternal: (url: string) => ipcRenderer.send("gateway:open-external", url),
     showLog: () => ipcRenderer.send("gateway:show-log"),
+    reportSettings: (info: { supportsSettings: boolean; settingsRevision: string }) =>
+      ipcRenderer.send("gateway:settings-revision", info),
     saveArtifact: (request: { id: string; folder: boolean; name: string }) =>
       ipcRenderer.invoke("gateway:save-artifact", request),
     onStatus: (callback: (status: Hello["status"]) => void) => {
