@@ -50,7 +50,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .macs: return "Pair, switch and remove Macs"
         case .models: return "Model tiers, backups and usage limits"
-        case .tools: return "MCP servers and their sign-ins"
+        case .tools: return "Backends, GitHub and MCP servers, and their sign-ins"
         case .memory: return "What Cantrip remembers on your Mac"
         case .voice: return "Speech recognition and reply voice"
         case .notifications: return "Alerts, widget and Live Activity"

@@ -1381,6 +1381,9 @@ struct ChatView: View {
             .sheet(isPresented: $remote.showingSkills) {
                 CantripSkillsView(remote: remote)
             }
+            .sheet(isPresented: $remote.showingBackends) {
+                CantripBackendsView(remote: remote)
+            }
             .sheet(isPresented: $showCantripMaintenance) {
                 CantripMaintenanceSheet(remote: remote)
             }
