@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 
@@ -302,5 +303,83 @@ extension CantripHomeStore {
             throw CantripHomeArtifactDownload.unavailable
         }
         return url
+    }
+
+    func localFileURL(for artifact: CantripHomeArtifact) -> URL? {
+        let root = Self.artifactDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        return try? Self.downloadURL(artifact, root: root)
+    }
+
+    @discardableResult
+    func downloadToDownloads(_ artifact: CantripHomeArtifact, revealInFinder: Bool = true) throws -> URL {
+        let root = Self.artifactDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        let sourceURL = try Self.downloadURL(artifact, root: root)
+        return try Self.copyFileToDownloads(from: sourceURL, suggestedName: sourceURL.lastPathComponent, revealInFinder: revealInFinder)
+    }
+
+    @discardableResult
+    static func copyFileToDownloads(from sourceURL: URL, suggestedName: String? = nil, revealInFinder: Bool = true) throws -> URL {
+        let fm = FileManager.default
+        guard let downloadsDir = fm.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            throw CantripHomeError(500, "Downloads folder is unavailable.")
+        }
+        try fm.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
+        let fileName = (suggestedName?.isEmpty == false ? suggestedName! : sourceURL.lastPathComponent)
+        let destination = uniqueDownloadDestination(in: downloadsDir, fileName: fileName)
+        try fm.copyItem(at: sourceURL, to: destination)
+        if revealInFinder {
+            NSWorkspace.shared.activateFileViewerSelecting([destination])
+        }
+        return destination
+    }
+
+    static func saveFileWithPanel(from sourceURL: URL, suggestedName: String? = nil, completion: (@MainActor (Result<URL?, Error>) -> Void)? = nil) {
+        let panel = NSSavePanel()
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.nameFieldStringValue = suggestedName ?? sourceURL.lastPathComponent
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        let finish: (NSApplication.ModalResponse) -> Void = { response in
+            Task { @MainActor in
+                guard response == .OK, let destination = panel.url else {
+                    completion?(.success(nil))
+                    return
+                }
+                do {
+                    if sourceURL.standardizedFileURL != destination.standardizedFileURL {
+                        if FileManager.default.fileExists(atPath: destination.path) {
+                            try FileManager.default.removeItem(at: destination)
+                        }
+                        try FileManager.default.copyItem(at: sourceURL, to: destination)
+                    }
+                    completion?(.success(destination))
+                } catch {
+                    completion?(.failure(error))
+                }
+            }
+        }
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            panel.begin(completionHandler: finish)
+        }
+    }
+
+    private static func uniqueDownloadDestination(in directory: URL, fileName: String) -> URL {
+        let fm = FileManager.default
+        let candidate = directory.appendingPathComponent(fileName)
+        if !fm.fileExists(atPath: candidate.path) {
+            return candidate
+        }
+        let ext = (fileName as NSString).pathExtension
+        let stem = (fileName as NSString).deletingPathExtension
+        for index in 2...999 {
+            let numbered = ext.isEmpty ? "\(stem) (\(index))" : "\(stem) (\(index)).\(ext)"
+            let url = directory.appendingPathComponent(numbered)
+            if !fm.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        return directory.appendingPathComponent("\(UUID().uuidString)-\(fileName)")
     }
 }

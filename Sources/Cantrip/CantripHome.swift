@@ -1419,33 +1419,65 @@ final class CantripHomeStore: ObservableObject {
 
     func recoverUnregisteredArtifacts() throws {
         let root = Self.artifactDirectory.standardizedFileURL.resolvingSymlinksInPath()
-        let urls = try FileManager.default.contentsOfDirectory(
+        let keys: [URLResourceKey] = [
+            .isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey,
+            .contentModificationDateKey
+        ]
+        let topLevel = try FileManager.default.contentsOfDirectory(
             at: root,
-            includingPropertiesForKeys: [
-                .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey,
-                .contentModificationDateKey
-            ],
+            includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         )
+        var candidates: [URL] = []
+        for url in topLevel {
+            let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
+            guard resolved.deletingLastPathComponent() == root else { continue }
+            let values = try? resolved.resourceValues(forKeys: Set(keys))
+            if values?.isDirectory == true, values?.isSymbolicLink != true {
+                if let sub = try? FileManager.default.contentsOfDirectory(
+                    at: resolved,
+                    includingPropertiesForKeys: keys,
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
+                ) {
+                    candidates.append(contentsOf: sub)
+                }
+            } else {
+                candidates.append(resolved)
+            }
+        }
         var recovered: [CantripHomeArtifact] = []
-        for url in urls {
+        var updatedExisting = false
+        for url in candidates {
             let candidate = url.standardizedFileURL.resolvingSymlinksInPath()
-            guard candidate.deletingLastPathComponent() == root else { continue }
-            let relative = candidate.lastPathComponent
-            guard !artifacts.contains(where: { $0.relativePath == relative }) else { continue }
-            let values = try candidate.resourceValues(forKeys: [
-                .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey,
-                .contentModificationDateKey
-            ])
+            guard candidate.path.hasPrefix(root.path + "/") else { continue }
+            let relative = String(candidate.path.dropFirst(root.path.count + 1))
+            let values = try candidate.resourceValues(forKeys: Set(keys))
             guard values.isRegularFile == true, values.isSymbolicLink != true,
                   let size = values.fileSize,
                   (0...Self.maximumArtifactBytes).contains(size) else { continue }
+            if let existingIndex = artifacts.firstIndex(where: { $0.relativePath == relative }) {
+                if artifacts[existingIndex].size != size {
+                    let old = artifacts[existingIndex]
+                    artifacts[existingIndex] = CantripHomeArtifact(
+                        id: old.id,
+                        title: old.title,
+                        relativePath: old.relativePath,
+                        kind: old.kind,
+                        mimeType: old.mimeType,
+                        size: size,
+                        createdAt: values.contentModificationDate ?? old.createdAt
+                    )
+                    updatedExisting = true
+                }
+                continue
+            }
             let ext = candidate.pathExtension.lowercased()
             let base = candidate.deletingPathExtension().lastPathComponent
                 .replacingOccurrences(of: "-", with: " ")
                 .replacingOccurrences(of: "_", with: " ")
+            let title = Self.inferredTitle(for: candidate, ext: ext) ?? base.localizedCapitalized
             recovered.append(.init(
-                title: base.localizedCapitalized,
+                title: title,
                 relativePath: relative,
                 kind: Self.kind(ext),
                 mimeType: Self.mimeType(ext),
@@ -1453,11 +1485,31 @@ final class CantripHomeStore: ObservableObject {
                 createdAt: values.contentModificationDate ?? Date()
             ))
         }
-        guard !recovered.isEmpty else { return }
-        artifacts.append(contentsOf: recovered)
+        guard !recovered.isEmpty || updatedExisting else { return }
+        if !recovered.isEmpty {
+            artifacts.append(contentsOf: recovered)
+            recoveredArtifacts.append(contentsOf: recovered)
+        }
         artifacts.sort { $0.createdAt > $1.createdAt }
         try save(artifacts, to: artifactsURL)
-        recoveredArtifacts.append(contentsOf: recovered)
+    }
+
+    private static func inferredTitle(for url: URL, ext: String) -> String? {
+        guard ext == "md" || ext == "markdown",
+              let handle = try? FileHandle(forReadingFrom: url),
+              let data = try? handle.read(upToCount: 2048) else { return nil }
+        try? handle.close()
+        let prefix = String(decoding: data, as: UTF8.self)
+        for line in prefix.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("# ") {
+                let heading = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
+                if !heading.isEmpty, heading.count <= 160 {
+                    return heading
+                }
+            }
+        }
+        return nil
     }
 
     func artifactData(id: UUID) throws -> (CantripHomeArtifact, Data) {
@@ -1523,6 +1575,7 @@ final class CantripHomeStore: ObservableObject {
     }
 
     private func tick() {
+        try? recoverUnregisteredArtifacts()
         applyTaskEdits()
         drainIncidentInbox()
         CantripHomeDelegations.shared.refresh()

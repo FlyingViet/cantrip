@@ -28,6 +28,10 @@ struct LauncherView: View {
     @ObservedObject private var metrics = PanelMetrics.shared
     @State private var showUsage = false
     @State private var showHistory = false
+    @State private var showArtifacts = false
+    @State private var artifactSearch = ""
+    @State private var downloadedArtifactIDs: Set<UUID> = []
+    @ObservedObject private var homeStore = CantripHomeStore.shared
     @State private var historySearch = ""
     @State private var historyEntries: [HistoryEntry] = []
     @State private var archivedSessions: [SessionManager.ArchivedSession] = []
@@ -445,6 +449,9 @@ struct LauncherView: View {
                 Divider().opacity(0.3)
                 ScrollView { usageView }
                     .frame(maxHeight: lowerSectionMaxHeight)
+            } else if showArtifacts {
+                Divider().opacity(0.3)
+                artifactsView
             } else if showHistory {
                 Divider().opacity(0.3)
                 historyView
@@ -650,6 +657,23 @@ struct LauncherView: View {
             .hoverHint(terminalBusy ? "Terminal — command running in background"
                                     : "Terminal — shell with persistent state (cd, env)",
                        $toolbarHint)
+
+            Button(action: toggleArtifacts) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "tray.and.arrow.down")
+                        .font(.system(size: 14))
+                        .foregroundStyle(showArtifacts ? Color.accentColor : Color.secondary)
+                    if !homeStore.artifacts.isEmpty && !showArtifacts {
+                        Circle()
+                            .fill(Color.accentColor.opacity(0.85))
+                            .frame(width: 5, height: 5)
+                            .offset(x: 3, y: -3)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Artifacts (\(homeStore.artifacts.count)) — browse & download generated documents and files")
+            .hoverHint("Artifacts — browse & download generated files (\(homeStore.artifacts.count))", $toolbarHint)
 
             Button(action: toggleHistory) {
                 Image(systemName: "clock.arrow.circlepath")
@@ -1196,6 +1220,7 @@ struct LauncherView: View {
         showSteps = false
         showTerminal = false
         showUsage = false
+        showArtifacts = false
         showHistory = false
         activePluginPanelID = ""
     }
@@ -1917,7 +1942,7 @@ struct LauncherView: View {
     /// history, or usage) — i.e. there is content for suggestions to
     /// float over.
     private var lowerSectionVisible: Bool {
-        showTerminal || showUsage || showHistory
+        showTerminal || showUsage || showArtifacts || showHistory
             || !session.messages.isEmpty || session.statusText != nil
     }
 
@@ -1925,7 +1950,7 @@ struct LauncherView: View {
         !session.isLocalPrivate && (appSuggestion != nil
             || slashToken != nil
             || showsMentionSuggestions
-            || (!fileSearch.results.isEmpty && !showHistory))
+            || (!fileSearch.results.isEmpty && !showHistory && !showArtifacts))
     }
 
     /// The suggestion rows themselves, shared between the inline layout
@@ -2521,10 +2546,20 @@ struct LauncherView: View {
         }
     }
 
+    private func toggleArtifacts() {
+        withAnimation(.easeOut(duration: 0.15)) {
+            showArtifacts.toggle()
+            if showArtifacts { showHistory = false; showUsage = false; showTerminal = false }
+        }
+        if showArtifacts {
+            try? CantripHomeStore.shared.recoverUnregisteredArtifacts()
+        }
+    }
+
     private func toggleHistory() {
         withAnimation(.easeOut(duration: 0.15)) {
             showHistory.toggle()
-            if showHistory { showUsage = false; showTerminal = false }
+            if showHistory { showUsage = false; showTerminal = false; showArtifacts = false }
         }
         if showHistory {
             historyEntries = HistoryStore.load()
@@ -2535,7 +2570,7 @@ struct LauncherView: View {
     private func toggleUsage() {
         withAnimation(.easeOut(duration: 0.15)) {
             showUsage.toggle()
-            if showUsage { showHistory = false; showTerminal = false }
+            if showUsage { showHistory = false; showTerminal = false; showArtifacts = false }
         }
         if showUsage { usage.refreshQuotas() }
     }
@@ -2580,7 +2615,7 @@ struct LauncherView: View {
     /// resize feedback glitch).
     private var councilActive: Bool {
         !manager.showingRemote && session.councilMode && settings.councilMembers.count >= 2
-            && !showUsage && !showHistory
+            && !showUsage && !showHistory && !showArtifacts
             && (!session.messages.isEmpty || session.statusText != nil)
     }
 
@@ -2631,7 +2666,7 @@ struct LauncherView: View {
         }
         withAnimation(.easeOut(duration: 0.15)) {
             showTerminal.toggle()
-            if showTerminal { showHistory = false; showUsage = false }
+            if showTerminal { showHistory = false; showUsage = false; showArtifacts = false }
         }
     }
 
@@ -2834,6 +2869,54 @@ struct LauncherView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
+    }
+
+    // MARK: - Artifacts
+
+    private var artifactsView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Artifacts (\(homeStore.artifacts.count))")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Open Artifacts Folder", systemImage: "folder") {
+                    NSWorkspace.shared.open(CantripHomeStore.artifactDirectory)
+                }
+                .font(.caption)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+            TextField("Search artifacts…", text: $artifactSearch)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12))
+            let filtered = homeStore.artifacts.filter {
+                artifactSearch.isEmpty ||
+                $0.title.localizedCaseInsensitiveContains(artifactSearch) ||
+                $0.relativePath.localizedCaseInsensitiveContains(artifactSearch) ||
+                $0.kind.localizedCaseInsensitiveContains(artifactSearch)
+            }
+            if filtered.isEmpty {
+                Text(homeStore.artifacts.isEmpty ? "No artifacts yet." : "No matching artifacts.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.vertical, 4)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(filtered) { artifact in
+                            ArtifactLauncherRow(
+                                artifact: artifact,
+                                isDownloaded: downloadedArtifactIDs.contains(artifact.id),
+                                onDownloaded: { downloadedArtifactIDs.insert(artifact.id) }
+                            )
+                        }
+                    }
+                }
+                .frame(maxHeight: lowerSectionMaxHeight)
+            }
+        }
+        .padding(12)
     }
 
     // MARK: - History
@@ -3591,6 +3674,19 @@ struct MessageRow: View {
                         CardDocumentStack(cards: cards, links: showsLinks ? message.visibleLinkPreviews : [])
                             .padding(.top, 2)
                     }
+                    let matchedArtifacts = localOnly ? [] : Self.referencedArtifacts(in: message)
+                    if !matchedArtifacts.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(matchedArtifacts) { artifact in
+                                ArtifactLauncherRow(
+                                    artifact: artifact,
+                                    isDownloaded: false,
+                                    onDownloaded: {}
+                                )
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -3655,6 +3751,109 @@ struct MessageRow: View {
         }
     }
 
+    private static func referencedArtifacts(in message: ChatMessage) -> [CantripHomeArtifact] {
+        guard !message.text.isEmpty || !message.activities.isEmpty else { return [] }
+        let artifacts = CantripHomeStore.shared.artifacts
+        guard !artifacts.isEmpty else { return [] }
+        let changedPaths = Set(message.activities.flatMap { $0.fileChanges.map(\.path) })
+        return artifacts.filter { artifact in
+            message.text.contains("Saved to Artifacts: **\(artifact.title)**")
+                || message.text.contains(artifact.relativePath)
+                || changedPaths.contains(where: { $0.hasSuffix("/" + artifact.relativePath) })
+        }
+    }
+
+}
+
+private struct ArtifactLauncherRow: View {
+    let artifact: CantripHomeArtifact
+    let isDownloaded: Bool
+    let onDownloaded: () -> Void
+    @State private var justDownloaded = false
+    @State private var errorText: String?
+
+    private var iconName: String {
+        switch artifact.kind {
+        case "image": return "photo"
+        case "video": return "film"
+        case "audio": return "waveform"
+        default: return "doc.richtext"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: iconName)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(artifact.title)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(artifact.relativePath)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text("·")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Text(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    if let errorText {
+                        Text("· \(errorText)")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            Spacer(minLength: 8)
+            if let url = CantripHomeStore.shared.localFileURL(for: artifact) {
+                Button("Open") {
+                    NSWorkspace.shared.open(url)
+                }
+                .font(.caption)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Open \(artifact.relativePath)")
+
+                Button {
+                    do {
+                        _ = try CantripHomeStore.shared.downloadToDownloads(artifact, revealInFinder: true)
+                        justDownloaded = true
+                        onDownloaded()
+                    } catch {
+                        errorText = error.localizedDescription
+                    }
+                } label: {
+                    Label(
+                        justDownloaded || isDownloaded ? "Downloaded" : "Download",
+                        systemImage: justDownloaded || isDownloaded ? "checkmark.circle.fill" : "arrow.down.to.line"
+                    )
+                    .font(.caption)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help("Download \(artifact.relativePath) to ~/Downloads and reveal in Finder")
+
+                Button {
+                    CantripHomeStore.saveFileWithPanel(from: url, suggestedName: url.lastPathComponent)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Save As…")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+    }
 }
 
 /// Streamed extended-thinking text, collapsed by default so long silent
@@ -3916,9 +4115,53 @@ private struct FileChangeRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
+                FileChangeDownloadButton(path: change.path)
                 RevertButton(path: change.path)
             }
                 .help(change.path)
+        }
+    }
+}
+
+private struct FileChangeDownloadButton: View {
+    let path: String
+    @State private var downloaded = false
+
+    private var fileURL: URL? {
+        let expanded = (path as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: expanded)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else {
+            return nil
+        }
+        return url
+    }
+
+    var body: some View {
+        if let url = fileURL {
+            HStack(spacing: 5) {
+                Button {
+                    if (try? CantripHomeStore.copyFileToDownloads(from: url, revealInFinder: true)) != nil {
+                        downloaded = true
+                    }
+                } label: {
+                    Image(systemName: downloaded ? "checkmark.circle.fill" : "arrow.down.to.line")
+                        .font(.system(size: 11))
+                        .foregroundStyle(downloaded ? Color.green : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Download \(url.lastPathComponent) to ~/Downloads")
+
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                } label: {
+                    Image(systemName: "folder")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Reveal in Finder")
+            }
         }
     }
 }
