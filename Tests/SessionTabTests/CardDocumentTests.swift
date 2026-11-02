@@ -106,6 +106,7 @@ extension SessionTabTests {
                                                       output: authored, fileChanges: [])])
         precondition(tool?.type == "package" && tool?.blocks.map(\.type) == ["header", "keyValue"] && tool?.source?.kind == "tool",
                      "images and unknown blocks are dropped from cards Cantrip didn't build")
+        precondition(tool?.accessibilityLabel == "Package", "a card without a label is named by its header")
     }
 
     static func testModelCardVerification() {
