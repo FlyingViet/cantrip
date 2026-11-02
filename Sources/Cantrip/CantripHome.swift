@@ -232,6 +232,8 @@ struct CantripHomeTaskRun: Codable, Equatable, Identifiable {
     let summary: String
     /// The model the run used; older runs omit it.
     var model: String? = nil
+    /// Cards from the run's `weather`, `places` and `card` blocks (RunCards).
+    var cards: [CardDocument]? = nil
 }
 
 struct CantripHomeTaskField: Codable, Equatable, Identifiable {
@@ -296,6 +298,8 @@ struct CantripHomeTaskWorkspace: Codable, Equatable {
     var list: CantripHomeTaskListPresentation
     var detailSections: [CantripHomeTaskDetailSection]
     var records: [CantripHomeTaskRecord]
+    /// Cards built from the records: list cards above the list, weather and map cards on a record.
+    var cards: [CantripHomeTaskCardSpec]? = nil
 }
 
 struct CantripHomeTask: Codable, Equatable, Identifiable {
@@ -360,12 +364,15 @@ struct CantripHomeTaskProposal: Decodable {
     /// The task's own Copilot model and effort: "" returns it to Home's, nil keeps the saved one.
     let model: String?
     let effort: String?
+    /// Edits by `id` may replace only the workspace's cards; `[]` removes them.
+    let cards: [CantripHomeTaskCardSpec]?
 
     init(
         id: UUID?, title: String?, prompt: String?, schedule: CantripHomeSchedule?,
         workspace: CantripHomeTaskWorkspaceProposal? = nil,
         initialRecords: [[String: String]]? = nil, runsAfter: [UUID]? = nil,
-        list: CantripHomeTaskListPresentation? = nil, model: String? = nil, effort: String? = nil
+        list: CantripHomeTaskListPresentation? = nil, model: String? = nil, effort: String? = nil,
+        cards: [CantripHomeTaskCardSpec]? = nil
     ) {
         self.id = id
         self.title = title
@@ -377,6 +384,7 @@ struct CantripHomeTaskProposal: Decodable {
         self.list = list
         self.model = model
         self.effort = effort
+        self.cards = cards
     }
 }
 
@@ -387,6 +395,7 @@ struct CantripHomeTaskWorkspaceProposal: Decodable {
     let fields: [CantripHomeTaskField]
     let list: CantripHomeTaskListPresentation
     let detailSections: [CantripHomeTaskDetailSection]
+    var cards: [CantripHomeTaskCardSpec]? = nil
 }
 
 struct CantripHomeTaskRecordBatch: Decodable {
@@ -426,6 +435,33 @@ struct CantripHomeTasksSnapshot: Encodable {
     let revision: String
     let error: String?
     var supportsReordering = true
+    /// Each workspace's list cards, built from its records, by task ID.
+    var workspaceCards: [String: [CardDocument]]? = nil
+    /// `GET …/tasks/<id>/records/<record id>/cards` answers a record's weather and map cards.
+    var supportsRecordCards = true
+
+    /// What clients get: run cards as they are now (the latest run's forecast stays live) and the
+    /// workspaces' record cards.
+    @MainActor
+    init(tasks: [CantripHomeTask], revision: String, error: String?, now: Date = Date()) {
+        self.tasks = tasks.map { task in
+            var task = task
+            for index in task.runs.indices {
+                guard let cards = task.runs[index].cards else { continue }
+                let live = index == 0 && now.timeIntervalSince(task.runs[index].finishedAt) < LiveCards.liveWindow
+                task.runs[index].cards = cards.map { LiveCards.shared.presented($0, live: live, now: now) }
+            }
+            return task
+        }
+        self.revision = revision
+        self.error = error
+        var cards: [String: [CardDocument]] = [:]
+        for task in tasks {
+            let documents = WorkspaceCards.documents(for: task, now: now)
+            if !documents.isEmpty { cards[task.id.uuidString] = documents }
+        }
+        workspaceCards = cards.isEmpty ? nil : cards
+    }
 }
 
 private struct CantripHomeIncidentEnvelope: Decodable {
@@ -446,6 +482,7 @@ private struct CantripHomeTaskEditEnvelope: Decodable {
     let list: CantripHomeTaskListPresentation?
     let model: String?
     let effort: String?
+    var cards: [CantripHomeTaskCardSpec]? = nil
 }
 
 struct CantripHomeArtifactsSnapshot: Encodable {
@@ -488,6 +525,8 @@ struct CantripHomeBackgroundRun: Codable, Equatable, Identifiable {
     /// The model a hidden run used, and why it fell back from the task's own model.
     var model: String? = nil
     var modelNote: String? = nil
+    /// Cards from the run's `weather`, `places` and `card` blocks (RunCards).
+    var cards: [CardDocument]? = nil
 }
 
 struct CantripHomeBackgroundSnapshot: Encodable {
@@ -550,9 +589,11 @@ struct CantripHomeBackgroundSnapshot: Encodable {
         /// `/api/v1/sessions/<sessionID>/input/<id>` without opening the hidden session.
         let inputs: [InputRequestSnapshot]?
         let model: String?
+        let cards: [CardDocument]?
 
+        @MainActor
         init(run: CantripHomeBackgroundRun, activity: String?, canStop: Bool,
-             inputs: [InputRequestSnapshot]? = nil) {
+             inputs: [InputRequestSnapshot]? = nil, now: Date = Date()) {
             id = run.id
             kind = run.kind
             label = run.label
@@ -570,6 +611,8 @@ struct CantripHomeBackgroundSnapshot: Encodable {
             self.canStop = canStop
             self.inputs = inputs.flatMap { $0.isEmpty ? nil : $0 }
             model = run.model
+            let live = run.finishedAt.map { now.timeIntervalSince($0) < LiveCards.liveWindow } ?? false
+            cards = run.cards.map { $0.map { LiveCards.shared.presented($0, live: live, now: now) } }
         }
     }
 
@@ -604,7 +647,16 @@ extension CantripHomeTaskWorkspace {
                 let choices = options.joined(separator: "|")
                 return "\(field.key):choice[\(choices.count > 600 ? choices.prefix(600) + "…" : choices)]"
             }.joined(separator: ",")
-            + list.promptContext
+            + list.promptContext + cardsContext
+    }
+
+    /// The saved cards as compact JSON, so Home can send them back with changes.
+    var cardsContext: String {
+        guard let cards, !cards.isEmpty else { return "" }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(cards) else { return "" }
+        return "; cards " + String(decoding: data, as: UTF8.self)
     }
 }
 
@@ -719,7 +771,8 @@ private extension CantripHomeTaskWorkspaceProposal {
         let workspace = CantripHomeTaskWorkspace(
             recordLabel: label, recordLabelPlural: pluralLabel, icon: symbol,
             fields: fields, list: validatedList,
-            detailSections: detailSections, records: records
+            detailSections: detailSections, records: records,
+            cards: try CantripHomeTaskCardSpec.validated(cards, fields: fields)
         )
         for record in records {
             _ = try workspace.validated(values: record.values, requiringAll: true)
@@ -864,6 +917,7 @@ final class CantripHomeStore: ObservableObject {
     }
 
     private init() {
+        LiveCards.shared.onRefresh = { [weak self] in self?.liveCardsRefreshed() }
         do {
             try FileManager.default.createDirectory(
                 at: Self.artifactDirectory, withIntermediateDirectories: true
@@ -1004,8 +1058,13 @@ final class CantripHomeStore: ObservableObject {
                 400, "Send list on its own only to change an existing task's workspace list."
             )
         }
+        if proposal.cards != nil, proposal.id == nil || proposal.workspace != nil {
+            throw CantripHomeError(
+                400, "Send cards at the top level only to change an existing task's workspace cards; put them in workspace when creating one."
+            )
+        }
         guard proposal.schedule != nil || proposal.workspace != nil
-            || (proposal.id != nil && (proposal.runsAfter != nil || proposal.list != nil
+            || (proposal.id != nil && (proposal.runsAfter != nil || proposal.list != nil || proposal.cards != nil
                 || proposal.model != nil || proposal.effort != nil)) else {
             throw CantripHomeError(400, "A task needs a schedule, a workspace, or both.")
         }
@@ -1052,6 +1111,12 @@ final class CantripHomeStore: ObservableObject {
                 }
                 return try list.validated(fields: fields)
             }
+            let cards = try proposal.cards.map { cards -> [CantripHomeTaskCardSpec]? in
+                guard let fields = tasks[index].workspace?.fields else {
+                    throw CantripHomeError(400, "This task has no workspace to show cards on.")
+                }
+                return try CantripHomeTaskCardSpec.validated(cards, fields: fields)
+            }
             tasks[index].title = title
             tasks[index].prompt = prompt
             if let schedule {
@@ -1066,13 +1131,21 @@ final class CantripHomeStore: ObservableObject {
                     throw CantripHomeError(400, "Initial records are only supported for new tasks.")
                 }
                 let records = tasks[index].workspace?.records ?? []
+                let savedCards = tasks[index].workspace?.cards
                 tasks[index].workspace = try workspace.validated(records: records)
+                if workspace.cards == nil, let fields = tasks[index].workspace?.fields {
+                    // A new definition without cards keeps the saved ones that still fit its fields.
+                    tasks[index].workspace?.cards = try? CantripHomeTaskCardSpec.validated(savedCards, fields: fields)
+                }
                 if !tasks[index].isScheduled {
                     tasks[index].state = .ready
                 }
             }
             if let list {
                 tasks[index].workspace?.list = list
+            }
+            if let cards {
+                tasks[index].workspace?.cards = cards
             }
             if let runsAfter {
                 tasks[index].runsAfter = runsAfter.isEmpty ? nil : runsAfter
@@ -1600,7 +1673,7 @@ final class CantripHomeStore: ObservableObject {
                     CantripHomeTaskEditEnvelope.self, from: Data(contentsOf: url)
                 )
                 guard edit.version == 1,
-                      edit.schedule != nil || edit.runsAfter != nil || edit.list != nil
+                      edit.schedule != nil || edit.runsAfter != nil || edit.list != nil || edit.cards != nil
                         || edit.model != nil || edit.effort != nil,
                       edit.runsAfterTimeoutMinutes.map({ (5...240).contains($0) }) ?? true else {
                     throw CantripHomeError(400, "Unsupported or empty task edit.")
@@ -1608,7 +1681,8 @@ final class CantripHomeStore: ObservableObject {
                 if tasks.first(where: { $0.id == edit.taskID })?.state == .running { continue }
                 var task = try create(.init(
                     id: edit.taskID, title: nil, prompt: nil, schedule: edit.schedule,
-                    runsAfter: edit.runsAfter, list: edit.list, model: edit.model, effort: edit.effort
+                    runsAfter: edit.runsAfter, list: edit.list, model: edit.model, effort: edit.effort,
+                    cards: edit.cards
                 ), now: clock())
                 if let minutes = edit.runsAfterTimeoutMinutes,
                    let index = tasks.firstIndex(where: { $0.id == task.id }) {
@@ -1631,6 +1705,7 @@ final class CantripHomeStore: ObservableObject {
                         + task.schedule.summary
                         + (after.isEmpty ? "" : "; runs after " + after.joined(separator: ", "))
                         + groups
+                        + (edit.cards.map { "; \($0.count) workspace cards" } ?? "")
                         + (edit.model == nil && edit.effort == nil ? ""
                             : "; model \(task.model ?? "Home's")" + (task.effort.map { " (\($0))" } ?? ""))
                 )
@@ -1702,7 +1777,7 @@ final class CantripHomeStore: ObservableObject {
         }
     }
 
-    func complete(runID: UUID, status: String, summary: String) {
+    func complete(runID: UUID, status: String, summary: String, cards: [CardDocument] = []) {
         var model: String?
         var modelNote: String?
         if let run = backgroundRuns.firstIndex(where: { $0.id == runID }) {
@@ -1711,6 +1786,7 @@ final class CantripHomeStore: ObservableObject {
             backgroundRuns[run].status = status
             backgroundRuns[run].finishedAt = Date()
             backgroundRuns[run].sessionID = nil
+            backgroundRuns[run].cards = cards.isEmpty ? nil : cards
             // A closing "Summary:" section is the result; the full report stays in the log.
             let result = CantripHomeDelegations.summarySection(summary)
                 ?? summary.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1732,9 +1808,10 @@ final class CantripHomeStore: ObservableObject {
         }
         let clipped = CantripHomeDelegations.runSummary(summary)
         tasks[index].runs.insert(.init(
-            startedAt: tasks[index].lastRunAt ?? finished,
+            id: runID, startedAt: tasks[index].lastRunAt ?? finished,
             finishedAt: finished, status: status,
-            summary: modelNote.map { "\($0)\n\(clipped)" } ?? clipped, model: model
+            summary: modelNote.map { "\($0)\n\(clipped)" } ?? clipped, model: model,
+            cards: cards.isEmpty ? nil : cards
         ), at: 0)
         if tasks[index].runs.count > 20 { tasks[index].runs.removeLast(tasks[index].runs.count - 20) }
         tasks[index].activeRunID = nil
@@ -1755,6 +1832,23 @@ final class CantripHomeStore: ObservableObject {
         do { try persistTasks() }
         catch { recordStorageFailure(error) }
         tick()
+    }
+
+    /// Run-result cards that stay live: recent runs' and each task's latest run's.
+    func liveRunCards(now: Date = Date()) -> [CardDocument] {
+        let recent = backgroundRuns.filter {
+            $0.finishedAt.map { now.timeIntervalSince($0) < LiveCards.liveWindow } ?? false
+        }.flatMap { $0.cards ?? [] }
+        let latest = tasks.compactMap(\.runs.first).filter {
+            now.timeIntervalSince($0.finishedAt) < LiveCards.liveWindow
+        }.flatMap { $0.cards ?? [] }
+        return (recent + latest).filter { $0.refresh != nil }
+    }
+
+    /// A live card was rebuilt: clients polling with a revision fetch it.
+    private func liveCardsRefreshed() {
+        backgroundRevision = UUID()
+        revision = UUID()
     }
 
     private func persistBackgroundRuns() {
@@ -2050,6 +2144,7 @@ extension ChatSession {
         to check for new mail yourself, even when the task's instructions show that osascript
         command: it shares one refresh across concurrent jobs and waits for the sync to settle.
         Read Mail's Envelope Index and Messages' chat.db read-only.
+        \(RunCards.guidance)
         """ : """
         (CANTRIP HOME — persistent assistant protocol
         This is the user's dedicated Cantrip Home conversation.
@@ -2098,12 +2193,14 @@ extension ChatSession {
         "list":{"titleField":"key","subtitleFields":["key"],"badgeField":"key or null",
         "dateField":"date/dateTime key or null","groupField":"choice key or null",
         "groups":[{"title":"section title","values":["choice values"],"collapsed":false}] or null},
-        "detailSections":[{"title":"optional heading","fields":["key"]}]},
+        "detailSections":[{"title":"optional heading","fields":["key"]}],
+        "cards":null or [workspace card objects, below]},
         "initialRecords":[{"fieldKey":"string value"}] or null,
         "runsAfter":["other task UUID"] or null,
         "model":"fast, standard, deep, or a model ID", "" for Home's model, or null to keep,
         "effort":"reasoning effort", "" for the model's default, or null to keep,
-        "list":null or a workspace list object (edits by id only)}
+        "list":null or a workspace list object (edits by id only),
+        "cards":null or workspace card objects replacing the saved ones, [] removes them (edits by id only)}
         Sunday is 1 and Saturday is 7. \(zoneText)
         A once schedule runs a single time at startAt. When that run succeeds Cantrip removes
         the task by itself (its result stays in Background), so once suits one-off reminders and
@@ -2136,6 +2233,16 @@ extension ChatSession {
         section's starting state. To change only an existing workspace's list (for example its
         groups), send `id` and the complete new `list` at the top level of the block, without
         `workspace`; its fields, detail sections, records and schedule are kept.
+        Workspace cards (up to 4) are built by Cantrip from the records, so their values are always
+        the records' own. A list card sits above the list:
+        {"kind":"list","title":"Due in the next 7 days","dateField":"date/dateTime key",
+        "withinDays":7,"includeOverdue":true,"filter":{"choiceKey":["option"]},"titleField":"key",
+        "subtitleFields":["key"],"trailingField":"key","limit":8} (everything but kind optional;
+        withinDays needs dateField). A record's detail can show one weather card for the place a
+        text field names, for the event's days when dated: {"kind":"weather","placeField":"cityKey",
+        "dateField":"startKey","endDateField":"endKey"}, and one map card for a venue:
+        {"kind":"map","placeField":"venueKey","nearField":"cityKey"}. To change only an existing
+        workspace's cards, send `id` and the complete new `cards` at the top level, without `workspace`.
         \(treatText)
         \(tasksText)
         Do not emit this block for an ordinary immediate request or without explicit user intent.

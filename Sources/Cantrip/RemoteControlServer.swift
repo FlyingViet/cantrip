@@ -2198,6 +2198,7 @@ final class RemoteControlServer {
                     sendError(405, "Tasks are created conversationally in Cantrip Home.", on: connection)
                     return
                 }
+                LiveCards.shared.check(store.liveRunCards())
                 let revision = store.revision.uuidString
                 // Clients clear the warning on "unchanged", so send it in full while one stands.
                 let warning = store.storageError ?? Consolidator.healthWarning
@@ -2279,6 +2280,21 @@ final class RemoteControlServer {
                         taskID: id, recordID: nil, values: update.values
                     )
                     sendEncoded(on: connection) { try JSONEncoder().encode(task) }
+                    return
+                }
+                if parts.count == 8, String(parts[7]) == "cards" {
+                    // GET …/records/<record id>/cards: the record's weather and map cards.
+                    guard request.method == "GET" else { throw CantripHomeError(405, "Use GET for a record's cards.") }
+                    guard let recordID = UUID(uuidString: String(parts[6])),
+                          let task = store.tasks.first(where: { $0.id == id }),
+                          task.workspace?.records.contains(where: { $0.id == recordID }) == true else {
+                        throw CantripHomeError(404, "task record not found")
+                    }
+                    Task { @MainActor in
+                        let cards = await RecordCards.shared.cards(task: task, recordID: recordID)
+                        let body: [String: Any] = ["cards": cards.map(\.snapshot), "refreshAfter": RecordCards.refreshAfter]
+                        self.sendJSON(body, on: connection)
+                    }
                     return
                 }
                 guard parts.count == 7,

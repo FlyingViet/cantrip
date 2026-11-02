@@ -8,12 +8,46 @@ import Foundation
 /// shown only when its values are found in that tool's output.
 struct CardDocument: Codable, Equatable, Sendable, Identifiable {
     struct Source: Codable, Equatable, Sendable {
-        /// "resolver", "tool" or "preview".
+        /// "resolver", "tool", "preview" or "records".
         var kind: String
         var name: String?
         var attribution: String?
         var url: String?
         var updatedAt: Date?
+
+        init(kind: String, name: String? = nil, attribution: String? = nil, url: String? = nil, updatedAt: Date? = nil) {
+            self.kind = kind
+            self.name = name
+            self.attribution = attribution
+            self.url = url
+            self.updatedAt = updatedAt
+        }
+
+        private enum Keys: String, CodingKey { case kind, name, attribution, url, updatedAt }
+
+        // `updatedAt` is ISO-8601 whatever encoder carries the card (Home's state files use the
+        // default date encoding); an older saved card's number still reads.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: Keys.self)
+            kind = try container.decode(String.self, forKey: .kind)
+            name = try container.decodeIfPresent(String.self, forKey: .name)
+            attribution = try container.decodeIfPresent(String.self, forKey: .attribution)
+            url = try container.decodeIfPresent(String.self, forKey: .url)
+            if let text = try? container.decodeIfPresent(String.self, forKey: .updatedAt) {
+                updatedAt = ISO8601DateFormatter().date(from: text)
+            } else {
+                updatedAt = try? container.decodeIfPresent(Date.self, forKey: .updatedAt)
+            }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: Keys.self)
+            try container.encode(kind, forKey: .kind)
+            try container.encodeIfPresent(name, forKey: .name)
+            try container.encodeIfPresent(attribution, forKey: .attribution)
+            try container.encodeIfPresent(url, forKey: .url)
+            try container.encodeIfPresent(updatedAt.map { ISO8601DateFormatter().string(from: $0) }, forKey: .updatedAt)
+        }
     }
 
     /// Opens `url` (https, http or tel only; clients refuse anything else).
@@ -127,6 +161,36 @@ struct CardDocument: Codable, Equatable, Sendable, Identifiable {
     /// The card as plain text, for anything that can't draw a block.
     var fallbackText: String?
     var blocks: [Block]
+    /// What a resolver card was built from, so the Mac can rebuild it while it's on screen
+    /// (`LiveCards`). Kept on the Mac: `presented` drops it before a card goes to a client.
+    var refresh: Refresh?
+
+    /// A forecast's place: a named place, or the coordinates of the device or Mac it was for.
+    struct Refresh: Codable, Equatable, Sendable {
+        /// "weather".
+        var kind: String
+        var place: String?
+        var label: String?
+        var latitude: Double?
+        var longitude: Double?
+        var note: String?
+        var unit: String
+        /// yyyy-MM-dd: an event's days, when the card shows only those.
+        var from: String?
+        var to: String?
+
+        var key: String {
+            [kind, place ?? "", latitude.map { String(format: "%.2f", $0) } ?? "",
+             longitude.map { String(format: "%.2f", $0) } ?? "", unit, from ?? "", to ?? ""].joined(separator: "|")
+        }
+    }
+
+    /// The card as clients get it.
+    var presented: CardDocument {
+        var copy = self
+        copy.refresh = nil
+        return copy
+    }
 
     static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()

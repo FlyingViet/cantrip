@@ -140,6 +140,29 @@ remote's Tasks panel:
 Records keep their saved order within each section, values no group lists fall
 under Other, and each client remembers which sections the user collapsed.
 
+### Workspace cards
+
+A workspace can show up to four cards that Cantrip builds from its own records,
+so every value on them is a record's (`workspace.cards`, set by asking Home):
+
+- A **list** card sits above the record list, for example bills due in the
+  next 7 days or this week's interviews:
+  `{"kind":"list","title":"Due in the next 7 days","dateField":"due","withinDays":7,"includeOverdue":true,"filter":{"status":["Unpaid"]},"trailingField":"amount","limit":8}`.
+  Rows are sorted by the date field, overdue first, with Overdue, Today and
+  Tomorrow badges; an empty list says so.
+- A record's detail can show one **weather** card for the place a text field
+  names, limited to the event's days when it has dates
+  (`{"kind":"weather","placeField":"city","dateField":"start","endDateField":"end"}`;
+  before the 10-day forecast reaches the event it says when it opens), and one
+  **map** card for a venue (`{"kind":"map","placeField":"venue","nearField":"city"}`).
+  Clients ask for them with `GET /api/v1/home/tasks/<task>/records/<record>/cards`
+  while the detail is open and again every `refreshAfter` seconds; the Mac
+  caches forecasts for 10 minutes and maps for 12 hours.
+
+The tasks snapshot carries each workspace's list cards in `workspaceCards`
+(by task ID). Home edits only the cards by sending `id` and the complete
+`cards` (`[]` removes them); a `task-edits/` file can carry `"cards":[…]` too.
+
 ## Background runs
 
 Each due run and local ingestion incident runs in its own hidden, single-use
@@ -159,7 +182,21 @@ they discover. Concurrent jobs refresh Apple Mail through
 Results appear in the Background list (with per-run Stop), task run summaries,
 workspaces and completion notifications (which open the run's report in Home's
 background log); finished sessions are removed and their transcripts kept in
-that log. A run whose reply ends with a section that begins on its own line
+that log.
+
+A run can end its reply with up to four card blocks — `weather`, `places` or a
+`card` that cites a tool it called (see [Cards](cards.md)). Cantrip strips them,
+resolves them on the Mac as the run finishes (no extra model tokens) and keeps
+the cards with the run's result, so they show in the Background list, the
+task's runs, its workspace and the run's report on every client, and survive a
+relaunch. A `card` block's numbers, times and links must be in the cited
+tool's output, or it stays plain text. Resolving has a 12-second deadline and
+never fails or holds up a run: a card that can't resolve in time is left out.
+Runs get no link previews or automatic tool cards. A forecast on a recent
+result (the last day) stays live: when a client reads one older than 15
+minutes, the Mac rebuilds it in the background (at most every 10 minutes per
+place) and the card's Updated time moves. Notifications and older clients keep
+the plain-text summary. A run whose reply ends with a section that begins on its own line
 with `Summary:` uses that section (from the last such label, up to 1,200
 characters, line breaks kept) as its summary, and its first two lines as the
 notification; other runs keep the start of the reply.
