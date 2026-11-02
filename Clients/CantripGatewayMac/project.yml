@@ -165,6 +165,7 @@ targets:
       - path: Hermes/Tests/CantripTerminalTests.swift
       - path: Hermes/Tests/CantripRichCardTests.swift
       - path: Hermes/Tests/CantripWeatherCardTests.swift
+      - path: Hermes/Tests/CantripCardTests.swift
       - path: Hermes/Tests/CantripDeleteMessageTests.swift
       - path: Hermes/Tests/CantripSkillsTests.swift
       - path: Hermes/Tests/CantripBackendsTests.swift
