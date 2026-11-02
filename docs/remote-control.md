@@ -229,6 +229,59 @@ lists the tiers first, labeled with what they run), and `GET
 /api/v1/copilot/usage` adds `tiers`: runs, tokens and cost per tier today and
 over 7 days.
 
+## Mac settings
+
+Everything you can change about the Mac itself is one list the Mac serves, so
+Cantrip Agent (iPhone, Duo, Watch), Gateway Mac, Cantrip's own Settings window,
+the browser Remote and Windows draw the same settings on the same pages: Macs
+(Remote control, ports, pairing token, Apple Watch route), Models (default
+backend, Act on my behalf, each backend's model, effort and permissions), Tools
+(the OpenAI-compatible API, CLI paths), Home & tabs (Cantrip Home, background
+jobs, child tabs, default folder, idle Copilot tabs, link previews), Memory
+(vault, consolidation, document and calendar context) and About (View Mac,
+storage upkeep, simulator pool). Changes save as you make them and other
+devices showing Settings refresh within seconds. Model tiers, backups, MCP
+servers, skills, the agent policy and secrets keep their own screens.
+
+Some settings only change at the Mac: CLI paths and folders (a phone can't
+browse the Mac), Remote control itself, View Mac access, and making an
+OpenAI-endpoint key (it's shown once). Paired devices show them read-only.
+Cantrip's Settings window on the Mac also shows the app's own settings there:
+the ⌥Space interface, panel opacity, attaching the screen, voice mode, Open at
+login, sharing this Mac's location, and **Show Pairing Code**.
+
+A change from a paired device that could cut it off (the HTTP port, the direct
+port, **Replace Pairing Token**) applies for 60 seconds: the device asks you to
+keep it once it's back over the new route, and if it can't reach the Mac, the
+Mac undoes the change by itself.
+
+`GET /api/v1/settings` returns `version` (1), `revision`, `mac`, `local` and
+`pages` (`id`: `macs`, `models`, `tools`, `home`, `memory`, `location`,
+`appearance`, `about`; `title`; `sections` with `id`, `title`, `footer`,
+`link` (open as its own screen, with `summary`) and `fields`). A field has
+`key` (the `cantrip config` name), `type` (`toggle`, `choice`, `integer`,
+`port`, `number`, `text`, `path`, `secret`, `action`, `info`), `label`, `help`
+and `value` (secrets send `isSet` instead), plus as needed `choices`
+(`value`, `label`, `disabled`), `min`/`max`/`step`, `unit`, `format`
+(`percent`), `placeholder`, `zeroLabel` (port 0, e.g. Automatic),
+`visibleWhen` (`{key, values}`: show while that field's value is one of them),
+`readOnly` with `readOnlyReason`, `guarded`, `destructive`, `confirmation`
+(ask before an action), `multiline`, `maxLength` and `tone` (`warning`/`error`
+on info lines). `pending` (`id`, `keys`, `summary`, `secondsLeft`,
+`revertsAt`) is a guarded change waiting to be kept.
+
+`POST` takes `{"revision", "changes": {key: value}}` and returns the new
+manifest; nothing is saved unless every change is valid (`422` with `fields`:
+`{key: reason}`), and a stale revision gets `409` with the current manifest in
+`settings`. `{"action": key}` runs a button and may return `result`
+(`message`; `copy`, text to copy once; `link` with `qr`; `pairingToken` after a
+paired device replaces the token, which it saves before keeping the change).
+`{"keep": id}` keeps a guarded change and `{"revert": id}` undoes it now; a
+second guarded change while one waits gets `409`. Session lists and
+`/api/v1/ready` include `supportsSettings` and `settingsRevision`, which moves
+whenever a setting changes. Requests from Cantrip's own windows on the Mac
+carry a per-launch `X-Cantrip-Local-Key` and get `local: true`.
+
 ## Shared MCP servers
 
 `GET /api/v1/mcp` lists the [shared MCP servers](extensions-and-skills.md#share-mcp-servers-with-every-backend):

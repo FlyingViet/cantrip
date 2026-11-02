@@ -214,6 +214,16 @@ final class AppSettings: ObservableObject {
             remoteControlError = "Could not generate a secure pairing token."
             return false
         }
+        return replaceRemoteControlToken(with: token)
+    }
+
+    /// A new random pairing token (not saved).
+    static func makePairingToken() -> String? { RemoteControlCredentials.generate() }
+
+    /// Saves `token` as the pairing token (a new one, or the previous one when a paired device's
+    /// replacement is undone) and restarts the server with it.
+    @discardableResult
+    func replaceRemoteControlToken(with token: String) -> Bool {
         let status = RemoteControlCredentials.store(token)
         if status == errSecSuccess {
             remoteControlError = nil
@@ -836,6 +846,10 @@ final class AppSettings: ObservableObject {
             "cantripHomeEnabled": cantripHomeEnabled,
             "cantripHomeParallelRuns": cantripHomeParallelRuns,
             "copilotAllowSubagents": copilotAllowSubagents,
+            "copilotMCPApps": copilotMCPApps,
+            "agyAuxiliaryRouting": agyAuxiliaryRouting,
+            "agyMemoryConsolidation": agyMemoryConsolidation,
+            "interfaceMode": interfaceMode.rawValue,
             "childTabsAutoFork": childTabsAutoFork,
             "childTabsPerParentLimit": childTabsPerParentLimit,
             "childTabsOverallLimit": childTabsOverallLimit,
@@ -970,6 +984,13 @@ final class AppSettings: ObservableObject {
         bool("remoteControlEnabled") { self.remoteControlEnabled = $0 }
         bool("cantripHomeEnabled") { self.cantripHomeEnabled = $0 }
         bool("copilotAllowSubagents") { self.copilotAllowSubagents = $0 }
+        bool("copilotMCPApps") { self.copilotMCPApps = $0 }
+        bool("agyAuxiliaryRouting") { self.agyAuxiliaryRouting = $0 }
+        bool("agyMemoryConsolidation") { self.agyMemoryConsolidation = $0 }
+        if let raw = dict["interfaceMode"] as? String, let mode = InterfaceMode(rawValue: raw) {
+            interfaceMode = mode
+            applied.append("interfaceMode")
+        }
         bool("childTabsAutoFork") { self.childTabsAutoFork = $0 }
         int("childTabsPerParentLimit", 1...ChildTabCapacity.maximumPerParent) { self.childTabsPerParentLimit = $0 }
         int("childTabsOverallLimit", 1...ChildTabCapacity.maximumOverall) { self.childTabsOverallLimit = $0 }
