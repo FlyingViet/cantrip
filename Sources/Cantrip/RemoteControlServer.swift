@@ -3500,7 +3500,12 @@ private extension RemoteControlServer {
     .input-image figcaption{font-size:12px;line-height:1.3;color:var(--secondary);overflow-wrap:anywhere}.input-images .mac-image{flex:none;margin:0;max-width:none}
     .input-images .mac-image img{height:120px;width:auto;max-width:200px;max-height:none}.input-images .mac-image-status{width:96px;min-height:120px;padding:6px;text-align:center}
     #tasksPanel{width:min(calc(100% - 24px),720px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
-    #tasksPanel::backdrop{background:rgba(0,0,0,.35)}.tasks-bar{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:Canvas}
+    #tasksPanel::backdrop,#backgroundPanel::backdrop{background:rgba(0,0,0,.35)}
+    #backgroundPanel{width:min(calc(100% - 24px),760px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
+    #backgroundPanel .control{min-height:44px;padding:4px 14px}#backgroundTitle{font-size:16px}#backgroundTitle:focus{outline:0}#backgroundPanel button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}#backgroundBody{padding:12px 14px 16px}#backgroundError:not(:empty){padding:8px 14px;color:#f87171}
+    .bg-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}.bg-run{display:grid;gap:4px;padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface)}
+    .bg-run .run-summary{white-space:pre-wrap}.bg-head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--secondary);margin:4px 0 8px}
+    .bg-log{display:grid;gap:12px}.bg-log .message{margin:0}.tasks-bar{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:Canvas}
     #tasksPanel .control{min-height:44px;padding:4px 14px}#tasksPanel button:focus-visible,#tasksPanel summary:focus-visible,#tasksSearch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     #artifactsPanel{width:min(calc(100% - 24px),860px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#artifactsPanel::backdrop{background:rgba(0,0,0,.35)}
     #artifactsPanel .control{min-height:44px;padding:4px 14px}#artifactsPanel button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}#artifactsTitle{font-size:16px}#artifactsTitle:focus{outline:0}
@@ -3605,7 +3610,7 @@ private extension RemoteControlServer {
     <main id="app" class="hidden"><aside id="sessionSidebar" class="hidden" aria-labelledby="sessionSidebarTitle"><div id="sessionSidebarHeader"><strong id="sessionSidebarTitle">Tabs</strong></div></aside><header class="workspace">
     <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="slashList"><div id="slashPopover" class="slash-popover hidden"><div id="slashList" role="listbox" aria-label="Commands"></div><div id="slashLoading" class="slash-info hidden"><span class="spinner" aria-hidden="true"></span>Loading commands…</div><div id="slashInfo" class="slash-info hidden"></div></div><div id="slashStatus" class="sr-only" role="status" aria-live="polite"></div><div id="mentionPopover" class="slash-popover hidden"><div id="mentionList" role="listbox" aria-label="Tab suggestions"></div><div id="mentionInfo" class="slash-info hidden"></div></div><div id="mentionStatus" class="sr-only" role="status" aria-live="polite"></div><button id="locationButton" class="round" aria-haspopup="dialog" aria-label="Location sharing is off" title="Location: Off. Share this device's location with your messages"><svg class="location-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 1.5 1.5 7l5.5 2 2 5.5z"/></svg></button><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
     <div id="mentionChips" class="mention-chips" role="list" aria-label="Mentioned tabs"></div>
-    <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSection" class="round hidden" title="New section" aria-label="New section"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M1.5 4.5v8a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3.5h-4a1 1 0 0 0-1 1z"/><path d="M8 7.5v4M6 9.5h4"/></svg></button><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><button id="homeArtifacts" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home artifacts">Artifacts</button><span class="tools-spacer"></span>
+    <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSection" class="round hidden" title="New section" aria-label="New section"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M1.5 4.5v8a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3.5h-4a1 1 0 0 0-1 1z"/><path d="M8 7.5v4M6 9.5h4"/></svg></button><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><button id="homeArtifacts" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home artifacts">Artifacts</button><button id="homeBackground" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home background runs">Background</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div>
@@ -3718,6 +3723,7 @@ private extension RemoteControlServer {
     <dialog id="threadView" aria-labelledby="threadTitle"><div class="thread-bar"><div class="thread-heading"><strong id="threadTitle">Thread</strong><span id="threadCount"></span></div><button id="threadClose" type="button" aria-label="Close thread">✕</button></div><div id="threadBody"></div></dialog>
     <dialog id="tasksPanel" aria-labelledby="tasksTitle"><div class="tasks-bar"><button id="tasksBack" type="button" class="control hidden" aria-label="Back to tasks">‹ Tasks</button><strong id="tasksTitle" class="grow" tabindex="-1">Tasks</strong><button id="tasksDone" type="button" class="control">Done</button></div>
     <div id="tasksError" role="alert"></div><input id="tasksSearch" class="hidden" type="search" autocomplete="off" aria-label="Search records"><div id="tasksBody"></div><div id="tasksStatus" class="sr-only" role="status" aria-live="polite"></div></dialog>
+    <dialog id="backgroundPanel" aria-labelledby="backgroundTitle"><div class="tasks-bar"><button id="backgroundBack" type="button" class="control hidden" aria-label="Back to background runs">‹ Background</button><strong id="backgroundTitle" class="grow" tabindex="-1">Background</strong><button id="backgroundLog" type="button" class="control">Full Log</button><button id="backgroundDone" type="button" class="control">Done</button></div><div id="backgroundError" role="alert"></div><div id="backgroundBody"></div></dialog>
     <dialog id="artifactsPanel" aria-labelledby="artifactsTitle"><div class="tasks-bar"><strong id="artifactsTitle" class="grow" tabindex="-1">Artifacts</strong><button id="artifactsCreate" type="button" class="control">Create in Chat</button><button id="artifactsDone" type="button" class="control">Done</button></div><div id="artifactsError" role="alert"></div><div id="artifactsBody"></div><div id="artifactsStatus" class="sr-only" role="status" aria-live="polite"></div></dialog>
     <dialog id="imageViewer" aria-labelledby="imageViewerTitle"><div class="viewer-bar"><strong id="imageViewerTitle" class="grow">Preview</strong><button id="imageZoom" type="button" class="control" aria-pressed="false">Actual size</button><button id="imageRetry" type="button" class="control hidden">Retry</button><button id="imageDone" type="button" class="control">Done</button></div>
     <div id="imageStage"><img id="imageFull" alt=""><p id="imageStatus" role="status" aria-live="polite"></p></div></dialog>
@@ -3899,7 +3905,7 @@ private extension RemoteControlServer {
         let listedSuccessfully=false,requestSelection=requestedID;
         try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);tabSections=listed.sections||[];sectionsSupported=listed.supportsTabSections===true;$("newSection").classList.toggle("hidden",!sectionsSupported);renderHomeInputs(listed.homeInputs||[]);
           // Cantrip Home is pinned first when the Mac has it on; it is never closed or moved.
-          const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;$("homeTasks").classList.toggle("hidden",!listed.home);$("homeArtifacts").classList.toggle("hidden",!listed.home);
+          const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;$("homeTasks").classList.toggle("hidden",!listed.home);$("homeArtifacts").classList.toggle("hidden",!listed.home);$("homeBackground").classList.toggle("hidden",!listed.home);
           for(const id of historyCache.keys())if(!sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}
           if(selected!==requestedID){refreshRequested=true;continue}
           if(tabLink&&sessions.some(s=>s.id===tabLink)){selectTab(tabLink);tabLink=null;history.replaceState(null,"",location.pathname+location.search)}
@@ -5436,6 +5442,44 @@ private extension RemoteControlServer {
           list.append(homeNode("dt","",field.label),cell)}
         body.append(list)}
       return body}
+    // Background: Cantrip Home's scheduled-task and incident runs, each with its result and cards; Full Log shows
+    // the runs' reports from Home's background log.
+    let backgroundState=null;
+    const backgroundStatus={running:"Running",succeeded:"Done",failed:"Failed",cancelled:"Stopped",interrupted:"Interrupted",skipped:"Skipped"};
+    function openBackground(){closeBackground();backgroundState={token,runs:[],queued:[],sessionID:null,view:"list",loaded:false,loading:false,timer:setInterval(()=>loadBackground(),10000)};
+      setText($("backgroundError"),"");renderBackground();$("backgroundPanel").showModal();$("backgroundTitle").focus();loadBackground()}
+    function closeBackground(){if(backgroundState)clearInterval(backgroundState.timer);backgroundState=null}
+    async function loadBackground(){const state=backgroundState;if(!state||state.loading)return;state.loading=true;
+      try{const data=await api("/api/v1/home/background");if(state!==backgroundState)return;setText($("backgroundError"),"");
+        const next=JSON.stringify([data.runs,data.queued]);if(next!==state.last){state.last=next;state.runs=data.runs||[];state.queued=data.queued||[];state.sessionID=data.sessionID||null;state.loaded=true;if(state.view==="list")renderBackground()}
+        else if(!state.loaded){state.loaded=true;renderBackground()}}
+      catch(error){if(state===backgroundState){setText($("backgroundError"),`Couldn't load background runs: ${error.message}`);if(!state.loaded){state.loaded=true;renderBackground()}}}
+      finally{state.loading=false}}
+    function renderBackground(){const state=backgroundState;if(!state)return;const body=$("backgroundBody"),panel=$("backgroundPanel"),scroll=panel.scrollTop;
+      $("backgroundBack").classList.toggle("hidden",state.view!=="log");$("backgroundLog").classList.toggle("hidden",state.view==="log"||!state.sessionID);setText($("backgroundTitle"),state.view==="log"?"Background log":"Background");
+      if(state.view==="log"){body.replaceChildren(state.logNode||homeNode("p","muted tasks-empty","Loading the log…"));return}
+      const view=homeNode("div");
+      if(!state.loaded){view.append(homeNode("p","muted tasks-empty","Loading background runs…"));body.replaceChildren(view);return}
+      if(state.queued.length){view.append(homeNode("div","bg-head","Waiting"));const list=homeNode("ul","bg-list");
+        for(const job of state.queued){const item=homeNode("li","bg-run");item.append(homeNode("strong","task-title",job.label),homeNode("span","task-meta",job.reason||"Queued"));list.append(item)}view.append(list)}
+      view.append(homeNode("div","bg-head","Scheduled and automated"));
+      if(!state.runs.length)view.append(homeNode("p","muted tasks-empty","No background runs yet."));
+      else{const list=homeNode("ul","bg-list");
+        for(const run of state.runs){const item=homeNode("li","bg-run");item.setAttribute("aria-label",`${run.label}, ${backgroundStatus[run.status]||run.status}`);
+          const when=run.finishedAt??run.startedAt;item.append(homeNode("strong","task-title",run.label),homeNode("span","task-meta",[run.kind==="incident"?"Incident":"Scheduled task",backgroundStatus[run.status]||run.status,when!=null?homeTime(when):"",run.model||""].filter(Boolean).join(" · ")));
+          const result=run.status==="running"?(run.activity||"Running…"):(run.summary||"");if(result)item.append(homeNode("span","run-summary",result));
+          if(run.status!=="running"&&Array.isArray(run.cards)&&run.cards.length)appendCards(item,run.cards,`bg:${run.id}`);list.append(item)}
+        view.append(list)}
+      body.replaceChildren(view);panel.scrollTop=scroll}
+    async function openBackgroundLog(){const state=backgroundState;if(!state?.sessionID)return;state.view="log";state.logNode=null;renderBackground();
+      try{const data=await api(`/api/v1/sessions/${encodeURIComponent(state.sessionID)}?history=recent`);if(state!==backgroundState||state.view!=="log")return;
+        const session=data.session||{},log=homeNode("div","bg-log"),messages=(session.messages||[]).slice(-24);
+        if(!messages.length)log.append(homeNode("p","muted tasks-empty","The log is empty."));
+        for(const message of messages){if(message.role!=="user"&&message.role!=="assistant")continue;const row=homeNode("article",`message ${message.role}`);row.dataset.messageId=message.id;
+          if(message.role==="user")row.append(homeNode("p","task-meta",(message.displayText||message.text||"").split("\\n")[0]));
+          else appendReply(row,message,[],{id:state.sessionID,isLocalPrivate:false});log.append(row)}
+        state.logNode=log;renderBackground();$("backgroundPanel").scrollTop=$("backgroundPanel").scrollHeight}
+      catch(error){if(state===backgroundState)setText($("backgroundError"),`Couldn't load the log: ${error.message}`)}}
     // Artifacts: files Cantrip Home saved on the Mac. Images open in the viewer; other files download.
     // Downloads stream the original file (or a folder's zip) from the Mac; nothing gets a public address.
     let artifactsState=null,artifactThumbActive=0;const artifactThumbs=new Map(),artifactThumbQueue=[];
@@ -5504,6 +5548,8 @@ private extension RemoteControlServer {
       const draft=$("draft");if(!draft.value.trim())draft.value="Create a ";draft.dispatchEvent(new Event("input",{bubbles:true}));draft.focus();draft.setSelectionRange(draft.value.length,draft.value.length)}
     $("homeArtifacts").onclick=openArtifacts;$("artifactsDone").onclick=()=>$("artifactsPanel").close();$("artifactsCreate").onclick=createArtifactInChat;
     $("artifactsPanel").addEventListener("close",()=>{closeArtifacts();$("artifactsBody").replaceChildren();setText($("artifactsStatus"),"")});
+    $("homeBackground").onclick=openBackground;$("backgroundDone").onclick=()=>$("backgroundPanel").close();$("backgroundLog").onclick=openBackgroundLog;
+    $("backgroundBack").onclick=()=>{if(!backgroundState)return;backgroundState.view="list";renderBackground()};$("backgroundPanel").addEventListener("close",()=>{closeBackground();$("backgroundBody").replaceChildren()});
     $("homeTasks").onclick=openTasks;$("tasksDone").onclick=()=>$("tasksPanel").close();$("tasksBack").onclick=()=>showTask(null);
     $("tasksSearch").oninput=()=>{if(tasksState){renderTasks();$("tasksPanel").scrollTop=0}};
     $("tasksPanel").addEventListener("close",()=>{closeTasks();$("tasksBody").replaceChildren();setText($("tasksStatus"),"")});
