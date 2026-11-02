@@ -20,7 +20,7 @@ const HOST_ORIGIN = `${HOST_SCHEME}://mac/`;
 const HOST_PARTITION = "persist:cantrip-gateway";
 const LINK_SCHEME = "cantripagent";
 const APP_ID = "com.itzhoang.cantripgateway.windows";
-const REPOSITORY = "https://github.com/FlyingViet/CantripGatewayMac";
+const GATEWAY_SOURCE = "https://github.com/FlyingViet/cantrip/tree/main/Clients/CantripGatewayMac";
 /** The bundled Gateway interface (Preact), served from the same origin as the Mac's API. */
 const GATEWAY_ROOT = resolve(__dirname, "../gateway");
 /**
@@ -667,7 +667,7 @@ function buildMenu(): void {
     {
       role: "help",
       submenu: [
-        { label: "Cantrip Gateway on GitHub", click: () => void shell.openExternal(`${REPOSITORY}/tree/main/windows`) },
+        { label: "Cantrip Gateway on GitHub", click: () => void shell.openExternal(`${GATEWAY_SOURCE}/windows`) },
         { label: "Show Log File", click: () => shell.showItemInFolder(logFile()) },
       ],
     },

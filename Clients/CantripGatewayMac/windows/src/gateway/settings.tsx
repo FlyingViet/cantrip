@@ -307,7 +307,7 @@ function Connection(props: { state: State; setState: (state: State) => void; not
 
       <FormSection header="This PC" footer={`Cantrip Gateway for Windows ${state.version}. The log records routes and errors only, never tokens or messages.`}>
         <FormRow label="Log file"><button type="button" class="btn" onClick={() => void settings.openLog()}>Show Log File</button></FormRow>
-        <FormRow label="Help"><button type="button" class="btn" onClick={() => settings.openExternal("https://github.com/FlyingViet/CantripGatewayMac/tree/main/windows")}>Cantrip Gateway on GitHub</button></FormRow>
+        <FormRow label="Help"><button type="button" class="btn" onClick={() => settings.openExternal("https://github.com/FlyingViet/cantrip/tree/main/Clients/CantripGatewayMac/windows")}>Cantrip Gateway on GitHub</button></FormRow>
       </FormSection>
     </>
   );

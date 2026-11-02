@@ -73,7 +73,7 @@ struct MacHomeCommands: Commands {
 }
 
 enum MacHomeLinks {
-    static let help = URL(string: "https://github.com/FlyingViet/CantripGatewayMac#readme")!
+    static let help = URL(string: "https://github.com/FlyingViet/cantrip/tree/main/Clients/CantripGatewayMac#readme")!
     static let docs = URL(string: "https://github.com/FlyingViet/cantrip/tree/main/docs")!
 }
 
