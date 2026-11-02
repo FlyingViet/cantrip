@@ -3272,6 +3272,13 @@ final class CantripRemoteModel: ObservableObject {
         try await connect(to: server)
     }
 
+    /// Connects again to the Mac in use after its saved credential changed outside this model, as
+    /// when Cantrip.app hands its Home window a new token after `cantrip pair --rotate`.
+    func reconnectSelectedServer() async throws {
+        guard let server = servers.selected, server.id == selectedServerID else { return }
+        try await connect(to: server)
+    }
+
     /// Saves a saved server's re-entered pairing token (e.g. after moving to a new device, where
     /// Keychain tokens don't follow) and connects to it, keeping its entry and history.
     func reenterCredential(_ credential: String, for server: SavedServer) async throws {

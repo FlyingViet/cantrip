@@ -21,9 +21,25 @@ the same.
    either interface.
 3. To go back, choose **Interface: Panel** in the menu bar menu.
 
-The window talks to Cantrip's server on this Mac only (127.0.0.1). If Remote
-control is off, Cantrip runs that server just for the window, with no
-network listener. The window is built when you build Cantrip with full Xcode
+The window opens on this Mac's own Cantrip, listed as **This Mac**, over
+127.0.0.1. If Remote control is off, Cantrip runs that server just for the
+window, with no network listener.
+
+### Use the window with another Mac
+
+The window can also show another Mac's Cantrip, like Cantrip Gateway Mac:
+
+1. In the window, choose **More** (the ⋯ button) › **Settings…**, then **Macs**.
+2. Click **Pair a Mac** and enter the other Mac's pairing token (its Settings ›
+   Remote control, or `cantrip pair` there) and, if needed, its Tailscale URL or
+   direct address.
+3. Open the Mac and click **Use This Mac**. Home, Tasks, Artifacts and the tabs
+   now come from that Mac. Choose **This Mac** the same way to come back.
+
+The window remembers the Mac you picked, also after Cantrip restarts. Other
+Macs' pairing tokens stay in this Mac's Keychain (under "Cantrip Home Window",
+apart from Cantrip Gateway Mac's); This Mac needs no token and can't be removed.
+The panel (**Option+Space** in Panel mode) always works with this Mac. The window is built when you build Cantrip with full Xcode
 and xcodegen installed (`make app` builds it from
 `Clients/CantripGatewayMac`). Without them, Cantrip builds with the panel only and the setting
 explains what's missing. **Option+Shift+Space** (send the selected text)

@@ -4,7 +4,8 @@ import SwiftUI
 /// Cantrip's Home window inside the Cantrip menu bar app: the same window as Cantrip Gateway Mac,
 /// built as a plug-in bundle (`CantripHomeWindow.bundle`, macOS 26) that Cantrip.app loads when
 /// its interface is set to Window. Cantrip passes its own server on this Mac (loopback URL and
-/// token) on every open; nothing is saved to the Keychain or to Gateway Mac's server list.
+/// token) on every open; it shows as "This Mac" in Settings › Macs, where other Macs can be paired
+/// too (see `ThisMacServer`). Nothing is shared with Gateway Mac's server list or Keychain items.
 ///
 /// Cantrip calls these class methods by selector after loading the bundle:
 /// `showWithURL:token:` opens or focuses the window, `close` closes it, `isOpen` reports it,
@@ -38,7 +39,6 @@ public final class CantripHomeWindowPlugin: NSObject {
 @MainActor
 final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
     static let defaultsSuite = "cantrip.home-window"
-    static let serverName = "This Mac"
 
     private let onClose: () -> Void
     private var window: NSWindow?
@@ -48,6 +48,7 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
     private let voice = VoiceController()
     private let navigation = MacHomeNavigation()
     private let directLocal = DirectLocalChat()
+    private let thisMacToken: ThisMacToken
     private var settingsWindow: NSWindow?
     private var connected: (url: String, token: String)?
 
@@ -55,7 +56,10 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
         self.onClose = onClose
         defaults = UserDefaults(suiteName: Self.defaultsSuite) ?? .standard
         env = HermesEnv(servers: ServerProfiles(kind: .hermes, defaults: defaults), defaults: defaults)
-        remote = CantripRemoteModel(servers: ServerProfiles(kind: .cantrip, defaults: defaults))
+        let token = ThisMacToken()
+        thisMacToken = token
+        let credentials = token.store(persistent: .keychain(service: ThisMacServer.keychainService))
+        remote = CantripRemoteModel(servers: ServerProfiles(kind: .cantrip, defaults: defaults, credentials: credentials))
         super.init()
     }
 
@@ -76,18 +80,19 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
         window?.close()
     }
 
-    /// Saves This Mac (replacing an older entry whose port or token changed) and opens Home on it.
+    /// Refreshes This Mac and opens Home on the Mac in use: This Mac, unless another Mac was picked
+    /// in Settings › Macs (then it stays on that one, also after Cantrip relaunches).
     private func connect(url: String, token: String) async {
-        let stale = remote.servers.servers.filter {
-            $0.name == Self.serverName && ($0.url != url || (try? remote.servers.credential(for: $0)) != token)
+        if let registration = try? ThisMacServer.register(url: url, token: token, remote: remote,
+                                                          local: thisMacToken, defaults: defaults) {
+            let server = registration.server
+            if remote.selectedServerID == server.id {
+                try? await remote.reconnectSelectedServer()
+            } else if remote.servers.selectedID == nil || remote.servers.selectedID == server.id
+                        || registration.replacedSelection {
+                try? await remote.selectServer(server)
+            }
         }
-        for server in stale { try? remote.removeServer(server) }
-        if !remote.servers.servers.contains(where: { $0.name == Self.serverName }) {
-            try? remote.addServer(ServerDraft(name: Self.serverName, url: url, credential: token,
-                                              tailscaleOnly: true, directAddress: ""))
-        }
-        guard let server = remote.servers.servers.first(where: { $0.name == Self.serverName }) else { return }
-        try? await remote.selectServer(server)
         if env.executionLane != .home && env.executionLane != .cantrip { env.select(.home) }
         if env.executionLane == .home { await remote.selectHome() }
     }
