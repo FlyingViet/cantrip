@@ -279,6 +279,62 @@ final class RemoteControlServer {
         }
     }
 
+    /// A backend went signed out or out of quota, or is back (BackendStatusMonitor sends each once).
+    func notifyBackendStatus(title: String, body: String) {
+        guard !token.isEmpty else { return }
+        notificationLifecycleLock.lock()
+        let activation = notificationLifecycleTask
+        notificationLifecycleLock.unlock()
+        Task {
+            await activation?.value
+            await notifications.enqueueNotice(title: title, body: body, kind: "backendStatus")
+        }
+    }
+
+    /// Each agent backend's install, sign-in, limits and last run (never a token), and Check now
+    /// or Sign in on one.
+    @MainActor
+    private func handleBackends(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
+        let monitor = BackendStatusMonitor.shared
+        switch request.method {
+        case "GET":
+            sendJSON(monitor.remotePayload(), on: connection)
+        case "POST":
+            guard request.body.count <= 1024,
+                  let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+                  let action = body["action"] as? String else {
+                sendError(400, "Send an action: check (optionally with an id), signIn or cancelSignIn (with an id).", on: connection)
+                return
+            }
+            let backend = (body["id"] as? String).flatMap(MonitoredBackend.init(rawValue:))
+            if body["id"] != nil, backend == nil {
+                sendError(400, "Unknown backend. Use copilot, claude, antigravity or codex.", on: connection)
+                return
+            }
+            var payload: [String: Any]
+            switch action {
+            case "check":
+                monitor.check(backend.map { [$0] })
+                payload = monitor.remotePayload()
+            case "signIn", "cancelSignIn":
+                guard let backend else {
+                    sendError(400, "\(action) needs the backend's id.", on: connection)
+                    return
+                }
+                var message = "Sign-in cancelled."
+                if action == "signIn" { message = monitor.signIn(backend) } else { monitor.cancelSignIn(backend) }
+                payload = monitor.remotePayload()
+                payload["message"] = message
+            default:
+                sendError(400, "Unknown backends action \(action).", on: connection)
+                return
+            }
+            sendJSON(payload, on: connection)
+        default:
+            sendError(405, "method not allowed", on: connection)
+        }
+    }
+
     /// The shared skills library (names, which backends see each, problems) and folder-rule drift;
     /// actions turn a skill on or off, relink, or start a drift check. Never file contents.
     @MainActor
@@ -859,6 +915,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/policy"
                 || request.path == "/api/v1/model-tiers"
                 || request.path == "/api/v1/mcp"
+                || request.path == "/api/v1/backends"
                 || request.path == "/api/v1/skills"
                 || request.path == "/api/v1/secrets"
                 || request.path == "/api/v1/link-previews/image"
@@ -877,6 +934,10 @@ final class RemoteControlServer {
         }
         if request.path == "/api/v1/mcp" {
             handleMCP(request, on: connection)
+            return
+        }
+        if request.path == "/api/v1/backends" {
+            handleBackends(request, on: connection)
             return
         }
         if request.path == "/api/v1/skills" {
@@ -3392,9 +3453,9 @@ private extension RemoteControlServer {
     .policy-rule{display:grid;gap:4px;padding:10px 0;border-top:1px solid var(--line)}.policy-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.policy-head strong{flex:1;min-width:140px;overflow-wrap:anywhere}.policy-rule .muted{overflow-wrap:anywhere}.policy-rule.off{opacity:.55}
     .policy-effect{font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid var(--line)}.policy-effect.deny{color:#b42318}.policy-effect.ask{color:#b54708}.policy-effect.allow{color:#067647}
     #policyEditor textarea{width:100%;min-height:90px;font:12px ui-monospace,monospace}#policyJSON{min-height:260px}#policyEditor button,#policyEditor select{min-height:44px}#policyEditor details{margin-top:12px}#policyEditor form{display:grid;gap:8px}
-    #mcpEditor{width:min(calc(100% - 24px),760px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#mcpEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor{width:min(calc(100% - 24px),640px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#secretsEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor button{min-height:44px}.secret-row{display:flex;gap:10px;align-items:baseline;padding:6px 0;border-top:1px solid var(--line)}.secret-row code{font-weight:600}
+    #mcpEditor,#backendsEditor{width:min(calc(100% - 24px),760px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#mcpEditor::backdrop,#backendsEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor{width:min(calc(100% - 24px),640px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#secretsEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor button{min-height:44px}.secret-row{display:flex;gap:10px;align-items:baseline;padding:6px 0;border-top:1px solid var(--line)}.secret-row code{font-weight:600}
     .mcp-row{border-top:1px solid var(--line);padding:10px 0;display:flex;flex-direction:column;gap:6px}.mcp-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.mcp-head strong{flex:1}.mcp-status{font-size:13px}.mcp-status.attn{color:var(--accent,#0a84ff)}.mcp-status.warn{color:#c76a00}
-    .mcp-switches{display:flex;gap:12px;flex-wrap:wrap;font-size:13px}.mcp-page img{max-width:100%;max-height:340px;border:1px solid var(--line);border-radius:8px}#mcpEditor button,#skillsEditor button{min-height:44px}.mcp-warn{color:#c76a00;font-size:13px;margin:0}
+    .mcp-switches{display:flex;gap:12px;flex-wrap:wrap;font-size:13px}.mcp-page img{max-width:100%;max-height:340px;border:1px solid var(--line);border-radius:8px}#mcpEditor button,#skillsEditor button,#backendsEditor button,#backendsEditor .backend-link{min-height:44px}.backend-lines{font-size:13px;display:flex;flex-direction:column;gap:2px}.backend-code{font:600 22px ui-monospace,Menlo,monospace;letter-spacing:.08em;user-select:all}.backend-link{display:inline-flex;align-items:center}.mcp-warn{color:#c76a00;font-size:13px;margin:0}
     #desktopEditor::backdrop{background:rgba(0,0,0,.35)}#desktopEditor .tab-actions{flex-wrap:wrap}#desktopEditor button,#desktopEditor select{min-height:44px}
     #desktopViewport{height:380px;overflow:auto;border:1px solid var(--line)}#desktopImage{display:block;max-width:none;height:auto;width:100%}
     #desktopText{width:100%;box-sizing:border-box;min-height:44px}#desktopPermissions>div{margin:12px 0}
@@ -3494,7 +3555,7 @@ private extension RemoteControlServer {
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
     <label id="tabSectionLabel" class="hidden">Section<select id="tabSection"></select></label><input id="tabNewSection" class="hidden" maxlength="40" autocomplete="off" placeholder="New section name" aria-label="New section name">
-    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button><button id="tabPolicy" type="button" class="control">Agent Policy</button><button id="tabSkills" type="button" class="control">Skills &amp; Rules</button><button id="tabSecrets" type="button" class="control">Secrets</button>
+    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button><button id="tabBackends" type="button" class="control">Backends</button><button id="tabPolicy" type="button" class="control">Agent Policy</button><button id="tabSkills" type="button" class="control">Skills &amp; Rules</button><button id="tabSecrets" type="button" class="control">Secrets</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
@@ -3525,6 +3586,8 @@ private extension RemoteControlServer {
     </div></form></dialog>
     <dialog id="browserViewer" aria-labelledby="browserViewerTitle"><div class="browser-top"><span id="browserViewerTitle">Agent Chrome</span><button id="browserViewerClose" class="control">Close</button></div>
     <img id="browserViewerImage" alt="Live view of the agent browser"><div id="browserViewerError" role="status"></div></dialog>
+    <dialog id="backendsEditor" aria-labelledby="backendsTitle"><div class="tasks-bar"><strong id="backendsTitle" class="grow">Backends</strong><button id="backendsCheck" type="button" class="control" aria-label="Check every backend now">Check now</button><button id="backendsDone" type="button" class="control">Done</button></div>
+    <p class="muted">Whether each agent CLI on the Mac is installed and signed in. Cantrip skips a signed-out backend and runs your backups instead.</p><div id="backendsError" role="alert"></div><div id="backendsStatus" class="muted" role="status" aria-live="polite"></div><div id="backendsList"></div></dialog>
     <dialog id="mcpEditor" aria-labelledby="mcpTitle"><div class="tasks-bar"><strong id="mcpTitle" class="grow">MCP Servers</strong><button id="mcpDone" type="button" class="control">Done</button></div>
     <p class="muted">Every backend shares these. Sign-ins open in the agent Chrome; approve them here.</p><div id="mcpError" role="alert"></div><div id="mcpList"></div></dialog>
     <dialog id="policyEditor" aria-labelledby="policyTitle"><div class="tasks-bar"><strong id="policyTitle" class="grow">Agent Policy</strong><button id="policyReload" type="button" class="control">Reload</button><button id="policyDone" type="button" class="control">Done</button></div>
@@ -4315,6 +4378,34 @@ private extension RemoteControlServer {
         if(s.state&&["awaitingApproval","needsLogin","connecting","failed","locked"].includes(phase)){const page=el("div","mcp-page");if(s.state.message)page.append(el("p","muted",s.state.message));
           if(s.state.screenshot){const img=document.createElement("img");img.alt=`The sign-in page for ${s.name}`;img.src=`data:image/jpeg;base64,${s.state.screenshot}`;page.append(img)}
           if(phase==="awaitingApproval"){const a=el("div","tab-actions");a.append(button("Decline","decline"),button("Approve","approve",true));page.append(a)}row.append(page)}
+        list.append(row)}}
+    let backendsState=null,backendsTimer=null;
+    $("tabBackends").onclick=()=>{if(tabSaving||movingTab)return;$("tabEditor").close();editingTab=null;$("backendsError").textContent="";$("backendsStatus").textContent="";$("backendsEditor").showModal();loadBackends()};
+    $("backendsDone").onclick=()=>$("backendsEditor").close();$("backendsEditor").addEventListener("close",()=>{clearTimeout(backendsTimer);backendsState=null});
+    $("backendsCheck").onclick=()=>backendsAction({action:"check"});
+    async function loadBackends(){clearTimeout(backendsTimer);if(!$("backendsEditor").open)return;try{backendsState=await api("/api/v1/backends");$("backendsError").textContent="";renderBackends()}catch(e){$("backendsError").textContent=e.status===404?"Update Cantrip on the Mac to see backend status.":(e.message||"Backend status isn't available.")}
+      const busy=(backendsState?.backends||[]).some(b=>b.checking||b.signIn?.code);backendsTimer=setTimeout(loadBackends,busy?1500:8000)}
+    async function backendsAction(body){try{backendsState=await api("/api/v1/backends",{method:"POST",body:JSON.stringify(body)});$("backendsError").textContent="";$("backendsStatus").textContent=body.action==="check"?"Checking…":"";renderBackends();clearTimeout(backendsTimer);backendsTimer=setTimeout(loadBackends,800)}catch(e){$("backendsError").textContent=e.message||"That didn't work."}}
+    const backendStates={ready:["Ready",""],signedOut:["Signed out","warn"],outOfQuota:["Out of quota","warn"],notInstalled:["Not installed",""],unknown:["Unknown","attn"]};
+    function backendTime(iso){const d=iso?new Date(iso):null;return d&&!isNaN(d)?d.toLocaleString([],{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}):""}
+    function renderBackends(){const list=$("backendsList");list.replaceChildren();
+      for(const b of backendsState?.backends||[]){const row=el("div","mcp-row"),head=el("div","mcp-head"),[label,cls]=backendStates[b.state]||backendStates.unknown;
+        row.setAttribute("role","group");row.setAttribute("aria-label",`${b.name}: ${label}`);
+        head.append(el("strong","",b.name),el("span",`mcp-status ${cls}`,b.checking?"Checking…":label));
+        const button=(text,action,aria,primary)=>{const x=el("button",`control${primary?" primary":""}`,text);x.type="button";x.setAttribute("aria-label",aria);x.onclick=()=>backendsAction({action,id:b.id});return x};
+        head.append(button("Check now","check",`Check ${b.name} now`));
+        const pending=!!b.signIn?.code;if(pending)head.append(button("Cancel","cancelSignIn",`Cancel the ${b.name} sign-in`));
+        else if(b.state!=="notInstalled"&&(b.state==="signedOut"||b.signedIn!==true))head.append(button("Sign in","signIn",`Sign in to ${b.name}`,true));
+        row.append(head);const lines=el("div","backend-lines");const line=(text,c="muted")=>{if(text)lines.append(el("span",c,text))};
+        line(b.summary,"");if(b.state==="notInstalled")line(`Install ${b.name} on the Mac to use it.`);
+        if(b.path)line(`Installed: ${b.path}${b.version?` · ${b.version}`:""}`);if(b.account||b.authMethod||b.plan)line(`Account: ${[b.account,b.authMethod,b.plan].filter(Boolean).join(" · ")}`);
+        for(const q of b.quota||[])line(`${q.name}: ${q.usedPercent==null?"usage unknown":`${Math.round(q.usedPercent)}% used`}${q.resetsAt?` · resets ${backendTime(q.resetsAt)}`:""}`);
+        if(b.lastSuccessAt)line(`Last successful run: ${backendTime(b.lastSuccessAt)}`);if(b.lastAuthError)line(`Last sign-in error: ${b.lastAuthError.message} (${backendTime(b.lastAuthError.at)})`,"mcp-warn");
+        if(b.problem&&b.state==="unknown")line(b.problem,"mcp-warn");line(b.checking?"Checking now…":b.checkedAt?`Checked ${backendTime(b.checkedAt)}`:"Not checked yet");row.append(lines);
+        const s=b.signIn||{};if(pending){const page=el("div","mcp-page");page.append(el("p","muted",s.message||"Open the link on any device and enter the code."),el("div","backend-code",s.code));
+          const acts=el("div","tab-actions");if(s.url){const a=el("a","control primary backend-link","Open link");a.href=s.url;a.target="_blank";a.rel="noopener";a.setAttribute("aria-label",`Open the ${b.name} sign-in page`);acts.append(a)}
+          const copy=el("button","control","Copy code");copy.type="button";copy.setAttribute("aria-label",`Copy the ${b.name} sign-in code`);copy.onclick=()=>navigator.clipboard?.writeText(s.code).then(()=>{$("backendsStatus").textContent="Code copied."});acts.append(copy);page.append(acts);row.append(page)}
+        else if(s.message)row.append(el("p","muted",s.message));else if(s.mode==="terminal"&&b.state!=="ready"&&b.state!=="notInstalled")row.append(el("p","muted",s.hint));
         list.append(row)}}
     let skillsState=null,skillsTimer=null,skillsSaving=false;
     $("tabSkills").onclick=()=>{if(tabSaving||movingTab)return;$("tabEditor").close();editingTab=null;$("skillsError").textContent="";$("skillsStatus").textContent="";$("skillsEditor").showModal();loadSkills()};

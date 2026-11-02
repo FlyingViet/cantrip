@@ -271,6 +271,13 @@ actor RemoteNotifications {
                                  homeRun: homeRun ? true : nil))
     }
 
+    /// A one-off alert that isn't about a tab (a backend signed out, or back): its own title and
+    /// text, no badge, and the app opens its Backends settings for `kind`.
+    func enqueueNotice(title: String, body: String, kind: String) {
+        enqueue(RemoteCompletion(id: UUID(), sessionID: UUID(uuid: UUID_NULL), title: String(title.prefix(120)),
+                                 summary: String(body.prefix(300)), completedAt: Date(), kind: kind), seen: true)
+    }
+
     func resolveInput(_ id: UUID) {
         pendingInputs.remove(id)
         let before = (try? load()).map { badgeCount($0) } ?? 0
@@ -486,7 +493,9 @@ actor RemoteNotifications {
         request.setValue(String(Int((completion.expiresAt ?? completion.completedAt.addingTimeInterval(3600)).timeIntervalSince1970)),
                          forHTTPHeaderField: "apns-expiration")
         let input = completion.isAttention
-        let alert = completion.kind == "mcpSignIn"
+        let notice = completion.kind == "backendStatus"
+        let alert = notice ? ["title": completion.title, "body": completion.summary]
+            : completion.kind == "mcpSignIn"
             ? ["title": "An MCP sign-in needs your OK", "body": "Open Cantrip Agent to approve it in MCP Servers."]
             : input ? ["title": completion.kind == "macAttention" ? "Cantrip Mac needs attention"
                                 : completion.homeRun == true ? "Cantrip Home needs your input" : "Cantrip needs your input",
@@ -503,7 +512,7 @@ actor RemoteNotifications {
             "aps": aps,
             "cantrip": ["eventID": completion.id.uuidString, "sessionID": completion.sessionID.uuidString,
                         "serverID": registration.serverID.uuidString, "fingerprint": fingerprint,
-                        "kind": input ? (completion.kind ?? "input") : "completion"]
+                        "kind": notice ? "backendStatus" : input ? (completion.kind ?? "input") : "completion"]
                 .merging(completion.homeRun == true ? ["home": "run"] : [:]) { current, _ in current },
         ])
         guard request.httpBody!.count <= 4096 else {
