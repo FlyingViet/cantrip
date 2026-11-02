@@ -787,6 +787,8 @@ struct CantripHomeTaskRun: Decodable, Equatable, Identifiable {
     let summary: String
     /// The model the run used; older Macs and runs omit it.
     var model: String? = nil
+    /// Cards from the run's weather, places and card blocks; older Macs omit them.
+    var cards: [CantripCard]? = nil
 }
 
 /// A scheduled-task or incident run on the Mac: in its own hidden session, or handed to the
@@ -813,6 +815,8 @@ struct CantripHomeBackgroundRun: Decodable, Equatable, Identifiable {
     var inputs: [CantripInputRequest]? = nil
     /// The model a hidden run used; older Macs omit it.
     var model: String? = nil
+    /// Cards from the run's weather, places and card blocks; older Macs omit them.
+    var cards: [CantripCard]? = nil
 
     var isIncident: Bool { kind == "incident" }
     var isRunning: Bool { status == "running" }
@@ -901,6 +905,21 @@ struct CantripHomeTaskWorkspace: Decodable, Equatable {
     let list: CantripHomeTaskListPresentation
     let detailSections: [CantripHomeTaskDetailSection]
     let records: [CantripHomeTaskRecord]
+    /// What the Mac builds from the records; a record's detail asks for its weather and map cards.
+    var cards: [CantripHomeTaskCardSpec]? = nil
+
+    var hasRecordCards: Bool { (cards ?? []).contains { $0.kind == "weather" || $0.kind == "map" } }
+}
+
+/// One of a workspace's cards, as far as this app needs to know: what kind it is.
+struct CantripHomeTaskCardSpec: Decodable, Equatable {
+    let kind: String
+
+    init(from decoder: Decoder) throws {
+        kind = (try? decoder.container(keyedBy: Keys.self).decode(String.self, forKey: .kind)) ?? ""
+    }
+
+    private enum Keys: String, CodingKey { case kind }
 }
 
 struct CantripHomeTask: Decodable, Equatable, Identifiable {
@@ -921,6 +940,8 @@ struct CantripHomeTask: Decodable, Equatable, Identifiable {
     /// The task's own Copilot model and effort; nil runs on Home's model.
     var model: String? = nil
     var effort: String? = nil
+    /// Cards the Mac built from the workspace's records (`workspaceCards` in the tasks snapshot).
+    var workspaceCards: [CantripCard]? = nil
 
     var isScheduled: Bool { hasSchedule != false }
     /// "claude-sonnet-5.5 · high", or nil when the task follows Home's model.
@@ -993,6 +1014,22 @@ private struct CantripHomeTasksResponse: Decodable {
     let error: String?
     let supportsReordering: Bool?
     let unchanged: Bool?
+    /// Each workspace's cards built from its records, by task ID; older Macs omit it.
+    var workspaceCards: [String: [CantripCard]]? = nil
+
+    /// The tasks with their workspace cards attached.
+    var tasksWithCards: [CantripHomeTask]? {
+        tasks?.map { task in
+            var task = task
+            task.workspaceCards = workspaceCards?[task.id.uuidString]
+            return task
+        }
+    }
+}
+
+private struct CantripHomeRecordCardsResponse: Decodable {
+    var cards: [CantripCard]? = nil
+    var refreshAfter: Int? = nil
 }
 
 typealias CantripHomeTasksSnapshot = (
@@ -1947,8 +1984,16 @@ struct CantripRemoteAPI {
             guard let revision, response.revision == revision else { throw CantripRemoteError.invalidResponse }
             return nil
         }
-        guard let tasks = response.tasks else { throw CantripRemoteError.invalidResponse }
+        guard let tasks = response.tasksWithCards else { throw CantripRemoteError.invalidResponse }
         return (tasks, response.revision, response.error, response.supportsReordering == true)
+    }
+
+    /// A record's weather and map cards, and how many seconds until they're worth asking for again.
+    func homeRecordCards(taskID: UUID, recordID: UUID) async throws -> (cards: [CantripCard], refreshAfter: Int) {
+        let response: CantripHomeRecordCardsResponse = try await request(
+            path: "/api/v1/home/tasks/\(taskID.uuidString)/records/\(recordID.uuidString)/cards"
+        )
+        return (response.cards ?? [], max(30, response.refreshAfter ?? 300))
     }
 
     static func path(_ path: String, revision: String?) -> String {
@@ -1966,7 +2011,7 @@ struct CantripRemoteAPI {
                 "targetID": targetID.uuidString, "placement": after ? "after" : "before",
             ])
         )
-        guard let tasks = response.tasks else { throw CantripRemoteError.invalidResponse }
+        guard let tasks = response.tasksWithCards else { throw CantripRemoteError.invalidResponse }
         return (tasks, response.revision, response.error, response.supportsReordering == true)
     }
 
@@ -3938,6 +3983,9 @@ final class CantripRemoteModel: ObservableObject {
                 )
             }
             if let index = homeTasks.firstIndex(where: { $0.id == updated.id }) {
+                // A single task comes back without its workspace cards; the next refresh rebuilds them.
+                var updated = updated
+                updated.workspaceCards = homeTasks[index].workspaceCards
                 homeTasks[index] = updated
             }
             homeDataError = nil
@@ -4032,6 +4080,9 @@ final class CantripRemoteModel: ObservableObject {
                 return try await api.createHomeTaskRecord(taskID: taskID, values: values)
             }
             if let index = homeTasks.firstIndex(where: { $0.id == updated.id }) {
+                // A single task comes back without its workspace cards; the next refresh rebuilds them.
+                var updated = updated
+                updated.workspaceCards = homeTasks[index].workspaceCards
                 homeTasks[index] = updated
             }
             homeDataError = nil
@@ -4039,6 +4090,13 @@ final class CantripRemoteModel: ObservableObject {
         } catch {
             homeDataError = error.localizedDescription
             return false
+        }
+    }
+
+    /// A record's weather and map cards (nil when the Mac can't answer them right now).
+    func homeRecordCards(taskID: UUID, recordID: UUID) async -> (cards: [CantripCard], refreshAfter: Int)? {
+        try? await performAuthenticated(allowFallback: false) {
+            try await $0.homeRecordCards(taskID: taskID, recordID: recordID)
         }
     }
 
@@ -4051,6 +4109,9 @@ final class CantripRemoteModel: ObservableObject {
                 try await $0.deleteHomeTaskRecord(taskID: taskID, recordID: recordID)
             }
             if let index = homeTasks.firstIndex(where: { $0.id == updated.id }) {
+                // A single task comes back without its workspace cards; the next refresh rebuilds them.
+                var updated = updated
+                updated.workspaceCards = homeTasks[index].workspaceCards
                 homeTasks[index] = updated
             }
             homeDataError = nil

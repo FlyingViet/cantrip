@@ -446,6 +446,11 @@ struct CantripHomeBackgroundRunRow: View {
             } else {
                 summary.accessibilityElement(children: .combine)
             }
+            if !run.isRunning, let cards = run.cards, !cards.isEmpty, let remote {
+                CantripCardStack(cards: cards, remote: remote)
+                    .padding(.top, 4)
+                    .accessibilityIdentifier("home.background.cards")
+            }
             if let handoffs = run.handoffs, !handoffs.isEmpty {
                 CantripHandoffStack(handoffs: handoffs, onOpenTab: onOpenTab)
                     .padding(.top, 4)

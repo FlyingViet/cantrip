@@ -655,6 +655,9 @@ private struct CantripHomeTaskEditView: View {
                             LabeledContent("Model", value: model)
                         }
                         CantripHomeRunSummaryText(summary: run.summary)
+                        if let cards = run.cards, !cards.isEmpty {
+                            CantripHomeCardsRow(cards: cards, remote: remote)
+                        }
                     }
                 }
             }
@@ -754,6 +757,24 @@ struct CantripHomeTaskWorkspaceView: View {
                             Label(error, systemImage: "exclamationmark.triangle.fill")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
+                        }
+                        if !isSearching {
+                            // Cards built from the records (bills due this week), then the latest
+                            // run's cards, above the list.
+                            if let cards = task.workspaceCards, !cards.isEmpty {
+                                CantripHomeCardsRow(cards: cards, remote: remote)
+                            }
+                            if let run = task.runs.first, let cards = run.cards, !cards.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Latest run · \(run.finishedAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    CantripHomeRunSummaryText(summary: run.summary, lineLimit: 3)
+                                        .font(.callout)
+                                }
+                                .listRowSeparator(.hidden)
+                                CantripHomeCardsRow(cards: cards, remote: remote)
+                            }
                         }
                         if let sections = CantripHomeWorkspaceGrouping.sections(
                             for: workspace, records: records, searching: isSearching
@@ -943,9 +964,20 @@ private struct CantripHomeTaskRecordDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var editorTarget: CantripHomeRecordEditorTarget?
     @State private var confirmingDelete = false
+    /// The record's weather and map cards, refreshed while the detail stays open.
+    @State private var recordCards: [CantripCard] = []
 
     private var task: CantripHomeTask? {
         remote.homeTasks.first { $0.id == taskID }
+    }
+
+    /// Asks the Mac for the record's cards, then again every `refreshAfter` seconds while it's shown.
+    private func followRecordCards() async {
+        while !Task.isCancelled, workspace?.hasRecordCards == true {
+            let answer = await remote.homeRecordCards(taskID: taskID, recordID: recordID)
+            if let answer, answer.cards != recordCards { recordCards = answer.cards }
+            try? await Task.sleep(for: .seconds(answer?.refreshAfter ?? 60))
+        }
     }
 
     private var workspace: CantripHomeTaskWorkspace? { task?.workspace }
@@ -963,6 +995,9 @@ private struct CantripHomeTaskRecordDetailView: View {
         Group {
             if let workspace, let record {
                 List {
+                    if workspace.hasRecordCards, !recordCards.isEmpty {
+                        CantripHomeCardsRow(cards: recordCards, remote: remote)
+                    }
                     ForEach(sections(workspace)) { section in
                         Section(section.title ?? "") {
                             ForEach(section.fields, id: \.self) { key in
@@ -991,6 +1026,7 @@ private struct CantripHomeTaskRecordDetailView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: record?.values) { await followRecordCards() }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button("Edit") {
@@ -1600,6 +1636,20 @@ struct CantripArtifactCardLabel: View {
 /// A task run's summary. A run that ends with a "Summary:" section reports it as short lines
 /// ("Upcoming interviews: …"), shown one per row with the label emphasized; one-line
 /// summaries render as before.
+/// Cards in a Home list (Tasks, a workspace, a record): edge to edge, no row chrome.
+struct CantripHomeCardsRow: View {
+    let cards: [CantripCard]
+    @ObservedObject var remote: CantripRemoteModel
+
+    var body: some View {
+        CantripCardStack(cards: cards, remote: remote)
+            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .accessibilityIdentifier("home.cards")
+    }
+}
+
 struct CantripHomeRunSummaryText: View {
     let summary: String
     /// How far each line may wrap; nil shows all of it.
