@@ -15,13 +15,15 @@ import type {
 import type { PluginMcpSnapshot } from "../shared/pluginTypes";
 
 const execFileAsync = promisify(execFile);
-const ansiPattern =
+export const ansiPattern =
   // eslint-disable-next-line no-control-regex
   /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
 
-interface CommandSpec {
+export interface CommandSpec {
   executable: string;
   prefixArgs: string[];
+  /** What PATH found (the .exe, or the npm .cmd shim). */
+  path?: string;
 }
 
 const labels: Record<BackendId, string> = {
@@ -46,10 +48,10 @@ async function where(command: string): Promise<string[]> {
   }
 }
 
-async function commandSpec(command: string): Promise<CommandSpec | null> {
+export async function commandSpec(command: string): Promise<CommandSpec | null> {
   const matches = await where(command);
   const native = matches.find((file) => [".exe", ".com"].includes(path.extname(file).toLocaleLowerCase()));
-  if (native) return { executable: native, prefixArgs: [] };
+  if (native) return { executable: native, prefixArgs: [], path: native };
 
   const shim = matches.find((file) => [".cmd", ".bat"].includes(path.extname(file).toLocaleLowerCase()));
   if (!shim || !existsSync(shim)) return null;
@@ -62,7 +64,7 @@ async function commandSpec(command: string): Promise<CommandSpec | null> {
 
   const localNode = path.join(path.dirname(shim), "node.exe");
   const node = existsSync(localNode) ? localNode : (await where("node")).find((file) => file.endsWith(".exe"));
-  return node ? { executable: node, prefixArgs: [script] } : null;
+  return node ? { executable: node, prefixArgs: [script], path: shim } : null;
 }
 
 export function backendArgs(
@@ -309,6 +311,11 @@ export class RunManager {
 
   private async resolve(id: BackendId): Promise<CommandSpec | null> {
     if (this.specs.has(id)) return this.specs.get(id) ?? null;
+    return this.refresh(id);
+  }
+
+  /** Looks the CLI up on PATH again (a backend check), so an install or removal shows without a restart. */
+  async refresh(id: BackendId): Promise<CommandSpec | null> {
     const spec = await commandSpec(id);
     this.specs.set(id, spec);
     return spec;

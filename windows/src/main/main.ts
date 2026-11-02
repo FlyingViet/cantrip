@@ -9,6 +9,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  Notification,
   protocol,
   screen,
   shell,
@@ -17,8 +18,10 @@ import {
 import type { OpenDialogOptions } from "electron";
 import { AppCatalog } from "./appCatalog";
 import { RunManager } from "./backends";
+import { BackendHealthMonitor, githubCliSignedIn, probeBackend, runCommand } from "./backendHealth";
 import { UpdateManager } from "./updateManager";
 import { PluginRegistry } from "./plugins";
+import { parseBackendsAction, withHealth } from "../shared/backendHealth";
 import type { RunRequest, ShortcutStatus, UpdateState } from "../shared/types";
 
 const appCatalog = new AppCatalog();
@@ -27,6 +30,9 @@ let launcher: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let updateManager: UpdateManager | null = null;
 let pluginRegistry: PluginRegistry | null = null;
+let backendHealth: BackendHealthMonitor | null = null;
+// Shown notifications stay referenced so a click still reaches its handler.
+const backendNotifications = new Set<Notification>();
 let shortcutStatus: ShortcutStatus = {
   accelerator: null,
   displayName: "Unavailable",
@@ -184,6 +190,43 @@ function updateTrayMenu(): void {
   );
 }
 
+/** The backend list with signed-out backends unavailable, so routing uses a backup. */
+async function backendStatuses() {
+  return withHealth(await runManager.statuses(), backendHealth?.snapshot().backends ?? []);
+}
+
+function openBackendsSettings(): void {
+  showLauncher();
+  launcher?.webContents.send("backends:open");
+}
+
+function createBackendHealth(): BackendHealthMonitor {
+  return new BackendHealthMonitor({
+    storePath: path.join(app.getPath("userData"), "backend-status.json"),
+    resolve: (id) => runManager.refresh(id),
+    probe: (id) =>
+      probeBackend(id, {
+        resolve: (backend) => runManager.refresh(backend),
+        run: runCommand,
+        home: app.getPath("home"),
+        env: process.env,
+        githubCliSignedIn,
+      }),
+    notify: (title, body) => {
+      if (!Notification.isSupported()) return;
+      const notification = new Notification({ title, body });
+      backendNotifications.add(notification);
+      notification.on("click", () => {
+        backendNotifications.delete(notification);
+        openBackendsSettings();
+      });
+      notification.on("close", () => backendNotifications.delete(notification));
+      notification.show();
+    },
+    onChange: (snapshot) => launcher?.webContents.send("backends:health", snapshot),
+  });
+}
+
 function handleUpdateState(state: UpdateState): void {
   launcher?.webContents.send("updates:state", state);
   updateTrayMenu();
@@ -256,7 +299,14 @@ function registerIpc(): void {
     if (typeof id !== "string") return { ok: false, error: "Invalid app." };
     return appCatalog.launch(id);
   });
-  ipcMain.handle("backends:status", () => runManager.statuses());
+  ipcMain.handle("backends:status", () => backendStatuses());
+  ipcMain.handle("backends:health", () => backendHealth?.snapshot());
+  ipcMain.handle("backends:action", async (_event, input: unknown) => {
+    const action = parseBackendsAction(input);
+    if (!backendHealth) throw new Error("Backend checks aren't ready yet.");
+    if (!action) return { ...backendHealth.snapshot(), message: "Invalid backend action." };
+    return backendHealth.perform(action);
+  });
   ipcMain.handle("shortcut:status", () => shortcutStatus);
   ipcMain.handle("shortcut:retry", () => {
     registerShortcut();
@@ -317,10 +367,19 @@ function registerIpc(): void {
   });
   ipcMain.handle("run:start", async (_event, request: unknown) => {
     if (!request || typeof request !== "object") return { ok: false, error: "Invalid run." };
+    const run = request as RunRequest;
+    // The output's tail tells a sign-in failure apart from any other (Settings › Backends).
+    let tail = "";
     return runManager.start(
-      request as RunRequest,
-      (chunk) => launcher?.webContents.send("run:chunk", chunk),
-      (exit) => launcher?.webContents.send("run:exit", exit),
+      run,
+      (chunk) => {
+        tail = (tail + chunk.text).slice(-8_000);
+        launcher?.webContents.send("run:chunk", chunk);
+      },
+      (exit) => {
+        if (run.mode === "ai") backendHealth?.runFinished(run.backend, exit.exitCode, exit.error, tail);
+        launcher?.webContents.send("run:exit", exit);
+      },
     );
   });
   ipcMain.handle("run:cancel", (_event, runId: unknown) =>
@@ -372,11 +431,13 @@ if (!instanceLock) {
   app.whenReady().then(async () => {
     app.setAppUserModelId("dev.flyingviet.cantrip.windows");
     await runManager.cleanupStaleAttachments();
+    backendHealth = createBackendHealth();
     createLauncher();
     registerShortcut();
     updateManager = new UpdateManager(handleUpdateState);
     createTray();
     registerIpc();
+    backendHealth.start();
     updateManager.initialize();
     const pluginRoot =
       process.env.CANTRIP_PLUGIN_DIR ??
@@ -397,7 +458,7 @@ if (!instanceLock) {
       },
       getCantripStatus: async () => ({
         version: app.getVersion(),
-        backends: await runManager.statuses(),
+        backends: await backendStatuses(),
         update: updateManager?.getState(),
       }),
       runAction: runPluginAction,
@@ -411,6 +472,7 @@ if (!instanceLock) {
 app.on("will-quit", () => {
   quitting = true;
   runManager.cancelAll();
+  backendHealth?.stop();
   pluginRegistry?.dispose();
   globalShortcut.unregisterAll();
 });

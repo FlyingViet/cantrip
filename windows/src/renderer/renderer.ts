@@ -1,10 +1,25 @@
 import "./styles.css";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import {
+  BACKEND_IDS,
+  backendCheckLine,
+  backendLines,
+  backendOffersSignIn,
+  backendShowsCode,
+  backendSignInLine,
+  backendSignInPending,
+  backendStatus,
+  routeBackend,
+} from "../shared/backendHealth";
 import { getInstantAnswer, type InstantAnswer } from "../shared/instantAnswers";
 import type {
   AppMatch,
+  BackendHealth,
   BackendId,
+  BackendsAction,
+  BackendsSnapshot,
+  BackendStatus,
   ContextTier,
   ReasoningEffort,
   RunRequest,
@@ -64,6 +79,10 @@ const pluginsList = requiredElement<HTMLElement>("plugins-list");
 const pluginsOpenFolder = requiredElement<HTMLButtonElement>("plugins-open-folder");
 const pluginsRescan = requiredElement<HTMLButtonElement>("plugins-rescan");
 const pluginsInstallExample = requiredElement<HTMLButtonElement>("plugins-install-example");
+const settingsBackendsSection = requiredElement<HTMLElement>("settings-backends-section");
+const backendsList = requiredElement<HTMLElement>("backends-list");
+const backendsCheckAll = requiredElement<HTMLButtonElement>("backends-check-all");
+const backendsError = requiredElement<HTMLElement>("backends-error");
 
 interface BackendControls {
   models: string[];
@@ -153,9 +172,24 @@ let screenCaptures: ScreenCapture[] = [];
 let outputText = "";
 let currentRunMode: "ai" | "shell" | null = null;
 let plugins: PluginSummary[] = [];
+let backendHealth: BackendsSnapshot | null = null;
+let backendActionBusy = false;
+/** Backends whose Check now is on its way to the main process ("Checking…" at once). */
+const backendCheckPending = new Set<BackendId>();
+interface BackendRow {
+  card: HTMLElement;
+  body: HTMLElement;
+  /** The one sign-in line (a live region; visually hidden while a code shows). */
+  signIn: HTMLElement;
+  device: HTMLElement;
+  deviceKey: string;
+  copyNote: HTMLElement;
+  status: HTMLElement;
+  actions: HTMLElement;
+}
+const backendRows = new Map<BackendId, BackendRow>();
 
 function saveSettings(): void {
-  localStorage.setItem("backend", backendSelect.value);
   localStorage.setItem("allowActions", String(actionsCheckbox.checked));
   localStorage.setItem("workdir", workdir);
 }
@@ -417,6 +451,244 @@ function renderPlugins(): void {
   }
 }
 
+/** Backend picker options: signed-out or missing CLIs can't be chosen; routing picks a backup. */
+function applyBackendStatuses(statuses: BackendStatus[]): void {
+  for (const status of statuses) {
+    let option = [...backendSelect.options].find((entry) => entry.value === status.id);
+    if (!option) {
+      option = document.createElement("option");
+      option.value = status.id;
+      backendSelect.append(option);
+    }
+    option.textContent = status.label;
+    option.disabled = !status.available;
+    option.title = status.detail;
+
+    let settingsOption = [...settingsBackend.options].find((entry) => entry.value === status.id);
+    if (!settingsOption) {
+      settingsOption = document.createElement("option");
+      settingsOption.value = status.id;
+      settingsBackend.append(settingsOption);
+    }
+    const signedOut = backendHealth?.backends.some((entry) => entry.id === status.id && entry.unavailable);
+    settingsOption.textContent = status.available
+      ? status.label
+      : `${status.label} — ${signedOut ? "signed out" : "not installed"}`;
+  }
+  const routed = routeBackend(localStorage.getItem("backend"), statuses);
+  if (routed && backendSelect.value !== routed) {
+    backendSelect.value = routed;
+    renderSuggestions();
+  }
+}
+
+function backendButton(
+  label: string,
+  ariaLabel: string,
+  focusKey: string,
+  onClick: () => void,
+  options: { primary?: boolean; disabled?: boolean; describedBy?: string } = {},
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.setAttribute("aria-label", ariaLabel);
+  button.dataset.focusKey = focusKey;
+  if (options.primary) button.className = "primary";
+  // aria-disabled keeps a pressed button focusable while its backend is busy.
+  if (options.disabled) button.setAttribute("aria-disabled", "true");
+  if (options.describedBy) button.setAttribute("aria-describedby", options.describedBy);
+  button.addEventListener("click", () => {
+    if (button.getAttribute("aria-disabled") !== "true") onClick();
+  });
+  return button;
+}
+
+function backendLine(text: string, warning = false): HTMLParagraphElement {
+  const line = document.createElement("p");
+  line.className = `backend-line${warning ? " warning" : ""}`;
+  line.textContent = text;
+  return line;
+}
+
+function backendRowBody(backend: BackendHealth, now: number): HTMLElement[] {
+  const header = document.createElement("div");
+  header.className = "plugin-card-header";
+  const identity = document.createElement("span");
+  const name = document.createElement("strong");
+  name.textContent = backend.name;
+  const status = backendStatus(backend);
+  const state = document.createElement("span");
+  state.className = `backend-state ${status.tone || (backend.state === "ready" && !backend.checking ? "ready" : "")}`;
+  state.textContent = status.text;
+  identity.append(name, state);
+  header.append(identity);
+
+  const parts: HTMLElement[] = [header];
+  for (const line of backendLines(backend, "on this PC", now)) {
+    parts.push(backendLine(line.text, line.tone === "warning"));
+  }
+  return parts;
+}
+
+/** The code box: the link, the code (the instructions live here), Copy code and Open link. */
+function backendDevice(backend: BackendHealth, row: BackendRow, url: string, code: string): HTMLElement[] {
+  const intro = backendLine(`Open ${url} on any device and enter this code:`);
+  const codeElement = document.createElement("code");
+  codeElement.className = "backend-code";
+  codeElement.textContent = code;
+  const actions = document.createElement("div");
+  actions.className = "plugin-actions";
+  actions.append(
+    backendButton("Copy code", `Copy code for ${backend.name} sign-in`, `${backend.id}:copy`, () => {
+      navigator.clipboard.writeText(code).then(
+        () => (row.copyNote.textContent = "Code copied."),
+        () => (row.copyNote.textContent = "Couldn't copy: select the code and press Ctrl+C."),
+      );
+    }),
+    backendButton(
+      "Open link",
+      `Open link for ${backend.name} sign-in`,
+      `${backend.id}:open`,
+      () => void window.cantrip.openExternal(url),
+      { primary: true },
+    ),
+  );
+  row.copyNote.textContent = "";
+  return [intro, codeElement, actions, row.copyNote];
+}
+
+function backendRowActions(backend: BackendHealth): HTMLElement[] {
+  const id = backend.id;
+  const pending = backendSignInPending(backend);
+  const buttons = [
+    backendButton(
+      "Check now",
+      `Check ${backend.name} now`,
+      `${id}:check`,
+      () => void runBackendAction({ action: "check", id }),
+      { disabled: backendActionBusy || backend.checking },
+    ),
+  ];
+  const signInLine = backendSignInLine(backend);
+  if (pending || backendOffersSignIn(backend)) {
+    buttons.push(
+      backendButton(
+        pending ? "Cancel" : "Sign in",
+        pending ? `Cancel ${backend.name} sign-in` : `Sign in to ${backend.name}`,
+        `${id}:sign-in`,
+        () => void runBackendAction({ action: pending ? "cancelSignIn" : "signIn", id }),
+        {
+          primary: !pending,
+          disabled: backendActionBusy,
+          describedBy: !pending && signInLine ? `backend-${id}-sign-in` : undefined,
+        },
+      ),
+    );
+  }
+  return buttons;
+}
+
+/** Settings › Backends. Rows and their live status lines persist; their contents are redrawn. */
+function renderBackendHealth(): void {
+  if (!backendHealth) return;
+  const focused =
+    document.activeElement instanceof HTMLElement && backendsList.contains(document.activeElement)
+      ? document.activeElement.dataset.focusKey
+      : undefined;
+  const now = Date.now();
+  for (const entry of backendHealth.backends) {
+    const backend = { ...entry, checking: entry.checking || backendCheckPending.has(entry.id) };
+    let row = backendRows.get(backend.id);
+    if (!row) {
+      const liveLine = (className: string) => {
+        const line = document.createElement("p");
+        line.className = className;
+        line.setAttribute("role", "status");
+        line.setAttribute("aria-live", "polite");
+        return line;
+      };
+      const card = document.createElement("section");
+      card.className = "plugin-card backend-row";
+      card.setAttribute("aria-label", `${backend.name} backend`);
+      const body = document.createElement("div");
+      const signIn = liveLine("backend-line backend-sign-in");
+      signIn.id = `backend-${backend.id}-sign-in`;
+      const device = document.createElement("div");
+      device.className = "backend-device hidden";
+      const copyNote = liveLine("backend-status");
+      const status = liveLine("backend-status");
+      const actions = document.createElement("div");
+      actions.className = "plugin-actions";
+      card.append(body, signIn, device, status, actions);
+      backendsList.append(card);
+      row = { card, body, signIn, device, deviceKey: "", copyNote, status, actions };
+      backendRows.set(backend.id, row);
+    }
+    row.card.classList.toggle(
+      "needs-approval",
+      backend.state === "signedOut" || backend.state === "outOfQuota",
+    );
+    row.body.replaceChildren(...backendRowBody(backend, now));
+
+    // While a code shows, its box carries the instructions; screen readers still hear it's ready.
+    const { url, code } = backend.signIn;
+    const showsCode = backendShowsCode(backend) && Boolean(url && code);
+    const line = backendSignInLine(backend);
+    const signInText = line ?? (showsCode ? `${backend.name} sign-in code ${code} is ready.` : "");
+    row.signIn.classList.toggle("sr-only", !line && showsCode);
+    if (row.signIn.textContent !== signInText) row.signIn.textContent = signInText;
+    const deviceKey = showsCode ? `${url}\n${code}` : "";
+    if (row.deviceKey !== deviceKey) {
+      row.deviceKey = deviceKey;
+      row.device.replaceChildren(...(showsCode && url && code ? backendDevice(backend, row, url, code) : []));
+    }
+    row.device.classList.toggle("hidden", !showsCode);
+
+    const statusText = backendCheckLine(backend, now);
+    if (row.status.textContent !== statusText) row.status.textContent = statusText;
+    row.actions.replaceChildren(...backendRowActions(backend));
+  }
+  backendsCheckAll.setAttribute("aria-disabled", String(backendActionBusy));
+  if (focused && !backendsList.contains(document.activeElement)) {
+    const [id] = focused.split(":");
+    (
+      backendsList.querySelector<HTMLElement>(`[data-focus-key="${focused}"]`) ??
+      backendsList.querySelector<HTMLElement>(`[data-focus-key="${id}:check"]`)
+    )?.focus();
+  }
+}
+
+function applyBackendHealth(snapshot: BackendsSnapshot): void {
+  backendHealth = snapshot;
+  renderBackendHealth();
+  void window.cantrip.getBackendStatus().then(applyBackendStatuses);
+}
+
+/** The reply's `message` isn't shown: each row's sign-in state says what's next (as on the Mac and iPhone). */
+async function runBackendAction(action: BackendsAction): Promise<void> {
+  if (backendActionBusy) return;
+  backendActionBusy = true;
+  backendsError.classList.add("hidden");
+  if (action.action === "check") {
+    for (const id of action.id ? [action.id] : BACKEND_IDS) backendCheckPending.add(id);
+  }
+  renderBackendHealth();
+  try {
+    const snapshot = await window.cantrip.backendAction(action);
+    backendActionBusy = false;
+    backendCheckPending.clear();
+    applyBackendHealth(snapshot);
+  } catch (error) {
+    backendsError.textContent = error instanceof Error ? error.message : String(error);
+    backendsError.classList.remove("hidden");
+  } finally {
+    backendActionBusy = false;
+    backendCheckPending.clear();
+    renderBackendHealth();
+  }
+}
+
 function setBusy(busy: boolean): void {
   stopButton.classList.toggle("hidden", !busy);
   backendSelect.disabled = busy;
@@ -644,6 +916,8 @@ stopButton.addEventListener("click", () => {
 });
 
 backendSelect.addEventListener("change", () => {
+  // Only a person's pick is the preference: a backup routing chose while one is signed out isn't.
+  localStorage.setItem("backend", backendSelect.value);
   saveSettings();
   settingsBackend.value = backendSelect.value;
   renderBackendSettings();
@@ -687,6 +961,9 @@ pluginsToggle.addEventListener("click", () => {
   settingsPluginsSection.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 settingsClose.addEventListener("click", () => toggleSettings(false));
+backendsCheckAll.addEventListener("click", () => {
+  if (backendsCheckAll.getAttribute("aria-disabled") !== "true") void runBackendAction({ action: "check" });
+});
 settingsBackend.addEventListener("change", renderBackendSettings);
 settingsModel.addEventListener("input", () => {
   const backend = settingsBackend.value as BackendId;
@@ -803,6 +1080,11 @@ window.cantrip.onPluginsChanged((nextPlugins) => {
   plugins = nextPlugins;
   renderPlugins();
 });
+window.cantrip.onBackendHealth(applyBackendHealth);
+window.cantrip.onOpenBackends(() => {
+  toggleSettings(true);
+  settingsBackendsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+});
 window.cantrip.onPluginPrompt((prompt) => {
   toggleSettings(false);
   queryInput.value = prompt;
@@ -816,34 +1098,15 @@ output.addEventListener("click", (event) => {
 });
 
 async function initialize(): Promise<void> {
-  const [statuses, currentShortcut] = await Promise.all([
+  const [statuses, currentShortcut, health] = await Promise.all([
     window.cantrip.getBackendStatus(),
     window.cantrip.getShortcutStatus(),
+    window.cantrip.getBackendHealth(),
   ]);
   applyShortcutStatus(currentShortcut);
-  for (const status of statuses) {
-    const option = document.createElement("option");
-    option.value = status.id;
-    option.textContent = status.label;
-    option.disabled = !status.available;
-    option.title = status.detail;
-    backendSelect.append(option);
-
-    const settingsOption = document.createElement("option");
-    settingsOption.value = status.id;
-    settingsOption.textContent = status.available
-      ? status.label
-      : `${status.label} — not installed`;
-    settingsBackend.append(settingsOption);
-  }
-
-  const preferredBackend = localStorage.getItem("backend");
-  const preferredOption = preferredBackend
-    ? [...backendSelect.options].find((option) => option.value === preferredBackend && !option.disabled)
-    : undefined;
-  const firstAvailable = [...backendSelect.options].find((option) => !option.disabled);
-  if (preferredOption) backendSelect.value = preferredOption.value;
-  else if (firstAvailable) backendSelect.value = firstAvailable.value;
+  backendHealth = health;
+  applyBackendStatuses(statuses);
+  renderBackendHealth();
 
   setAllowActions(localStorage.getItem("allowActions") === "true");
   const savedOpacity = Number(localStorage.getItem("panelOpacity") ?? "100");

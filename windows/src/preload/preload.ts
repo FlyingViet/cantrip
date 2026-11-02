@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppMatch,
   BackendStatus,
+  BackendsAction,
+  BackendsSnapshot,
   CantripApi,
   RunChunkEvent,
   RunExitEvent,
@@ -19,6 +21,10 @@ const api: CantripApi = {
     ipcRenderer.invoke("apps:launch", id) as Promise<{ ok: boolean; error?: string }>,
   getBackendStatus: () =>
     ipcRenderer.invoke("backends:status") as Promise<BackendStatus[]>,
+  getBackendHealth: () =>
+    ipcRenderer.invoke("backends:health") as Promise<BackendsSnapshot>,
+  backendAction: (action: BackendsAction) =>
+    ipcRenderer.invoke("backends:action", action) as Promise<BackendsSnapshot>,
   getShortcutStatus: () =>
     ipcRenderer.invoke("shortcut:status") as Promise<ShortcutStatus>,
   retryShortcut: () =>
@@ -111,6 +117,17 @@ const api: CantripApi = {
       callback(prompt);
     ipcRenderer.on("plugin:prompt", listener);
     return () => ipcRenderer.removeListener("plugin:prompt", listener);
+  },
+  onBackendHealth: (callback: (snapshot: BackendsSnapshot) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: BackendsSnapshot) =>
+      callback(payload);
+    ipcRenderer.on("backends:health", listener);
+    return () => ipcRenderer.removeListener("backends:health", listener);
+  },
+  onOpenBackends: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on("backends:open", listener);
+    return () => ipcRenderer.removeListener("backends:open", listener);
   },
 };
 
