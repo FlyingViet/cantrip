@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds a notarized, stapled DMG of Cantrip Gateway Mac and publishes it as a GitHub release.
 #
-#   Scripts/release.sh 1.0.1            # build, notarize, publish v1.0.1
+#   Scripts/release.sh 1.0.1            # build, notarize, publish gateway-mac-v1.0.1
 #   PUBLISH=0 Scripts/release.sh 1.0.1  # build and notarize only
 #   NOTARIZE=0 PUBLISH=0 SIGN_IDENTITY="Apple Development" EXPORT_METHOD=development \
 #       Scripts/release.sh 0.0.0        # local dry run without a Developer ID certificate
@@ -24,7 +24,10 @@ NOTARY_PROFILE="${NOTARY_PROFILE:-cantrip-notary}"
 NOTARIZE="${NOTARIZE:-1}"
 PUBLISH="${PUBLISH:-1}"
 APP_NAME="Cantrip Gateway Mac"
+# The repository's commit count: it only grows (it jumped when Gateway joined the cantrip repository).
 BUILD_NUMBER="$(git rev-list --count HEAD)"
+# Gateway tags carry a prefix: plain v* tags are the Mac host's (its build identity matches v[0-9]*).
+TAG="gateway-mac-v$VERSION"
 DIST="$(Scripts/build-dir.sh)/Distribution"
 OUT="$DIST/$VERSION"
 ARCHIVE="$OUT/CantripGatewayMac.xcarchive"
@@ -36,8 +39,8 @@ if [ "$PUBLISH" = 1 ]; then
     [ -z "$(git status --porcelain --ignore-submodules=none)" ] \
         || { echo "Commit or stash changes before publishing a release." >&2; exit 1; }
     git fetch -q --tags origin
-    ! git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null \
-        || { echo "Tag v$VERSION already exists." >&2; exit 1; }
+    ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null \
+        || { echo "Tag $TAG already exists." >&2; exit 1; }
 fi
 
 if [ -n "${RELEASE_KEYCHAIN:-}" ]; then
@@ -103,10 +106,11 @@ fi
 shasum -a 256 "$DMG" | tee "$DMG.sha256"
 
 if [ "$PUBLISH" = 1 ]; then
-    say "Publishing v$VERSION"
-    git tag -a "v$VERSION" -m "Cantrip Gateway Mac $VERSION"
-    git push -q origin "v$VERSION"
-    gh release create "v$VERSION" "$DMG" --verify-tag --title "Cantrip Gateway Mac $VERSION" \
+    say "Publishing $TAG"
+    git tag -a "$TAG" -m "Cantrip Gateway Mac $VERSION"
+    git push -q origin "$TAG"
+    # The repository's "Latest" release stays the Mac host's.
+    gh release create "$TAG" "$DMG" --verify-tag --latest=false --title "Cantrip Gateway Mac $VERSION" \
         --notes "Download **CantripGatewayMac-$VERSION.dmg**, open it and drag Cantrip Gateway Mac to Applications. Signed with Developer ID and notarized by Apple. Requires macOS 26 and Cantrip on a Mac to pair with (see the README)."
     if [ "${KEEP_BUILD:-0}" != 1 ]; then
         say "Removing the published build's intermediates"
