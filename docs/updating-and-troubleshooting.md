@@ -312,8 +312,12 @@ Agents leave work behind: every Copilot CLI session keeps a folder in
 `~/.copilot/session-state/` (with whatever the agent saved in its `files/`),
 and agents often check out extra git worktrees. Cantrip cleans these up about
 once a day, 10 minutes after it starts and then every 24 hours, without using
-a model. Turn it off or change how long unused sessions stay in **Settings >
-Clean up unused agent sessions and worktrees daily**.
+a model, and early whenever free space falls under 20 GB (checked every 5
+minutes, at most once an hour while space stays low). If that cleanup leaves
+less than 15 GB, one alert (on the Mac and paired devices) names the largest
+things left; the next one comes only after space has recovered. Turn it off or
+change how long unused sessions stay in **Settings > Clean up unused agent
+sessions and worktrees daily**.
 
 - **Sessions** are removed after 14 days without changes (3 to 365, the
   `storageSessionRetentionDays` setting). A session stays while an open or
@@ -323,13 +327,26 @@ Clean up unused agent sessions and worktrees daily**.
   remote has. This covers every Copilot CLI session on the Mac, including other
   tools' (such as a gateway that calls `copilot -p`) and Terminal sessions you
   could otherwise resume.
-- **Worktrees** are removed with `git worktree remove` (never `--force`) only
-  when they are inside a session folder, `~/.cache/Cantrip/` or a temporary
-  folder, unlocked, unused, unchanged for 3 days, clean, and their commits are
-  on a branch (which is kept) or, for a detached worktree, on another branch,
-  tag or remote. Checkouts in your own folders, such as `~/Coding`, are never
-  removed (only their git-ignored build caches, below). Records of agent
-  worktrees that were already deleted are pruned.
+- **Worktrees** are removed only when they are inside a session folder,
+  `~/.cache/Cantrip/` (child tabs' `worktrees/` included, and worktrees of a
+  submodule's own repository) or a temporary folder, unlocked, unused, not an
+  open tab's working folder or an unfinished child tab's, clean, and either
+  every commit is on a remote and nothing changed for a day, or nothing changed
+  or was committed for 3 days and their commits are on a branch (which is
+  kept) or, for a detached worktree, on another branch, tag or remote. Each
+  initialized submodule must be clean with nothing a remote doesn't have, too.
+  `git worktree remove` (never `--force`) does it; git refuses a worktree
+  holding submodules, so after those checks its folder is deleted and
+  `git worktree prune` drops the record. Checkouts in your own folders, such
+  as `~/Coding`, are never removed (only their git-ignored build caches,
+  below). Records of agent worktrees that were already deleted are pruned.
+- **Build output in worktrees that stay** (uncommitted or unpushed work, a
+  recent commit): once nothing in the worktree changed for 12 hours, its
+  git-ignored DerivedData, `.build`, `build`, `.spm`, `node_modules`, `dist`,
+  `dist-electron` and `release` folders go, submodules included. Source, git
+  state and anything git tracks stay. Open tabs' and child tabs' worktrees,
+  locked ones and ones in use are left alone: `git worktree lock` keeps the
+  cleanup away from a worktree entirely.
 - **Simulators** from the [shared pool](#shared-simulators): a pool simulator
   or temporary copy booted for 15 minutes without a lease
   (`simulatorPoolIdleMinutes`, 5–1440) is shut down (the pool checks every 5
@@ -344,14 +361,16 @@ Clean up unused agent sessions and worktrees daily**.
   are deleted. A booted simulator the pool didn't make, one with a lease and
   one a running build or test names (xcodebuild, Maestro, simctl) are never
   touched, and runtimes are never removed.
-- **Build caches**, which the next build makes again: Xcode DerivedData and
-  SwiftPM checkout folders (`.spm`, `SourcePackages`) that agents left in
-  `~/.cache/Cantrip/` and nothing used for 3 days; the same in checkouts in
+- **Build caches**, which the next build makes again: Xcode DerivedData
+  folders that agents left in `~/.cache/Cantrip/` and nothing used for 6 hours,
+  and SwiftPM checkout folders (`.spm`, `SourcePackages`) there unused for 3
+  days; the same in checkouts in
   `~/Coding` and `~/Projects` after 7 days, only where git ignores them and
   nothing inside is tracked; and DerivedData in Xcode's folder or the
   [build disk](#build-disk) whose project no longer exists (a removed
   worktree's), after a day. A folder a running process uses stays, and so does
-  one whose project is on a disk that isn't mounted.
+  one whose project is on a disk that isn't mounted. Every removal checks
+  running processes again right before it happens.
 - **Package caches** are measured each run and trimmed only while no build or
   install uses them: SwiftPM's (`~/Library/Caches/org.swift.swiftpm`, over
   6 GiB: entries unused for 14 days, oldest first), npm's (over 5 GiB:
@@ -360,8 +379,10 @@ Clean up unused agent sessions and worktrees daily**.
   days) and Gradle versions no build used for 30 days (their caches and
   wrapper). `cantrip cleanup` prints each cache's size and cap.
 
-To see what would go, or to clean up now (`--simulators` includes the other
-simulators for this run):
+Each run's report (`~/.cache/Cantrip/storage-upkeep.json`, the
+`bytesByCategory` field) and `cantrip cleanup` say how much each kind of
+removal freed. To see what would go, or to clean up now (`--simulators`
+includes the other simulators for this run):
 
 ```sh
 cantrip cleanup --dry-run --list --simulators

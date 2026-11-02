@@ -9,6 +9,10 @@ enum StorageUpkeep {
     static let defaultSessionRetentionDays = 14
     static let sessionRetentionDays = 3...365
     static let worktreeIdleDays = 3
+    /// A clean worktree whose commits (and its submodules') are all on a remote goes after a day.
+    static let pushedWorktreeIdle: TimeInterval = 86_400
+    /// Build output inside an agent worktree nobody touched for this long goes, whatever its commits.
+    static let worktreeOutputIdle: TimeInterval = 12 * 3_600
 
     struct Configuration {
         /// `~/.copilot/session-state`: one folder per Copilot CLI session (Cantrip tabs, Home runs,
@@ -31,8 +35,14 @@ enum StorageUpkeep {
         var stateDirectory: URL
         var sessionRetention: TimeInterval
         var worktreeIdle: TimeInterval = TimeInterval(StorageUpkeep.worktreeIdleDays) * 86_400
+        var pushedWorktreeIdle: TimeInterval = StorageUpkeep.pushedWorktreeIdle
+        var worktreeOutputIdle: TimeInterval = StorageUpkeep.worktreeOutputIdle
+        /// Open tabs' working folders and the worktrees of child tabs still in progress: a worktree
+        /// holding one is never touched.
+        var protectedPaths: [String] = []
         var now = Date()
         var git = "/usr/bin/git"
+        /// A fresh look at running processes; called again right before each removal.
         var processes: () -> ProcessSnapshot = ProcessSnapshot.current
         /// Simulator cleanup (`SimulatorPool.sweep`); nil skips it (no Xcode, or tests).
         var simulators: SimulatorPool.SweepOptions?
@@ -62,14 +72,36 @@ enum StorageUpkeep {
                 transcriptFolders: [cache.appendingPathComponent("chats"), cache.appendingPathComponent("home")],
                 memoryVault: checkedVault,
                 repositoryParents: [home.appendingPathComponent("Coding"), home.appendingPathComponent("Projects"), home],
-                worktreeSearchRoots: [cache] + temporary,
+                // Child tabs and agents keep worktrees in ~/.cache/Cantrip/worktrees, including ones
+                // of a submodule's own repository (CantripGatewayMac/.git/modules/Hermes).
+                worktreeSearchRoots: [cache, cache.appendingPathComponent("worktrees")] + temporary,
                 agentRoots: [sessions, cache, URL(fileURLWithPath: "/private/var/folders")] + temporary,
                 stateDirectory: cache,
                 sessionRetention: TimeInterval(retentionDays(defaults)) * 86_400,
+                protectedPaths: protectedPaths(defaults: defaults, childTabs: cache.appendingPathComponent("child-tabs.json")),
                 now: now,
                 simulators: hasSimulators ? simulators : nil,
                 caches: .standard(home: home, now: now)
             )
+        }
+
+        /// The working folders of the tabs open in Cantrip, and the worktrees of child tabs that
+        /// aren't settled (merged, discarded, or with nothing to merge).
+        static func protectedPaths(defaults: UserDefaults, childTabs: URL) -> [String] {
+            var paths: [String] = []
+            for id in defaults.stringArray(forKey: "openSessionIDs") ?? [] {
+                if let workdir = defaults.string(forKey: "workdir-\(id)"), !workdir.isEmpty { paths.append(workdir) }
+            }
+            if let data = try? Data(contentsOf: childTabs),
+               let records = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] {
+                let settled: Set<String> = ["merged", "noChanges", "discarded", "requeued"]
+                for record in records {
+                    guard let worktree = record["worktree"] as? String, !worktree.isEmpty,
+                          !settled.contains(record["state"] as? String ?? "") else { continue }
+                    paths.append(worktree)
+                }
+            }
+            return paths
         }
 
         static func retentionDays(_ defaults: UserDefaults) -> Int {
@@ -119,10 +151,56 @@ enum StorageUpkeep {
         var freeBytesAfter: Int64?
         var simulators: SimulatorPool.SweepReport?
         var caches: BuildCaches.Report?
+        /// Build output removed from worktrees that stay (their source and git state are kept).
+        /// Optional, like the fields below, so reports from older versions still read.
+        var worktreeOutputRemoved: [BuildCaches.Removal]?
+        /// Bytes freed per kind of thing removed (`Category`), filled in when the run ends.
+        var bytesByCategory: [String: Int64]?
+        /// Free space fell under the low-disk threshold and started this run.
+        var lowDisk: Bool?
+
+        enum Category: String, CaseIterable {
+            case sessions, worktrees, worktreeBuildOutput, agentBuildFolders, checkoutBuildOutput,
+                 orphanedBuildFolders, packageCaches, simulators
+
+            var label: String {
+                switch self {
+                case .sessions: return "unused sessions"
+                case .worktrees: return "worktrees"
+                case .worktreeBuildOutput: return "build output in worktrees"
+                case .agentBuildFolders: return "agents' DerivedData and package clones"
+                case .checkoutBuildOutput: return "build output in checkouts"
+                case .orphanedBuildFolders: return "DerivedData of deleted projects"
+                case .packageCaches: return "package caches"
+                case .simulators: return "simulators"
+                }
+            }
+        }
 
         var worktreeBytesRemoved: Int64 { worktreesRemoved.reduce(0) { $0 + $1.bytes } }
+        var worktreeOutputBytesRemoved: Int64 { (worktreeOutputRemoved ?? []).reduce(0) { $0 + $1.bytes } }
         var bytesRemoved: Int64 {
-            sessionBytesRemoved + worktreeBytesRemoved + (simulators?.bytesRemoved ?? 0) + (caches?.bytesRemoved ?? 0)
+            sessionBytesRemoved + worktreeBytesRemoved + worktreeOutputBytesRemoved + (simulators?.bytesRemoved ?? 0)
+                + (caches?.bytesRemoved ?? 0)
+        }
+
+        func categoryBytes() -> [String: Int64] {
+            var bytes: [Category: Int64] = [.sessions: sessionBytesRemoved, .worktrees: worktreeBytesRemoved,
+                                            .worktreeBuildOutput: worktreeOutputBytesRemoved,
+                                            .simulators: simulators?.bytesRemoved ?? 0]
+            for removal in caches?.removed ?? [] {
+                let category = removal.category.flatMap(Category.init(rawValue:)) ?? .agentBuildFolders
+                bytes[category, default: 0] += removal.bytes
+            }
+            bytes[.packageCaches, default: 0] += (caches?.caches ?? []).reduce(0) { $0 + max($1.bytes - $1.bytesAfter, 0) }
+            return Dictionary(uniqueKeysWithValues: bytes.filter { $0.value > 0 }.map { ($0.key.rawValue, $0.value) })
+        }
+
+        /// "worktrees 4.1 GB, build output in worktrees 2 GB", largest first.
+        var categoryLines: [String] {
+            (bytesByCategory ?? categoryBytes()).sorted { $0.value > $1.value }.compactMap { key, value in
+                Category(rawValue: key).map { "\($0.label) \(StorageUpkeep.format(value))" }
+            }
         }
 
         /// One sentence for Settings, the log and the terminal.
@@ -132,6 +210,10 @@ enum StorageUpkeep {
             var parts: [String] = []
             if sessionsRemoved > 0 { parts.append("\(sessions) (\(StorageUpkeep.format(sessionBytesRemoved)))") }
             if !worktreesRemoved.isEmpty { parts.append("\(worktrees) (\(StorageUpkeep.format(worktreeBytesRemoved)))") }
+            if let output = worktreeOutputRemoved, !output.isEmpty {
+                let folders = output.count == 1 ? "1 build output folder" : "\(output.count) build output folders"
+                parts.append("\(folders) in kept worktrees (\(StorageUpkeep.format(worktreeOutputBytesRemoved)))")
+            }
             if let simulators, simulators.removedCount > 0 {
                 let count = simulators.removedCount == 1 ? "1 simulator's data" : "\(simulators.removedCount) simulators' data"
                 parts.append("\(count) (\(StorageUpkeep.format(simulators.bytesRemoved)))")
@@ -163,7 +245,7 @@ enum StorageUpkeep {
 
     /// Runs one cleanup unless another (the host's or `cantrip cleanup`) holds the lock. Real runs
     /// save their report and log each removal; `log` also receives every removal.
-    static func perform(_ configuration: Configuration, dryRun: Bool,
+    static func perform(_ configuration: Configuration, dryRun: Bool, lowDisk: Bool = false,
                         log: (String) -> Void = { _ in }) -> Report? {
         let fm = FileManager.default
         try? fm.createDirectory(at: configuration.stateDirectory, withIntermediateDirectories: true)
@@ -176,10 +258,11 @@ enum StorageUpkeep {
         defer { flock(lock, LOCK_UN); close(lock) }
 
         let logFile = configuration.stateDirectory.appendingPathComponent("storage-upkeep.log")
-        let report = run(configuration, dryRun: dryRun) { line in
+        var report = run(configuration, dryRun: dryRun) { line in
             log(line)
             if !dryRun { appendLog(line, to: logFile) }
         }
+        if lowDisk { report.lowDisk = true }
         if !dryRun {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -197,6 +280,86 @@ enum StorageUpkeep {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return (try? Data(contentsOf: reportURL(in: directory))).flatMap { try? decoder.decode(Report.self, from: $0) }
+    }
+
+    // MARK: - Low disk
+
+    /// When free space starts a cleanup, and when what's left after it is worth one alert. Saved
+    /// between launches, so a restart doesn't alert again.
+    struct LowDiskGuard: Codable, Equatable {
+        static let gigabyte: Int64 = 1 << 30
+        var runBelow: Int64 = 20 * gigabyte
+        var alertBelow: Int64 = 15 * gigabyte
+        /// A low-disk cleanup runs at most this often while space stays low.
+        var retry: TimeInterval = 60 * 60
+        var lastRunAt: Date?
+        /// The alert went out; it goes again only after free space recovers past `runBelow`.
+        var alerted = false
+
+        /// Whether free space calls for a cleanup now (and notes that one is starting).
+        mutating func shouldRun(free: Int64, now: Date) -> Bool {
+            guard free < runBelow else {
+                alerted = false
+                return false
+            }
+            if let lastRunAt, now.timeIntervalSince(lastRunAt) < retry { return false }
+            lastRunAt = now
+            return true
+        }
+
+        /// After a low-disk cleanup: whether to send the one alert.
+        mutating func shouldAlert(freeAfter: Int64) -> Bool {
+            guard freeAfter < alertBelow, !alerted else { return false }
+            alerted = true
+            return true
+        }
+    }
+
+    /// The largest things still on disk that Cantrip's agents made: each folder in
+    /// `~/.cache/Cantrip` (each worktree in its worktrees folder), Copilot's sessions, simulators
+    /// and package caches, largest first.
+    static func biggestItems(_ c: Configuration, report: Report?, limit: Int = 5) -> [(name: String, bytes: Int64)] {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        func name(_ url: URL) -> String {
+            url.path.hasPrefix(home + "/") ? "~" + url.path.dropFirst(home.count) : url.path
+        }
+        var items: [(String, Int64)] = []
+        let cache = c.stateDirectory
+        for entry in (try? fm.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil)) ?? []
+        where isRealDirectory(entry) {
+            if entry.lastPathComponent == "worktrees" {
+                for worktree in (try? fm.contentsOfDirectory(at: entry, includingPropertiesForKeys: nil)) ?? []
+                where isRealDirectory(worktree) {
+                    items.append((name(worktree), allocatedSize(worktree)))
+                }
+            } else {
+                items.append((name(entry), allocatedSize(entry)))
+            }
+        }
+        items.append(("Copilot sessions (\(name(c.sessionRoot)))", allocatedSize(c.sessionRoot)))
+        if let simulators = report?.simulators { items.append(("Simulators", simulators.totalBytes)) }
+        for cache in report?.caches?.caches ?? [] { items.append(("\(cache.name) cache", cache.bytesAfter)) }
+        return Array(items.filter { $0.1 > 0 }.sorted { $0.1 > $1.1 }.prefix(limit))
+    }
+
+    /// Runs a cleanup when free space is under the guard's threshold, then sends `alert` once if
+    /// space is still under its alert threshold. nil when no cleanup ran (or another one held the lock).
+    static func lowDiskRun(_ c: Configuration, guard state: inout LowDiskGuard, free: () -> Int64?,
+                           alert: (_ title: String, _ body: String) -> Void,
+                           log: (String) -> Void = { _ in }) -> Report? {
+        guard let before = free(), state.shouldRun(free: before, now: c.now) else { return nil }
+        log("free space \(format(before)) is under \(format(state.runBelow)): cleaning up")
+        guard var report = perform(c, dryRun: false, lowDisk: true, log: log) else { return nil }
+        report.lowDisk = true
+        guard let after = free(), state.shouldAlert(freeAfter: after) else { return report }
+        let biggest = biggestItems(c, report: report)
+            .map { "\($0.name) \(format($0.bytes))" }.joined(separator: ", ")
+        let freed = report.bytesRemoved > 0 ? "Cleanup freed \(format(report.bytesRemoved)). " : ""
+        alert("Only \(format(after)) free on the Mac",
+              freed + (biggest.isEmpty ? "Nothing else Cantrip made is large." : "Largest left: \(biggest)."))
+        log("low disk alert sent: \(format(after)) free")
+        return report
     }
 
     /// Worktrees first, so a session folder only holds worktrees the sweep had a reason to keep.
@@ -224,8 +387,10 @@ enum StorageUpkeep {
         }
         if var caches = c.caches {
             caches.git = c.git
+            caches.currentProcesses = c.processes
             report.caches = BuildCaches.sweep(caches, processes: processes, dryRun: dryRun, log: log)
         }
+        report.bytesByCategory = report.categoryBytes()
         report.freeBytesAfter = freeBytes(c.sessionRoot)
         report.finishedAt = Date()
         return report
@@ -517,7 +682,6 @@ enum StorageUpkeep {
 
     static func sweepWorktrees(_ c: Configuration, processes: ProcessSnapshot, protections: Protections = .init(),
                                dryRun: Bool, report: inout Report, log: (String) -> Void) {
-        let cutoff = c.now.addingTimeInterval(-c.worktreeIdle)
         let sessionRoot = resolved(c.sessionRoot.path) + "/"
         for common in repositories(c) {
             let repository = repositoryArguments(common)
@@ -529,6 +693,8 @@ enum StorageUpkeep {
                 if entry.prunable { stale.append(entry.path); continue }
                 guard isUnder(entry.path, c.agentRoots) else { continue }
                 var result = Worktree(path: entry.path, repository: common)
+                // Build output may go from a worktree that stays, unless something is using it.
+                var trimmable = true
                 // A worktree in a kept session (a tab's, a note's, a live CLI's) stays with it.
                 let target = resolved(entry.path)
                 if target.hasPrefix(sessionRoot) {
@@ -538,15 +704,32 @@ enum StorageUpkeep {
                         result.reason = reason == .tab ? "its session belongs to a tab or Home run" : "its session is named in a memory note"
                     } else if lockOwners(folder).contains(where: processes.isAlive) {
                         result.reason = "its session is in use"
+                        trimmable = false
                     }
-                    if result.reason != nil {
-                        report.worktreesKept.append(result)
-                        continue
+                    if entry.locked || processes.uses(entry.path) || isProtected(entry.path, by: c.protectedPaths) {
+                        trimmable = false
                     }
                 }
-                if let reason = keepReason(entry, common: common, configuration: c,
-                                           processes: processes, cutoff: cutoff) {
-                    result.reason = reason
+                var hasSubmodules = false
+                if result.reason == nil {
+                    switch keepDecision(entry, common: common, configuration: c, processes: processes) {
+                    case .keep(let reason, let canTrim):
+                        result.reason = reason
+                        trimmable = canTrim
+                    case .remove(let submodules):
+                        hasSubmodules = submodules
+                    }
+                }
+                if result.reason != nil {
+                    if trimmable {
+                        trimOutput(of: entry.path, c, dryRun: dryRun, report: &report, log: log)
+                    }
+                    report.worktreesKept.append(result)
+                    continue
+                }
+                // A build may have started since the run began: look again right before removing.
+                if c.processes().uses(entry.path) {
+                    result.reason = "in use by a running process"
                     report.worktreesKept.append(result)
                     continue
                 }
@@ -555,21 +738,36 @@ enum StorageUpkeep {
                     // Removing it would make its parent (a session's files/) look recently used.
                     let parent = URL(fileURLWithPath: entry.path).deletingLastPathComponent()
                     let parentDate = try? parent.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-                    let removed = Git.run(c.git, repository + ["worktree", "remove", entry.path])
-                    if let parentDate {
-                        try? FileManager.default.setAttributes([.modificationDate: parentDate], ofItemAtPath: parent.path)
+                    defer {
+                        if let parentDate {
+                            try? FileManager.default.setAttributes([.modificationDate: parentDate], ofItemAtPath: parent.path)
+                        }
                     }
-                    guard removed?.succeeded == true, !FileManager.default.fileExists(atPath: entry.path) else {
-                        result.reason = "git worktree remove failed: \(removed?.error ?? "no output")"
-                        report.worktreesKept.append(result)
-                        report.errors.append("Worktree \(entry.path): \(result.reason!)")
-                        continue
+                    if hasSubmodules {
+                        // git refuses to remove a worktree holding submodules. The worktree and each
+                        // submodule were checked clean and on their remotes, so the folder goes and
+                        // `git worktree prune` drops the record (and the submodules' git data).
+                        do { try removeTree(URL(fileURLWithPath: entry.path)) } catch {
+                            result.reason = "could not delete it: \(error.localizedDescription)"
+                            report.worktreesKept.append(result)
+                            report.errors.append("Worktree \(entry.path): \(result.reason!)")
+                            continue
+                        }
+                    } else {
+                        let removed = Git.run(c.git, repository + ["worktree", "remove", entry.path])
+                        guard removed?.succeeded == true, !FileManager.default.fileExists(atPath: entry.path) else {
+                            result.reason = "git worktree remove failed: \(removed?.error ?? "no output")"
+                            report.worktreesKept.append(result)
+                            report.errors.append("Worktree \(entry.path): \(result.reason!)")
+                            continue
+                        }
                     }
                 }
+                if hasSubmodules { stale.append(entry.path) }
                 report.worktreesRemoved.append(result)
                 log("worktree \(entry.path) \(dryRun ? "would remove" : "removed"): \(format(result.bytes)), "
                     + "\(entry.branch.map { "branch \($0.replacingOccurrences(of: "refs/heads/", with: ""))" } ?? "detached") "
-                    + "of \(common)")
+                    + "of \(common)" + (hasSubmodules ? " (with its submodules)" : ""))
             }
             guard !stale.isEmpty else { continue }
             // `git worktree prune` drops every missing worktree's record; only do it when all are agents'.
@@ -588,39 +786,122 @@ enum StorageUpkeep {
         }
     }
 
-    /// Why a worktree stays, or nil when removing it loses nothing: it is unlocked, unused,
-    /// unchanged for `worktreeIdle`, clean, and its commits are on a branch (which removal keeps)
-    /// or, when detached, on some other branch, tag or remote.
-    static func keepReason(_ entry: WorktreeEntry, common: String, configuration c: Configuration,
-                           processes: ProcessSnapshot, cutoff: Date) -> String? {
+    enum KeepDecision: Equatable {
+        /// Stays; `trimmable`: its build output may still go.
+        case keep(String, trimmable: Bool)
+        /// Removing it loses nothing; `submodules`: it holds initialized submodules, so git won't remove it.
+        case remove(submodules: Bool)
+    }
+
+    /// Whether a worktree stays. It goes when it is unlocked, unused, not an open tab's or a child
+    /// tab's, clean, its submodules clean and on their remotes, and either its commits are on a
+    /// remote and nothing changed for `pushedWorktreeIdle`, or nothing changed or was committed for
+    /// `worktreeIdle` and its commits are on a branch (which removal keeps) or, when detached, on
+    /// some other branch, tag or remote.
+    static func keepDecision(_ entry: WorktreeEntry, common: String, configuration c: Configuration,
+                             processes: ProcessSnapshot) -> KeepDecision {
         let path = entry.path
-        guard FileManager.default.fileExists(atPath: path) else { return "missing" }
-        if entry.locked { return "locked" }
-        if processes.uses(path) { return "in use by a running process" }
-        let idleDays = Int(c.worktreeIdle / 86_400)
-        if let newest = newestChange(URL(fileURLWithPath: path), cutoff: cutoff), newest >= cutoff {
-            return "changed in the last \(idleDays) days"
+        guard FileManager.default.fileExists(atPath: path) else { return .keep("missing", trimmable: false) }
+        if entry.locked { return .keep("locked", trimmable: false) }
+        if processes.uses(path) { return .keep("in use by a running process", trimmable: false) }
+        if isProtected(path, by: c.protectedPaths) {
+            return .keep("an open tab or a child tab in progress works in it", trimmable: false)
         }
-        if let committed = Git.run(c.git, ["-C", path, "log", "-1", "--format=%ct"]),
-           committed.succeeded, let seconds = TimeInterval(committed.output),
-           Date(timeIntervalSince1970: seconds) >= cutoff {
-            return "committed to in the last \(idleDays) days"
-        }
+        let pushedCutoff = c.now.addingTimeInterval(-c.pushedWorktreeIdle)
+        let cutoff = c.now.addingTimeInterval(-c.worktreeIdle)
+        let newest = newestChange(URL(fileURLWithPath: path), cutoff: pushedCutoff)
+        if let newest, newest >= pushedCutoff { return .keep("changed in the last day", trimmable: true) }
         guard let status = Git.run(c.git, ["-C", path, "status", "--porcelain"]), status.succeeded else {
-            return "git status failed"
+            return .keep("git status failed", trimmable: true)
         }
         if !status.output.isEmpty {
             let count = status.output.split(separator: "\n").count
-            return count == 1 ? "1 uncommitted file" : "\(count) uncommitted files"
+            return .keep(count == 1 ? "1 uncommitted file" : "\(count) uncommitted files", trimmable: true)
+        }
+        // Removing a worktree removes its submodules' git data too: each must hold nothing of its own.
+        guard let submodules = initializedSubmodules(path, git: c.git) else {
+            return .keep("git could not list its submodules", trimmable: true)
+        }
+        if let unsaved = submodules.first(where: { hasUnsavedWork(URL(fileURLWithPath: path).appendingPathComponent($0), git: c.git) }) {
+            return .keep("submodule \(unsaved) has uncommitted or unpushed work", trimmable: true)
+        }
+        let hasSubmodules = !submodules.isEmpty
+        if let unpushed = Git.run(c.git, ["-C", path, "rev-list", "--count", "HEAD", "--not", "--remotes"]),
+           unpushed.succeeded, unpushed.output == "0" {
+            return .remove(submodules: hasSubmodules)
+        }
+        let idleDays = Int(c.worktreeIdle / 86_400)
+        if let newest, newest >= cutoff { return .keep("changed in the last \(idleDays) days", trimmable: true) }
+        if let committed = Git.run(c.git, ["-C", path, "log", "-1", "--format=%ct"]),
+           committed.succeeded, let seconds = TimeInterval(committed.output),
+           Date(timeIntervalSince1970: seconds) >= cutoff {
+            return .keep("committed to in the last \(idleDays) days", trimmable: true)
         }
         if entry.branch == nil {
             guard let head = entry.head,
                   let refs = Git.run(c.git, repositoryArguments(common) + ["for-each-ref", "--contains", head,
                                              "--format=%(refname)", "refs/heads", "refs/remotes", "refs/tags"]),
-                  refs.succeeded else { return "git could not check its commits" }
-            if refs.output.isEmpty { return "detached commits on no branch" }
+                  refs.succeeded else { return .keep("git could not check its commits", trimmable: true) }
+            if refs.output.isEmpty { return .keep("detached commits on no branch", trimmable: true) }
         }
-        return nil
+        return .remove(submodules: hasSubmodules)
+    }
+
+    /// The worktree's initialized submodules (recursively), relative to it; nil when git can't say.
+    static func initializedSubmodules(_ path: String, git: String) -> [String]? {
+        guard FileManager.default.fileExists(atPath: URL(fileURLWithPath: path).appendingPathComponent(".gitmodules").path) else {
+            return []
+        }
+        guard let listed = Git.run(git, ["-C", path, "submodule", "status", "--recursive"]), listed.succeeded else { return nil }
+        // " <sha> path (describe)", "+<sha> path", "U<sha> path"; "-" marks one never initialized.
+        return listed.output.split(separator: "\n").compactMap { line in
+            guard let first = line.first, first != "-" else { return nil }
+            let fields = line.dropFirst().split(separator: " ")
+            return fields.count >= 2 ? String(fields[1]) : nil
+        }
+    }
+
+    /// Whether `path` is one of `protected` or holds one.
+    static func isProtected(_ path: String, by protected: [String]) -> Bool {
+        let targets = forms(path)
+        return protected.contains { candidate in
+            forms(candidate).contains { form in targets.contains { form == $0 || form.hasPrefix($0 + "/") } }
+        }
+    }
+
+    /// Removes the git-ignored build output (DerivedData, .build, build, .spm, node_modules, dist...)
+    /// of a worktree that stays, once nothing in it changed for `worktreeOutputIdle`. Source, git
+    /// state and anything git tracks stay. Each folder is checked against running processes right
+    /// before it goes, and its parent keeps its date so the worktree doesn't look recently used.
+    static func trimOutput(of path: String, _ c: Configuration, dryRun: Bool, report: inout Report,
+                           log: (String) -> Void) {
+        let root = URL(fileURLWithPath: path)
+        let cutoff = c.now.addingTimeInterval(-c.worktreeOutputIdle)
+        if let newest = newestChange(root, cutoff: cutoff), newest >= cutoff { return }
+        let folders = BuildCaches.outputFolders(in: root, git: c.git)
+        guard !folders.isEmpty, !c.processes().uses(path) else { return }
+        for folder in folders {
+            let idle = BuildCaches.idleSince(folder.url, shape: folder.shape)
+            guard c.now.timeIntervalSince(idle) >= c.worktreeOutputIdle, !c.processes().uses(folder.url.path) else { continue }
+            let bytes = allocatedSize(folder.url)
+            if !dryRun {
+                let parent = folder.url.deletingLastPathComponent()
+                let parentDate = try? parent.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+                do { try removeTree(folder.url) } catch {
+                    report.errors.append("\(folder.url.path): \(error.localizedDescription)")
+                    continue
+                }
+                if let parentDate {
+                    try? FileManager.default.setAttributes([.modificationDate: parentDate], ofItemAtPath: parent.path)
+                }
+            }
+            let hours = Int(c.now.timeIntervalSince(idle) / 3_600)
+            let reason = "build output of a worktree that stays, unused for \(hours >= 48 ? "\(hours / 24) days" : "\(hours) hours")"
+            report.worktreeOutputRemoved = (report.worktreeOutputRemoved ?? [])
+                + [BuildCaches.Removal(path: folder.url.path, bytes: bytes, reason: reason,
+                                       category: Report.Category.worktreeBuildOutput.rawValue)]
+            log("build output \(folder.url.path) \(dryRun ? "would remove" : "removed"): \(format(bytes)), \(reason)")
+        }
     }
 
     /// Repositories (by git common dir) that may have agent worktrees: main checkouts directly in

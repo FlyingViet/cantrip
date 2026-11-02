@@ -96,6 +96,7 @@ final class HostServices {
         self.remoteControlServer = remoteControlServer
         MCPHost.shared.start(remote: remoteControlServer, postsMacNotifications: postsMacNotifications)
         BackendStatusMonitor.shared.remote = remoteControlServer
+        StorageUpkeepStatus.shared.remote = remoteControlServer
         WatchInternetRoute.shared.start(server: remoteControlServer)
         CantripHomeStore.shared.onHandoff = { [weak self] run, handoff in
             guard let self else { return }
@@ -180,6 +181,7 @@ final class HostServices {
         // Daily memory consolidation, off the launch path; failed runs retry with backoff.
         Consolidator.start()
         // Daily cleanup of agent session folders and worktrees nothing uses anymore.
+        StorageUpkeepStatus.shared.postsMacNotifications = postsMacNotifications
         StorageUpkeepStatus.shared.start()
 
         if let recoveryReport {

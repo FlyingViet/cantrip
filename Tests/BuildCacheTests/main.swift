@@ -238,6 +238,20 @@ do {
     let busyAgent = agentCache.appendingPathComponent("busy-dd")
     derivedData(busyAgent, workspace: "/x")
     age(busyAgent, longAgo)
+    // `xcodebuild -derivedDataPath` output without info.plist, idle 7 hours (past the 6-hour limit) and 2 hours.
+    func bareDerivedData(_ url: URL, idleFor hours: Double) {
+        write("o", to: url.appendingPathComponent("Build/Products/Debug/app"))
+        write("log", to: url.appendingPathComponent("Logs/Build/a.xcactivitylog"))
+        write("i", to: url.appendingPathComponent("Index.noindex/DataStore/v5"))
+        age(url, now.addingTimeInterval(-hours * 3_600))
+    }
+    let hoursAgent = agentCache.appendingPathComponent("worktrees/artifact-dd")
+    bareDerivedData(hoursAgent, idleFor: 7)
+    let freshAgent = agentCache.appendingPathComponent("sw-dd-duo")
+    bareDerivedData(freshAgent, idleFor: 2)
+    // Idle when the sweep began, but a build starts in it before it is removed.
+    let startedAgent = agentCache.appendingPathComponent("dd-browserpreview")
+    bareDerivedData(startedAgent, idleFor: 30)
     // A child worktree's own build output goes with the worktree.
     let childWorktree = agentCache.appendingPathComponent("worktrees/ABC")
     write("gitdir: /x", to: childWorktree.appendingPathComponent(".git"))
@@ -289,17 +303,27 @@ do {
                                            buildRoots: [xcode], sharedCaches: [], now: now)
     options.git = "/usr/bin/git"
     let processes = StorageUpkeep.ProcessSnapshot(workingDirectories: [busyAgent.path], commandLines: [])
+    options.currentProcesses = {
+        StorageUpkeep.ProcessSnapshot(workingDirectories: [busyAgent.path],
+                                      commandLines: ["xcodebuild -derivedDataPath \(startedAgent.path) build"])
+    }
 
     let preview = BuildCaches.sweep(options, processes: processes, dryRun: true)
     let previewed = Set(preview.removed.map(\.path))
     let expected: Set<String> = [oldAgent.path, kit.appendingPathComponent("dd").path, staleSPM.path, staleBuild.path,
-                                 orphan.path]
+                                 orphan.path, hoursAgent.path]
     expect(previewed == expected, "build folders to remove: \(previewed.sorted())")
     expect(exists(oldAgent) && exists(staleSPM), "a dry run removes nothing")
 
     let report = BuildCaches.sweep(options, processes: processes, dryRun: false)
     expect(Set(report.removed.map(\.path)) == expected && report.errors.isEmpty, "removed: \(report.removed.map(\.path))")
     expect(!exists(oldAgent) && !exists(staleSPM) && !exists(staleBuild) && !exists(orphan), "stale folders are gone")
+    expect(!exists(hoursAgent), "an agent's DerivedData idle 7 hours goes, without an info.plist too")
+    expect(exists(freshAgent), "an agent's DerivedData used 2 hours ago stays")
+    expect(exists(startedAgent), "a DerivedData a build started using during the sweep stays")
+    let categories = Dictionary(report.removed.map { ($0.path, $0.category ?? "") }, uniquingKeysWith: { a, _ in a })
+    expect(categories[hoursAgent.path] == "agentBuildFolders" && categories[staleSPM.path] == "checkoutBuildOutput"
+           && categories[orphan.path] == "orphanedBuildFolders", "removals are filed by kind: \(categories)")
     expect(exists(recentAgent), "a DerivedData Xcode used recently stays")
     expect(exists(kit.appendingPathComponent("Host.swift")), "a QA kit beside a DerivedData stays")
     expect(exists(busyAgent), "a DerivedData a process uses stays")
@@ -310,6 +334,23 @@ do {
     expect(exists(live), "a DerivedData whose project exists stays")
     expect(exists(unmounted), "a DerivedData whose volume is unmounted stays")
     expect(report.bytesRemoved > 0 && report.count == expected.count, "the report counts removals")
+
+    // A worktree's build output: what git ignores under a build tool's folder name, or shaped like
+    // DerivedData; never a tracked folder or one git doesn't ignore.
+    let tree = root.appendingPathComponent("output-tree")
+    write("node_modules/\n.build/\nbuild/\ndist/\nscratch/\n", to: tree.appendingPathComponent(".gitignore"))
+    write("x", to: tree.appendingPathComponent("build/tracked.txt"))
+    git(["init", "-q"], in: tree)
+    git(["add", "-f", ".gitignore", "build/tracked.txt"], in: tree)
+    git(["commit", "-q", "-m", "init"], in: tree)
+    write("x", to: tree.appendingPathComponent("windows/node_modules/pkg/index.js"))
+    write("x", to: tree.appendingPathComponent(".build/debug/app"))
+    write("x", to: tree.appendingPathComponent("release/app.zip"))
+    write("x", to: tree.appendingPathComponent("scratch/dd/Build/Products/a"))
+    write("x", to: tree.appendingPathComponent("scratch/dd/Logs/a.log"))
+    let outputs = Set(BuildCaches.outputFolders(in: tree, git: "/usr/bin/git").map { $0.url.lastPathComponent })
+    expect(outputs == ["node_modules", ".build", "dd"],
+           "ignored output folders only (tracked build/ and unignored release/ stay): \(outputs.sorted())")
 }
 
 // MARK: - Shared caches
