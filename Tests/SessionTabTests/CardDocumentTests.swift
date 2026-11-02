@@ -23,7 +23,24 @@ extension SessionTabTests {
         try testKiwiFlightCards()
         testModelCardVerification()
         try await testCardsThroughSessions()
+        testCardSections()
         print("Generic cards: weather, places, links, Kiwi flights, tool cards, verification, fallback text and old history passed")
+    }
+
+    /// The Mac's card view: a map and its legend draw as one section; unknown and empty blocks draw nothing.
+    @MainActor
+    static func testCardSections() {
+        var map = CardDocument.Block(type: "map")
+        map.pins = [.init(id: "p1", title: "Cafe", latitude: 37.3, longitude: -121.9)]
+        var legend = CardDocument.Block(type: "list")
+        legend.mapLinked = true
+        legend.items = [.init(id: "p1", title: "Cafe", pinID: "p1")]
+        var header = CardDocument.Block(type: "header")
+        header.title = "Cafes"
+        let sections = CardPanelView.sections([header, map, legend, .init(type: "hologram"), .init(type: "header"), .init(type: "list")])
+        precondition(sections.count == 2, "\(sections)")
+        guard case .map(_, let linked) = sections[1] else { preconditionFailure("the map takes its legend") }
+        precondition(linked?.items?.first?.pinID == "p1" && sections[1].hasDivider && !sections[0].hasDivider)
     }
 
     static func testResolverDocuments() throws {
