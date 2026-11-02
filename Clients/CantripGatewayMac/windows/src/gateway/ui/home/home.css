@@ -146,6 +146,15 @@
 .hm-sheet-summary { font-size: 12px; color: var(--secondary); line-height: 1.4; }
 .hm-run-meta { font-size: 11.5px; color: var(--secondary); }
 
+/* Cards on runs, workspaces and records (drawn by transcript/Cards.tsx, dark like the chat's) */
+.hm-cards { width: 100%; max-width: 580px; }
+.hm-cards .card-stack { margin-top: 0; }
+.form-row.hm-run-cards { padding-top: 2px; }
+.hm-workspace-cards { display: flex; flex-direction: column; gap: 14px; padding: 12px 22px 10px; }
+.hm-latest-run { display: flex; flex-direction: column; gap: 6px; }
+.hm-record-cards { max-width: var(--readable); margin: 0 0 18px; }
+.hm-record-cards-status { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 10px; font-size: 12px; color: var(--secondary); }
+
 /* Artifacts grid (LazyVGrid, adaptive 150–320 pt columns, 12 pt spacing) */
 .ha-grid {
   list-style: none; margin: 0; padding: 16px; display: grid; gap: 12px; align-items: start;

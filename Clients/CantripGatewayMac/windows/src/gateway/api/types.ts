@@ -1374,6 +1374,8 @@ export interface HomeTaskRun {
   summary: string;
   /** The model the run used (newer hosts). */
   model?: string;
+  /** Cards the run's reply ended with, resolved on the Mac (newer hosts; omitted when none). */
+  cards?: RemoteCardDocument[];
 }
 
 export interface HomeTaskField {
@@ -1423,6 +1425,26 @@ export interface HomeTaskRecord {
   updatedAt: AppleReferenceSeconds;
 }
 
+/**
+ * A card the Mac builds from a workspace's records (`CantripHomeTaskCardSpec`, newer hosts): `list` cards
+ * arrive in {@link HomeTasksSnapshot.workspaceCards}; `weather` and `map` cards from
+ * `GET /api/v1/home/tasks/<task>/records/<record>/cards`. Clients only read `kind`.
+ */
+export interface HomeTaskCardSpec {
+  /** "list", "weather" or "map" (others may come later). */
+  kind: string;
+  title?: string;
+  dateField?: string;
+  endDateField?: string;
+  placeField?: string;
+  nearField?: string;
+  trailingField?: string;
+  withinDays?: Int;
+  includeOverdue?: boolean;
+  filter?: Record<string, string[]>;
+  limit?: Int;
+}
+
 export interface HomeTaskWorkspace {
   /** Singular noun, e.g. "Package". */
   recordLabel: string;
@@ -1433,6 +1455,8 @@ export interface HomeTaskWorkspace {
   list: HomeTaskListPresentation;
   detailSections: HomeTaskDetailSection[];
   records: HomeTaskRecord[];
+  /** Cards built from the records (newer hosts; omitted when none). */
+  cards?: HomeTaskCardSpec[];
 }
 
 /** `CantripHomeTask`. */
@@ -1474,6 +1498,18 @@ export interface HomeTasksSnapshot {
   /** Mac storage problem; when set, the server never answers `unchanged`. */
   error?: string;
   supportsReordering: true;
+  /** Task ID → the `list` cards built from its workspace's records (newer hosts; omitted when none). */
+  workspaceCards?: Record<UUIDString, RemoteCardDocument[]>;
+  /** The Mac answers `GET /api/v1/home/tasks/<task>/records/<record>/cards`. */
+  supportsRecordCards?: true;
+}
+
+/** GET /api/v1/home/tasks/<taskID>/records/<recordID>/cards: a record's live weather and map cards. */
+export interface HomeTaskRecordCardsResponse {
+  /** Empty when the workspace has no weather or map card, or the record names no place. */
+  cards: RemoteCardDocument[];
+  /** Seconds until the client should ask again while the record stays open. */
+  refreshAfter?: Int;
 }
 
 /** GET /api/v1/home/tasks?revision=<same>. */
@@ -1598,6 +1634,8 @@ export interface HomeBackgroundRun {
   inputs?: InputRequest[];
   /** The model a hidden run used (newer hosts). */
   model?: string;
+  /** Cards the finished run's reply ended with, resolved on the Mac (newer hosts; omitted when none). */
+  cards?: RemoteCardDocument[];
 }
 
 /** A job waiting to start. */

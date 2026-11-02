@@ -11,6 +11,8 @@ import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
 import { Icon, StatusIcon } from "../icons";
 import { confirmDialog, Sheet, Spinner, toast } from "../kit";
+import { backgroundRunCards } from "../home/homeCardLogic";
+import { HomeCardStack } from "../home/HomeCards";
 import { inline } from "../transcript/Markdown";
 import { InputCard } from "../transcript/Inputs";
 import {
@@ -183,6 +185,7 @@ function RunRow(props: {
   const canExpand = runCanExpand(run, activity);
   const resultID = `act-result-${run.id}`;
   const labelled = shows && !running && isLabelledSummary(result);
+  const cards = backgroundRunCards(run);
   return (
     <div class={`act-card${props.focused ? " focused" : ""}`} data-run-id={run.id} data-run-session={run.sessionID}>
       <span class="act-card-icon"><RunStatusIcon run={run} /></span>
@@ -219,6 +222,7 @@ function RunRow(props: {
             {expanded ? "Show less" : "Show full result"}
           </button>
         ) : null}
+        {cards.length ? <HomeCardStack cards={cards} class="act-run-cards" /> : null}
         {run.handoffs?.length ? (
           <div class="act-handoffs">{run.handoffs.map((handoff) => <HandoffCard key={handoff.id} handoff={handoff} />)}</div>
         ) : null}
