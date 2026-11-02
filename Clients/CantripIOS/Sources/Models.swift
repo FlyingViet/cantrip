@@ -160,6 +160,7 @@ struct ChatTurn: Identifiable, Codable {
     var linkPreviews: [CantripLinkPreview]? = nil
     var placeCard: CantripPlaceCard? = nil
     var weatherCard: CantripWeatherCard? = nil
+    var cards: [CantripCard]? = nil
     /// A Cantrip error that repeats the one before it; offers Start Fresh and Change Model.
     var isRepeatedError: Bool? = nil
     /// A Cantrip failed run's latest error; offers Continue (`CantripContinue`).

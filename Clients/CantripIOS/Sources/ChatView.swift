@@ -346,6 +346,7 @@ final class ChatViewModel: ObservableObject {
                 linkPreviews: message.linkPreviews,
                 placeCard: message.placeCard,
                 weatherCard: message.weatherCard,
+                cards: message.cards,
                 isRepeatedError: isError && message.id == session?.repeatedErrorMessageID ? true : nil,
                 isContinuable: isError && session?.continuableMessageIDs?.contains(message.id) == true ? true : nil
             )
@@ -3785,14 +3786,12 @@ struct TurnView: View {
                         }
                     }
                 }
-                if let weatherCard = remoteMessage?.weatherCard ?? turn.weatherCard {
-                    CantripWeatherCardView(card: weatherCard)
-                }
-                if let placeCard = remoteMessage?.placeCard ?? turn.placeCard, !placeCard.places.isEmpty {
-                    CantripPlaceCardView(card: placeCard)
-                }
-                if let linkPreviews = remoteMessage?.linkPreviews ?? turn.linkPreviews, !linkPreviews.isEmpty {
-                    CantripLinkPreviewStack(cards: linkPreviews, remote: remote)
+                let cards = CantripCard.forReply(cards: remoteMessage?.cards ?? turn.cards,
+                                                 weather: remoteMessage?.weatherCard ?? turn.weatherCard,
+                                                 places: remoteMessage?.placeCard ?? turn.placeCard,
+                                                 links: remoteMessage?.linkPreviews ?? turn.linkPreviews)
+                if !cards.isEmpty, turn.isLocalPrivate != true {
+                    CantripCardStack(cards: cards, remote: remote)
                 }
                 if let handoffs = remoteMessage?.delegations, !handoffs.isEmpty {
                     CantripHandoffStack(handoffs: handoffs, onOpenTab: onOpenTab)

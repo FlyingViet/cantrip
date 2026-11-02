@@ -634,6 +634,9 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var placeCard: CantripPlaceCard? = nil
     /// Forecast card for the reply's `weather` block (Open-Meteo, fetched on the Mac).
     var weatherCard: CantripWeatherCard? = nil
+    /// Every card under the reply as blocks (weather, places, links, tool results); absent from
+    /// older Macs, which send only the three fields above.
+    var cards: [CantripCard]? = nil
 
     var presentedText: String { displayText ?? text }
     /// Result cards Cantrip posts into Home's chat; never a model reply.
