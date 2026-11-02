@@ -54,7 +54,7 @@ enum StorageUpkeep {
             let checkedVault = memoryOn || FileManager.default.fileExists(atPath: vault.path) ? vault : nil
             let hasSimulators = (try? ProcessRunner.run("/usr/bin/xcrun", ["--find", "simctl"], errorOutput: .discard,
                                                         timeout: 20))?.succeeded == true
-            var simulators = SimulatorPool.SweepOptions()
+            var simulators = SimulatorPool.SweepOptions.pool(SimulatorPool.Policy.standard(defaults))
             simulators.includeUnmanaged = defaults.bool(forKey: "storageSimulatorCleanup")
             return Configuration(
                 sessionRoot: sessions,

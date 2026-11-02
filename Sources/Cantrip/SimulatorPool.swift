@@ -40,6 +40,9 @@ enum SimulatorPool {
         var waitMinutes = 10
         /// Seconds between checks while waiting.
         var pollSeconds = 3.0
+        /// A pool simulator or temporary copy booted this long with no lease and nothing using it
+        /// is shut down.
+        var idleMinutes = 15
 
         enum Key {
             static let phone = "simulatorPoolPhone"
@@ -48,11 +51,13 @@ enum SimulatorPool {
             static let maxBooted = "simulatorPoolMaxBooted"
             static let minFreeMemoryGB = "simulatorPoolMinFreeMemoryGB"
             static let waitMinutes = "simulatorPoolWaitMinutes"
+            static let idleMinutes = "simulatorPoolIdleMinutes"
         }
 
         static let maxBootedRange = 1...8
         static let minFreeMemoryRange = 0...64
         static let waitRange = 0...120
+        static let idleRange = 5...1_440
 
         static func standard(_ defaults: UserDefaults = .standard) -> Policy {
             var policy = Policy()
@@ -66,6 +71,7 @@ enum SimulatorPool {
             if let value = number(Key.maxBooted, maxBootedRange) { policy.maxBooted = value }
             if let value = number(Key.minFreeMemoryGB, minFreeMemoryRange) { policy.minFreeMemoryGB = value }
             if let value = number(Key.waitMinutes, waitRange) { policy.waitMinutes = value }
+            if let value = number(Key.idleMinutes, idleRange) { policy.idleMinutes = value }
             return policy
         }
     }
@@ -485,11 +491,34 @@ enum SimulatorPool {
         func target(_ type: DeviceType, _ runtime: Runtime, note: String? = nil) -> Target {
             Target(type: type, runtime: runtime, key: key(type: type, runtime: runtime), note: note)
         }
+        // A family the pool keeps one of: its first member (in pool order) whose device type and
+        // runtime are installed. `leaving` keeps the same one.
+        func kept(_ family: Family) -> (Member, DeviceType, Runtime)? {
+            for member in pool where Family(key: member.key) == family {
+                if let type = types.first(where: { $0.name == typeName(ofKey: member.key) }),
+                   let runtime = runtimes.first(where: {
+                       $0.isAvailable && $0.supportedTypes.contains(type.identifier) && member.key == key(type: type, runtime: $0)
+                   }) {
+                    return (member, type, runtime)
+                }
+            }
+            return nil
+        }
         if exact {
             let type = try asked ?? resolveType(device, in: types)
             let runtime = family == .duo ? try duoRuntime(type) : try resolveRuntime(os, for: type, in: runtimes)
             var chosen = target(type, runtime)
-            chosen.temporaryOnly = !pool.contains { $0.key == chosen.key }
+            // The pool's own only if the pool keeps it; a member on its way out isn't handed out.
+            let pooled: Bool
+            switch family {
+            case .phone:
+                pooled = (try? phone(policy, types: types, runtimes: runtimes)).map { key(type: $0.0, runtime: $0.1) } == chosen.key
+            case .tablet, .watch, .tv:
+                pooled = kept(family)?.0.key == chosen.key
+            case .duo, .other:
+                pooled = pool.contains { $0.key == chosen.key }
+            }
+            chosen.temporaryOnly = !pooled
             return chosen
         }
         let askedFor = os.map { "\(device) on \($0)" } ?? device
@@ -508,11 +537,7 @@ enum SimulatorPool {
             let type = try asked ?? resolveType(device, in: types)
             return target(type, try duoRuntime(type))
         case .tablet, .watch, .tv:
-            if let member = pool.first(where: { Family(key: $0.key) == family }),
-               let type = types.first(where: { $0.name == typeName(ofKey: member.key) }),
-               let runtime = runtimes.first(where: {
-                   $0.isAvailable && $0.supportedTypes.contains(type.identifier) && member.key == key(type: type, runtime: $0)
-               }) {
+            if let (_, type, runtime) = kept(family) {
                 let generic = device.trimmingCharacters(in: .whitespaces).lowercased() == family.label.lowercased()
                 let same = (generic || (asked ?? (try? resolveType(device, in: types))) == type)
                     && os.map { matches($0, runtime) } != false
@@ -633,8 +658,19 @@ enum SimulatorPool {
         let booted = Set(devices.filter { $0.isBooted && (snapshot.member($0.udid) != nil || snapshot.isTemporary($0)) }.map(\.udid))
         let before = Set(state.leases.map(\.udid)).union(booted)
         let freeing = Set(ending.map(\.udid)).subtracting(staying.map(\.udid))
-        let occupied = Set(staying.map(\.udid)).union(booted).subtracting(freeing)
+        var occupied = Set(staying.map(\.udid)).union(booted).subtracting(freeing)
         let swapping = before.count > occupied.count
+        if reuse.map({ !occupied.contains($0) }) ?? true, occupied.count >= c.policy.maxBooted, !swapping {
+            // One booted with no lease and nothing using it past the idle time gives its room back.
+            let idle = devices.filter { device in
+                booted.contains(device.udid) && occupied.contains(device.udid) && !staying.contains { $0.udid == device.udid }
+                    && !inUse(device.udid) && now.timeIntervalSince(device.lastUsed ?? .distantPast) >= Double(c.policy.idleMinutes) * 60
+            }
+            for device in idle where occupied.count >= c.policy.maxBooted {
+                c.simctl.shutdown(device.udid)
+                occupied.remove(device.udid)
+            }
+        }
         if reuse.map({ !occupied.contains($0) }) ?? true {
             var reasons: [String] = []
             if occupied.count >= c.policy.maxBooted, !swapping {
@@ -843,10 +879,54 @@ enum SimulatorPool {
         var includeUnmanaged = false
         var unusedDays = 3
         var temporaryHours = 24
-        /// A pool simulator holding more data than this is erased while it's free.
+        /// A pool simulator holding more data than this is erased while it's free (never an
+        /// iPhone Duo's: its installed apps are kept).
         var poolSizeCap: Int64 = 10_000_000_000
-        /// A free pool simulator booted longer than this is shut down.
-        var idleBootMinutes = 60
+        /// A free pool simulator or temporary copy booted longer than this is shut down.
+        var idleBootMinutes = Policy().idleMinutes
+
+        /// The pool's own upkeep, with the idle time from the settings.
+        static func pool(_ policy: Policy) -> SweepOptions {
+            var options = SweepOptions()
+            options.idleBootMinutes = policy.idleMinutes
+            return options
+        }
+    }
+
+    /// Pool members the pool no longer keeps, by UDID, with why: an iPhone other than the pool's
+    /// one (`phoneKey`), and all but one iPad, watch or TV (the first available one in pool order,
+    /// as `resolve` hands out). The iPhone Duo keeps one per iOS version. Nothing leaves while its
+    /// simulator is unavailable (its runtime missing for now), and no iPhone leaves before the
+    /// pool's own one is there and available, so a runtime that's briefly gone can't make the
+    /// wrong one leave.
+    static func leaving(_ state: State, devices: [Device], phoneKey: String?) -> [String: String] {
+        let available = Dictionary(devices.map { ($0.udid, $0) }, uniquingKeysWith: { a, _ in a }).filter { $0.value.isAvailable }
+        var result: [String: String] = [:]
+        for (family, members) in Dictionary(grouping: state.pool, by: { Family(key: $0.key) }) where !family.perVersion {
+            let keeper = family == .phone
+                ? phoneKey.flatMap { key in members.first { $0.key == key && available[$0.udid] != nil } }
+                : members.first { available[$0.udid] != nil }
+            guard let keeper else { continue }
+            for member in members where member.udid != keeper.udid && available[member.udid] != nil {
+                result[member.udid] = family == .phone ? "every iPhone request shares the pool's \(describe(keeper.key))"
+                    : "the pool keeps one \(family.label): \(describe(keeper.key))"
+            }
+        }
+        return result
+    }
+
+    /// The pool's iPhone's key, or nil when it can't be resolved.
+    static func phoneKey(_ policy: Policy, types: [DeviceType], runtimes: [Runtime]) -> String? {
+        (try? phone(policy, types: types, runtimes: runtimes)).map { key(type: $0.0, runtime: $0.1) }
+    }
+
+    /// The pool's own upkeep, run every few minutes by the host and by `cantrip sim tidy`: idle
+    /// simulators shut down, members the pool no longer keeps deleted once free, and old copies
+    /// deleted. Nil when the pool has nothing to look after.
+    static func tidy(dryRun: Bool = false, context c: Context = Context(), log: (String) -> Void = { _ in }) -> SweepReport? {
+        let state = c.store.read()
+        guard !state.pool.isEmpty || !state.leases.isEmpty || !state.temporaries.isEmpty else { return nil }
+        return sweep(.pool(c.policy), dryRun: dryRun, context: c, log: log)
     }
 
     struct Action: Codable, Equatable {
@@ -872,13 +952,16 @@ enum SimulatorPool {
     }
 
     /// Cleans up simulators: never one with a live lease or a process using it, and never a
-    /// booted one the pool didn't make. Pool simulators stay (erased past the size cap).
+    /// booted one the pool didn't make. Pool simulators stay (erased past the size cap), except
+    /// members the pool no longer keeps (`leaving`), which are deleted.
     static func sweep(_ o: SweepOptions, dryRun: Bool, context c: Context = Context(),
                       log: (String) -> Void = { _ in }) -> SweepReport {
         var report = SweepReport()
         do {
             let devices = try c.simctl.devices()
-            let typeNames = Dictionary((try c.simctl.deviceTypes()).map { ($0.identifier, $0.name) }, uniquingKeysWith: { a, _ in a })
+            let types = try c.simctl.deviceTypes()
+            let typeNames = Dictionary(types.map { ($0.identifier, $0.name) }, uniquingKeysWith: { a, _ in a })
+            let canonicalPhone = phoneKey(c.policy, types: types, runtimes: try c.simctl.runtimes())
             let lines = c.commandLines()
             let now = c.now()
             func work(_ state: inout State) {
@@ -889,21 +972,34 @@ enum SimulatorPool {
                 report.totalBytes = devices.reduce(0) { $0 + $1.dataBytes }
                 report.poolBytes = devices.filter { state.member($0.udid) != nil }.reduce(0) { $0 + $1.dataBytes }
                 var deletesUnavailable = false
+                let leavingMembers = leaving(state, devices: devices, phoneKey: canonicalPhone)
+                let idle = Double(o.idleBootMinutes) * 60
                 for device in devices {
                     guard !live.contains(device.udid), !lines.contains(where: { $0.contains(device.udid) }) else { continue }
                     let age = now.timeIntervalSince(device.lastUsed ?? .distantPast)
                     if state.isTemporary(device) {
                         let made = state.temporaries[device.udid] ?? device.lastUsed ?? .distantPast
-                        guard now.timeIntervalSince(made) >= Double(o.temporaryHours) * 3_600 else { continue }
-                        act(.deleted, device, reason: "temporary copy without a lease for \(o.temporaryHours) hours")
-                        if !dryRun { state.temporaries[device.udid] = nil }
-                    } else if state.member(device.udid) != nil {
+                        if now.timeIntervalSince(made) >= Double(o.temporaryHours) * 3_600 {
+                            act(.deleted, device, reason: "temporary copy without a lease for \(o.temporaryHours) hours")
+                            if !dryRun { state.temporaries[device.udid] = nil }
+                        } else if device.isBooted, age >= idle {
+                            act(.shutDown, device, reason: "temporary copy booted without a lease")
+                        }
+                    } else if let member = state.member(device.udid) {
+                        if let why = leavingMembers[device.udid] {
+                            // A booted one may be someone's for a moment; it goes once idle.
+                            guard !device.isBooted || age >= idle else { continue }
+                            if act(.deleted, device, reason: "no longer in the pool: \(why)"), !dryRun {
+                                state.pool.removeAll { $0.udid == device.udid }
+                            }
+                            continue
+                        }
                         var shutDown = !device.isBooted
-                        if device.isBooted, age >= Double(o.idleBootMinutes) * 60 {
+                        if device.isBooted, age >= idle {
                             act(.shutDown, device, reason: "pool simulator booted without a lease")
                             shutDown = true
                         }
-                        if shutDown, device.dataBytes > o.poolSizeCap {
+                        if shutDown, device.dataBytes > o.poolSizeCap, Family(key: member.key) != .duo {
                             act(.erased, device, reason: "pool simulator over \(StorageUpkeep.format(o.poolSizeCap))")
                         }
                     } else if o.includeUnmanaged, !device.isBooted {
@@ -926,7 +1022,8 @@ enum SimulatorPool {
                     do { try c.simctl.deleteUnavailable() } catch { report.errors.append(error.localizedDescription) }
                 }
             }
-            func act(_ kind: Action.Kind, _ device: Device, reason: String, run: Bool = true) {
+            @discardableResult
+            func act(_ kind: Action.Kind, _ device: Device, reason: String, run: Bool = true) -> Bool {
                 if !dryRun, run {
                     do {
                         switch kind {
@@ -936,7 +1033,7 @@ enum SimulatorPool {
                         }
                     } catch {
                         report.errors.append("Simulator \(device.name) (\(device.udid)): \(error.localizedDescription)")
-                        return
+                        return false
                     }
                 }
                 let verb: String
@@ -948,6 +1045,7 @@ enum SimulatorPool {
                 let bytes = kind == .shutDown ? 0 : device.dataBytes
                 report.actions.append(Action(udid: device.udid, name: device.name, kind: kind, bytes: bytes, reason: reason))
                 log("simulator \(device.name) (\(device.udid)) \(verb): \(StorageUpkeep.format(device.dataBytes)), \(reason)")
+                return true
             }
             if dryRun {
                 var state = c.store.read()

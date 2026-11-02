@@ -77,8 +77,9 @@ config` shows them as `limitFallbackEntries`; see [usage limit fallbacks](backen
 The simulator pool's `simulatorPoolPhone` (default `iPhone 17 Pro`),
 `simulatorPoolPhoneOS` (empty: the newest iOS that runs it),
 `simulatorPoolDuoOS` (default `27.1`), `simulatorPoolMaxBooted` (1–8, default
-2), `simulatorPoolMinFreeMemoryGB` (0–64, default 4) and
-`simulatorPoolWaitMinutes` (0–120, default 10) are described in
+2), `simulatorPoolMinFreeMemoryGB` (0–64, default 4),
+`simulatorPoolWaitMinutes` (0–120, default 10) and `simulatorPoolIdleMinutes`
+(5–1440, default 15) are described in
 [Shared simulators](updating-and-troubleshooting.md#shared-simulators).
 Run `cantrip config` for the full list.
 
