@@ -456,6 +456,9 @@ enum SimulatorPool {
         var temporaryOnly = false
         /// Why it isn't what was asked for.
         var note: String?
+        /// The exact model and OS asked for, when they're installed: a tab already holding a lease
+        /// on that (from `--exact`, or from before the pool kept one iPhone) keeps it.
+        var askedKey: String?
 
         var description: String { "\(type.name), \(runtime.name)" }
     }
@@ -489,7 +492,12 @@ enum SimulatorPool {
             return try resolveRuntime(nil, for: type, in: runtimes)
         }
         func target(_ type: DeviceType, _ runtime: Runtime, note: String? = nil) -> Target {
-            Target(type: type, runtime: runtime, key: key(type: type, runtime: runtime), note: note)
+            var chosen = Target(type: type, runtime: runtime, key: key(type: type, runtime: runtime), note: note)
+            if let askedType = asked ?? (try? resolveType(device, in: types)),
+               let askedRuntime = family == .duo ? try? duoRuntime(askedType) : try? resolveRuntime(os, for: askedType, in: runtimes) {
+                chosen.askedKey = key(type: askedType, runtime: askedRuntime)
+            }
+            return chosen
         }
         // A family the pool keeps one of: its first member (in pool order) whose device type and
         // runtime are installed. `leaving` keeps the same one.
@@ -631,12 +639,19 @@ enum SimulatorPool {
             state.waiting.removeAll { $0.id == waiter.id }
             return .acquired(acquired)
         }
-        if let tab, let index = state.leases.firstIndex(where: { $0.tab == tab && $0.key == key }),
-           devices.contains(where: { $0.udid == state.leases[index].udid }) {
+        // The same kind again, or exactly the model and OS asked for (a lease from --exact, or from
+        // before the pool kept one iPhone, stays the tab's while it works).
+        let present = Set(devices.map(\.udid))
+        let held = tab.flatMap { tab in
+            state.leases.firstIndex { $0.tab == tab && $0.key == key && present.contains($0.udid) }
+                ?? state.leases.firstIndex { $0.tab == tab && $0.key == target.askedKey && present.contains($0.udid) }
+        }
+        if let index = held {
             state.leases[index].expiresAt = now.addingTimeInterval(lifetime)
             let lease = state.leases[index]
             return done(Acquired(lease: lease, name: devices.first { $0.udid == lease.udid }?.name ?? "",
-                                 description: description, renewed: true, note: target.note))
+                                 description: lease.key == key ? description : describe(lease.key), renewed: true,
+                                 note: lease.key == key ? target.note : nil))
         }
         let lines = c.commandLines()
         func inUse(_ udid: String) -> Bool { lines.contains { $0.contains(udid) } }
