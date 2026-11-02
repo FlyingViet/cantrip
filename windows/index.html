@@ -40,6 +40,7 @@
           <span id="run-state"></span>
         </header>
         <div id="output" class="markdown-output"></div>
+        <div id="reply-card" class="card-slot hidden"></div>
       </section>
 
       <footer class="toolbar">
@@ -60,6 +61,13 @@
           <span>Allow agent actions</span>
         </label>
         <select id="backend" aria-label="AI backend"></select>
+        <button
+          id="home-toggle"
+          class="toolbar-button settings-toggle"
+          type="button"
+          title="Cantrip Home"
+          aria-label="Open Cantrip Home"
+        ><svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 1.6 1.2 7.4l.9 1.1 1.1-.9V14h3.9v-3.9h1.8V14h3.9V7.6l1.1.9.9-1.1z" fill="currentColor"/></svg></button>
         <button
           id="plugins-toggle"
           class="toolbar-button settings-toggle"
@@ -158,6 +166,30 @@
               <input id="settings-opacity" type="range" min="85" max="100" step="1" value="100" />
             </label>
             <p id="settings-error" class="settings-error hidden" role="alert"></p>
+          </section>
+
+          <section class="settings-section" aria-labelledby="settings-location-title">
+            <h2 id="settings-location-title">Location</h2>
+            <label class="settings-check">
+              <span>
+                <strong>Share location with prompts</strong>
+                <small>Answer weather and "near me" questions for where this PC is</small>
+              </span>
+              <input id="settings-location-share" type="checkbox" />
+            </label>
+            <label class="settings-check">
+              <span>
+                <strong>Precise location</strong>
+                <small>Otherwise rounded to about 1 km</small>
+              </span>
+              <input id="settings-location-precise" type="checkbox" />
+            </label>
+            <p class="settings-note">
+              Off by default. While on, each AI prompt includes this PC's location from the Windows
+              Location service and its time zone, read only when you send one and reused for up to
+              15 minutes. It isn't saved, and shell commands never get it.
+            </p>
+            <p id="settings-location-status" class="settings-note hidden" role="status" aria-live="polite"></p>
           </section>
 
           <section id="settings-plugins-section" class="settings-section">

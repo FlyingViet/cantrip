@@ -1,0 +1,26 @@
+{
+  "accessibilityLabel" : "Weather for Atlantis",
+  "blocks" : [
+    {
+      "title" : "Atlantis",
+      "type" : "header"
+    },
+    {
+      "symbol" : "exclamationmark.icloud",
+      "text" : "Couldn't find “Atlantis” to get its forecast.",
+      "title" : "Forecast unavailable",
+      "tone" : "warning",
+      "type" : "notice"
+    }
+  ],
+  "fallbackText" : "Atlantis\nForecast unavailable: Couldn't find “Atlantis” to get its forecast.",
+  "id" : "weather-atlantis",
+  "source" : {
+    "attribution" : "Weather data by Open-Meteo.com",
+    "kind" : "resolver",
+    "name" : "Open-Meteo",
+    "url" : "https:\/\/open-meteo.com\/"
+  },
+  "type" : "weather",
+  "version" : 1
+}

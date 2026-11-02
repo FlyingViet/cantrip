@@ -1,0 +1,136 @@
+{
+  "accessibilityLabel" : "Places for Matcha cafes",
+  "blocks" : [
+    {
+      "accessibilityLabel" : "Map of 3 places",
+      "attribution" : "Apple Maps · © OpenStreetMap",
+      "latitude" : 37.354100000000003,
+      "latitudeDelta" : 0.059999999999999998,
+      "longitude" : -121.9552,
+      "longitudeDelta" : 0.059999999999999998,
+      "pins" : [
+        {
+          "glyph" : "☕",
+          "id" : "p1",
+          "latitude" : 37.349600000000002,
+          "longitude" : -121.9389,
+          "symbol" : "cup.and.saucer.fill",
+          "title" : "Matcha Cafe Maiko"
+        },
+        {
+          "glyph" : "☕",
+          "id" : "p2",
+          "latitude" : 37.3688,
+          "longitude" : -121.967,
+          "symbol" : "cup.and.saucer.fill",
+          "title" : "Stonemill Matcha"
+        },
+        {
+          "glyph" : "🧁",
+          "id" : "p3",
+          "latitude" : 37.362000000000002,
+          "longitude" : -121.98999999999999,
+          "symbol" : "birthday.cake.fill",
+          "title" : "Arisan"
+        }
+      ],
+      "type" : "map"
+    },
+    {
+      "items" : [
+        {
+          "accessibilityLabel" : "Matcha Cafe Maiko, Matcha cafe · $$, rated 4.6 (312), Open now, 1310 Lafayette St, Santa Clara, CA",
+          "actions" : [
+            {
+              "kind" : "directions",
+              "label" : "Directions",
+              "url" : "https:\/\/maps.apple.com\/?q=Matcha%20Cafe%20Maiko&ll=37.349600,-121.938900"
+            },
+            {
+              "kind" : "call",
+              "label" : "Call",
+              "url" : "tel:+14085550100"
+            },
+            {
+              "kind" : "website",
+              "label" : "Website",
+              "url" : "https:\/\/www.example.com\/maiko"
+            }
+          ],
+          "badges" : [
+            {
+              "symbol" : "star.fill",
+              "text" : "4.6 (312)",
+              "tone" : "warning"
+            },
+            {
+              "text" : "Open now",
+              "tone" : "positive"
+            }
+          ],
+          "detail" : "1310 Lafayette St, Santa Clara, CA",
+          "glyph" : "☕",
+          "id" : "p1",
+          "note" : "Daily 11:00-21:00",
+          "pinID" : "p1",
+          "subtitle" : "Matcha cafe · $$",
+          "symbol" : "cup.and.saucer.fill",
+          "title" : "Matcha Cafe Maiko"
+        },
+        {
+          "accessibilityLabel" : "Stonemill Matcha, Tea house · $, rated 4.4 (98), Closed, 3150 El Camino Real",
+          "actions" : [
+            {
+              "kind" : "directions",
+              "label" : "Directions",
+              "url" : "https:\/\/maps.apple.com\/?q=Stonemill%20Matcha&ll=37.368800,-121.967000"
+            }
+          ],
+          "badges" : [
+            {
+              "symbol" : "star.fill",
+              "text" : "4.4 (98)",
+              "tone" : "warning"
+            },
+            {
+              "text" : "Closed",
+              "tone" : "negative"
+            }
+          ],
+          "detail" : "3150 El Camino Real",
+          "glyph" : "☕",
+          "id" : "p2",
+          "pinID" : "p2",
+          "subtitle" : "Tea house · $",
+          "symbol" : "cup.and.saucer.fill",
+          "title" : "Stonemill Matcha"
+        },
+        {
+          "accessibilityLabel" : "Arisan, Dessert shop",
+          "actions" : [
+            {
+              "kind" : "directions",
+              "label" : "Directions",
+              "url" : "https:\/\/maps.apple.com\/?q=Arisan&ll=37.362000,-121.990000"
+            }
+          ],
+          "glyph" : "🧁",
+          "id" : "p3",
+          "note" : "Approximate location",
+          "pinID" : "p3",
+          "subtitle" : "Dessert shop",
+          "symbol" : "birthday.cake.fill",
+          "title" : "Arisan",
+          "tone" : "warning"
+        }
+      ],
+      "mapLinked" : true,
+      "title" : "Matcha cafes",
+      "type" : "list"
+    }
+  ],
+  "fallbackText" : "• Matcha Cafe Maiko — Matcha cafe · $$ — 1310 Lafayette St, Santa Clara, CA\n• Stonemill Matcha — Tea house · $ — 3150 El Camino Real\n• Arisan — Dessert shop",
+  "id" : "places-p1",
+  "type" : "places",
+  "version" : 1
+}

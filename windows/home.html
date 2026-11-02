@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cantrip Home</title>
+  </head>
+  <body>
+    <section id="pair-view" class="pair-view" aria-labelledby="pair-title" hidden>
+      <div class="pair-panel">
+        <h1 id="pair-title">Pair with your Mac</h1>
+        <p>
+          Cantrip Home runs on your Mac. Pair this PC to see Home's conversation, its background
+          runs and tasks here, with their cards.
+        </p>
+        <p>
+          On the Mac, run <code>cantrip pair</code> and paste the
+          <code>cantripagent://pair</code> link it prints. Cantrip Gateway's pairing links work too.
+        </p>
+        <form id="pair-form" class="pair-form">
+          <label for="pair-link">Pairing link</label>
+          <textarea id="pair-link" rows="3" spellcheck="false" autocomplete="off" required></textarea>
+          <button id="pair-submit" class="primary-button" type="submit">Pair</button>
+        </form>
+        <p id="pair-error" class="pair-error" role="alert"></p>
+        <p class="pair-note">
+          The token is stored encrypted for this Windows account and is only sent to your Mac over
+          its encrypted home-network connection or its Tailscale HTTPS address. Nothing is shared
+          through a public link.
+        </p>
+      </div>
+    </section>
+
+    <div id="home-app" class="home-app" hidden>
+      <header class="home-header">
+        <h1>Cantrip Home</h1>
+        <span id="home-connection" class="home-connection"></span>
+        <span class="spacer"></span>
+        <button id="home-refresh" class="secondary-button" type="button">Refresh</button>
+        <button id="home-unpair" class="secondary-button" type="button">Unpair</button>
+      </header>
+      <nav class="home-nav" aria-label="Cantrip Home">
+        <button type="button" data-view="home">Home</button>
+        <button type="button" data-view="background">Background</button>
+        <button type="button" data-view="tasks">Tasks</button>
+      </nav>
+      <main id="home-content" class="home-content" tabindex="-1"></main>
+      <p id="home-status" class="home-status" role="status" aria-live="polite"></p>
+    </div>
+    <script type="module" src="/src/renderer/home.ts"></script>
+  </body>
+</html>

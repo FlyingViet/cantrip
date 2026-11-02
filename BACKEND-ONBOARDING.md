@@ -91,6 +91,7 @@ working or deliberately unsupported with a clear message.
 | `cantrip tab ask`/`read` | `CANTRIP_TAB_ID` in the agent's environment (`tabID` set by `ChatSession`) | `TabInsight.swift` | 0b9c00a |
 | `sudo`/`ssh` prompts | `RemoteAskpass` broker on the child process | `RemoteAskpass.swift` | 087f1c5 |
 | Reply visibility | `ReplyVisibility.guidance` in the session's system message | `Backend.swift` | f3ca958, 05b8c08 |
+| Cards | `CardComposer.richCardGuidance(command:)` (the `weather` block and the generic `card` block) in the session's system message and Home's protocol; `cantrip weather` for the card's numbers; tool cards (Kiwi `search-flight`, a tool's `"cantrip/card"`) and checking a `card` block need the tool's result in `ToolActivity.output`; Home runs learn run-result cards from `RunCards.guidance` in the background protocol, and a run's `card` block is checked against its own `ToolActivity.output` | `CardDocuments.swift`, `WeatherCards.swift`; spec in `docs/cards.md` | b353dfc |
 | Terminal CLI | `cantrip ask --backend <name>` aliases | `CLIServer.swift`, `HostControl.swift` | 84827f8 |
 
 Codex (0.166.0), as wired in `CodexBackend` and `CodexAppServer`:
@@ -109,8 +110,9 @@ Codex (0.166.0), as wired in `CodexBackend` and `CodexAppServer`:
 | Auto routing, queue plans, consolidation, OpenAI-compatible API | Unavailable: no tool-free one-shot mode (the shell can't be turned off) |
 
 Context such as memory, location, calendar, files, screen and continuity is added to
-`request.prompt` by `ChatSession.composeContext` and `prepareMemory`, so a backend gets it
-without extra work and must not add it again.
+`request.prompt` by `ChatSession.composeContext` and `prepareMemory`, and a paired device's
+location note (`takeClientContextNote`) goes into `send()`'s hidden preamble, so a backend gets
+it without extra work and must not add it again.
 
 ## 3. Wire it in on macOS
 
@@ -221,8 +223,9 @@ live run.
 - Put fixed instructions (Home's protocol) in the session's system instructions once, and send
   only per-turn data with each message. On Copilot this cut a Home message from about 117K to
   21K characters, and compaction can't drop it (8b3cd70).
-- Add `ReplyVisibility.guidance`, `RemoteGeneratedImages.agentGuidance` and (for backends
-  that run commands) `SimulatorPool.agentGuidance` to the system message (f3ca958). Check where the model's text before a tool call ends up: through Copilot,
+- Add `ReplyVisibility.guidance`, `CardComposer.richCardGuidance(command:)`,
+  `RemoteGeneratedImages.agentGuidance` and (for backends that run commands)
+  `SimulatorPool.agentGuidance` to the system message (f3ca958). Check where the model's text before a tool call ends up: through Copilot,
   Claude's "narration" blocks arrived only as reasoning, so 101 notes went missing in one
   session until they were shown as reply text (05b8c08).
 - MCP servers come from Cantrip's shared list (`MCPBackendConfig`), never from a list of the
@@ -382,7 +385,7 @@ either matches or the gap goes in section 9.
 - Slash commands and skills
 - Shared skills library (`cantrip skills list` shows the backend) and folder rules in the guidance
 - Usage reading, limit codes and fallback
-- Reply visibility guidance
+- Reply visibility and card guidance (`weather` and `card` blocks; a tool card from a real tool result)
 - `CANTRIP_TAB_ID` and `RemoteAskpass`
 
 ## 6. Other platforms and clients
@@ -455,7 +458,7 @@ table when you do.
 
 | Backend | Missing |
 |---|---|
-| Antigravity | Delete Message leaves agy's own conversation files unchanged (it only starts a new conversation); a system prompt: `ReplyVisibility`, `SimulatorPool` and `watch-`/`side-` guidance are missing, and Cantrip's folder rules go ahead of a conversation's first message instead (again when they change); per-tab MCP switches for local servers (agy reads MCP servers only from `~/.gemini/config/mcp_config.json`, which Cantrip writes); `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
+| Antigravity | Delete Message leaves agy's own conversation files unchanged (it only starts a new conversation); a system prompt: `ReplyVisibility`, card guidance for `weather` and `card` blocks (Home's protocol has it), `SimulatorPool` and `watch-`/`side-` guidance are missing, and Cantrip's folder rules go ahead of a conversation's first message instead (again when they change); per-tab MCP switches for local servers (agy reads MCP servers only from `~/.gemini/config/mcp_config.json`, which Cantrip writes); `CANTRIP_TAB_ID`; `RemoteAskpass`; `.usageLimit` from a run's error (limits are detected only from the usage read and phrase matching); `.heartbeat`; stopping one subagent; live steering (the CLI has none) |
 | Claude Code | Stopping one foreground Task subagent (the CLI can stop only background agents); Delete Message scrubs only the tab's current session file, not earlier sessions' files or subagent transcripts |
 | Codex | Delete Message scrubs only the tab's current thread's rollout file; `watch-`/`side-` background agents and wake-up turns (Codex's agents end with the turn); stopping one subagent (no API); Auto routing, queue plans, Done-when checks and memory upkeep (no tool-free one-shot mode wired); idle process release (each tab's app server stays up); shared servers that sign in through Cantrip's relay not yet run live (local `-c` servers were); Windows still runs `codex exec` |
 | Copilot Remote | Delete Message can't reach the remote server's session; Cantrip only starts a new one |

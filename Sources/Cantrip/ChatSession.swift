@@ -40,6 +40,10 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var linkPreviews: [LinkPreviewCard] = []
     /// Interactive map card with place pins resolved from this assistant reply.
     var placeCard: PlaceCard?
+    /// Forecast card for this reply's `weather` block (Open-Meteo data, or why there's none).
+    var weatherCard: WeatherCard?
+    /// A card from a tool result (built by Cantrip, or a model's `card` block verified against it).
+    var cards: [CardDocument] = []
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
     /// `freshStart`: the Start Fresh divider; turns above it are never sent to the model.
     enum Role: String, Codable { case user, assistant, error, handoff, freshStart }
@@ -50,14 +54,28 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
-        case threadID, continuesRunID, linkPreviews, placeCard
+        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards
     }
 }
 
 extension ChatMessage {
-    /// Link previews to show: none for links this reply's map card already covers.
+    /// Link previews to show: none for links this reply's map card already covers, and none for
+    /// weather sites under a weather card.
     var visibleLinkPreviews: [LinkPreviewCard] {
-        PlaceLinkFilter.visible(linkPreviews, placeCard: placeCard, text: text)
+        CardComposer.visibleLinks(PlaceLinkFilter.visible(linkPreviews, placeCard: placeCard, text: text), main: mainCard)
+    }
+
+    /// The reply's one main card, from whichever source it has.
+    var mainCard: CardDocument? {
+        CardComposer.mainCard(weather: weatherCard, places: placeCard, cards: cards)
+    }
+
+    /// Every card under the reply, as generic blocks: the main card, then link cards. A Home
+    /// run's result can carry several cards; they follow the main one.
+    func cardDocuments(linkPreviews showsLinks: Bool) -> [CardDocument] {
+        let extra = weatherCard == nil && placeCard == nil ? Array(cards.dropFirst()) : []
+        let documents = CardComposer.documents(main: mainCard, links: showsLinks ? visibleLinkPreviews : [])
+        return Array(documents.prefix(1)) + extra + documents.dropFirst()
     }
 
     /// Appends streamed reasoning. Reasoning after a new tool call or answer text is a new block.
@@ -124,6 +142,8 @@ extension ChatMessage {
         continuesRunID = try? container.decodeIfPresent(UUID.self, forKey: .continuesRunID)
         linkPreviews = (try? container.decodeIfPresent([LinkPreviewCard].self, forKey: .linkPreviews)) ?? []
         placeCard = try? container.decodeIfPresent(PlaceCard.self, forKey: .placeCard)
+        weatherCard = try? container.decodeIfPresent(WeatherCard.self, forKey: .weatherCard)
+        cards = (try? container.decodeIfPresent([CardDocument].self, forKey: .cards)) ?? []
         if (try? container.decodeIfPresent(Bool.self, forKey: .freshStart)) == true {
             role = .freshStart
         } else {
@@ -159,6 +179,8 @@ extension ChatMessage {
         try container.encodeIfPresent(continuesRunID, forKey: .continuesRunID)
         if !linkPreviews.isEmpty { try container.encode(linkPreviews, forKey: .linkPreviews) }
         try container.encodeIfPresent(placeCard, forKey: .placeCard)
+        try container.encodeIfPresent(weatherCard, forKey: .weatherCard)
+        if !cards.isEmpty { try container.encode(cards, forKey: .cards) }
     }
 }
 
@@ -265,6 +287,8 @@ final class ChatSession: ObservableObject {
     var onRunFinished: (() -> Void)?
     /// Called for every individual turn, including scheduled Home runs.
     var onTurnCompleted: ((UUID, String, String) -> Void)?
+    /// A finished Home run whose cards are still resolving: it reports completion once they do.
+    private(set) var isResolvingRunCards = false
     /// Called when the Home background conversation starts a scheduled task or incident.
     var onCantripHomeRunStarted: ((UUID, CantripHomeAutomatedRun) -> Void)?
     private(set) var remoteCompletion: RemoteCompletion?
@@ -1633,11 +1657,61 @@ final class ChatSession: ObservableObject {
     /// staged by the person at the Mac or capture ambient Mac data.
     /// `autoForkEligible`: a paired client's queued message, which auto-fork may start in a
     /// child tab like one sent with Auto delivery.
-    func submitRemote(_ text: String, mode: MessageDeliveryMode = .auto, autoForkEligible: Bool = false) {
+    /// `client`: a message from a paired device's composer, with the location it shared (if any).
+    func submitRemote(_ text: String, mode: MessageDeliveryMode = .auto, autoForkEligible: Bool = false,
+                      client: RemoteClientMessage? = nil) {
+        if let client { rememberClientMessage(client, text: text) }
         let before = autoForkEligible ? Set(queued.map(\.id)) : []
         receive(text, mode: mode, includesAmbientContext: false)
         guard autoForkEligible, mode == .queue else { return }
         for item in queued where !before.contains(item.id) { noteAutoDelivered(item.id) }
+    }
+
+    /// Where the device that sent this turn's message is, for its weather card. In memory only.
+    private(set) var turnClientLocation: RemoteClientLocation?
+
+    /// Paired clients' messages by text, with the location each carried (or none). In memory only,
+    /// for at most six hours: the note is added to that message's backend prompt when it runs.
+    private var clientMessages: [String: (message: RemoteClientMessage, received: Date)] = [:]
+
+    private func rememberClientMessage(_ message: RemoteClientMessage, text: String) {
+        let key = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty, !isLocalPrivate else { return }
+        let now = Date()
+        clientMessages = clientMessages.filter { now.timeIntervalSince($0.value.received) < 6 * 3_600 }
+        if clientMessages.count >= 32,
+           let oldest = clientMessages.min(by: { $0.value.received < $1.value.received })?.key {
+            clientMessages.removeValue(forKey: oldest)
+        }
+        clientMessages[key] = (message, now)
+    }
+
+    /// The location note for the paired-client message(s) about to run, consumed so it goes once.
+    func takeClientContextNote(for texts: [String]) -> String? {
+        var found: RemoteClientMessage?
+        for text in texts {
+            guard let entry = clientMessages.removeValue(
+                forKey: text.trimmingCharacters(in: .whitespacesAndNewlines)
+            ) else { continue }
+            if found?.location == nil { found = entry.message }
+        }
+        guard let found, !isLocalPrivate else { return nil }
+        if found.location != nil { turnClientLocation = found.location }
+        if found.location == nil, settings.shareLocation { LocationProvider.shared.refresh() }
+        return RemoteClientContextNote.note(
+            for: found.location, macLocation: settings.shareLocation ? LocationProvider.shared.contextLine : nil
+        )
+    }
+
+    /// A paired-client message delivered into the running turn, with a note only when the device
+    /// sent a location: the turn already has its context, so the Mac fallback would just be noise.
+    private func withClientContext(_ text: String) -> String {
+        let key = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard clientMessages[key]?.message.location != nil, let note = takeClientContextNote(for: [text]) else {
+            clientMessages.removeValue(forKey: key)
+            return text
+        }
+        return text + "\n\n" + note
     }
 
     private func invalidateRouting() {
@@ -1973,7 +2047,8 @@ final class ChatSession: ObservableObject {
                 dispatched = true
                 // The root takes the message now, so new messages no longer bypass the queue.
                 if sendNow { self.isWaitingOnBackgroundWatchers = false }
-                let text = parallel ? MessageRoutingPolicy.parallelDelivery(item.text) : item.text
+                let delivered = self.withClientContext(item.text)
+                let text = parallel ? MessageRoutingPolicy.parallelDelivery(delivered) : delivered
                 let result = await withCheckedContinuation { continuation in
                     let resume = { (result: MidTurnDelivery) in continuation.resume(returning: result) }
                     sendNow ? self.activeBackend.sendNowMidTurn(text, completion: resume)
@@ -2067,7 +2142,7 @@ final class ChatSession: ObservableObject {
                 }
                 dispatched = true
                 let result = await withCheckedContinuation { continuation in
-                    self.activeBackend.injectMidTurn(item.text) { result in
+                    self.activeBackend.injectMidTurn(self.withClientContext(item.text)) { result in
                         continuation.resume(returning: result)
                     }
                 }
@@ -2227,6 +2302,12 @@ final class ChatSession: ObservableObject {
         if !isLocalPrivate, !isPrivate, !isResume, automatedRun == nil, !isCantripHomeBackground,
            SlashInvocation(prompt) == nil, let notes = Self.tabContextProvider?(self, prompt) {
             preamble = notes + (preamble.map { "\n\n" + $0 } ?? "")
+        }
+        // A paired device's message says where the device is (or that the Mac's location stands in).
+        if !isResume { turnClientLocation = nil }
+        if !isLocalPrivate, !isResume, automatedRun == nil, SlashInvocation(prompt) == nil,
+           let note = takeClientContextNote(for: queuedItem.map { [$0.text] + combinedItems.map(\.text) } ?? [prompt]) {
+            preamble = note + (preamble.map { "\n\n" + $0 } ?? "")
         }
         if isCantripHomeBackground, !isResume { cantripHomeRunLabel = automatedRun?.label }
         if let automatedRun {
@@ -3834,24 +3915,48 @@ final class ChatSession: ObservableObject {
         let messageID = messages[idx].id
         var text = messages[idx].text
         let proposal = PlaceCardResolver.extractProposal(from: &text)
+        let weather = WeatherBlock.extract(from: &text)
+        // One main card: a places or weather block, else a model's card verified against the tool
+        // it cites, else a card Cantrip builds from a tool result. Anything else stays as text.
+        var proposals = ModelCards.extract(from: &text)
+        var toolCard: CardDocument?
+        if proposal == nil, weather == nil {
+            if let last = proposals.popLast() {
+                toolCard = ModelCards.verified(last, activities: messages[idx].activities)
+                if toolCard == nil { proposals.append(last) }
+            }
+            if toolCard == nil { toolCard = ToolCards.card(from: messages[idx].activities) }
+        }
+        let unshown = proposals.map(\.card.plainText).filter { !$0.isEmpty }
+        if !unshown.isEmpty { text = ([text] + unshown).filter { !$0.isEmpty }.joined(separator: "\n\n") }
         if text != messages[idx].text {
             messages[idx].text = text
         }
+        if let toolCard { messages[idx].cards = [toolCard] }
         // Every link, not just the first three: links the map card covers are dropped
-        // before picking which ones get a preview.
-        let candidateLinks = settings.linkPreviewsEnabled
-            ? LinkPreviewExtractor.extractLinks(from: text, limit: 64) : []
-        guard proposal != nil || !candidateLinks.isEmpty else { return false }
+        // before picking which ones get a preview, and weather sites under a weather card.
+        let candidateLinks = CardComposer.uncovered(WeatherLinkFilter.uncovered(
+            settings.linkPreviewsEnabled ? LinkPreviewExtractor.extractLinks(from: text, limit: 64) : [],
+            hasWeatherCard: weather != nil
+        ), main: toolCard)
+        guard proposal != nil || weather != nil || !candidateLinks.isEmpty else { return toolCard != nil }
+        let weatherContext = weather != nil ? weatherContext() : nil
         Task { @MainActor [weak self] in
+            async let forecast = WeatherCardResolver.resolve(weather, context: weatherContext)
             let resolvedPlaces = await (proposal != nil ? PlaceCardResolver.shared.resolve(proposal!) : nil)
             let previewURLs = PlaceLinkFilter.uncovered(candidateLinks, places: resolvedPlaces?.places ?? [])
                 .prefix(LinkPreviewExtractor.maximumLinksPerMessage).map(\.url)
             let resolvedLinks = await (!previewURLs.isEmpty
                 ? LinkPreviewStore.shared.resolve(urls: Array(previewURLs))
                 : [])
+            let resolvedWeather = await forecast
             guard let self,
                   let currentIdx = self.messages.firstIndex(where: { $0.id == messageID }) else { return }
             var changed = false
+            if let resolvedWeather, self.messages[currentIdx].weatherCard != resolvedWeather {
+                self.messages[currentIdx].weatherCard = resolvedWeather
+                changed = true
+            }
             if let resolvedPlaces, self.messages[currentIdx].placeCard != resolvedPlaces {
                 self.messages[currentIdx].placeCard = resolvedPlaces
                 changed = true
@@ -3864,7 +3969,46 @@ final class ChatSession: ObservableObject {
                 self.persistTranscript()
             }
         }
-        return proposal != nil
+        return proposal != nil || weather != nil
+    }
+
+    /// A Home run's card blocks: stripped from its reply and resolved for its result. Checked
+    /// `card` blocks need no lookup; a forecast or map has `RunCards.deadline` to resolve.
+    private func beginRunCards() -> Task<Void, Never>? {
+        guard let index = messages.lastIndex(where: { $0.role == .assistant }) else { return nil }
+        var text = messages[index].text
+        let (pending, unshown) = RunCards.extract(from: &text, activities: messages[index].activities)
+        if !unshown.isEmpty { text = ([text] + unshown).filter { !$0.isEmpty }.joined(separator: "\n\n") }
+        if text != messages[index].text { messages[index].text = text }
+        guard !pending.isEmpty else { return nil }
+        let messageID = messages[index].id
+        guard pending.needsResolving else {
+            messages[index].cards = Array(pending.checked.prefix(RunCards.maximumCards))
+            return nil
+        }
+        if PlaceCardResolver.locationContextProvider == nil {
+            PlaceCardResolver.locationContextProvider = { LocationProvider.shared.contextLine }
+        }
+        isResolvingRunCards = true
+        let context = weatherContext()
+        return Task { @MainActor [weak self] in
+            let cards = await RunCards.resolve(pending, context: context)
+            guard let self, let current = self.messages.firstIndex(where: { $0.id == messageID }) else { return }
+            self.messages[current].cards = cards
+            self.persistTranscript()
+        }
+    }
+
+    /// Where a weather block without a place is: the device this turn came from, else the Mac.
+    private func weatherContext() -> WeatherCardResolver.Context {
+        typealias Place = WeatherCardResolver.KnownPlace
+        let device = turnClientLocation.map { location in
+            Place(label: location.label,
+                  coordinate: .init(latitude: location.latitude, longitude: location.longitude),
+                  note: WeatherCardResolver.deviceNote(location.device))
+        }
+        return WeatherCardResolver.Context(device: device, mac: WeatherCardResolver.macPlace(),
+                                           unit: WeatherCardResolver.preferredUnit)
     }
 
     private func finishStream(dequeue: Bool = true, notify: Bool = true,
@@ -3905,6 +4049,7 @@ final class ChatSession: ObservableObject {
         councilFinished = []
         councilSynthesizing = false
         if !isLocalPrivate { processOverlayBlock() }
+        let runCards = isCantripHomeBackground ? beginRunCards() : nil
         let reply = processCantripHomeBlocks()
         let hasPendingRichCard = !isLocalPrivate ? processRichCards() : false
         if let completion = pendingTurnCompletion {
@@ -3915,7 +4060,18 @@ final class ChatSession: ObservableObject {
                 visibleSummary = reply
             }
             pendingTurnCompletion = nil
-            onTurnCompleted?(completion.runID, completion.status, visibleSummary)
+            if let runCards {
+                // The run's result carries its cards, so it completes once they resolve or their
+                // deadline passes (RunCards.deadline); a card that can't resolve is left out.
+                Task { @MainActor [weak self] in
+                    await runCards.value
+                    guard let self else { return }
+                    self.isResolvingRunCards = false
+                    self.onTurnCompleted?(completion.runID, completion.status, visibleSummary)
+                }
+            } else {
+                onTurnCompleted?(completion.runID, completion.status, visibleSummary)
+            }
         }
         isStreaming = false
         isWaitingOnBackgroundWatchers = false
@@ -3947,6 +4103,8 @@ final class ChatSession: ObservableObject {
            messages[idx].thinking.isEmpty,
            messages[idx].delegations.isEmpty,
            messages[idx].placeCard == nil,
+           messages[idx].weatherCard == nil,
+           messages[idx].cards.isEmpty,
            messages[idx].linkPreviews.isEmpty,
            !hasPendingRichCard {
             messages.remove(at: idx)

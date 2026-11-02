@@ -74,7 +74,7 @@ test-browser-preview:
 test-rich-cards:
 	@BIN="/tmp/cantrip-rich-card-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library Sources/Cantrip/CantripPaths.swift Sources/Cantrip/RichCards.swift Tests/RichCardTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc -parse-as-library Sources/Cantrip/CantripPaths.swift Sources/Cantrip/RichCards.swift Sources/Cantrip/WeatherCards.swift Tests/RichCardTests/*.swift -o "$$BIN" && "$$BIN"
 
 test-remote-images:
 	@BIN="/tmp/cantrip-remote-image-tests-$$$$"; \

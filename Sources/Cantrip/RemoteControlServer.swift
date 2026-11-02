@@ -2005,6 +2005,9 @@ final class RemoteControlServer {
                     inputRequestID = id
                 } else { inputRequestID = nil }
                 let images = try RemoteImageAttachments.decode(body["images"])
+                // Where the device is, when its "Share location" setting is on; nil means the Mac's
+                // location stands in. Only the message's backend prompt carries it.
+                let location = try RemoteClientLocation.parse(body["location"])
                 var videoID: UUID?
                 if let value = body["videoID"] {
                     guard let raw = value as? String, let uploadID = UUID(uuidString: raw) else {
@@ -2057,7 +2060,10 @@ final class RemoteControlServer {
                             )
                             if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
                             // A paired client's queued message may auto-fork, like one sent with Auto.
-                            else { session.submitRemote(prompt, mode: mode, autoForkEligible: true) }
+                            else {
+                                let client = RemoteClientMessage(location: await location?.named())
+                                session.submitRemote(prompt, mode: mode, autoForkEligible: true, client: client)
+                            }
                             sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
                         } catch let error as InputRequestError {
                             sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
@@ -2090,7 +2096,25 @@ final class RemoteControlServer {
                     text, images: images, sessionID: session.id
                 )
                 if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
-                else { session.submitRemote(prompt, mode: mode, autoForkEligible: true) }
+                else if let location, location.label == nil {
+                    // Name the place first (a browser or Windows PC sends coordinates only).
+                    Task {
+                        let client = RemoteClientMessage(location: await location.named())
+                        guard manager.managedSession(id: id) === session else {
+                            sendError(409, "The session closed before the message could be sent.", on: connection)
+                            return
+                        }
+                        session.submitRemote(prompt, mode: mode, autoForkEligible: true, client: client)
+                        sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
+                    }
+                    return
+                } else {
+                    session.submitRemote(prompt, mode: mode, autoForkEligible: true,
+                                         client: RemoteClientMessage(location: location))
+                }
+            } catch let error as RemoteClientLocation.Invalid {
+                sendError(400, error.localizedDescription, on: connection)
+                return
             } catch let error as InputRequestError {
                 sendError(error == .unavailable ? 409 : 400, error.localizedDescription, on: connection)
                 return
@@ -2235,6 +2259,7 @@ final class RemoteControlServer {
                     sendError(405, "Tasks are created conversationally in Cantrip Home.", on: connection)
                     return
                 }
+                LiveCards.shared.check(store.liveRunCards())
                 let revision = store.revision.uuidString
                 // Clients clear the warning on "unchanged", so send it in full while one stands.
                 let warning = store.storageError ?? Consolidator.healthWarning
@@ -2318,6 +2343,21 @@ final class RemoteControlServer {
                     sendEncoded(on: connection) { try JSONEncoder().encode(task) }
                     return
                 }
+                if parts.count == 8, String(parts[7]) == "cards" {
+                    // GET …/records/<record id>/cards: the record's weather and map cards.
+                    guard request.method == "GET" else { throw CantripHomeError(405, "Use GET for a record's cards.") }
+                    guard let recordID = UUID(uuidString: String(parts[6])),
+                          let task = store.tasks.first(where: { $0.id == id }),
+                          task.workspace?.records.contains(where: { $0.id == recordID }) == true else {
+                        throw CantripHomeError(404, "task record not found")
+                    }
+                    Task { @MainActor in
+                        let cards = await RecordCards.shared.cards(task: task, recordID: recordID)
+                        let body: [String: Any] = ["cards": cards.map(\.snapshot), "refreshAfter": RecordCards.refreshAfter]
+                        self.sendJSON(body, on: connection)
+                    }
+                    return
+                }
                 guard parts.count == 7,
                       let recordID = UUID(uuidString: String(parts[6])) else {
                     throw CantripHomeError(404, "task record not found")
@@ -2363,6 +2403,29 @@ final class RemoteControlServer {
                     artifacts: store.artifacts, revision: revision
                 )
                 sendEncoded(on: connection) { try JSONEncoder().encode(value) }
+                return
+            }
+            if parts.count == 6, parts[5] == "file" || parts[5] == "folder" {
+                // GET /api/v1/home/artifacts/<id>/file: the artifact's original bytes, streamed.
+                // GET /api/v1/home/artifacts/<id>/folder: the registered artifacts in its folder, as a zip.
+                guard request.method == "GET" else {
+                    sendError(405, "method not allowed", on: connection)
+                    return
+                }
+                guard let id = UUID(uuidString: String(parts[4])) else {
+                    sendError(404, "artifact not found", on: connection)
+                    return
+                }
+                do {
+                    let download = parts[5] == "file"
+                        ? try store.artifactDownload(id: id)
+                        : try store.artifactFolderDownload(id: id)
+                    sendDownload(download, on: connection)
+                } catch let error as CantripHomeError {
+                    sendError(error.status, error.message, on: connection)
+                } catch {
+                    sendError(404, "Artifact is no longer available on the Mac.", on: connection)
+                }
                 return
             }
             if parts.count == 6, parts[5] == "thumbnail" {
@@ -2708,6 +2771,9 @@ final class RemoteControlServer {
         // POST …/delete-message {"messageID"} deletes a prompt and its reply; clients drop
         // cached copies of every message listed in deletedMessageIDs.
         result["supportsDeleteMessage"] = !session.isCantripHomeRun
+        // POST …/messages takes {"location": {latitude, longitude, label?, accuracy?, precise?,
+        // timeZone?, age?, device?}}; without it, the model is told to use the Mac's location.
+        result["supportsClientLocation"] = !session.isLocalPrivate
         if !session.deletedMessageIDs.isEmpty {
             result["deletedMessageIDs"] = session.deletedMessageIDs.map(\.uuidString)
         }
@@ -3255,6 +3321,34 @@ final class RemoteControlServer {
         sendJSON(["error": message], status: status, on: connection)
     }
 
+    /// Streams an artifact (or a folder zip) from disk; files are opened and measured off the
+    /// main actor, and an error before the first byte still gets a JSON error response.
+    private func sendDownload(_ download: CantripHomeArtifactDownload, on connection: RemoteRequestConnection) {
+        connection.trace.enter(.encodeWait)
+        DispatchQueue.global(qos: .userInitiated).async {
+            connection.trace.enter(.encode)
+            let body: RemoteStreamBody
+            do {
+                body = try download.makeBody()
+            } catch {
+                let failure = error as? CantripHomeError ?? CantripHomeArtifactDownload.unavailable
+                self.sendError(failure.status, failure.message, on: connection)
+                return
+            }
+            let head = "HTTP/1.1 200 OK\r\n"
+                + "Content-Type: \(download.contentType)\r\n"
+                + "Content-Length: \(body.length)\r\n"
+                + "Content-Disposition: \(download.contentDisposition)\r\n"
+                + "Cache-Control: no-store\r\n"
+                + "X-Content-Type-Options: nosniff\r\n"
+                + "X-Cantrip-Request-ID: \(connection.trace.id)\r\n"
+                + "Content-Security-Policy: default-src 'none'; sandbox; frame-ancestors 'none'\r\n"
+                + "Referrer-Policy: no-referrer\r\n"
+                + "Connection: close\r\n\r\n"
+            connection.sendStream(head: Data(head.utf8), body: body, status: 200)
+        }
+    }
+
     private func send(
         status: Int,
         contentType: String,
@@ -3419,7 +3513,8 @@ private extension RemoteControlServer {
     #tabEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#tabEditor::backdrop{background:rgba(0,0,0,.35)}#tabEditor form{display:grid;gap:12px}#tabName{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}.tab-actions{display:flex;justify-content:flex-end;gap:8px}#tabError,#actionError{color:var(--orange);font-size:12px}#actionError:not(:empty){padding:8px 14px}.session-close:disabled{opacity:.65;cursor:default}.session-menu{border:0;background:transparent;color:var(--secondary);padding:2px 5px}
     .section-header{display:flex;align-items:center;flex:none;border-radius:999px;color:var(--secondary)}.section-header.drop-target{outline:2px solid var(--accent)}.section-header[draggable=true]{cursor:grab}.section-header.dragging{opacity:.5}.section-toggle{display:flex;align-items:center;gap:5px;min-width:0;max-width:170px;padding:4px 4px 4px 9px;border:0;background:transparent;color:inherit;font-size:12px;font-weight:600;white-space:nowrap}.section-toggle .section-name{overflow:hidden;text-overflow:ellipsis}.section-toggle .section-count{color:var(--tertiary);font-weight:400}.section-header:hover{background:var(--surface);color:var(--text)}.section-menu{border:0;background:transparent;color:var(--tertiary);padding:2px 7px 2px 3px;opacity:.6}.section-header:hover .section-menu,.section-menu:focus-visible{opacity:1}
     .remote-sidebar .section-header{width:100%;min-height:30px;margin-top:6px;border-radius:7px}.remote-sidebar .section-toggle{flex:1;max-width:none;text-transform:uppercase;letter-spacing:.04em;font-size:11px}
-    #sectionEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#sectionEditor::backdrop{background:rgba(0,0,0,.35)}#sectionEditor form{display:grid;gap:12px}#sectionName,#tabNewSection{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}#sectionActions{flex-wrap:wrap;justify-content:flex-start}#sectionError{color:var(--orange);font-size:12px}#tabSection{max-width:none;width:100%;height:32px;border:1px solid var(--line);background:var(--surface);color:var(--text)}
+    #sectionEditor{width:min(calc(100% - 32px),380px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#sectionEditor::backdrop{background:rgba(0,0,0,.35)}
+    #locationEditor{width:min(calc(100% - 32px),420px);padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#locationEditor::backdrop{background:rgba(0,0,0,.35)}#locationEditor form{display:grid;gap:12px}#locationEditor p{margin:0;line-height:1.45}.location-row{display:flex;align-items:center;gap:10px;min-height:44px}.location-row input{width:20px;height:20px;flex:none;margin:0}.location-row input:disabled+span{opacity:.5}#locationButton{display:inline-flex;align-items:center;justify-content:center}.location-icon{flex:none}#locationButton.location-on{color:var(--accent,currentColor)}#locationButton.location-on .location-icon{fill:currentColor}#sectionEditor form{display:grid;gap:12px}#sectionName,#tabNewSection{width:100%;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px}#sectionActions{flex-wrap:wrap;justify-content:flex-start}#sectionError{color:var(--orange);font-size:12px}#tabSection{max-width:none;width:100%;height:32px;border:1px solid var(--line);background:var(--surface);color:var(--text)}
     .prompt-usage{margin-top:4px}.prompt-usage>summary{font-size:11px}.usage-table{margin:6px 0 2px 19px;max-width:340px;color:var(--text)}.usage-title{margin-top:6px;color:var(--secondary);font-size:11px;font-weight:600}.usage-table dl{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:3px 0;font-size:12px}.usage-table dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}.prompt-preview{white-space:pre-wrap}.prompt-preview.clipped{max-height:11.2em;overflow:hidden}#promptReader{width:min(calc(100% - 24px),680px);border:1px solid var(--line);border-radius:12px;background:Canvas;color:var(--text)}#promptReader::backdrop{background:rgba(0,0,0,.35)}#promptPage{height:55vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
     @media(max-width:620px){.prompt-row{padding-inline:12px}.tools{padding-inline:10px}.connection-label{display:none}.session-tab{max-width:145px}.session-select{max-width:115px}#messages{padding:14px 12px 22px}.live-subagents{padding:8px 12px}}
     .remote-sidebar{--sidebar-width:clamp(136px,30vw,240px)}.remote-sidebar #app{padding-left:var(--sidebar-width)}
@@ -3466,7 +3561,12 @@ private extension RemoteControlServer {
     .input-image figcaption{font-size:12px;line-height:1.3;color:var(--secondary);overflow-wrap:anywhere}.input-images .mac-image{flex:none;margin:0;max-width:none}
     .input-images .mac-image img{height:120px;width:auto;max-width:200px;max-height:none}.input-images .mac-image-status{width:96px;min-height:120px;padding:6px;text-align:center}
     #tasksPanel{width:min(calc(100% - 24px),720px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
-    #tasksPanel::backdrop{background:rgba(0,0,0,.35)}.tasks-bar{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:Canvas}
+    #tasksPanel::backdrop,#backgroundPanel::backdrop{background:rgba(0,0,0,.35)}
+    #backgroundPanel{width:min(calc(100% - 24px),760px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
+    #backgroundPanel .control{min-height:44px;padding:4px 14px}#backgroundTitle{font-size:16px}#backgroundTitle:focus{outline:0}#backgroundPanel button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}#backgroundBody{padding:12px 14px 16px}#backgroundError:not(:empty){padding:8px 14px;color:#f87171}
+    .bg-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}.bg-run{display:grid;gap:4px;padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface)}
+    .bg-run .run-summary{white-space:pre-wrap}.bg-head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--secondary);margin:4px 0 8px}
+    .bg-log{display:grid;gap:12px}.bg-log .message{margin:0}.tasks-bar{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:Canvas}
     #tasksPanel .control{min-height:44px;padding:4px 14px}#tasksPanel button:focus-visible,#tasksPanel summary:focus-visible,#tasksSearch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     #artifactsPanel{width:min(calc(100% - 24px),860px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#artifactsPanel::backdrop{background:rgba(0,0,0,.35)}
     #artifactsPanel .control{min-height:44px;padding:4px 14px}#artifactsPanel button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}#artifactsTitle{font-size:16px}#artifactsTitle:focus{outline:0}
@@ -3474,7 +3574,7 @@ private extension RemoteControlServer {
     .artifact-card{display:grid;gap:6px;box-sizing:border-box;width:100%;height:100%;align-content:start;padding:8px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:inherit;font:inherit;text-align:left;cursor:pointer}.artifact-card:hover{background:var(--surface-2)}.artifact-card[aria-busy="true"]{opacity:.6}
     .artifact-thumb{display:grid;place-items:center;aspect-ratio:4/3;overflow:hidden;border-radius:8px;background:var(--surface-2);color:var(--secondary);font-size:13px;font-weight:650;letter-spacing:.04em}.artifact-thumb img{width:100%;height:100%;object-fit:cover}
     .artifact-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:14px;font-weight:600;overflow-wrap:anywhere}.artifact-meta{display:flex;justify-content:space-between;gap:6px;color:var(--secondary);font-size:12px}
-    .artifact-delete{position:absolute;top:14px;right:14px;display:grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:18px;background:rgba(0,0,0,.6);color:#fff;opacity:.85}.artifact-delete:hover,.artifact-delete:focus-visible{background:rgba(0,0,0,.82);opacity:1}.artifact-delete svg{width:18px;height:18px}
+    .artifact-actions{position:absolute;top:14px;right:14px;display:flex;gap:6px}.artifact-action{display:grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:18px;background:rgba(0,0,0,.6);color:#fff;opacity:.85}.artifact-action:hover,.artifact-action:focus-visible{background:rgba(0,0,0,.82);opacity:1}.artifact-action[aria-busy="true"]{opacity:.5;cursor:progress}.artifact-action svg{width:18px;height:18px}
     #tasksTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}#tasksTitle:focus{outline:0}
     #tasksError:not(:empty){margin:10px 14px 0;color:var(--red);font-size:13px}#tasksSearch{display:block;box-sizing:border-box;width:calc(100% - 28px);min-height:40px;margin:12px 14px 0;padding:6px 10px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--text);font:inherit}
     #tasksBody{padding:10px 14px 16px}.tasks-empty{padding:18px 2px;font-size:14px}.task-list,.record-list,.run-list{display:grid;gap:8px;margin:0;padding:0;list-style:none}
@@ -3510,6 +3610,39 @@ private extension RemoteControlServer {
     .link-card-domain{color:var(--secondary);font-size:13px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .link-card.compact{flex-direction:row;align-items:center;gap:12px;padding:10px 14px}.link-card.compact .link-card-body{padding:0;min-width:0;flex:1}
     .link-card-icon{display:grid;place-items:center;width:36px;height:36px;border-radius:10px;background:var(--surface-2);color:var(--secondary);font-size:16px;flex:none}
+    .link-card-icon svg{width:18px;height:18px}
+    .workspace-cards,.workspace-run{margin-bottom:14px}.workspace-run{display:grid;gap:4px}.record-cards{padding:0 12px}.record-cards:empty{display:none}.run-list .cd-card,.run-list .place-card{max-width:100%}
+    .cd-card{margin-top:10px;max-width:760px;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:linear-gradient(180deg,#21304a 0%,#1c232d 60%);color:#f3f4f6}.cd-card.has-map{background:#1c232d}
+    .cd-card>.cd-strip,.cd-card>.cd-chart,.cd-card>.cd-list,.cd-card>.cd-kv,.cd-card>.place-card,.cd-card>.cd-foot{border-top:1px solid rgba(255,255,255,.1)}.cd-card>:first-child{border-top:0}
+    .cd-card .place-card{margin-top:0;max-width:none;border-left:0;border-right:0;border-bottom:0;border-radius:0}.place-card.no-legend{min-height:260px}
+    .cd-icon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;flex:none}.cd-icon svg{width:100%;height:100%}.cd-icon.glyph{font-size:15px;line-height:1}
+    .cd-icon.sun{color:#ffcc40}.cd-icon.moon{color:#e8e3c4}.cd-icon.wet{color:#8ccaff}.cd-icon.cloud{color:#d5dae2}.cd-icon.star{color:#f5b841}
+    .cd-head{display:flex;align-items:flex-start;gap:12px;padding:14px 16px}.cd-info{flex:1;min-width:0}.cd-lead{width:22px;height:22px;margin-top:1px;color:#8ccaff}
+    .cd-title{font-size:15px;font-weight:700;line-height:1.3;color:#fff;overflow-wrap:anywhere}.cd-sub{display:flex;align-items:center;gap:4px;margin-top:2px;font-size:11.5px;color:#c9d0da}.cd-sub-icon{width:10px;height:10px}
+    .cd-line{margin-top:2px;font-size:12px;color:#c9d0da}.cd-line.first{margin-top:5px;font-size:13px;color:#e5e7eb}
+    .cd-stat{display:flex;align-items:center;gap:6px;flex:none}.cd-stat-value{font-size:40px;font-weight:300;line-height:1;color:#fff;font-variant-numeric:tabular-nums}.cd-stat-icon{width:32px;height:32px}
+    .cd-statblock{padding:2px 16px 12px}.cd-stat-label{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#9ca3af}.cd-stat-row{display:flex;align-items:center;gap:8px;margin-top:3px}.cd-statblock .cd-stat-value{font-size:30px;font-weight:400}.cd-statblock .cd-stat-icon{width:24px;height:24px;color:#8ccaff}
+    .cd-kv{padding:4px 0}.cd-kv-row{display:flex;justify-content:space-between;gap:12px;padding:7px 16px;font-size:13px;border-bottom:1px solid rgba(255,255,255,.06)}.cd-kv-row:last-child{border-bottom:0}.cd-kv-key{color:#c9d0da}.cd-kv-value{color:#fff;font-weight:650;text-align:right;overflow-wrap:anywhere}
+    .cd-strip{display:flex;gap:2px;overflow-x:auto;padding:10px;scrollbar-width:thin}
+    .cd-strip-item{flex:none;display:grid;justify-items:center;gap:3px;width:54px;font-size:11.5px;color:#d1d5db}.cd-strip-value{font-size:13.5px;font-weight:650;color:#fff;font-variant-numeric:tabular-nums}.cd-strip-item .cd-note{min-height:13px}
+    .cd-note{font-size:10.5px;font-weight:650;color:#9ca3af}.cd-note.accent{color:#8ccaff}.cd-note.positive{color:#34d399}.cd-note.negative{color:#f87171}.cd-note.warning{color:#f5b841}.cd-item .cd-note,.place-item .cd-note{font-size:11px;font-weight:500}
+    .cd-chart{padding:4px 0}
+    .cd-chart-row{display:grid;grid-template-columns:52px 26px 38px 36px minmax(40px,1fr) 36px;align-items:center;gap:8px;padding:6px 16px;font-size:13px;border-bottom:1px solid rgba(255,255,255,.06)}.cd-chart-row:last-child{border-bottom:0}
+    .cd-chart-label{font-weight:600}.cd-chart-low{color:#c9d0da;text-align:right;font-variant-numeric:tabular-nums}.cd-chart-high{color:#fff;font-weight:650;text-align:right;font-variant-numeric:tabular-nums}
+    .cd-bar{position:relative;height:5px;border-radius:999px;background:rgba(255,255,255,.14)}.cd-bar span{position:absolute;top:0;bottom:0;border-radius:999px;background:linear-gradient(90deg,#5ac8fa,#ffcc40)}
+    .cd-list{padding:2px 0}.cd-list-head{padding:8px 16px;border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#9ca3af}
+    .cd-item{display:grid;gap:4px;padding:10px 16px;border-bottom:1px solid rgba(255,255,255,.06)}.cd-item:last-child{border-bottom:0}
+    .cd-item-top{display:flex;align-items:center;gap:8px;min-width:0}.cd-item-icon{width:18px;height:18px;color:#8ccaff}.cd-item-title{flex:1;min-width:0;font-size:14px;font-weight:700;line-height:1.3;color:#fff;overflow-wrap:anywhere}.place-item .place-item-name{flex:1;min-width:0}
+    .cd-item-trailing{flex:none;font-size:14px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
+    .cd-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;color:#c9d0da}.cd-detail{font-size:12px;color:#c9d0da;overflow-wrap:anywhere}
+    .cd-badges.padded{display:flex;flex-wrap:wrap;gap:6px;padding:6px 16px 12px}
+    .cd-badge{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border-radius:999px;background:rgba(255,255,255,.1);color:#e5e7eb;font-size:11px;font-weight:650;line-height:1.5}.cd-badge-icon{width:11px;height:11px}
+    .cd-badge.positive{color:#34d399;background:rgba(52,211,153,.14)}.cd-badge.negative{color:#f87171;background:rgba(248,113,113,.14)}.cd-badge.warning{color:#f5b841;background:rgba(245,184,65,.14)}.cd-badge.accent{color:#8ccaff;background:rgba(140,202,255,.14)}
+    .cd-notice{padding:0 16px 14px}.cd-notice-title{display:flex;align-items:center;gap:6px;font-size:13.5px;font-weight:700;color:#fff}.cd-notice-icon{width:16px;height:16px}.cd-notice.warning .cd-notice-icon{color:#f5b841}.cd-notice.negative .cd-notice-icon{color:#f87171}.cd-notice.positive .cd-notice-icon{color:#34d399}
+    .cd-head+.cd-notice{margin-top:-8px}
+    .cd-foot{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;padding:8px 16px;font-size:11px;color:#b9c0ca}.cd-attr{margin-left:auto;color:#b9c0ca;text-decoration:underline}
+    .cd-fallback{padding:14px 16px;font-size:13px;white-space:pre-wrap}.cd-action-icon{width:12px;height:12px}
+    @media(max-width:620px){.cd-head{padding:12px}.cd-chart-row{grid-template-columns:44px 24px 34px 32px minmax(28px,1fr) 32px;gap:6px;padding:6px 12px}.cd-stat-value{font-size:34px}}
     .place-card{position:relative;margin-top:10px;max-width:760px;min-height:390px;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#1c232d;user-select:none}
     .place-map-viewport{position:absolute;inset:0;overflow:hidden;cursor:grab;touch-action:none}.place-map-viewport:active{cursor:grabbing}
     .place-map-tiles{position:absolute;inset:0;filter:brightness(.82) contrast(1.08) saturate(.88)}
@@ -3517,13 +3650,12 @@ private extension RemoteControlServer {
     .place-map-pins{position:absolute;inset:0;pointer-events:none}
     .place-pin{position:absolute;transform:translate(-50%,-50%);display:inline-flex;align-items:center;gap:4px;padding:3px 8px 3px 4px;border-radius:999px;background:rgba(20,24,30,.88);border:1px solid rgba(255,255,255,.18);color:#fff;font-size:11.5px;font-weight:700;white-space:nowrap;cursor:pointer;pointer-events:auto;box-shadow:0 3px 10px rgba(0,0,0,.4)}
     .place-pin.selected{background:#e04f44;border-color:#fff;z-index:2}.place-pin-dot{display:grid;place-items:center;width:18px;height:18px;border-radius:50%;background:#e04f44;color:#fff;font-size:10px}
-    .place-pin.selected .place-pin-dot{background:#fff;color:#e04f44}.place-item-note{font-size:11px;color:#9ca3af;margin-top:2px}.place-item-note.warn{color:#f5b841}.place-pin-label{max-width:130px;overflow:hidden;text-overflow:ellipsis}
+    .place-pin.selected .place-pin-dot{background:#fff;color:#e04f44}.place-pin-dot svg{width:11px;height:11px}.place-pin-label{max-width:130px;overflow:hidden;text-overflow:ellipsis}
     .place-list{position:relative;z-index:3;width:min(305px,calc(100% - 24px));max-height:360px;overflow-y:auto;margin:12px;border:1px solid rgba(255,255,255,.12);border-radius:13px;background:rgba(24,26,31,.92);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);color:#f3f4f6;box-shadow:0 8px 28px rgba(0,0,0,.42)}
     .place-list-head{padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#9ca3af}
     .place-item{display:grid;gap:4px;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.08);cursor:pointer}.place-item:last-child{border-bottom:0}.place-item:hover,.place-item.selected{background:rgba(255,255,255,.07)}
     .place-item-name{font-size:14px;font-weight:700;color:#fff;line-height:1.3}
     .place-item-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:12px;color:#9ca3af}
-    .place-open{color:#34d399;font-weight:650}.place-closed{color:#f87171;font-weight:650}
     .place-item-addr{font-size:11.5px;color:#9ca3af;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .place-item-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:3px}
     .place-action{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.1);color:#e5e7eb;font-size:11.5px;font-weight:600;text-decoration:none}
@@ -3537,9 +3669,9 @@ private extension RemoteControlServer {
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
     <main id="app" class="hidden"><aside id="sessionSidebar" class="hidden" aria-labelledby="sessionSidebarTitle"><div id="sessionSidebarHeader"><strong id="sessionSidebarTitle">Tabs</strong></div></aside><header class="workspace">
-    <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="slashList"><div id="slashPopover" class="slash-popover hidden"><div id="slashList" role="listbox" aria-label="Commands"></div><div id="slashLoading" class="slash-info hidden"><span class="spinner" aria-hidden="true"></span>Loading commands…</div><div id="slashInfo" class="slash-info hidden"></div></div><div id="slashStatus" class="sr-only" role="status" aria-live="polite"></div><div id="mentionPopover" class="slash-popover hidden"><div id="mentionList" role="listbox" aria-label="Tab suggestions"></div><div id="mentionInfo" class="slash-info hidden"></div></div><div id="mentionStatus" class="sr-only" role="status" aria-live="polite"></div><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
+    <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="slashList"><div id="slashPopover" class="slash-popover hidden"><div id="slashList" role="listbox" aria-label="Commands"></div><div id="slashLoading" class="slash-info hidden"><span class="spinner" aria-hidden="true"></span>Loading commands…</div><div id="slashInfo" class="slash-info hidden"></div></div><div id="slashStatus" class="sr-only" role="status" aria-live="polite"></div><div id="mentionPopover" class="slash-popover hidden"><div id="mentionList" role="listbox" aria-label="Tab suggestions"></div><div id="mentionInfo" class="slash-info hidden"></div></div><div id="mentionStatus" class="sr-only" role="status" aria-live="polite"></div><button id="locationButton" class="round" aria-haspopup="dialog" aria-label="Location sharing is off" title="Location: Off. Share this device's location with your messages"><svg class="location-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 1.5 1.5 7l5.5 2 2 5.5z"/></svg></button><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
     <div id="mentionChips" class="mention-chips" role="list" aria-label="Mentioned tabs"></div>
-    <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSection" class="round hidden" title="New section" aria-label="New section"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M1.5 4.5v8a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3.5h-4a1 1 0 0 0-1 1z"/><path d="M8 7.5v4M6 9.5h4"/></svg></button><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><button id="homeArtifacts" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home artifacts">Artifacts</button><span class="tools-spacer"></span>
+    <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSection" class="round hidden" title="New section" aria-label="New section"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M1.5 4.5v8a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3.5h-4a1 1 0 0 0-1 1z"/><path d="M8 7.5v4M6 9.5h4"/></svg></button><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><button id="homeArtifacts" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home artifacts">Artifacts</button><button id="homeBackground" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home background runs">Background</button><span class="tools-spacer"></span>
     <select id="mode" aria-label="Delivery override"><option value="auto">Auto</option><option value="queue">Queue</option><option value="interrupt">Redirect</option><option value="inject">Inject</option></select>
     <span class="connection"><span class="connection-dot"></span><span class="connection-label">Connected</span></span><button id="forget" class="control quiet">Unpair</button></div>
     <div id="sessionProgress" class="run-status hidden" role="status" aria-live="polite" aria-atomic="true"><span id="sessionProgressText"></span></div>
@@ -3558,6 +3690,14 @@ private extension RemoteControlServer {
     <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button><button id="tabBackends" type="button" class="control">Backends</button><button id="tabPolicy" type="button" class="control">Agent Policy</button><button id="tabSkills" type="button" class="control">Skills &amp; Rules</button><button id="tabSecrets" type="button" class="control">Secrets</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
+    </form></dialog>
+    <dialog id="locationEditor" aria-labelledby="locationTitle"><form method="dialog">
+    <strong id="locationTitle">Location</strong>
+    <label class="location-row"><input id="locationShare" type="checkbox"><span>Share this device's location with my messages</span></label>
+    <label class="location-row"><input id="locationPrecise" type="checkbox"><span>Precise location</span></label>
+    <p class="muted">Off by default. While on, each message you send carries this device's location (rounded to about 1 km, or exact with Precise) and time zone, so weather and "near me" answers are for where you are. It goes only to your Mac over this paired connection and isn't saved to Cantrip's memory. While off, Cantrip uses the Mac's location and says so.</p>
+    <p id="locationStatus" class="muted" role="status" aria-live="polite"></p>
+    <div class="tab-actions"><button id="locationDone" type="submit" class="control primary">Done</button></div>
     </form></dialog>
     <dialog id="sectionEditor" aria-labelledby="sectionEditorTitle"><form id="sectionForm">
     <strong id="sectionEditorTitle">Section</strong><label>Name<input id="sectionName" maxlength="40" autocomplete="off"></label>
@@ -3646,6 +3786,7 @@ private extension RemoteControlServer {
     <dialog id="threadView" aria-labelledby="threadTitle"><div class="thread-bar"><div class="thread-heading"><strong id="threadTitle">Thread</strong><span id="threadCount"></span></div><button id="threadClose" type="button" aria-label="Close thread">✕</button></div><div id="threadBody"></div></dialog>
     <dialog id="tasksPanel" aria-labelledby="tasksTitle"><div class="tasks-bar"><button id="tasksBack" type="button" class="control hidden" aria-label="Back to tasks">‹ Tasks</button><strong id="tasksTitle" class="grow" tabindex="-1">Tasks</strong><button id="tasksDone" type="button" class="control">Done</button></div>
     <div id="tasksError" role="alert"></div><input id="tasksSearch" class="hidden" type="search" autocomplete="off" aria-label="Search records"><div id="tasksBody"></div><div id="tasksStatus" class="sr-only" role="status" aria-live="polite"></div></dialog>
+    <dialog id="backgroundPanel" aria-labelledby="backgroundTitle"><div class="tasks-bar"><button id="backgroundBack" type="button" class="control hidden" aria-label="Back to background runs">‹ Background</button><strong id="backgroundTitle" class="grow" tabindex="-1">Background</strong><button id="backgroundLog" type="button" class="control">Full Log</button><button id="backgroundDone" type="button" class="control">Done</button></div><div id="backgroundError" role="alert"></div><div id="backgroundBody"></div></dialog>
     <dialog id="artifactsPanel" aria-labelledby="artifactsTitle"><div class="tasks-bar"><strong id="artifactsTitle" class="grow" tabindex="-1">Artifacts</strong><button id="artifactsCreate" type="button" class="control">Create in Chat</button><button id="artifactsDone" type="button" class="control">Done</button></div><div id="artifactsError" role="alert"></div><div id="artifactsBody"></div><div id="artifactsStatus" class="sr-only" role="status" aria-live="polite"></div></dialog>
     <dialog id="imageViewer" aria-labelledby="imageViewerTitle"><div class="viewer-bar"><strong id="imageViewerTitle" class="grow">Preview</strong><button id="imageZoom" type="button" class="control" aria-pressed="false">Actual size</button><button id="imageRetry" type="button" class="control hidden">Retry</button><button id="imageDone" type="button" class="control">Done</button></div>
     <div id="imageStage"><img id="imageFull" alt=""><p id="imageStatus" role="status" aria-live="polite"></p></div></dialog>
@@ -3827,7 +3968,7 @@ private extension RemoteControlServer {
         let listedSuccessfully=false,requestSelection=requestedID;
         try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);tabSections=listed.sections||[];sectionsSupported=listed.supportsTabSections===true;$("newSection").classList.toggle("hidden",!sectionsSupported);renderHomeInputs(listed.homeInputs||[]);
           // Cantrip Home is pinned first when the Mac has it on; it is never closed or moved.
-          const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;$("homeTasks").classList.toggle("hidden",!listed.home);$("homeArtifacts").classList.toggle("hidden",!listed.home);
+          const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;$("homeTasks").classList.toggle("hidden",!listed.home);$("homeArtifacts").classList.toggle("hidden",!listed.home);$("homeBackground").classList.toggle("hidden",!listed.home);
           for(const id of historyCache.keys())if(!sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}
           if(selected!==requestedID){refreshRequested=true;continue}
           if(tabLink&&sessions.some(s=>s.id===tabLink)){selectTab(tabLink);tabLink=null;history.replaceState(null,"",location.pathname+location.search)}
@@ -4697,14 +4838,6 @@ private extension RemoteControlServer {
     const linkImageCache=new Map(),mapTileCache=new Map(),placeCardState=new Map();
     async function loadLinkPreviewImage(id,img){if(!id)return;const cached=linkImageCache.get(id);if(cached){img.src=cached;return}const requestToken=token;
       try{const data=await api(`/api/v1/link-previews/image?id=${encodeURIComponent(id)}`);if(token!==requestToken||!data?.data)return;const src=`data:image/jpeg;base64,${data.data}`;linkImageCache.set(id,src);if(img.isConnected)img.src=src}catch{}}
-    function appendLinkPreviews(parent,previews){if(!Array.isArray(previews)||!previews.length)return;const stack=document.createElement("div");stack.className="link-card-stack";
-      for(const item of previews){if(!item||typeof item.url!=="string"||!/^https?:\\/\\//i.test(item.url))continue;
-        const card=document.createElement("a");card.href=item.url;card.target="_blank";card.rel="noopener noreferrer";const hasImg=Boolean(item.imageID);card.className=`link-card${hasImg?"":" compact"}`;
-        const domainText=item.domain||item.siteName||item.url;card.setAttribute("aria-label",`${item.title||domainText}, ${domainText}, opens web page`);
-        if(hasImg){const hero=document.createElement("div"),img=document.createElement("img");hero.className="link-card-hero";img.alt="";img.decoding="async";hero.append(img);card.append(hero);loadLinkPreviewImage(item.imageID,img)}
-        else{const icon=document.createElement("span");icon.className="link-card-icon";icon.setAttribute("aria-hidden","true");icon.textContent="🌐";card.append(icon)}
-        const body=document.createElement("div"),title=document.createElement("div"),domain=document.createElement("div");body.className="link-card-body";title.className="link-card-title";title.textContent=item.title||domainText;domain.className="link-card-domain";domain.textContent=domainText;body.append(title,domain);card.append(body);stack.append(card)}
-      if(stack.children.length)parent.append(stack)}
     function lonToWorldX(lon,z){return((lon+180)/360)*256*Math.pow(2,z)}
     function latToWorldY(lat,z){const clamped=Math.max(-85.0511,Math.min(85.0511,lat)),rad=clamped*Math.PI/180;return((1-Math.log(Math.tan(rad)+1/Math.cos(rad))/Math.PI)/2)*256*Math.pow(2,z)}
     function worldXToLon(x,z){return(x/(256*Math.pow(2,z)))*360-180}
@@ -4714,36 +4847,112 @@ private extension RemoteControlServer {
     function initialPlaceZoom(places){if(!places||places.length<=1)return 14;let minLat=90,maxLat=-90,minLon=180,maxLon=-180;
       for(const p of places){minLat=Math.min(minLat,p.latitude);maxLat=Math.max(maxLat,p.latitude);minLon=Math.min(minLon,p.longitude);maxLon=Math.max(maxLon,p.longitude)}
       const span=Math.max(maxLat-minLat,maxLon-minLon);if(span>0.5)return 10;if(span>0.2)return 11;if(span>0.08)return 12;if(span>0.03)return 13;return 14}
-    function appendPlaceCard(parent,card,messageID){const places=Array.isArray(card?.places)?card.places:[];if(!places.length)return;
-      const key=messageID||card.query||places[0].id;let state=placeCardState.get(key);
-      if(!state){const avgLat=places.reduce((s,p)=>s+p.latitude,0)/places.length,avgLon=places.reduce((s,p)=>s+p.longitude,0)/places.length;
-        state={lat:avgLat,lon:avgLon,zoom:initialPlaceZoom(places),selectedID:places[0].id,fitKey:"",moved:false};placeCardState.set(key,state)}
-      const wrap=document.createElement("section");wrap.className="place-card";wrap.setAttribute("role","group");wrap.setAttribute("aria-label",card.query?`Places for ${card.query}`:"Recommended places map");
-      const viewport=document.createElement("div"),tileBox=document.createElement("div"),pinBox=document.createElement("div");viewport.className="place-map-viewport";tileBox.className="place-map-tiles";pinBox.className="place-map-pins";viewport.append(tileBox,pinBox);
-      const list=document.createElement("div");list.className="place-list";
-      if(card.query){const head=document.createElement("div");head.className="place-list-head";head.textContent=card.query;list.append(head)}
+    // Cards (docs/cards.md): every card under a reply is blocks; one function per block, nothing per card type.
+    // Lucide outlines (ISC) for the SF Symbol names cards use; constants, never reply data.
+    const cardIcons={"sun.max.fill":"<circle cx='12' cy='12' r='4'/><path d='M12 2v2'/><path d='M12 20v2'/><path d='m4.93 4.93 1.41 1.41'/><path d='m17.66 17.66 1.41 1.41'/><path d='M2 12h2'/><path d='M20 12h2'/><path d='m6.34 17.66-1.41 1.41'/><path d='m19.07 4.93-1.41 1.41'/>","moon.stars.fill":"<path d='M18 5h4'/><path d='M20 3v4'/><path d='M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401'/>","cloud.sun.fill":"<path d='M12 2v2'/><path d='m4.93 4.93 1.41 1.41'/><path d='M20 12h2'/><path d='m19.07 4.93-1.41 1.41'/><path d='M15.947 12.65a4 4 0 0 0-5.925-4.128'/><path d='M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z'/>","cloud.moon.fill":"<path d='M13 16a3 3 0 0 1 0 6H7a5 5 0 1 1 4.9-6z'/><path d='M18.376 14.512a6 6 0 0 0 3.461-4.127c.148-.625-.659-.97-1.248-.714a4 4 0 0 1-5.259-5.26c.255-.589-.09-1.395-.716-1.248a6 6 0 0 0-4.594 5.36'/>","cloud.fill":"<path d='M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z'/>","cloud.fog.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M16 17H7'/><path d='M17 21H9'/>","cloud.drizzle.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M8 19v1'/><path d='M8 14v1'/><path d='M16 19v1'/><path d='M16 14v1'/><path d='M12 21v1'/><path d='M12 16v1'/>","cloud.rain.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M16 14v6'/><path d='M8 14v6'/><path d='M12 16v6'/>","cloud.heavyrain.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='m9.2 22 3-7'/><path d='m9 13-3 7'/><path d='m17 13-3 7'/>","cloud.sleet.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M8 15h.01'/><path d='M8 19h.01'/><path d='M12 17h.01'/><path d='M12 21h.01'/><path d='M16 15h.01'/><path d='M16 19h.01'/>","cloud.snow.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M8 15h.01'/><path d='M8 19h.01'/><path d='M12 17h.01'/><path d='M12 21h.01'/><path d='M16 15h.01'/><path d='M16 19h.01'/>","cloud.sun.rain.fill":"<path d='M12 2v2'/><path d='m4.93 4.93 1.41 1.41'/><path d='M20 12h2'/><path d='m19.07 4.93-1.41 1.41'/><path d='M15.947 12.65a4 4 0 0 0-5.925-4.128'/><path d='M3 20a5 5 0 1 1 8.9-4H13a3 3 0 0 1 2 5.24'/><path d='M11 20v2'/><path d='M7 19v2'/>","cloud.moon.rain.fill":"<path d='M11 20v2'/><path d='M18.376 14.512a6 6 0 0 0 3.461-4.127c.148-.625-.659-.97-1.248-.714a4 4 0 0 1-5.259-5.26c.255-.589-.09-1.395-.716-1.248a6 6 0 0 0-4.594 5.36'/><path d='M3 20a5 5 0 1 1 8.9-4H13a3 3 0 0 1 2 5.24'/><path d='M7 19v2'/>","cloud.bolt.rain.fill":"<path d='M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973'/><path d='m13 12-3 5h4l-3 5'/>","cloud.hail.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M16 14v2'/><path d='M8 14v2'/><path d='M16 20h.01'/><path d='M8 20h.01'/><path d='M12 16v2'/><path d='M12 22h.01'/>","airplane":"<path d='M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z'/>","link":"<path d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71'/><path d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'/>","star.fill":"<path d='M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z'/>","shippingbox.fill":"<path d='M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z'/><path d='M12 22V12'/><polyline points='3.29 7 12 12 20.71 7'/><path d='m7.5 4.27 9 5.15'/>","location.fill":"<polygon points='3 11 22 2 13 21 11 13 3 11'/>","exclamationmark.icloud":"<path d='M12 12v4'/><path d='M12 20h.01'/><path d='M8.128 16.949A7 7 0 1 1 15.71 8h1.79a1 1 0 0 1 0 9h-1.642'/>","phone":"<path d='M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384'/>","globe":"<circle cx='12' cy='12' r='10'/><path d='M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20'/><path d='M2 12h20'/>","arrow.up.right":"<path d='M7 7h10v10'/><path d='M7 17 17 7'/>","directions":"<polygon points='12 2 19 21 12 17 5 21 12 2'/>","mappin":"<path d='M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0'/><circle cx='12' cy='10' r='3'/>","clock":"<circle cx='12' cy='12' r='10'/><path d='M12 6v6l4 2'/>","calendar":"<path d='M8 2v3'/><path d='M16 2v3'/><rect x='3' y='3' width='18' height='18' rx='2'/><path d='M3 9h18'/>","checkmark.circle":"<circle cx='12' cy='12' r='10'/><path d='m16 9-5.5 5.5L8 12'/>","exclamationmark.triangle":"<path d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/><path d='M12 9v4'/><path d='M12 17h.01'/>","info.circle":"<circle cx='12' cy='12' r='10'/><path d='M12 16v-4'/><path d='M12 8h.01'/>","dollarsign.circle":"<circle cx='12' cy='12' r='10'/><path d='M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8'/><path d='M12 18V6'/>","cart":"<path d='m2.05 2.05 1.099-.028a1 1 0 0 1 1.008.815l2.69 14.347A1 1 0 0 0 7.83 18H18'/><path d='M4.563 5h16.435a1 1 0 0 1 .981 1.204l-1.026 6.226A2 2 0 0 1 18.962 14H6.25'/><circle cx='18' cy='20' r='2'/><circle cx='8' cy='20' r='2'/>","bus":"<path d='M8 6v6'/><path d='M15 6v6'/><path d='M2 12h19.6'/><path d='M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3'/><circle cx='7' cy='18' r='2'/><path d='M9 18h5'/><circle cx='16' cy='18' r='2'/>","tram":"<rect width='16' height='16' x='4' y='3' rx='2'/><path d='M4 11h16'/><path d='M12 3v8'/><path d='m8 19-2 3'/><path d='m18 22-2-3'/><path d='M8 15h.01'/><path d='M16 15h.01'/>","car":"<path d='M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2'/><circle cx='7' cy='17' r='2'/><path d='M9 17h6'/><circle cx='17' cy='17' r='2'/>","bed.double":"<path d='M2 20v-8a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v8'/><path d='M4 10V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4'/><path d='M12 4v6'/><path d='M2 18h20'/>"};
+    const cardActionIcons={directions:"directions",call:"phone",website:"globe",open:"arrow.up.right"};
+    function cdEl(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!=null)node.textContent=String(text);return node}
+    function cardIcon(symbol,glyph,cls){const key=cardIcons[symbol]?symbol:null;if(!key&&!glyph)return null;
+      const tint=!key?"glyph":key==="sun.max.fill"?"sun":key==="moon.stars.fill"?"moon":/rain|drizzle|snow|sleet|hail|bolt/.test(key)?"wet":/^cloud/.test(key)?"cloud":key==="star.fill"?"star":"";
+      const node=cdEl("span",`cd-icon ${cls||""} ${tint}`);node.setAttribute("aria-hidden","true");
+      if(!key){node.textContent=glyph;return node}
+      const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");for(const [name,value] of [["viewBox","0 0 24 24"],["fill","none"],["stroke","currentColor"],["stroke-width","2"],["stroke-linecap","round"],["stroke-linejoin","round"]])svg.setAttribute(name,value);
+      svg.innerHTML=cardIcons[key];node.append(svg);return node}
+    function cardURL(url){return typeof url==="string"&&/^(https?:\\/\\/|tel:)/i.test(url)?url:null}
+    function cardNum(value){return Number.isFinite(Number(value))?Number(value):null}
+    function appendCards(parent,cards,messageID){let stack=null;
+      for(const card of cards){if(!card||typeof card!=="object"||!Array.isArray(card.blocks))continue;
+        if(card.style==="link"){const node=linkCardNode(card);if(!node)continue;if(!stack){stack=cdEl("div","link-card-stack");parent.append(stack)}stack.append(node);continue}
+        stack=null;parent.append(panelCardNode(card,`${messageID||""}:${card.id||""}`))}}
+    function linkCardNode(card){const url=cardURL(card.action?.url);if(!url||/^tel:/i.test(url))return null;
+      const image=card.blocks.find(b=>b?.type==="image"&&b.imageID),header=card.blocks.find(b=>b?.type==="header")||{};
+      const link=cdEl("a",`link-card${image?"":" compact"}`);link.href=url;link.target="_blank";link.rel="noopener noreferrer";
+      const domain=header.subtitle||url;link.setAttribute("aria-label",`${card.accessibilityLabel||header.title||domain}, opens web page`);
+      if(image){const hero=cdEl("div","link-card-hero"),img=cdEl("img");img.alt="";img.decoding="async";hero.append(img);link.append(hero);loadLinkPreviewImage(image.imageID,img)}
+      else{const icon=cardIcon(header.symbol||"link",null,"link-card-icon");if(icon)link.append(icon)}
+      const body=cdEl("div","link-card-body");body.append(cdEl("div","link-card-title",header.title||domain),cdEl("div","link-card-domain",domain));link.append(body);return link}
+    function panelCardNode(card,key){const wrap=cdEl("section","cd-card");wrap.setAttribute("aria-label",card.accessibilityLabel||card.blocks.find(b=>b?.type==="header")?.title||"Card");const blocks=card.blocks;let drew=0;
+      for(let i=0;i<blocks.length;i++){const block=blocks[i];if(!block||typeof block!=="object")continue;
+        if(block.type==="map"){const next=blocks[i+1],legend=next?.type==="list"&&next.mapLinked?next:null;if(legend)i++;const node=mapBlockNode(block,legend,key);if(node){wrap.append(node);wrap.classList.add("has-map");drew++}continue}
+        const node=cardBlockNode(block);if(node){wrap.append(node);drew++}}
+      if(!drew)wrap.append(cdEl("div","cd-fallback",card.fallbackText||""));
+      const source=card.source||{},updated=source.updatedAt?new Date(source.updatedAt):null;
+      if(source.attribution||(updated&&!Number.isNaN(updated.getTime()))){const foot=cdEl("div","cd-foot");
+        if(updated&&!Number.isNaN(updated.getTime()))foot.append(cdEl("span","",`Updated ${updated.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}`));
+        if(source.attribution){const url=cardURL(source.url);const attr=cdEl(url?"a":"span","cd-attr",source.attribution);if(url){attr.href=url;attr.target="_blank";attr.rel="noopener noreferrer"}foot.append(attr)}
+        wrap.append(foot)}
+      return wrap}
+    function cardBlockNode(b){switch(b.type){
+      case "header":{const head=cdEl("div","cd-head"),info=cdEl("div","cd-info");const lead=cardIcon(b.symbol,null,"cd-lead");if(lead)head.append(lead);
+        info.append(cdEl("div","cd-title",b.title||""));
+        if(b.subtitle){const sub=cdEl("div","cd-sub"),icon=cardIcon(b.subtitleSymbol,null,"cd-sub-icon");if(icon)sub.append(icon);sub.append(document.createTextNode(b.subtitle));info.append(sub)}
+        (Array.isArray(b.lines)?b.lines:[]).forEach((line,index)=>info.append(cdEl("div",index?"cd-line":"cd-line first",line)));head.append(info);
+        if(b.stat?.value){const stat=cdEl("div","cd-stat");stat.setAttribute("role","img");stat.setAttribute("aria-label",b.stat.accessibilityLabel||b.stat.value);
+          const icon=cardIcon(b.stat.symbol,null,"cd-stat-icon");if(icon)stat.append(icon);stat.append(cdEl("span","cd-stat-value",b.stat.value));head.append(stat)}
+        return head}
+      case "stat":{const node=cdEl("div","cd-statblock");if(b.label)node.append(cdEl("div","cd-stat-label",b.label));const row=cdEl("div","cd-stat-row"),icon=cardIcon(b.symbol,null,"cd-stat-icon");
+        if(icon)row.append(icon);row.append(cdEl("span","cd-stat-value",b.value||""));node.append(row);if(b.detail)node.append(cdEl("div","cd-line",b.detail));
+        if(b.accessibilityLabel){node.setAttribute("role","group");node.setAttribute("aria-label",b.accessibilityLabel)}return node}
+      case "keyValue":{const rows=(Array.isArray(b.rows)?b.rows:[]).slice(0,20);if(!rows.length)return null;const node=cdEl("div","cd-kv");node.setAttribute("role","list");
+        for(const row of rows){const item=cdEl("div","cd-kv-row");item.setAttribute("role","listitem");item.setAttribute("aria-label",`${row.key}: ${row.value}`);item.append(cdEl("span","cd-kv-key",row.key),cdEl("span","cd-kv-value",row.value));node.append(item)}return node}
+      case "strip":{const items=(Array.isArray(b.items)?b.items:[]).slice(0,24);if(!items.length)return null;const node=cdEl("div","cd-strip");node.setAttribute("role","list");node.setAttribute("aria-label",b.accessibilityLabel||"Strip");
+        for(const item of items){const cell=cdEl("div","cd-strip-item");cell.setAttribute("role","listitem");cell.setAttribute("aria-label",item.accessibilityLabel||[item.label,item.value,item.note].filter(Boolean).join(", "));
+          cell.append(cdEl("span","cd-strip-label",item.label||""),cardIcon(item.symbol,item.glyph,"cd-strip-icon")||cdEl("span","cd-strip-icon"),cdEl("span","cd-note accent",item.note||""),cdEl("span","cd-strip-value",item.value||""));node.append(cell)}return node}
+      case "chart":{const items=(Array.isArray(b.items)?b.items:[]).slice(0,24);if(!items.length)return null;const node=cdEl("div","cd-chart");node.setAttribute("role","list");node.setAttribute("aria-label",b.accessibilityLabel||"Chart");
+        const lows=items.map(item=>cardNum(item.low)).filter(v=>v!==null),highs=items.map(item=>cardNum(item.high)).filter(v=>v!==null);
+        const min=cardNum(b.min)??Math.min(...lows,...highs),max=cardNum(b.max)??Math.max(...highs),span=Math.max(1e-9,max-min);
+        for(const item of items){const row=cdEl("div","cd-chart-row");row.setAttribute("role","listitem");row.setAttribute("aria-label",item.accessibilityLabel||[item.label,item.lowText,item.highText].filter(Boolean).join(", "));
+          const low=cardNum(item.low)??min,high=cardNum(item.high)??low,bar=cdEl("span","cd-bar"),fill=cdEl("span");bar.setAttribute("aria-hidden","true");
+          const left=Math.min(100,Math.max(0,(low-min)/span*100));fill.style.left=`${left}%`;fill.style.width=`${Math.min(100-left,Math.max(4,(high-low)/span*100))}%`;bar.append(fill);
+          row.append(cdEl("span","cd-chart-label",item.label||""),cardIcon(item.symbol,item.glyph,"cd-chart-icon")||cdEl("span","cd-chart-icon"),cdEl("span","cd-note accent",item.note||""),cdEl("span","cd-chart-low",item.lowText||""),bar,cdEl("span","cd-chart-high",item.highText||""));node.append(row)}return node}
+      case "list":{const items=(Array.isArray(b.items)?b.items:[]).slice(0,24);if(!items.length)return null;const node=cdEl("div","cd-list");node.setAttribute("role","list");
+        if(b.title)node.append(cdEl("div","cd-list-head",b.title));for(const item of items)node.append(cardItemNode(item,"cd-item"));return node}
+      case "badges":{const badges=Array.isArray(b.badges)?b.badges:[];if(!badges.length)return null;const node=cdEl("div","cd-badges padded");for(const badge of badges)node.append(cardBadgeNode(badge));return node}
+      case "notice":{const node=cdEl("div",`cd-notice ${b.tone||""}`),title=cdEl("div","cd-notice-title"),icon=cardIcon(b.symbol,null,"cd-notice-icon");if(icon)title.append(icon);title.append(document.createTextNode(b.title||""));node.append(title);if(b.text)node.append(cdEl("div","cd-line",b.text));return node}
+      case "image":{if(!b.imageID)return null;const hero=cdEl("div","link-card-hero"),img=cdEl("img");img.alt=b.accessibilityLabel||"";img.decoding="async";hero.append(img);loadLinkPreviewImage(b.imageID,img);return hero}
+      default:return null}}
+    function cardBadgeNode(badge){const pill=cdEl("span",`cd-badge ${badge?.tone||"neutral"}`),icon=cardIcon(badge?.symbol,null,"cd-badge-icon");if(icon)pill.append(icon);pill.append(document.createTextNode(badge?.text||""));return pill}
+    // One row of a list; inside a map's legend it keeps the place list's look and selection.
+    function cardItemNode(item,cls){const row=cdEl("div",cls);row.setAttribute("role","listitem");if(item.accessibilityLabel)row.setAttribute("aria-label",item.accessibilityLabel);
+      const top=cdEl("div","cd-item-top");const icon=cls==="cd-item"?cardIcon(item.symbol,item.glyph,"cd-item-icon"):null;if(icon)top.append(icon);
+      top.append(cdEl("div",cls==="cd-item"?"cd-item-title":"place-item-name",item.title||item.label||""));if(item.trailing)top.append(cdEl("div","cd-item-trailing",item.trailing));row.append(top);
+      const badges=Array.isArray(item.badges)?item.badges:[];if(item.subtitle||badges.length){const meta=cdEl("div",cls==="cd-item"?"cd-meta":"place-item-meta");if(item.subtitle)meta.append(cdEl("span","",item.subtitle));for(const badge of badges)meta.append(cardBadgeNode(badge));row.append(meta)}
+      if(item.detail)row.append(cdEl("div",cls==="cd-item"?"cd-detail":"place-item-addr",item.detail));
+      if(item.note)row.append(cdEl("div",`cd-note ${item.tone||"muted"}`,item.note));
+      const actions=(Array.isArray(item.actions)?item.actions:[]).map(action=>({action,url:cardURL(action?.url)})).filter(entry=>entry.url);
+      if(actions.length){const bar=cdEl("div","place-item-actions");for(const {action,url} of actions){const link=cdEl("a","place-action");link.href=url;if(!/^tel:/i.test(url)){link.target="_blank";link.rel="noopener noreferrer"}
+        const actionIcon=cardIcon(cardActionIcons[action.kind]||"arrow.up.right",null,"cd-action-icon");if(actionIcon)link.append(actionIcon);link.append(document.createTextNode(action.label||"Open"));link.onclick=e=>e.stopPropagation();bar.append(link)}row.append(bar)}
+      return row}
+    // A map block with its legend list (pins and rows share ids), drawn from OpenStreetMap tiles the Mac proxies.
+    function mapBlockNode(block,legend,key){const pins=(Array.isArray(block.pins)?block.pins:[]).filter(p=>p&&cardNum(p.latitude)!==null&&cardNum(p.longitude)!==null).slice(0,24);if(!pins.length)return null;
+      const items=legend&&Array.isArray(legend.items)?legend.items.slice(0,24):[];let state=placeCardState.get(key);
+      if(!state){const avgLat=pins.reduce((s,p)=>s+p.latitude,0)/pins.length,avgLon=pins.reduce((s,p)=>s+p.longitude,0)/pins.length;
+        state={lat:avgLat,lon:avgLon,zoom:initialPlaceZoom(pins),selectedID:pins[0].id,fitKey:"",moved:false};placeCardState.set(key,state)}
+      const wrap=cdEl("div","place-card");wrap.setAttribute("role","group");wrap.setAttribute("aria-label",block.accessibilityLabel||"Map");
+      const viewport=cdEl("div","place-map-viewport"),tileBox=cdEl("div","place-map-tiles"),pinBox=cdEl("div","place-map-pins");viewport.append(tileBox,pinBox);
+      const list=cdEl("div","place-list");list.setAttribute("role","list");if(legend?.title)list.append(cdEl("div","place-list-head",legend.title));
       const rowNodes=new Map(),pinNodes=new Map();
       // The part of the map no overlay covers, as insets that include room for half a pin.
       const freeArea=()=>{const vp=viewport.getBoundingClientRect(),lr=list.getBoundingClientRect();let halfW=0,halfH=0;for(const pin of pinNodes.values()){halfW=Math.max(halfW,pin.offsetWidth/2);halfH=Math.max(halfH,pin.offsetHeight/2)}
-        const overlaid=lr.width>0&&lr.top<vp.bottom&&lr.bottom>vp.top&&lr.left<vp.right;
+        const overlaid=items.length&&lr.width>0&&lr.top<vp.bottom&&lr.bottom>vp.top&&lr.left<vp.right;
         return{left:(overlaid?lr.right-vp.left+8:10)+halfW,right:12+halfW,top:10+halfH,bottom:30+halfH}};
       // Centre a world-pixel point (at zoom z) in the free area.
       const centreIn=(area,width,height,x,y,z)=>{const cx=x-((area.left+width-area.right)/2-width/2),cy=y-((area.top+height-area.bottom)/2-height/2);state.lon=worldXToLon(cx,z);state.lat=worldYToLat(cy,z);state.zoom=z};
-      const fitPlaces=(width,height)=>{const area=freeArea(),w=Math.max(40,width-area.left-area.right),h=Math.max(40,height-area.top-area.bottom);let z=places.length>1?16:14;
-        for(;z>3;z--){const xs=places.map(p=>lonToWorldX(p.longitude,z)),ys=places.map(p=>latToWorldY(p.latitude,z));if(Math.max(...xs)-Math.min(...xs)<=w&&Math.max(...ys)-Math.min(...ys)<=h)break}
-        const xs=places.map(p=>lonToWorldX(p.longitude,z)),ys=places.map(p=>latToWorldY(p.latitude,z));centreIn(area,width,height,(Math.min(...xs)+Math.max(...xs))/2,(Math.min(...ys)+Math.max(...ys))/2,z)};
-      const focusPlace=p=>{state.selectedID=p.id;state.moved=true;const width=viewport.clientWidth||680,height=viewport.clientHeight||390;centreIn(freeArea(),width,height,lonToWorldX(p.longitude,state.zoom),latToWorldY(p.latitude,state.zoom),state.zoom);drawMap()};
-      const drawMap=()=>{wrap.classList.toggle("stacked",wrap.clientWidth>0&&wrap.clientWidth<640);
-        const width=viewport.clientWidth||680,height=viewport.clientHeight||390,fitKey=`${width}x${height}`;if(!state.moved&&viewport.clientWidth&&state.fitKey!==fitKey){state.fitKey=fitKey;fitPlaces(width,height)}
+      const fitPins=(width,height)=>{const area=freeArea(),w=Math.max(40,width-area.left-area.right),h=Math.max(40,height-area.top-area.bottom);let z=pins.length>1?16:14;
+        for(;z>3;z--){const xs=pins.map(p=>lonToWorldX(p.longitude,z)),ys=pins.map(p=>latToWorldY(p.latitude,z));if(Math.max(...xs)-Math.min(...xs)<=w&&Math.max(...ys)-Math.min(...ys)<=h)break}
+        const xs=pins.map(p=>lonToWorldX(p.longitude,z)),ys=pins.map(p=>latToWorldY(p.latitude,z));centreIn(area,width,height,(Math.min(...xs)+Math.max(...xs))/2,(Math.min(...ys)+Math.max(...ys))/2,z)};
+      const focusPin=p=>{if(!p)return;state.selectedID=p.id;state.moved=true;const width=viewport.clientWidth||680,height=viewport.clientHeight||390;centreIn(freeArea(),width,height,lonToWorldX(p.longitude,state.zoom),latToWorldY(p.latitude,state.zoom),state.zoom);drawMap()};
+      const drawMap=()=>{wrap.classList.toggle("stacked",wrap.clientWidth>0&&wrap.clientWidth<640);wrap.classList.toggle("no-legend",!items.length);
+        const width=viewport.clientWidth||680,height=viewport.clientHeight||390,fitKey=`${width}x${height}`;if(!state.moved&&viewport.clientWidth&&state.fitKey!==fitKey){state.fitKey=fitKey;fitPins(width,height)}
         const z=state.zoom,maxTile=Math.pow(2,z),centerX=lonToWorldX(state.lon,z),centerY=latToWorldY(state.lat,z);
         const startTileX=Math.floor((centerX-width/2)/256),endTileX=Math.floor((centerX+width/2)/256),startTileY=Math.floor((centerY-height/2)/256),endTileY=Math.floor((centerY+height/2)/256);
         tileBox.replaceChildren();
         for(let tx=startTileX;tx<=endTileX;tx++){for(let ty=startTileY;ty<=endTileY;ty++){if(ty<0||ty>=maxTile)continue;const normX=((tx%maxTile)+maxTile)%maxTile,img=document.createElement("img");
           img.className="place-map-tile";img.alt="";img.style.left=`${Math.round(tx*256-centerX+width/2)}px`;img.style.top=`${Math.round(ty*256-centerY+height/2)}px`;tileBox.append(img);loadMapTile(z,normX,ty,img)}}
         const laid=[];
-        for(const p of places){const pin=pinNodes.get(p.id);if(!pin)continue;const px=lonToWorldX(p.longitude,z)-centerX+width/2,py=latToWorldY(p.latitude,z)-centerY+height/2;
+        for(const p of pins){const pin=pinNodes.get(p.id);if(!pin)continue;const px=lonToWorldX(p.longitude,z)-centerX+width/2,py=latToWorldY(p.latitude,z)-centerY+height/2;
           pin.style.left=`${Math.round(px)}px`;pin.style.top=`${Math.round(py)}px`;pin.classList.toggle("selected",p.id===state.selectedID);laid.push({pin,x:px,y:py,w:pin.offsetWidth,h:pin.offsetHeight})}
-        // Close places: move later pins to the nearest free spot so every name stays readable (PlaceMapFit.labelOffsets).
+        // Close pins: move later pins to the nearest free spot so every name stays readable (PlaceMapFit.labelOffsets).
         const placed=[];for(const item of laid){const step=item.h+2,moves=[];for(let row=-3;row<=3;row++)for(const shift of [0,-.5,.5,-1,1])moves.push([shift*(item.w+2),row*step]);
           moves.sort((a,b)=>(Math.abs(a[0])/item.w*2+Math.abs(a[1])/step)-(Math.abs(b[0])/item.w*2+Math.abs(b[1])/step));
           let best=[0,0],bestOverlap=Infinity;for(const [dx,dy] of moves){const r={l:item.x-item.w/2+dx-1,t:item.y-item.h/2+dy-1,r:item.x+item.w/2+dx+1,b:item.y+item.h/2+dy+1};
@@ -4752,35 +4961,25 @@ private extension RemoteControlServer {
           placed.push({l:item.x-item.w/2+best[0],t:item.y-item.h/2+best[1],r:item.x+item.w/2+best[0],b:item.y+item.h/2+best[1]});
           item.pin.style.transform=best[0]||best[1]?`translate(calc(-50% + ${best[0]}px),calc(-50% + ${best[1]}px))`:""}
         for(const [id,node] of rowNodes)node.classList.toggle("selected",id===state.selectedID)};
-      for(const p of places){const pin=document.createElement("button");pin.type="button";pin.className="place-pin";pin.setAttribute("aria-label",`Pin for ${p.name}`);
-        const dot=document.createElement("span"),lbl=document.createElement("span");dot.className="place-pin-dot";dot.textContent=p.glyph||"📍";dot.setAttribute("aria-hidden","true");lbl.className="place-pin-label";lbl.textContent=p.name;pin.append(dot,lbl);
-        pin.onclick=event=>{event.stopPropagation();focusPlace(p)};pinBox.append(pin);pinNodes.set(p.id,pin);
-        const item=document.createElement("div"),name=document.createElement("div"),meta=document.createElement("div");item.className="place-item";name.className="place-item-name";name.textContent=p.name;meta.className="place-item-meta";
-        const metaParts=[];if(typeof p.rating==="number")metaParts.push(`${p.rating.toFixed(1)} ★${p.reviewCount?` (${p.reviewCount})`:""}`);if(p.priceDisplay)metaParts.push(p.priceDisplay);if(p.category)metaParts.push(p.category);
-        if(metaParts.length){const span=document.createElement("span");span.textContent=metaParts.join(" · ");meta.append(span)}
-        if(typeof p.isOpenNow==="boolean"){if(metaParts.length){const dotSep=document.createElement("span");dotSep.textContent="·";meta.append(dotSep)}const status=document.createElement("span");status.className=p.isOpenNow?"place-open":"place-closed";status.textContent=p.isOpenNow?"Open":"Closed";meta.append(status)}
-        item.append(name);if(meta.children.length)item.append(meta);
-        if(p.address){const addr=document.createElement("div");addr.className="place-item-addr";addr.textContent=p.address;item.append(addr)}
-        if(p.approximate){const note=document.createElement("div");note.className="place-item-note warn";note.textContent="Approximate location";item.append(note)}
-        else if(p.listedName){const note=document.createElement("div");note.className="place-item-note";note.textContent=`Listed as ${p.listedName}`;item.append(note)}
-        const actions=document.createElement("div");actions.className="place-item-actions";
-        const dir=document.createElement("a");dir.className="place-action";dir.href=p.directionsURL||`https://maps.apple.com/?q=${encodeURIComponent(p.name)}&ll=${p.latitude},${p.longitude}`;dir.target="_blank";dir.rel="noopener noreferrer";dir.textContent="Directions";dir.onclick=e=>e.stopPropagation();actions.append(dir);
-        if(p.phone){const digits=p.phone.replace(/[^0-9+*#]/g,"");if(digits){const call=document.createElement("a");call.className="place-action";call.href=`tel:${digits}`;call.textContent="Call";call.onclick=e=>e.stopPropagation();actions.append(call)}}
-        if(p.website&&/^https?:\\/\\//i.test(p.website)){const web=document.createElement("a");web.className="place-action";web.href=p.website;web.target="_blank";web.rel="noopener noreferrer";web.textContent="Website";web.onclick=e=>e.stopPropagation();actions.append(web)}
-        item.append(actions);item.onclick=()=>focusPlace(p);list.append(item);rowNodes.set(p.id,item)}
+      for(const p of pins){const pin=cdEl("button","place-pin");pin.type="button";pin.setAttribute("aria-label",`Pin for ${p.title||"place"}`);
+        const dot=cardIcon(p.symbol,p.glyph||"📍","place-pin-dot");dot.classList.remove("glyph");pin.append(dot,cdEl("span","place-pin-label",p.title||""));
+        pin.onclick=event=>{event.stopPropagation();focusPin(p)};pinBox.append(pin);pinNodes.set(p.id,pin)}
+      for(const item of items){const row=cardItemNode(item,"place-item"),pin=pins.find(p=>p.id===(item.pinID||item.id));
+        if(pin){row.onclick=()=>focusPin(pin);rowNodes.set(pin.id,row)}list.append(row)}
       let dragStart=null;
       viewport.addEventListener("pointerdown",e=>{if(e.target.closest(".place-pin"))return;state.moved=true;dragStart={x:e.clientX,y:e.clientY,worldX:lonToWorldX(state.lon,state.zoom),worldY:latToWorldY(state.lat,state.zoom)};viewport.setPointerCapture(e.pointerId)});
       viewport.addEventListener("pointermove",e=>{if(!dragStart)return;const nx=dragStart.worldX-(e.clientX-dragStart.x),ny=dragStart.worldY-(e.clientY-dragStart.y);state.lon=worldXToLon(nx,state.zoom);state.lat=worldYToLat(ny,state.zoom);drawMap()});
       viewport.addEventListener("pointerup",()=>{dragStart=null});viewport.addEventListener("pointercancel",()=>{dragStart=null});
-      const zoomCtrl=document.createElement("div"),zoomIn=document.createElement("button"),zoomOut=document.createElement("button");zoomCtrl.className="place-zoom";
-      zoomIn.type="button";zoomIn.textContent="+";zoomIn.setAttribute("aria-label","Zoom in");zoomIn.onclick=()=>{state.moved=true;state.zoom=Math.min(18,state.zoom+1);drawMap()};
-      zoomOut.type="button";zoomOut.textContent="−";zoomOut.setAttribute("aria-label","Zoom out");zoomOut.onclick=()=>{state.moved=true;state.zoom=Math.max(3,state.zoom-1);drawMap()};
+      const zoomCtrl=cdEl("div","place-zoom"),zoomIn=cdEl("button","","+"),zoomOut=cdEl("button","","−");
+      zoomIn.type="button";zoomIn.setAttribute("aria-label","Zoom in");zoomIn.onclick=()=>{state.moved=true;state.zoom=Math.min(18,state.zoom+1);drawMap()};
+      zoomOut.type="button";zoomOut.setAttribute("aria-label","Zoom out");zoomOut.onclick=()=>{state.moved=true;state.zoom=Math.max(3,state.zoom-1);drawMap()};
       zoomCtrl.append(zoomIn,zoomOut);
-      const attr=document.createElement("a");attr.className="place-attr";attr.href="https://www.openstreetmap.org/copyright";attr.target="_blank";attr.rel="noopener noreferrer";attr.textContent="© OpenStreetMap";
-      wrap.append(viewport,list,zoomCtrl,attr);parent.append(wrap);requestAnimationFrame(drawMap);
+      const attr=cdEl("a","place-attr","© OpenStreetMap");attr.href="https://www.openstreetmap.org/copyright";attr.target="_blank";attr.rel="noopener noreferrer";
+      wrap.append(viewport);if(items.length)wrap.append(list);wrap.append(zoomCtrl,attr);requestAnimationFrame(drawMap);
       // Refit when the card changes size (a rotated phone, a resized window) until the user moves the map.
-      if(window.ResizeObserver){let last=0;new ResizeObserver(()=>{if(!wrap.isConnected||wrap.clientWidth===last)return;last=wrap.clientWidth;drawMap()}).observe(wrap)}}
-    function appendReply(row,message,settled,session){const images=message.images||[],text=(images.length&&message.displayText)||message.text||"";inlineImages=images.length&&!session.isLocalPrivate?{sessionID:session.id,images:new Map(images.map(image=>[image.id,image]))}:null;try{appendReplyText(row,message,text,settled,session)}finally{inlineImages=null}if(!session.isLocalPrivate){if(message.placeCard)appendPlaceCard(row,message.placeCard,message.id);if(message.linkPreviews?.length)appendLinkPreviews(row,message.linkPreviews)}}
+      if(window.ResizeObserver){let last=0;new ResizeObserver(()=>{if(!wrap.isConnected||wrap.clientWidth===last)return;last=wrap.clientWidth;drawMap()}).observe(wrap)}
+      return wrap}
+    function appendReply(row,message,settled,session){const images=message.images||[],text=(images.length&&message.displayText)||message.text||"";inlineImages=images.length&&!session.isLocalPrivate?{sessionID:session.id,images:new Map(images.map(image=>[image.id,image]))}:null;try{appendReplyText(row,message,text,settled,session)}finally{inlineImages=null}if(!session.isLocalPrivate&&Array.isArray(message.cards)&&message.cards.length)appendCards(row,message.cards,message.id)}
     function appendReplyText(row,message,text,settled,session){const appendText=part=>{if(!part)return;if(session.isLocalPrivate){const pre=document.createElement("pre");pre.textContent=part;row.append(pre)}else appendProse(row,part)};
       if(!settled.length){appendText(text);return}const groups=new Map();for(const agent of settled){const block=Math.max(0,agent.textBlock??0);if(!groups.has(block))groups.set(block,[]);groups.get(block).push(agent)}
       const starts=replyBlockStarts(text);let from=0;for(const block of [...groups.keys()].sort((a,b)=>a-b)){const to=Math.max(from,block===0?0:block<starts.length?starts[block]:text.length);appendText(text.slice(from,to).replace(/\\s+$/,""));from=to;appendSubagents(row,groups.get(block),session.id,message.id,block)}appendText(text.slice(from))}
@@ -4926,7 +5125,7 @@ private extension RemoteControlServer {
       button.onclick=()=>openThread({sessionID,threadID:message.id,prompt:message.displayText??message.text,messageID:null,opener:button});return button}
     // Whether render() draws a row for a message.
     function drawsRow(message,answered){const subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id));
-      return Boolean(message.text||message.thinking||message.placeCard||(message.linkPreviews||[]).length||(message.activities||[]).some(activity=>!subagentIDs.has(activity.id))||subagents.some(agent=>!subagentActive(agent))||(message.delegations||[]).some(handoff=>!answered.has(handoff.id)))}
+      return Boolean(message.text||message.thinking||(message.cards||[]).length||(message.activities||[]).some(activity=>!subagentIDs.has(activity.id))||subagents.some(agent=>!subagentActive(agent))||(message.delegations||[]).some(handoff=>!answered.has(handoff.id)))}
     // Rows after a quoted reply that stay in its thread share its line, as in Messages: it runs from the quote down the
     // margin past them ("start", "through") and turns into the last reply ("end"). Answers in the thread and empty replies
     // (which the Mac skips when placing quotes) stay in a run, but the line never ends on one.
@@ -5023,9 +5222,33 @@ private extension RemoteControlServer {
       catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
     $("pairButton").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();historyCache.clear();clearMacImages();expandedHistory.clear();historyPaused.clear();tabDrafts.clear();selected=null;$("draft").value="";token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
       catch(error){$("pairError").textContent=error.message}};
+    // Location: off by default. While on, each message carries this device's location (about 1 km
+    // unless Precise) and time zone; a fix is reused for up to 15 minutes. Needs a secure (https) page.
+    const locationMaxAge=15*60*1000;let locationFix=null;
+    function locationPref(key){return localStorage.getItem(key)==="1"}
+    function locationAvailable(){return window.isSecureContext&&!!navigator.geolocation}
+    function renderLocationButton(){const on=locationPref("cantripShareLocation"),button=$("locationButton");button.classList.toggle("location-on",on);button.setAttribute("aria-label",on?"Location sharing is on":"Location sharing is off");button.title=`Location: ${on?"On":"Off"}. Share this device's location with your messages`}
+    function readLocation(){return new Promise(resolve=>{if(!locationAvailable())return resolve({error:"Location needs this page's secure (https) address, such as your Mac's Tailscale address."});
+      navigator.geolocation.getCurrentPosition(pos=>resolve({pos}),error=>resolve({error:error.code===1?"Location permission is off for this page in your browser.":"This device couldn't find its location."}),{enableHighAccuracy:locationPref("cantripPreciseLocation"),maximumAge:locationMaxAge,timeout:10000})})}
+    async function messageLocation(){if(!locationPref("cantripShareLocation"))return null;const precise=locationPref("cantripPreciseLocation");
+      if(!locationFix||Date.now()-locationFix.at>locationMaxAge||locationFix.precise!==precise){const result=await readLocation();if(!result.pos){locationFix=null;return null}
+        locationFix={at:Math.min(Date.now(),result.pos.timestamp||Date.now()),precise,latitude:result.pos.coords.latitude,longitude:result.pos.coords.longitude,accuracy:result.pos.coords.accuracy}}
+      const round=value=>precise?Math.round(value*1e5)/1e5:Math.round(value*100)/100;
+      return {latitude:round(locationFix.latitude),longitude:round(locationFix.longitude),accuracy:Math.round(precise?locationFix.accuracy:Math.max(1000,locationFix.accuracy)),precise,
+        timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,age:Math.max(0,Math.round((Date.now()-locationFix.at)/1000)),device:"browser"}}
+    async function checkLocation(){setText($("locationStatus"),"Finding this device's location…");const result=await readLocation();
+      if(result.pos)locationFix={at:Math.min(Date.now(),result.pos.timestamp||Date.now()),precise:locationPref("cantripPreciseLocation"),latitude:result.pos.coords.latitude,longitude:result.pos.coords.longitude,accuracy:result.pos.coords.accuracy};
+      setText($("locationStatus"),result.pos?`Location found${locationPref("cantripPreciseLocation")?"":"; it's sent rounded to about 1 km"}.`:result.error)}
+    $("locationButton").onclick=()=>{$("locationShare").checked=locationPref("cantripShareLocation");$("locationPrecise").checked=locationPref("cantripPreciseLocation");$("locationPrecise").disabled=!$("locationShare").checked;
+      setText($("locationStatus"),locationAvailable()?"":"Location needs this page's secure (https) address, such as your Mac's Tailscale address.");$("locationEditor").showModal()};
+    $("locationShare").onchange=()=>{localStorage.setItem("cantripShareLocation",$("locationShare").checked?"1":"0");$("locationPrecise").disabled=!$("locationShare").checked;locationFix=null;renderLocationButton();
+      if($("locationShare").checked)checkLocation();else setText($("locationStatus"),"Off. Cantrip uses the Mac's location and says so.")};
+    $("locationPrecise").onchange=()=>{localStorage.setItem("cantripPreciseLocation",$("locationPrecise").checked?"1":"0");locationFix=null;if($("locationShare").checked)checkLocation()};
+    renderLocationButton();
     $("send").onclick=async()=>{const text=$("draft").value.trim();if(!text)return;const sessionID=selected,requestToken=token,mode=$("mode").value,body={text:encodeMentions(text,currentMentions()),mode};
       if(mode==="auto"&&chatInputReply?.sessionID===sessionID&&chatInputReply.token===requestToken)body.inputRequestID=chatInputReply.id;
-      $("send").disabled=true;try{await action("messages",body);if(selected===sessionID&&token===requestToken){if($("draft").value.trim()===text){$("draft").value="";tabMentionLists.delete(sessionID);renderMentionChips();syncMentions()}$("mode").value="auto"}}
+      $("send").disabled=true;try{if(!body.inputRequestID){const location=await messageLocation();if(location)body.location=location}
+        await action("messages",body);if(selected===sessionID&&token===requestToken){if($("draft").value.trim()===text){$("draft").value="";tabMentionLists.delete(sessionID);renderMentionChips();syncMentions()}$("mode").value="auto"}}
       catch(error){$("actionError").textContent=`Send failed: ${error.message}. Check the session before resending.`}finally{$("send").disabled=false;scheduleUIReload()}};
     // Backend slash commands: the tab agent's commands, custom commands and skills, suggested while the composer holds a lone "/token".
     function slashToken(text){if(typeof text!=="string"||!text.startsWith("/")||/\\s/.test(text))return null;const query=text.slice(1);return query.includes("/")?null:query.toLowerCase()}
@@ -5214,14 +5437,14 @@ private extension RemoteControlServer {
       return value}
     function badgeTone(value){const text=value.trim().toLowerCase();
       return text.includes("reject")||text.includes("declin")?"rejected":text.includes("offer")?"offer":text==="applied"||text==="application received"?"applied":""}
-    function openTasks(){closeTasks();tasksState={token,taskID:null,tasks:[],revision:null,loaded:false,failed:false,loading:false,openRecords:new Set(),timer:setInterval(()=>loadTasks(),10000)};
+    function openTasks(){closeTasks();tasksState={token,taskID:null,tasks:[],workspaceCards:{},recordCards:new Map(),revision:null,loaded:false,failed:false,loading:false,openRecords:new Set(),timer:setInterval(()=>{loadTasks();refreshOpenRecordCards()},10000)};
       $("tasksSearch").value="";setText($("tasksError"),"");renderTasks();$("tasksPanel").showModal();loadTasks()}
     function closeTasks(){if(tasksState)clearInterval(tasksState.timer);tasksState=null}
     async function loadTasks(){const state=tasksState;if(!state||state.loading)return;state.loading=true;
       try{const data=await api("/api/v1/home/tasks"+(state.loaded&&state.revision?`?revision=${encodeURIComponent(state.revision)}`:""));if(state!==tasksState)return;state.failed=false;
         if(data.unchanged){setText($("tasksError"),"");return}
         setText($("tasksError"),data.error||"");
-        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.tasks=data.tasks||[];state.loaded=true;renderTasks()}}
+        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.tasks=data.tasks||[];state.workspaceCards=data.workspaceCards||{};state.loaded=true;renderTasks()}}
       catch(error){if(state===tasksState){setText($("tasksError"),`Couldn't load tasks: ${error.message}`);if(!state.loaded){state.loaded=true;state.failed=true;renderTasks()}}}
       finally{state.loading=false}}
     // Polling re-renders in place: scroll, open records, collapsed sections and the focused row survive.
@@ -5252,7 +5475,8 @@ private extension RemoteControlServer {
       if(task.enabled&&task.nextRunAt!==null&&task.nextRunAt!==undefined)fact("Next run",homeTime(task.nextRunAt));
       view.append(facts,homeNode("h3","","Recent runs"));
       if(!task.runs?.length)view.append(homeNode("p","muted","No runs yet."));
-      else{const runs=homeNode("ul","run-list");for(const run of task.runs.slice(0,5)){const item=homeNode("li");item.append(homeNode("span","task-meta",`${homeTime(run.finishedAt)} · ${run.status}${run.model?` · ${run.model}`:""}`),homeNode("span","run-summary",run.summary||"No summary"));runs.append(item)}view.append(runs)}
+      else{const runs=homeNode("ul","run-list");for(const run of task.runs.slice(0,5)){const item=homeNode("li");item.append(homeNode("span","task-meta",`${homeTime(run.finishedAt)} · ${run.status}${run.model?` · ${run.model}`:""}`),homeNode("span","run-summary",run.summary||"No summary"));
+        if(Array.isArray(run.cards)&&run.cards.length)appendCards(item,run.cards,`run:${run.id}`);runs.append(item)}view.append(runs)}
       const prompt=homeNode("details","disclosure");prompt.append(homeNode("summary","","Instructions"),homeNode("p","run-summary",task.prompt));view.append(prompt);
       return view}
     function workspaceView(task){const workspace=task.workspace,query=$("tasksSearch").value.trim().toLowerCase(),searching=Boolean(query);
@@ -5260,6 +5484,10 @@ private extension RemoteControlServer {
       const records=searching?workspace.records.filter(record=>Object.values(record.values).some(value=>String(value).toLowerCase().includes(query))):workspace.records;
       setText($("tasksStatus"),searching?`${records.length} ${homeNoun(workspace,records.length)} found`:"");
       const view=homeNode("div","workspace-records"),sections=workspaceSections(workspace,records,searching);
+      // Cards built from the records (bills due this week), and the latest run's cards, above the list.
+      if(!searching){const cards=tasksState?.workspaceCards?.[task.id]||[],run=task.runs?.[0];
+        if(cards.length){const box=homeNode("div","workspace-cards");appendCards(box,cards,`workspace:${task.id}`);view.append(box)}
+        if(Array.isArray(run?.cards)&&run.cards.length){const box=homeNode("section","workspace-run");box.append(homeNode("span","task-meta",`Latest run · ${homeTime(run.finishedAt)}`),homeNode("span","run-summary",run.summary||""));appendCards(box,run.cards,`run:${run.id}`);view.append(box)}}
       if(searching&&!records.length)view.append(homeNode("p","muted tasks-empty",`No ${homeNoun(workspace,2)} match.`));
       if(!sections){if(records.length)view.append(recordList(task,records));return view}
       const remembered=loadWorkspaceGroups(task.id);
@@ -5280,8 +5508,22 @@ private extension RemoteControlServer {
         if(subtitles.length)summary.append(homeNode("span","record-subtitle",subtitles.join(" · ")));
         const dateField=layout.dateField&&fields.get(layout.dateField),date=dateField&&record.values[dateField.key];
         if(date)summary.append(homeNode("span","record-date",`${dateField.label}: ${formatHomeValue(dateField,date)}`));
-        details.append(summary,recordDetails(workspace,record,fields));item.append(details);list.append(item)}
+        const cards=recordCardsNode(task,record);details.append(summary,...(cards?[cards]:[]),recordDetails(workspace,record,fields));item.append(details);list.append(item)
+        if(cards){if(details.open)loadRecordCards(task,record,cards);details.addEventListener("toggle",()=>{if(details.open)loadRecordCards(task,record,cards)})}}
       return list}
+    // A record's weather and map cards: fetched while its detail is open, again every refreshAfter seconds.
+    function hasRecordCards(workspace){return (workspace?.cards||[]).some(spec=>spec.kind==="weather"||spec.kind==="map")}
+    function recordCardsNode(task,record){if(!hasRecordCards(task.workspace))return null;const box=homeNode("div","record-cards");box.dataset.record=record.id;
+      const cached=tasksState?.recordCards.get(record.id);if(cached?.cards?.length)appendCards(box,cached.cards,`record:${record.id}`);return box}
+    async function loadRecordCards(task,record,box){const state=tasksState;if(!state)return;const entry=state.recordCards.get(record.id);
+      if(entry&&(entry.loading||Date.now()-entry.at<(entry.refreshAfter||300)*1000))return;
+      state.recordCards.set(record.id,{cards:entry?.cards||[],at:entry?.at||0,refreshAfter:entry?.refreshAfter||300,loading:true});
+      try{const data=await api(`/api/v1/home/tasks/${encodeURIComponent(task.id)}/records/${encodeURIComponent(record.id)}/cards`);if(state!==tasksState)return;
+        const cards=Array.isArray(data.cards)?data.cards:[];state.recordCards.set(record.id,{cards,at:Date.now(),refreshAfter:Number(data.refreshAfter)||300,loading:false});
+        const live=box.isConnected?box:document.querySelector(`#tasksBody .record-cards[data-record="${record.id}"]`);if(live){live.replaceChildren();appendCards(live,cards,`record:${record.id}`)}}
+      catch{if(state===tasksState)state.recordCards.set(record.id,{cards:entry?.cards||[],at:Date.now(),refreshAfter:60,loading:false})}}
+    function refreshOpenRecordCards(){const state=tasksState,task=state?.tasks.find(item=>item.id===state.taskID);if(!task?.workspace)return;
+      for(const box of document.querySelectorAll("#tasksBody details.record[open] .record-cards")){const record=task.workspace.records.find(item=>item.id===box.dataset.record);if(record)loadRecordCards(task,record,box)}}
     function recordDetails(workspace,record,fields){const body=homeNode("div","record-details");
       const sections=workspace.detailSections.length?workspace.detailSections:[{title:null,fields:workspace.fields.map(field=>field.key)}];
       for(const section of sections){if(section.title)body.append(homeNode("h3","",section.title));const list=homeNode("dl");
@@ -5291,7 +5533,46 @@ private extension RemoteControlServer {
           list.append(homeNode("dt","",field.label),cell)}
         body.append(list)}
       return body}
+    // Background: Cantrip Home's scheduled-task and incident runs, each with its result and cards; Full Log shows
+    // the runs' reports from Home's background log.
+    let backgroundState=null;
+    const backgroundStatus={running:"Running",succeeded:"Done",failed:"Failed",cancelled:"Stopped",interrupted:"Interrupted",skipped:"Skipped"};
+    function openBackground(){closeBackground();backgroundState={token,runs:[],queued:[],sessionID:null,view:"list",loaded:false,loading:false,timer:setInterval(()=>loadBackground(),10000)};
+      setText($("backgroundError"),"");renderBackground();$("backgroundPanel").showModal();$("backgroundTitle").focus();loadBackground()}
+    function closeBackground(){if(backgroundState)clearInterval(backgroundState.timer);backgroundState=null}
+    async function loadBackground(){const state=backgroundState;if(!state||state.loading)return;state.loading=true;
+      try{const data=await api("/api/v1/home/background");if(state!==backgroundState)return;setText($("backgroundError"),"");
+        const next=JSON.stringify([data.runs,data.queued]);if(next!==state.last){state.last=next;state.runs=data.runs||[];state.queued=data.queued||[];state.sessionID=data.sessionID||null;state.loaded=true;if(state.view==="list")renderBackground()}
+        else if(!state.loaded){state.loaded=true;renderBackground()}}
+      catch(error){if(state===backgroundState){setText($("backgroundError"),`Couldn't load background runs: ${error.message}`);if(!state.loaded){state.loaded=true;renderBackground()}}}
+      finally{state.loading=false}}
+    function renderBackground(){const state=backgroundState;if(!state)return;const body=$("backgroundBody"),panel=$("backgroundPanel"),scroll=panel.scrollTop;
+      $("backgroundBack").classList.toggle("hidden",state.view!=="log");$("backgroundLog").classList.toggle("hidden",state.view==="log"||!state.sessionID);setText($("backgroundTitle"),state.view==="log"?"Background log":"Background");
+      if(state.view==="log"){body.replaceChildren(state.logNode||homeNode("p","muted tasks-empty","Loading the log…"));return}
+      const view=homeNode("div");
+      if(!state.loaded){view.append(homeNode("p","muted tasks-empty","Loading background runs…"));body.replaceChildren(view);return}
+      if(state.queued.length){view.append(homeNode("div","bg-head","Waiting"));const list=homeNode("ul","bg-list");
+        for(const job of state.queued){const item=homeNode("li","bg-run");item.append(homeNode("strong","task-title",job.label),homeNode("span","task-meta",job.reason||"Queued"));list.append(item)}view.append(list)}
+      view.append(homeNode("div","bg-head","Scheduled and automated"));
+      if(!state.runs.length)view.append(homeNode("p","muted tasks-empty","No background runs yet."));
+      else{const list=homeNode("ul","bg-list");
+        for(const run of state.runs){const item=homeNode("li","bg-run");item.setAttribute("aria-label",`${run.label}, ${backgroundStatus[run.status]||run.status}`);
+          const when=run.finishedAt??run.startedAt;item.append(homeNode("strong","task-title",run.label),homeNode("span","task-meta",[run.kind==="incident"?"Incident":"Scheduled task",backgroundStatus[run.status]||run.status,when!=null?homeTime(when):"",run.model||""].filter(Boolean).join(" · ")));
+          const result=run.status==="running"?(run.activity||"Running…"):(run.summary||"");if(result)item.append(homeNode("span","run-summary",result));
+          if(run.status!=="running"&&Array.isArray(run.cards)&&run.cards.length)appendCards(item,run.cards,`bg:${run.id}`);list.append(item)}
+        view.append(list)}
+      body.replaceChildren(view);panel.scrollTop=scroll}
+    async function openBackgroundLog(){const state=backgroundState;if(!state?.sessionID)return;state.view="log";state.logNode=null;renderBackground();
+      try{const data=await api(`/api/v1/sessions/${encodeURIComponent(state.sessionID)}?history=recent`);if(state!==backgroundState||state.view!=="log")return;
+        const session=data.session||{},log=homeNode("div","bg-log"),messages=(session.messages||[]).slice(-24);
+        if(!messages.length)log.append(homeNode("p","muted tasks-empty","The log is empty."));
+        for(const message of messages){if(message.role!=="user"&&message.role!=="assistant")continue;const row=homeNode("article",`message ${message.role}`);row.dataset.messageId=message.id;
+          if(message.role==="user")row.append(homeNode("p","task-meta",(message.displayText||message.text||"").split("\\n")[0]));
+          else appendReply(row,message,[],{id:state.sessionID,isLocalPrivate:false});log.append(row)}
+        state.logNode=log;renderBackground();$("backgroundPanel").scrollTop=$("backgroundPanel").scrollHeight}
+      catch(error){if(state===backgroundState)setText($("backgroundError"),`Couldn't load the log: ${error.message}`)}}
     // Artifacts: files Cantrip Home saved on the Mac. Images open in the viewer; other files download.
+    // Downloads stream the original file (or a folder's zip) from the Mac; nothing gets a public address.
     let artifactsState=null,artifactThumbActive=0;const artifactThumbs=new Map(),artifactThumbQueue=[];
     function openArtifacts(){closeArtifacts();artifactsState={token,artifacts:[],revision:null,loaded:false,failed:false,loading:false,opening:null,timer:setInterval(()=>loadArtifacts(),15000)};
       setText($("artifactsError"),"");renderArtifacts();$("artifactsPanel").showModal();$("artifactsTitle").focus();loadArtifacts()}
@@ -5299,7 +5580,7 @@ private extension RemoteControlServer {
     async function loadArtifacts(){const state=artifactsState;if(!state||state.loading)return;state.loading=true;
       try{const data=await api("/api/v1/home/artifacts"+(state.loaded&&state.revision?`?revision=${encodeURIComponent(state.revision)}`:""));if(state!==artifactsState)return;state.failed=false;setText($("artifactsError"),"");
         if(data.unchanged)return;
-        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.artifacts=data.artifacts||[];state.loaded=true;renderArtifacts()}}
+        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.artifacts=data.artifacts||[];state.supportsDownloads=data.supportsDownloads===true;state.loaded=true;renderArtifacts()}}
       catch(error){if(state===artifactsState){setText($("artifactsError"),`Couldn't load artifacts: ${error.message}`);if(!state.loaded){state.loaded=true;state.failed=true;renderArtifacts()}}}
       finally{state.loading=false}}
     function renderArtifacts(){const state=artifactsState;if(!state)return;const panel=$("artifactsPanel"),body=$("artifactsBody"),scroll=panel.scrollTop,focused=document.activeElement?.closest?.("#artifactsBody [data-focus-key]")?.dataset.focusKey;
@@ -5312,12 +5593,17 @@ private extension RemoteControlServer {
       return unit?`${value<10?value.toFixed(1):Math.round(value)} ${units[unit]}`:`${bytes} ${bytes===1?"byte":"bytes"}`}
     function artifactDuration(seconds){const total=Math.round(seconds),minutes=Math.floor(total/60),rest=total%60;return`${minutes}:${String(rest).padStart(2,"0")}`}
     function artifactFileName(artifact){return String(artifact.relativePath||"").split("/").pop()||artifact.title}
+    function artifactFolder(artifact){const parts=String(artifact.relativePath||"").split("/").filter(Boolean);return parts.length>1?parts[0]:null}
     function artifactBadge(artifact){const extension=artifactFileName(artifact).split(".");return extension.length>1?extension.pop().slice(0,5).toUpperCase():artifactKind(artifact)}
-    function artifactItem(artifact){const item=homeNode("li"),card=homeNode("button","artifact-card"),thumb=homeNode("span","artifact-thumb"),meta=homeNode("span","artifact-meta"),remove=homeNode("button","artifact-delete");
+    function artifactAction(kind,artifact,label,icon,action){const button=homeNode("button","artifact-action");button.type="button";button.title=label;button.setAttribute("aria-label",label);
+      button.dataset.focusKey=`artifact-${kind}:${artifact.id}`;button.innerHTML=`<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="${icon}"/></svg>`;button.onclick=()=>action(button);return button}
+    function artifactItem(artifact){const item=homeNode("li"),card=homeNode("button","artifact-card"),thumb=homeNode("span","artifact-thumb"),meta=homeNode("span","artifact-meta"),actions=homeNode("span","artifact-actions"),folder=artifactFolder(artifact);
       card.type="button";card.dataset.focusKey=`artifact:${artifact.id}`;card.title=artifact.kind==="image"?"Opens the image":"Downloads the file";card.onclick=()=>openArtifact(artifact,card);
       meta.append(homeNode("span","artifact-kind",artifactKind(artifact)),homeNode("span",null,artifactSize(artifact.size)));card.append(thumb,homeNode("span","artifact-title",artifact.title),meta);
-      remove.type="button";remove.title="Delete";remove.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4zM6 9h12l-1 12H7zm4 2v8h1.5v-8zm2.5 0v8H14v-8z"/></svg>';remove.dataset.focusKey=`artifact-delete:${artifact.id}`;remove.setAttribute("aria-label",`Delete ${artifact.title}`);remove.onclick=()=>deleteArtifact(artifact);
-      item.append(card,remove);showArtifactThumb(artifact,card);return item}
+      actions.append(artifactAction("download",artifact,`Download ${artifact.title}`,"M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3zM5 18h14v2H5z",button=>downloadArtifact(artifact,null,button)));
+      if(folder&&artifactsState?.supportsDownloads)actions.append(artifactAction("folder",artifact,`Download the ${folder} folder as a zip`,"M3 5h7l2 2h9v12H3zm8 4v4.2l-1.6-1.6-1.4 1.4 4 4 4-4-1.4-1.4-1.6 1.6V9z",button=>downloadArtifact(artifact,folder,button)));
+      actions.append(artifactAction("delete",artifact,`Delete ${artifact.title}`,"M9 3h6l1 2h4v2H4V5h4zM6 9h12l-1 12H7zm4 2v8h1.5v-8zm2.5 0v8H14v-8z",()=>deleteArtifact(artifact)));
+      item.append(card,actions);showArtifactThumb(artifact,card);return item}
     function showArtifactThumb(artifact,card){const cached=artifactThumbs.get(artifact.id),thumb=card.querySelector(".artifact-thumb"),kind=card.querySelector(".artifact-kind");
       if(cached?.src){const img=homeNode("img");img.alt="";img.src=cached.src;thumb.replaceChildren(img)}else thumb.replaceChildren(homeNode("span",null,artifactBadge(artifact)));
       if(cached?.duration)setText(kind,`${artifactKind(artifact)} · ${artifactDuration(cached.duration)}`);
@@ -5330,12 +5616,20 @@ private extension RemoteControlServer {
     async function openArtifact(artifact,card){const state=artifactsState;if(!state||state.opening)return;
       if(artifact.kind==="image"){openImageViewer({kind:"preview",label:artifact.title,img:card.querySelector(".artifact-thumb img"),
         load:async()=>{const data=await mcpFetch(`/api/v1/home/artifacts/${artifact.id}`);return`data:${data.artifact?.mimeType||"image/png"};base64,${data.data}`}});return}
-      state.opening=artifact.id;card.setAttribute("aria-busy","true");setText($("artifactsStatus"),`Downloading ${artifact.title}…`);
-      try{const data=await mcpFetch(`/api/v1/home/artifacts/${artifact.id}`),binary=atob(data.data),bytes=new Uint8Array(binary.length);for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
-        const url=URL.createObjectURL(new Blob([bytes],{type:data.artifact?.mimeType||"application/octet-stream"})),link=homeNode("a");link.href=url;link.download=artifactFileName(artifact);document.body.append(link);link.click();link.remove();
-        setTimeout(()=>URL.revokeObjectURL(url),60000);setText($("artifactsStatus"),`Downloaded ${artifact.title}.`)}
-      catch(error){setText($("artifactsError"),`Couldn't open ${artifact.title}: ${error.message}`)}
-      finally{if(state===artifactsState)state.opening=null;card.removeAttribute("aria-busy")}}
+      downloadArtifact(artifact,null,card)}
+    // Paired fetch of the original bytes (or the folder's zip), then a normal browser download.
+    async function downloadArtifact(artifact,folder,control){const state=artifactsState;if(!state||state.opening)return;const label=folder?`the ${folder} folder`:artifact.title;
+      state.opening=artifact.id;control?.setAttribute("aria-busy","true");setText($("artifactsError"),"");setText($("artifactsStatus"),`Downloading ${label}…`);
+      try{let blob;
+        if(state.supportsDownloads){const response=await fetch(`/api/v1/home/artifacts/${artifact.id}/${folder?"folder":"file"}`,{headers:{Authorization:`Bearer ${token}`}});
+          if(!response.ok){const data=await response.json().catch(()=>({}));throw Error(data.error||`HTTP ${response.status}`)}
+          blob=await response.blob()}
+        else{const data=await mcpFetch(`/api/v1/home/artifacts/${artifact.id}`),binary=atob(data.data),bytes=new Uint8Array(binary.length);for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
+          blob=new Blob([bytes],{type:data.artifact?.mimeType||"application/octet-stream"})}
+        const url=URL.createObjectURL(blob),link=homeNode("a");link.href=url;link.download=folder?`${folder}.zip`:artifactFileName(artifact);document.body.append(link);link.click();link.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),60000);setText($("artifactsStatus"),`Downloaded ${label}.`)}
+      catch(error){setText($("artifactsError"),`Couldn't download ${label}: ${error.message}`)}
+      finally{if(state===artifactsState)state.opening=null;control?.removeAttribute("aria-busy")}}
     async function deleteArtifact(artifact){if(!confirm(`Delete ${artifact.title}?\n\nThis permanently deletes the file from your Mac.`))return;
       try{await api(`/api/v1/home/artifacts/${artifact.id}`,{method:"DELETE"});artifactThumbs.delete(artifact.id);const state=artifactsState;if(!state)return;
         state.artifacts=state.artifacts.filter(item=>item.id!==artifact.id);renderArtifacts();setText($("artifactsStatus"),`Deleted ${artifact.title}.`);$("artifactsTitle").focus();loadArtifacts()}
@@ -5345,6 +5639,8 @@ private extension RemoteControlServer {
       const draft=$("draft");if(!draft.value.trim())draft.value="Create a ";draft.dispatchEvent(new Event("input",{bubbles:true}));draft.focus();draft.setSelectionRange(draft.value.length,draft.value.length)}
     $("homeArtifacts").onclick=openArtifacts;$("artifactsDone").onclick=()=>$("artifactsPanel").close();$("artifactsCreate").onclick=createArtifactInChat;
     $("artifactsPanel").addEventListener("close",()=>{closeArtifacts();$("artifactsBody").replaceChildren();setText($("artifactsStatus"),"")});
+    $("homeBackground").onclick=openBackground;$("backgroundDone").onclick=()=>$("backgroundPanel").close();$("backgroundLog").onclick=openBackgroundLog;
+    $("backgroundBack").onclick=()=>{if(!backgroundState)return;backgroundState.view="list";renderBackground()};$("backgroundPanel").addEventListener("close",()=>{closeBackground();$("backgroundBody").replaceChildren()});
     $("homeTasks").onclick=openTasks;$("tasksDone").onclick=()=>$("tasksPanel").close();$("tasksBack").onclick=()=>showTask(null);
     $("tasksSearch").oninput=()=>{if(tasksState){renderTasks();$("tasksPanel").scrollTop=0}};
     $("tasksPanel").addEventListener("close",()=>{closeTasks();$("tasksBody").replaceChildren();setText($("tasksStatus"),"")});

@@ -7,6 +7,9 @@ import CoreLocation
 final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = LocationProvider()
     @Published private(set) var contextLine: String?
+    /// The last fix and its place name ("Santa Clara, CA, United States"), for weather cards.
+    private(set) var lastCoordinate: CLLocationCoordinate2D?
+    private(set) var placeName: String?
 
     private let manager = CLLocationManager()
     private let geocoder = CLGeocoder()
@@ -44,11 +47,13 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
         lastFix = Date()
+        lastCoordinate = loc.coordinate
         let coord = String(format: "%.3f, %.3f", loc.coordinate.latitude, loc.coordinate.longitude)
         geocoder.reverseGeocodeLocation(loc) { [weak self] placemarks, _ in
             DispatchQueue.main.async {
                 if let pm = placemarks?.first {
                     let parts = [pm.locality, pm.administrativeArea, pm.country].compactMap { $0 }
+                    self?.placeName = parts.isEmpty ? nil : parts.joined(separator: ", ")
                     self?.contextLine = parts.isEmpty ? coord : "\(parts.joined(separator: ", ")) (\(coord))"
                 } else {
                     self?.contextLine = coord
@@ -60,5 +65,26 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         Log.write("location error: \(error.localizedDescription)")
+    }
+}
+
+extension WeatherCardResolver {
+    /// The Mac's own location for weather cards, while "Share my location as context" is on.
+    @MainActor
+    static func macPlace() -> KnownPlace? {
+        guard AppSettings.shared.shareLocation else { return nil }
+        let provider = LocationProvider.shared
+        provider.refresh()
+        return provider.lastCoordinate.map {
+            KnownPlace(label: provider.placeName, coordinate: Coordinate(latitude: $0.latitude, longitude: $0.longitude),
+                       note: "The Mac's location")
+        }
+    }
+
+    /// `cantrip weather [PLACE]`: no device here, so a missing place means the Mac's location.
+    @MainActor
+    static func cliForecast(place: String?) async -> WeatherCard {
+        await shared.resolve(WeatherBlockProposal(place: place.flatMap(WeatherBlock.clean)),
+                             context: Context(device: nil, mac: macPlace(), unit: preferredUnit))
     }
 }

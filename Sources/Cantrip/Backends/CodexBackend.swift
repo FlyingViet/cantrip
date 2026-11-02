@@ -123,7 +123,8 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
     /// What the system message carries: reply visibility, images, simulators, Home's protocol and
     /// the rules Cantrip keeps for `workdir`.
     func developerInstructions(workdir: String) -> String {
-        var parts = [RemoteGeneratedImages.agentGuidance(sessionFilesFolder: false), ReplyVisibility.guidance]
+        var parts = [RemoteGeneratedImages.agentGuidance(sessionFilesFolder: false), ReplyVisibility.guidance,
+                     CardComposer.richCardGuidance(command: TabInsight.command)]
         if !readOnly { parts.append(SimulatorPool.agentGuidance(command: TabInsight.command)) }
         if let homeProtocol { parts.append(homeProtocol) }
         if let rules = FolderInstructions().guidance(for: workdir) { parts.append(rules) }

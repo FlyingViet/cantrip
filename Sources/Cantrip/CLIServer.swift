@@ -153,6 +153,15 @@ final class CLIServer {
 
     private func handleRequest(_ data: Data, on connection: NWConnection) {
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], obj["command"] is String {
+            // The forecast takes a network round trip, so it's answered when it arrives.
+            if obj["command"] as? String == "weather" {
+                let place = obj["place"] as? String
+                Task { @MainActor [weak self] in
+                    let card = await WeatherCardResolver.cliForecast(place: place)
+                    self?.send(["text": card.textSummary, "card": card.snapshot], on: connection, close: true)
+                }
+                return
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 let reply = MainActor.assumeIsolated { self.controlHandler?(obj) }
