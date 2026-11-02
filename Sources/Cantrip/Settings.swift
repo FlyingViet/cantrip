@@ -78,6 +78,32 @@ final class AppSettings: ObservableObject {
     @Published var storageSimulatorCleanup: Bool {
         didSet { d.set(storageSimulatorCleanup, forKey: "storageSimulatorCleanup") }
     }
+    /// The simulator pool's one iPhone and its iOS version (empty: the newest that runs it), and the
+    /// iPhone Duo's iOS version when a lease names none (`SimulatorPool.Policy`).
+    @Published var simulatorPoolPhone: String {
+        didSet { d.set(simulatorPoolPhone, forKey: SimulatorPool.Policy.Key.phone) }
+    }
+    @Published var simulatorPoolPhoneOS: String {
+        didSet { d.set(simulatorPoolPhoneOS, forKey: SimulatorPool.Policy.Key.phoneOS) }
+    }
+    @Published var simulatorPoolDuoOS: String {
+        didSet { d.set(simulatorPoolDuoOS, forKey: SimulatorPool.Policy.Key.duoOS) }
+    }
+    /// Pool simulators booted at once, the free memory (GB) one needs to boot, and how long a lease
+    /// waits in line for room (`SimulatorPool.Policy`).
+    @Published var simulatorPoolMaxBooted: Int {
+        didSet { d.set(simulatorPoolMaxBooted, forKey: SimulatorPool.Policy.Key.maxBooted) }
+    }
+    @Published var simulatorPoolMinFreeMemoryGB: Int {
+        didSet { d.set(simulatorPoolMinFreeMemoryGB, forKey: SimulatorPool.Policy.Key.minFreeMemoryGB) }
+    }
+    @Published var simulatorPoolWaitMinutes: Int {
+        didSet { d.set(simulatorPoolWaitMinutes, forKey: SimulatorPool.Policy.Key.waitMinutes) }
+    }
+    /// Minutes a pool simulator stays booted with no lease before it's shut down.
+    @Published var simulatorPoolIdleMinutes: Int {
+        didSet { d.set(simulatorPoolIdleMinutes, forKey: SimulatorPool.Policy.Key.idleMinutes) }
+    }
     /// Days an unused Copilot session folder is kept before the cleanup removes it.
     @Published var storageSessionRetentionDays: Int {
         didSet {
@@ -819,6 +845,13 @@ final class AppSettings: ObservableObject {
             "storageUpkeepEnabled": storageUpkeepEnabled,
             "storageSessionRetentionDays": storageSessionRetentionDays,
             "storageSimulatorCleanup": storageSimulatorCleanup,
+            "simulatorPoolPhone": simulatorPoolPhone,
+            "simulatorPoolPhoneOS": simulatorPoolPhoneOS,
+            "simulatorPoolDuoOS": simulatorPoolDuoOS,
+            "simulatorPoolMaxBooted": simulatorPoolMaxBooted,
+            "simulatorPoolMinFreeMemoryGB": simulatorPoolMinFreeMemoryGB,
+            "simulatorPoolWaitMinutes": simulatorPoolWaitMinutes,
+            "simulatorPoolIdleMinutes": simulatorPoolIdleMinutes,
             "openAIEndpointEnabled": openAIEndpointEnabled,
             "openAIEndpointPort": openAIEndpointPort,
             "openAIEndpointModel": openAIEndpointModel,
@@ -951,6 +984,16 @@ final class AppSettings: ObservableObject {
             self.storageSessionRetentionDays = $0
         }
         bool("storageSimulatorCleanup") { self.storageSimulatorCleanup = $0 }
+        if let phone = (dict["simulatorPoolPhone"] as? String)?.trimmingCharacters(in: .whitespaces), !phone.isEmpty {
+            simulatorPoolPhone = phone
+            applied.append("simulatorPoolPhone")
+        }
+        str("simulatorPoolPhoneOS") { self.simulatorPoolPhoneOS = $0.trimmingCharacters(in: .whitespaces) }
+        str("simulatorPoolDuoOS") { self.simulatorPoolDuoOS = $0.trimmingCharacters(in: .whitespaces) }
+        int("simulatorPoolMaxBooted", SimulatorPool.Policy.maxBootedRange) { self.simulatorPoolMaxBooted = $0 }
+        int("simulatorPoolMinFreeMemoryGB", SimulatorPool.Policy.minFreeMemoryRange) { self.simulatorPoolMinFreeMemoryGB = $0 }
+        int("simulatorPoolWaitMinutes", SimulatorPool.Policy.waitRange) { self.simulatorPoolWaitMinutes = $0 }
+        int("simulatorPoolIdleMinutes", SimulatorPool.Policy.idleRange) { self.simulatorPoolIdleMinutes = $0 }
         bool("openAIEndpointEnabled") { self.openAIEndpointEnabled = $0 }
         int("openAIEndpointPort", 1...65535) { self.openAIEndpointPort = $0 }
         // "copilot:gpt-5.6-sol", a bare backend name, or empty for the backend's default.
@@ -1045,6 +1088,14 @@ final class AppSettings: ObservableObject {
         storageUpkeepEnabled = d.object(forKey: "storageUpkeepEnabled") == nil ? true : d.bool(forKey: "storageUpkeepEnabled")
         storageSessionRetentionDays = StorageUpkeep.Configuration.retentionDays(d)
         storageSimulatorCleanup = d.bool(forKey: "storageSimulatorCleanup")
+        let simulatorPolicy = SimulatorPool.Policy.standard(d)
+        simulatorPoolPhone = simulatorPolicy.phone
+        simulatorPoolPhoneOS = simulatorPolicy.phoneOS
+        simulatorPoolDuoOS = simulatorPolicy.duoOS
+        simulatorPoolMaxBooted = simulatorPolicy.maxBooted
+        simulatorPoolMinFreeMemoryGB = simulatorPolicy.minFreeMemoryGB
+        simulatorPoolWaitMinutes = simulatorPolicy.waitMinutes
+        simulatorPoolIdleMinutes = simulatorPolicy.idleMinutes
         openAIEndpointEnabled = d.bool(forKey: "openAIEndpointEnabled")
         let storedEndpointPort = d.integer(forKey: "openAIEndpointPort")
         openAIEndpointPort = (1...65535).contains(storedEndpointPort) ? storedEndpointPort : OpenAIEndpoint.defaultPort
