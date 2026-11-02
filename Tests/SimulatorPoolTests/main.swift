@@ -378,6 +378,21 @@ do {
     expect((try? SimulatorPool.adopt("PRO18000-0000-0000-0000-000000000000", context: c)) == nil,
            "another iPhone can't become the pool's")
     expect(c.store.read().pool.count == 1, "so the pool still has one iPhone")
+
+    // A tab mid-work on a lease from before keeps it when it asks for that model again.
+    fake.devices.append(.init(udid: "OLDMAX00-0000-0000-0000-000000000000", name: "Cantrip Pool · iPhone 17 Pro Max · iOS 27.0",
+                              state: "Booted", type: FakeSimctl.proMax, runtime: FakeSimctl.ios270, lastUsed: now))
+    try c.store.locked {
+        $0.leases.append(.init(id: "old-lease", udid: "OLDMAX00-0000-0000-0000-000000000000", key: "iPhone 17 Pro Max|27.0",
+                               temporary: false, tab: "tab-old", acquiredAt: now, expiresAt: now.addingTimeInterval(3_600)))
+    }
+    let kept = try SimulatorPool.acquire(device: "iPhone 17 Pro Max", os: nil, tab: "tab-old", context: c)
+    expect(kept.renewed && kept.lease.id == "old-lease" && kept.description == "iPhone 17 Pro Max, iOS 27.0",
+           "the same request renews the tab's old lease: \(kept.lease.key)")
+    let moved = try SimulatorPool.acquire(device: "iPhone 18 Pro", os: nil, tab: "tab-old", context: c)
+    expect(moved.lease.udid.hasPrefix("CANON000") && moved.released.map(\.id) == ["old-lease"],
+           "another iPhone request moves it to the pool's iPhone")
+    try SimulatorPool.release(tab: "tab-old", context: c)
 } catch {
     expect(false, "one iPhone threw \(error)")
 }
