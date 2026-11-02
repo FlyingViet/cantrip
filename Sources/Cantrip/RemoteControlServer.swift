@@ -2399,6 +2399,7 @@ final class RemoteControlServer {
                     sendError(405, "method not allowed", on: connection)
                     return
                 }
+                try? store.recoverUnregisteredArtifacts()
                 let revision = store.revision.uuidString
                 if store.storageError == nil, request.query("revision") == revision {
                     sendJSON(["unchanged": true, "revision": revision], on: connection)
