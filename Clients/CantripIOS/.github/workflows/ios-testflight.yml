@@ -1,0 +1,116 @@
+name: iOS · TestFlight
+# Hermes → App Store Connect / TestFlight.
+
+# Manual only. Builds Hermes (native Xcode archive) and uploads it to TestFlight
+# via the App Store Connect API. Nothing runs on push.
+#
+# Run it:  gh workflow run ios-testflight.yml --ref master
+#
+# One-time setup this depends on: the 4 secrets below + an App Store Connect app
+# record for the app's bundle id + a self-hosted runner registered to this repo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "Build notes (for your reference only — not sent to Apple)"
+        required: false
+        default: ""
+
+env:
+  SCHEME: Hermes
+  PROJECT: Hermes.xcodeproj
+  CONFIGURATION: Release
+  TEAM_ID: "9M3XNFG4J7"
+  # CFBundleVersion = 100000 + run number → strictly increasing (all ASC needs).
+  BUILD_NUMBER_BASE: "100000"
+  # SwiftPM uses bare repositories for its cache. Keep this scoped to CI
+  # instead of relaxing the runner's global Git security setting.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.bareRepository
+  GIT_CONFIG_VALUE_0: all
+
+jobs:
+  testflight:
+    # Self-hosted Apple Silicon Mac with the side-by-side Xcode 27.1 Duo SDK.
+    # If other self-hosted runners
+    # share the machine, build serially (concurrent codesign collides on the
+    # login keychain).
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 40
+
+    steps:
+      - name: Use job-local temporary storage
+        run: echo "TMPDIR=$RUNNER_TEMP/" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v5
+
+      - name: Select Duo toolchain for this job
+        run: |
+          DEVELOPER_DIR="$HOME/Applications/Xcode-27.1-beta.app/Contents/Developer"
+          test -d "$DEVELOPER_DIR"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+
+      - name: Toolchain versions
+        run: |
+          xcodebuild -version
+          test "$(xcrun --sdk iphoneos --show-sdk-version)" = "27.1"
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Unlock login keychain
+        run: |
+          KC="$HOME/Library/Keychains/login.keychain-db"
+          security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" "$KC"
+          # Unlock only: changing lock settings here re-enabled auto-lock on the Mac's login keychain.
+
+      - name: Write App Store Connect API key
+        run: |
+          mkdir -p "$RUNNER_TEMP/asc"
+          echo "${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}" | base64 --decode \
+            > "$RUNNER_TEMP/asc/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8"
+
+      - name: Archive
+        run: |
+          BUILD_NUMBER=$(( BUILD_NUMBER_BASE + GITHUB_RUN_NUMBER ))
+          echo "Build number: $BUILD_NUMBER"
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -archivePath "$RUNNER_TEMP/Hermes.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8" \
+            -authenticationKeyID "${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            archive
+
+      - name: Verify archived Duo SDK
+        run: |
+          INFO="$RUNNER_TEMP/Hermes.xcarchive/Products/Applications/Hermes.app/Info.plist"
+          SDK=$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$INFO")
+          MINIMUM=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")
+          echo "Archived SDK: $SDK; minimum iOS: $MINIMUM"
+          test "$SDK" = "iphoneos27.1"
+          test "$MINIMUM" = "26.0"
+
+      - name: Export & upload to TestFlight
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Hermes.xcarchive" \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8" \
+            -authenticationKeyID "${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}"
+
+      - name: Clean up secrets on disk
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asc"

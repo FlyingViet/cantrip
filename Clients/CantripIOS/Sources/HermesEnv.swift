@@ -1,0 +1,342 @@
+import Foundation
+import SwiftUI
+
+enum GatewayTransportPolicy {
+    static func issue(for url: URL) -> String? {
+        guard url.user == nil, url.password == nil else {
+            return "Gateway URLs cannot contain embedded credentials."
+        }
+        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
+            return "Enter a complete gateway URL."
+        }
+        if scheme == "https" {
+            return nil
+        }
+        let loopbackHosts: Set<String> = ["localhost", "127.0.0.1", "::1", "[::1]"]
+        if scheme == "http", loopbackHosts.contains(host) {
+            return nil
+        }
+        return "Use HTTPS for a Mac or remote gateway. Plain HTTP exposes prompts and the API key."
+    }
+}
+
+enum GatewayConnectionState: Equatable {
+    case notChecked
+    case checking
+    case connected
+    case failed(String)
+}
+
+/// App-wide configuration + connection to the Hermes gateway's OpenAI-compatible
+/// API server (`/v1/responses`).
+@MainActor
+final class HermesEnv: ObservableObject {
+    private static let backendOrderKey = "hermes.backendOrder"
+    private static let hiddenBackendsKey = "hermes.hiddenBackends"
+
+    // Each user points this at their own HTTPS Hermes gateway. No default server.
+    @AppStorage("hermes.baseURL") var baseURL: String = ""
+    /// Selected TTS voice identifier (empty = system default). `VoiceController`
+    /// reads this key directly from UserDefaults at speak time.
+    @AppStorage("hermes.voiceId") var voiceId: String = ""
+    /// Stable per-install id so the gateway can scope long-term memory to this app
+    /// (the `X-Hermes-Session-Key` header). Generated once, kept in UserDefaults.
+    @AppStorage("hermes.sessionKey") private var storedSessionKey: String = ""
+
+    @Published var apiKey: String = Keychain.get("hermes.apiKey") ?? ""
+    @Published private(set) var executionLane: ExecutionLane
+    @Published private(set) var backendOrder: [ExecutionLane]
+    @Published private(set) var hiddenBackends: Set<ExecutionLane>
+    @Published private(set) var availableModels: Set<String> = []
+    @Published private(set) var connectionState: GatewayConnectionState = .notChecked
+    let servers: ServerProfiles
+    @Published private(set) var selectedServerID: UUID?
+    private let defaults: UserDefaults
+    private var gatewayGeneration = 0
+
+    var selectableLanes: [ExecutionLane] {
+        backendOrder.filter { !hiddenBackends.contains($0) }
+    }
+
+    var chatStorageID: UUID? {
+        servers.selected?.usesLegacyHistory == true ? nil : selectedServerID
+    }
+
+    init(servers: ServerProfiles? = nil, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        self.servers = servers ?? ServerProfiles(kind: .hermes)
+        let order = Self.loadBackendOrder(from: defaults)
+        // Cantrip Home holds every project tab (the old Cantrip Remote lane), so it never hides.
+        let hidden = Set(
+            (defaults.stringArray(forKey: Self.hiddenBackendsKey) ?? [])
+                .compactMap(ExecutionLane.init(rawValue:))
+                .filter { ExecutionLane.pickerLanes.contains($0) && $0 != .home }
+        )
+        backendOrder = order
+        hiddenBackends = hidden
+        let storedLane = defaults.string(forKey: "hermes.executionLane")
+        let visible = order.filter { !hidden.contains($0) }
+        let restoredLane = ExecutionLane(rawValue: storedLane ?? "")?.pickerLane
+        executionLane = visible.contains(.home)
+            ? .home
+            : restoredLane.flatMap { visible.contains($0) ? $0 : nil }
+                ?? Self.fallbackLane(in: visible)
+        if executionLane.rawValue != storedLane {
+            defaults.set(executionLane.rawValue, forKey: "hermes.executionLane")
+        }
+        do {
+            if !self.servers.hasSavedState, !baseURL.isEmpty, !apiKey.isEmpty {
+                try self.servers.migrate(url: baseURL, credential: apiKey)
+            }
+            if let server = self.servers.selected {
+                let credential = try self.servers.credential(for: server)
+                baseURL = server.url
+                apiKey = credential
+                selectedServerID = server.id
+            } else if self.servers.hasSavedState {
+                baseURL = ""
+                apiKey = ""
+            }
+            if let issue = self.servers.loadIssue {
+                throw ServerConfigurationError(message: issue)
+            }
+        } catch {
+            // Never use another server's legacy credential when a saved profile cannot load.
+            apiKey = ""
+            connectionState = .failed(error.localizedDescription)
+        }
+    }
+
+    var sessionKey: String {
+        if storedSessionKey.isEmpty { storedSessionKey = "ios-" + UUID().uuidString }
+        if let chatStorageID { return "\(storedSessionKey)-\(chatStorageID.uuidString)" }
+        return storedSessionKey
+    }
+
+    func addServer(_ draft: ServerDraft) throws {
+        try servers.add(draft)
+    }
+
+    func selectServer(_ server: SavedServer) throws {
+        guard selectedServerID != server.id else { return }
+        try activate(server)
+    }
+
+    /// Saves a saved gateway's re-entered API key and selects it, keeping its entry and history.
+    func reenterCredential(_ credential: String, for server: SavedServer) throws {
+        try servers.replaceCredential(credential, for: server)
+        try activate(server)
+    }
+
+    private func activate(_ server: SavedServer) throws {
+        let credential = try servers.credential(for: server)
+        try Keychain.saveCredential(credential, for: "hermes.apiKey")
+        try servers.select(server)
+        invalidateGateway()
+        selectedServerID = server.id
+        baseURL = server.url
+        apiKey = credential
+    }
+
+    func removeServer(_ server: SavedServer) throws {
+        if selectedServerID == server.id {
+            try Keychain.deleteCredential("hermes.apiKey")
+        }
+        try servers.remove(server)
+        if selectedServerID == server.id {
+            invalidateGateway()
+            selectedServerID = nil
+            baseURL = ""
+            apiKey = ""
+        }
+    }
+
+    var transportIssue: String? {
+        let value = trimmed(baseURL)
+        guard !value.isEmpty else { return "Enter your gateway URL." }
+        guard let url = URL(string: value) else { return "Enter a valid gateway URL." }
+        return GatewayTransportPolicy.issue(for: url)
+    }
+
+    var configurationIssue: String? {
+        if let transportIssue {
+            return transportIssue
+        }
+        if apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Enter the gateway API key."
+        }
+        if executionLane == .local, !isAvailable(.local) {
+            return "The gateway has not advertised the local-private model route."
+        }
+        return nil
+    }
+
+    var isConfigured: Bool { configurationIssue == nil }
+
+    var gatewayIdentity: String? {
+        guard let url = URL(string: trimmed(baseURL)),
+              let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased() else {
+            return nil
+        }
+        let defaultPort = scheme == "https" ? 443 : 80
+        var path = url.path
+        while path.count > 1, path.hasSuffix("/") {
+            path.removeLast()
+        }
+        return "\(scheme)://\(host):\(url.port ?? defaultPort)\(path)"
+    }
+
+    var client: HermesClient? {
+        client(for: executionLane)
+    }
+
+    func client(for lane: ExecutionLane) -> HermesClient? {
+        guard !lane.usesCantripRemote else { return nil }
+        guard let url = URL(string: trimmed(baseURL)),
+              GatewayTransportPolicy.issue(for: url) == nil,
+              !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        let scopedSessionKey = lane == .copilot ? sessionKey : "\(sessionKey)-local"
+        return HermesClient(
+            baseURL: url,
+            apiKey: apiKey,
+            sessionKey: scopedSessionKey,
+            model: lane.modelAlias
+        )
+    }
+
+    func isAvailable(_ lane: ExecutionLane) -> Bool {
+        switch lane {
+        case .copilot:
+            true
+        case .local:
+            availableModels.contains(lane.modelAlias)
+        case .cantrip:
+            true
+        case .home:
+            true
+        }
+    }
+
+    func isLaneVisible(_ lane: ExecutionLane) -> Bool {
+        !hiddenBackends.contains(lane)
+    }
+
+    func canHide(_ lane: ExecutionLane) -> Bool {
+        guard lane != .home else { return false }
+        return !isLaneVisible(lane) || selectableLanes.count > 1
+    }
+
+    func setLaneVisible(_ lane: ExecutionLane, isVisible: Bool) {
+        guard ExecutionLane.pickerLanes.contains(lane) else { return }
+        if isVisible {
+            hiddenBackends.remove(lane)
+        } else {
+            guard canHide(lane) else { return }
+            hiddenBackends.insert(lane)
+        }
+        persistBackendPreferences()
+        guard hiddenBackends.contains(executionLane) else { return }
+        let fallback = selectableLanes.first(where: isAvailable)
+            ?? Self.fallbackLane(in: selectableLanes)
+        select(fallback)
+    }
+
+    func moveBackends(fromOffsets: IndexSet, toOffset: Int) {
+        backendOrder.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        persistBackendPreferences()
+    }
+
+    /// `.cantrip` opens the selected project tab full screen inside Cantrip Home; it is stored
+    /// as Home, so a relaunch always returns to Home.
+    func select(_ lane: ExecutionLane) {
+        guard isAvailable(lane) else { return }
+        executionLane = lane
+        defaults.set(lane.pickerLane.rawValue, forKey: "hermes.executionLane")
+    }
+
+    @discardableResult
+    func refreshGateway() async -> GatewayConnectionState {
+        gatewayGeneration += 1
+        let generation = gatewayGeneration
+        let requestedURL = baseURL
+        let requestedKey = apiKey
+        availableModels.removeAll()
+        guard let probeClient = client(for: .copilot) else {
+            let state = GatewayConnectionState.failed(
+                transportIssue ?? "Enter the gateway URL and API key."
+            )
+            connectionState = state
+            return state
+        }
+        connectionState = .checking
+        do {
+            let models = try await probeClient.models()
+            guard generation == gatewayGeneration, requestedURL == baseURL,
+                  requestedKey == apiKey, !Task.isCancelled else { return connectionState }
+            availableModels = models
+            guard availableModels.contains(ExecutionLane.copilot.modelAlias) else {
+                let state = GatewayConnectionState.failed(
+                    "Gateway is reachable, but the copilot-coding route is missing."
+                )
+                connectionState = state
+                return state
+            }
+            if executionLane == .local, !availableModels.contains(ExecutionLane.local.modelAlias) {
+                let state = GatewayConnectionState.failed(
+                    "Gateway is reachable, but the local-private route is missing."
+                )
+                connectionState = state
+                return state
+            }
+            connectionState = .connected
+        } catch {
+            guard generation == gatewayGeneration, requestedURL == baseURL,
+                  requestedKey == apiKey, !Task.isCancelled else { return connectionState }
+            connectionState = .failed(
+                (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            )
+        }
+        return connectionState
+    }
+
+    func setAPIKey(_ value: String) {
+        apiKey = value
+        invalidateGateway()
+        if value.isEmpty { Keychain.remove("hermes.apiKey") } else { Keychain.set(value, for: "hermes.apiKey") }
+    }
+
+    func invalidateGateway() {
+        gatewayGeneration += 1
+        availableModels.removeAll()
+        connectionState = .notChecked
+    }
+
+    private func persistBackendPreferences() {
+        defaults.set(backendOrder.map(\.rawValue), forKey: Self.backendOrderKey)
+        defaults.set(
+            backendOrder.filter(hiddenBackends.contains).map(\.rawValue),
+            forKey: Self.hiddenBackendsKey
+        )
+    }
+
+    private static func loadBackendOrder(from defaults: UserDefaults) -> [ExecutionLane] {
+        var seen: Set<ExecutionLane> = []
+        let stored = (defaults.stringArray(forKey: backendOrderKey) ?? [])
+            .compactMap(ExecutionLane.init(rawValue:))
+            .filter { ExecutionLane.pickerLanes.contains($0) && seen.insert($0).inserted }
+        return stored + ExecutionLane.pickerLanes.filter { seen.insert($0).inserted }
+    }
+
+    private static func fallbackLane(in visible: [ExecutionLane]) -> ExecutionLane {
+        visible.first ?? .defaultLane
+    }
+
+    private func trimmed(_ s: String) -> String {
+        var t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        while t.hasSuffix("/") { t.removeLast() }
+        return t
+    }
+}

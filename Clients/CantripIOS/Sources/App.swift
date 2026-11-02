@@ -1,0 +1,110 @@
+import SwiftUI
+
+@main
+struct HermesApp: App {
+    @UIApplicationDelegateAdaptor(AgentGatewayAppDelegate.self) private var appDelegate
+    @ObservedObject private var notifications = CantripNotifications.shared
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var env = HermesEnv()
+    // Held, not observed: re-rendering the whole scene on every Cantrip poll
+    // snaps open menus back to the top. ChatView observes the model itself.
+    #if DEBUG
+    @State private var remoteModel = CantripRemoteModel(
+        liveStatus: .shared, authorizeSensitiveAction: CantripUITestFixtures.authorizeSensitiveAction
+    )
+    #else
+    @State private var remoteModel = CantripRemoteModel(liveStatus: .shared)
+    #endif
+    // Held like remoteModel; App state lives for the process, so only cold launches show it.
+    @State private var launchSplash = CantripLaunchSplashController()
+
+    init() {
+        #if os(iOS) && canImport(WatchConnectivity)
+        // Early, so a watch asking to be set up can wake this app in the background.
+        CantripWatchLink.shared.activate()
+        #endif
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            #if DEBUG
+            if CantripUITestFixtures.showsImageViewer {
+                CantripImageViewerFixtureView().preferredColorScheme(.dark)
+            } else {
+                content
+            }
+            #else
+            content
+            #endif
+        }
+    }
+
+    private var content: some View {
+        ChatView(env: env, remote: remoteModel)
+        .cantripLaunchSplash(launchSplash) { [env, remoteModel] in
+            CantripLaunchSplash.isReady(lane: env.executionLane, remote: remoteModel)
+        }
+        .preferredColorScheme(.dark)
+        .onAppear {
+            if scenePhase == .active { notifications.clearBadge() }
+            remoteModel.setAppActive(scenePhase == .active)
+            openNotification()
+        }
+        #if DEBUG
+        .task { await CantripUITestFixtures.pairRemoteIfRequested(remoteModel, env: env) }
+        .task { await CantripUITestFixtures.requestBadgesIfAsked() }
+        #endif
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { notifications.clearBadge() }
+            remoteModel.setAppActive(phase == .active)
+            if phase == .active { openNotification() }
+        }
+        .onChange(of: notifications.pendingTarget) { _, _ in openNotification() }
+        .onChange(of: notifications.presentedTarget) { _, target in
+            if let target { remoteModel.noteAlert(forSessionID: target.sessionID) }
+        }
+        .onChange(of: notifications.deviceToken) { _, _ in remoteModel.refreshCompletionNotificationRegistration(force: true) }
+        .onOpenURL { url in
+            if let pairing = CantripPairingLink.parse(url) {
+                launchSplash.skip()
+                CantripPairingPresenter.present(CantripPairingPrompt(result: pairing), model: remoteModel) { [env] in
+                    env.select(.home)
+                }
+                return
+            }
+            guard let target = CantripDeepLink.parse(url) else { return }
+            launchSplash.skip()
+            switch target {
+            case .tab(let id, _):
+                // Tabs open full screen inside Cantrip Home.
+                remoteModel.prepareToOpenTab(id)
+                env.select(.cantrip)
+            case .tabs:
+                env.select(.home)
+                remoteModel.requestTabDrawer()
+            }
+            Task { await remoteModel.openLiveStatusLink(target) }
+        }
+    }
+
+    private func openNotification() {
+        guard scenePhase == .active, let target = notifications.pendingTarget else { return }
+        notifications.consumeTarget()
+        launchSplash.skip()
+        Task {
+            if target.sessionID == CantripHomeIdentity.id {
+                env.select(.home)
+                await remoteModel.selectHome()
+            } else if target.isHomeRun, env.selectableLanes.contains(.home) {
+                // Background runs are answered in Home, never opened as Remote tabs.
+                env.select(.home)
+                await remoteModel.openHomeRunNotification(target)
+            } else {
+                // The tab opens full screen inside Cantrip Home.
+                remoteModel.prepareToOpenTab(target.sessionID.uuidString)
+                env.select(.cantrip)
+                await remoteModel.openCompletionNotification(target)
+            }
+        }
+    }
+}
