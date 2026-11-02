@@ -2,6 +2,7 @@
 // card needs no code here. Card strings only ever go into textContent and attributes; icons are
 // constants. `map` and `image` blocks need the Mac (its map tiles and image cache), so they're skipped.
 import type { Action, Badge, Block, CardDocument, Item, Source, Stat } from "../shared/cards";
+import "./cards.css";
 
 type Open = (url: string) => void;
 
