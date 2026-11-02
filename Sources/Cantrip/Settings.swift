@@ -89,6 +89,17 @@ final class AppSettings: ObservableObject {
     @Published var simulatorPoolDuoOS: String {
         didSet { d.set(simulatorPoolDuoOS, forKey: SimulatorPool.Policy.Key.duoOS) }
     }
+    /// Pool simulators booted at once, the free memory (GB) one needs to boot, and how long a lease
+    /// waits in line for room (`SimulatorPool.Policy`).
+    @Published var simulatorPoolMaxBooted: Int {
+        didSet { d.set(simulatorPoolMaxBooted, forKey: SimulatorPool.Policy.Key.maxBooted) }
+    }
+    @Published var simulatorPoolMinFreeMemoryGB: Int {
+        didSet { d.set(simulatorPoolMinFreeMemoryGB, forKey: SimulatorPool.Policy.Key.minFreeMemoryGB) }
+    }
+    @Published var simulatorPoolWaitMinutes: Int {
+        didSet { d.set(simulatorPoolWaitMinutes, forKey: SimulatorPool.Policy.Key.waitMinutes) }
+    }
     /// Days an unused Copilot session folder is kept before the cleanup removes it.
     @Published var storageSessionRetentionDays: Int {
         didSet {
@@ -833,6 +844,9 @@ final class AppSettings: ObservableObject {
             "simulatorPoolPhone": simulatorPoolPhone,
             "simulatorPoolPhoneOS": simulatorPoolPhoneOS,
             "simulatorPoolDuoOS": simulatorPoolDuoOS,
+            "simulatorPoolMaxBooted": simulatorPoolMaxBooted,
+            "simulatorPoolMinFreeMemoryGB": simulatorPoolMinFreeMemoryGB,
+            "simulatorPoolWaitMinutes": simulatorPoolWaitMinutes,
             "openAIEndpointEnabled": openAIEndpointEnabled,
             "openAIEndpointPort": openAIEndpointPort,
             "openAIEndpointModel": openAIEndpointModel,
@@ -971,6 +985,9 @@ final class AppSettings: ObservableObject {
         }
         str("simulatorPoolPhoneOS") { self.simulatorPoolPhoneOS = $0.trimmingCharacters(in: .whitespaces) }
         str("simulatorPoolDuoOS") { self.simulatorPoolDuoOS = $0.trimmingCharacters(in: .whitespaces) }
+        int("simulatorPoolMaxBooted", SimulatorPool.Policy.maxBootedRange) { self.simulatorPoolMaxBooted = $0 }
+        int("simulatorPoolMinFreeMemoryGB", SimulatorPool.Policy.minFreeMemoryRange) { self.simulatorPoolMinFreeMemoryGB = $0 }
+        int("simulatorPoolWaitMinutes", SimulatorPool.Policy.waitRange) { self.simulatorPoolWaitMinutes = $0 }
         bool("openAIEndpointEnabled") { self.openAIEndpointEnabled = $0 }
         int("openAIEndpointPort", 1...65535) { self.openAIEndpointPort = $0 }
         // "copilot:gpt-5.6-sol", a bare backend name, or empty for the backend's default.
@@ -1069,6 +1086,9 @@ final class AppSettings: ObservableObject {
         simulatorPoolPhone = simulatorPolicy.phone
         simulatorPoolPhoneOS = simulatorPolicy.phoneOS
         simulatorPoolDuoOS = simulatorPolicy.duoOS
+        simulatorPoolMaxBooted = simulatorPolicy.maxBooted
+        simulatorPoolMinFreeMemoryGB = simulatorPolicy.minFreeMemoryGB
+        simulatorPoolWaitMinutes = simulatorPolicy.waitMinutes
         openAIEndpointEnabled = d.bool(forKey: "openAIEndpointEnabled")
         let storedEndpointPort = d.integer(forKey: "openAIEndpointPort")
         openAIEndpointPort = (1...65535).contains(storedEndpointPort) ? storedEndpointPort : OpenAIEndpoint.defaultPort

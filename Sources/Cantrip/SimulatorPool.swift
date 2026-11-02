@@ -31,20 +31,72 @@ enum SimulatorPool {
         var phoneOS = ""
         /// The iPhone Duo's iOS version when a request names none (each version has its own simulator).
         var duoOS = "27.1"
+        /// Pool and temporary simulators booted at once; a leased one counts before it boots.
+        var maxBooted = 2
+        /// Nothing new boots while free plus compressible memory is below this (GB; 0 turns it off)
+        /// or macOS reports memory pressure.
+        var minFreeMemoryGB = 4
+        /// How long `acquire` waits in line for room before giving up.
+        var waitMinutes = 10
+        /// Seconds between checks while waiting.
+        var pollSeconds = 3.0
 
         enum Key {
             static let phone = "simulatorPoolPhone"
             static let phoneOS = "simulatorPoolPhoneOS"
             static let duoOS = "simulatorPoolDuoOS"
+            static let maxBooted = "simulatorPoolMaxBooted"
+            static let minFreeMemoryGB = "simulatorPoolMinFreeMemoryGB"
+            static let waitMinutes = "simulatorPoolWaitMinutes"
         }
+
+        static let maxBootedRange = 1...8
+        static let minFreeMemoryRange = 0...64
+        static let waitRange = 0...120
 
         static func standard(_ defaults: UserDefaults = .standard) -> Policy {
             var policy = Policy()
             func text(_ key: String) -> String? { defaults.string(forKey: key)?.trimmingCharacters(in: .whitespaces) }
+            func number(_ key: String, _ range: ClosedRange<Int>) -> Int? {
+                (defaults.object(forKey: key) as? NSNumber).map { min(max($0.intValue, range.lowerBound), range.upperBound) }
+            }
             if let phone = text(Key.phone), !phone.isEmpty { policy.phone = phone }
             if let os = text(Key.phoneOS) { policy.phoneOS = os }
             if let os = text(Key.duoOS) { policy.duoOS = os }
+            if let value = number(Key.maxBooted, maxBootedRange) { policy.maxBooted = value }
+            if let value = number(Key.minFreeMemoryGB, minFreeMemoryRange) { policy.minFreeMemoryGB = value }
+            if let value = number(Key.waitMinutes, waitRange) { policy.waitMinutes = value }
             return policy
+        }
+    }
+
+    /// The Mac's memory, checked before another simulator may boot.
+    struct Memory: Equatable {
+        /// `kern.memorystatus_vm_pressure_level`: 1 normal, 2 warning, 4 critical.
+        var pressureLevel: Int
+        /// Free plus compressible memory: `kern.memorystatus_level` (what `memory_pressure` calls
+        /// "System-wide memory free percentage") of physical memory.
+        var availableBytes: Int64
+
+        static let unknown = Memory(pressureLevel: 1, availableBytes: .max)
+
+        var isUnderPressure: Bool { pressureLevel >= 2 }
+
+        static func current() -> Memory {
+            guard let percent = sysctl("kern.memorystatus_level"), let total = sysctl("hw.memsize"), total > 0 else {
+                return .unknown
+            }
+            return Memory(pressureLevel: Int(sysctl("kern.memorystatus_vm_pressure_level") ?? 1),
+                          availableBytes: total / 100 * percent)
+        }
+
+        private static func sysctl(_ name: String) -> Int64? {
+            var size = 0
+            guard sysctlbyname(name, nil, &size, nil, 0) == 0, size == 4 || size == 8 else { return nil }
+            var value: Int64 = 0
+            guard sysctlbyname(name, &value, &size, nil, 0) == 0 else { return nil }
+            // A 4-byte value fills the low half (little-endian), sign-extended here.
+            return size == 4 ? Int64(Int32(truncatingIfNeeded: value)) : value
         }
     }
 
@@ -230,11 +282,35 @@ enum SimulatorPool {
         var shortID: String { String(id.prefix(8)) }
     }
 
+    /// A process waiting in `acquire` for room, first come first served.
+    struct Waiter: Codable, Equatable {
+        var id: String
+        var tab: String?
+        var pid: Int32
+        /// "iPhone 17 Pro, iOS 27.0"
+        var wants: String
+        var since: Date
+        /// Refreshed on every check; one not seen for a while gave up.
+        var seen: Date
+    }
+
     struct State: Codable, Equatable {
         var pool: [Member] = []
         var leases: [Lease] = []
         /// Temporary copies the pool made, by UDID, with when.
         var temporaries: [String: Date] = [:]
+        var waiting: [Waiter] = []
+
+        init() {}
+
+        // Older files lack newer fields; a missing one mustn't empty the pool.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            pool = try container.decodeIfPresent([Member].self, forKey: .pool) ?? []
+            leases = try container.decodeIfPresent([Lease].self, forKey: .leases) ?? []
+            temporaries = try container.decodeIfPresent([String: Date].self, forKey: .temporaries) ?? [:]
+            waiting = try container.decodeIfPresent([Waiter].self, forKey: .waiting) ?? []
+        }
 
         func isTemporary(_ device: Device) -> Bool {
             temporaries[device.udid] != nil || device.name.hasPrefix(SimulatorPool.temporaryPrefix)
@@ -288,6 +364,10 @@ enum SimulatorPool {
         var commandLines: () -> [String] = { StorageUpkeep.ProcessSnapshot.current().commandLines }
         var now: () -> Date = Date.init
         var policy = Policy.standard()
+        var memory: () -> Memory = Memory.current
+        var sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
+        var processID = getpid()
+        var isRunning: (Int32) -> Bool = { kill($0, 0) == 0 || errno == EPERM }
     }
 
     /// For agents' system instructions: lease simulators instead of making them.
@@ -299,6 +379,8 @@ enum SimulatorPool {
         particular iPhone model or iOS version unless the bug only happens there (then add \
         `--exact`, which makes a temporary copy). Only the iPhone Duo has a simulator per iOS \
         version (`--device 'iPhone Duo' [--os 27.1]`); iPad, Apple Watch and Apple TV have one each. \
+        A tab has one simulator at a time (leasing another kind releases the first), and only a \
+        couple run at once, so `acquire` may wait for one; don't work around it. \
         Use it only by UDID: `xcodebuild -destination 'id=UDID'`, `xcrun simctl boot UDID`, \
         `maestro --device UDID`. Never make simulators with `simctl create` or `simctl clone`, and \
         never delete or erase them. When you're done, `\(command) sim release` shuts it down (and \
@@ -453,62 +535,179 @@ enum SimulatorPool {
         var description: String
         /// The tab already held this lease; it was renewed.
         var renewed = false
-        /// How the request was mapped onto the pool, when it isn't what was asked for.
+        /// How the request was mapped onto the pool, and what happened to the tab's other leases.
         var note: String?
+        /// The tab's leases on other simulators, ended first: a tab has one at a time.
+        var released: [Lease] = []
     }
 
-    /// Leases a simulator for `device` on `os` (see `resolve`). The pool's own when it's free,
-    /// otherwise a temporary copy. A tab asking again for the same kind gets its lease back.
+    private enum Attempt {
+        case acquired(Acquired)
+        case waiting(String)
+    }
+
+    /// Leases a simulator for `device` on `os` (see `resolve`): the pool's own when it's free,
+    /// otherwise a temporary copy. A tab asking again for the same kind gets its lease back; asking
+    /// for another kind ends its other leases first, unless a running process still uses one.
+    /// Nothing new boots past `Policy.maxBooted` or while memory is short: the request waits in
+    /// line, first come first served, for up to `wait` seconds (`Policy.waitMinutes` when nil),
+    /// telling `progress` why, and fails if no room comes.
     static func acquire(device: String, os: String?, exact: Bool = false, tab: String?, hours: Double? = nil,
-                        context c: Context = Context()) throws -> Acquired {
+                        wait: TimeInterval? = nil, context c: Context = Context(),
+                        progress: (String) -> Void = { _ in }) throws -> Acquired {
         let types = try c.simctl.deviceTypes(), runtimes = try c.simctl.runtimes()
-        return try c.store.locked { state in
-            let target = try resolve(device: device, os: os, exact: exact, types: types, runtimes: runtimes,
-                                     pool: state.pool, policy: c.policy)
-            let (type, runtime, key, description) = (target.type, target.runtime, target.key, target.description)
-            let now = c.now()
-            var devices = try c.simctl.devices()
-            reap(&state, now: now, simctl: c.simctl)
-            let lifetime = (hours ?? (tab == nil ? defaultLeaseHours : tabLeaseHours)) * 3_600
-            if let tab, let index = state.leases.firstIndex(where: { $0.tab == tab && $0.key == key }),
-               devices.contains(where: { $0.udid == state.leases[index].udid }) {
-                state.leases[index].expiresAt = now.addingTimeInterval(lifetime)
-                let lease = state.leases[index]
-                return Acquired(lease: lease, name: devices.first { $0.udid == lease.udid }?.name ?? "", description: description,
-                                renewed: true, note: target.note)
+        let patience = max(wait ?? Double(c.policy.waitMinutes) * 60, 0)
+        let start = c.now()
+        let deadline = start.addingTimeInterval(patience)
+        let waiter = Waiter(id: UUID().uuidString.lowercased(), tab: tab, pid: c.processID, wants: device, since: start, seen: start)
+        var told: (reason: String, at: Date)?
+        while true {
+            let attempt = try c.store.locked { state in
+                try attemptAcquire(device: device, os: os, exact: exact, tab: tab, hours: hours, types: types,
+                                   runtimes: runtimes, waiter: waiter, queue: patience > 0, state: &state, context: c)
             }
-            let id = UUID().uuidString.lowercased()
-            let copyName = "\(temporaryPrefix) · \(type.name) · \(runtime.name) · \(id.prefix(4))"
-            if target.temporaryOnly {
-                let udid = try c.simctl.create(copyName, type: type.identifier, runtime: runtime.identifier)
-                state.temporaries[udid] = now
-                let lease = Lease(id: id, udid: udid, key: key, temporary: true, tab: tab,
-                                  acquiredAt: now, expiresAt: now.addingTimeInterval(lifetime))
-                state.leases.append(lease)
-                return Acquired(lease: lease, name: copyName, description: description,
-                                note: "The pool doesn't keep \(description), so this is a temporary copy.")
-            }
-            let member = try poolMember(key: key, type: type, runtime: runtime, state: &state, devices: &devices, simctl: c.simctl)
-            let lines = c.commandLines()
-            let busy = state.leases.contains { $0.udid == member.udid } || lines.contains { $0.contains(member.udid) }
-            var udid = member.udid
-            var name = devices.first { $0.udid == member.udid }?.name ?? ""
-            if busy {
-                // A copy of a shut-down pool simulator keeps its apps; a booted one can't be copied.
-                name = copyName
-                let source = devices.first { $0.udid == member.udid }
-                if source?.isBooted == false, let copy = try? c.simctl.clone(member.udid, name: name), !copy.isEmpty {
-                    udid = copy
-                } else {
-                    udid = try c.simctl.create(name, type: type.identifier, runtime: runtime.identifier)
+            switch attempt {
+            case .acquired(let acquired):
+                return acquired
+            case .waiting(let reason):
+                let now = c.now()
+                guard now < deadline else {
+                    if patience > 0 { _ = try? c.store.locked { $0.waiting.removeAll { $0.id == waiter.id } } }
+                    throw Failure(message: patience > 0
+                        ? "No simulator came free in \(duration(patience)): \(reason) Try again later; "
+                            + "`cantrip sim list` shows who has them."
+                        : "No simulator is free right now: \(reason)")
                 }
-                state.temporaries[udid] = now
+                if told == nil || (told?.reason != reason && now.timeIntervalSince(told!.at) >= 30) {
+                    progress("Waiting for a simulator until \(deadline.formatted(date: .omitted, time: .shortened)): \(reason)")
+                    told = (reason, now)
+                }
+                c.sleep(max(min(c.policy.pollSeconds, deadline.timeIntervalSince(now)), 0))
             }
-            let lease = Lease(id: id, udid: udid, key: key, temporary: busy, tab: tab,
-                              acquiredAt: now, expiresAt: now.addingTimeInterval(lifetime))
-            state.leases.append(lease)
-            return Acquired(lease: lease, name: name, description: description, note: target.note)
         }
+    }
+
+    private static func duration(_ seconds: TimeInterval) -> String {
+        seconds < 90 ? "\(Int(seconds)) seconds" : "\(Int((seconds / 60).rounded())) minutes"
+    }
+
+    /// One try at `acquire`, holding the lock: a lease, or why it has to wait (then it's in line).
+    private static func attemptAcquire(device: String, os: String?, exact: Bool, tab: String?, hours: Double?,
+                                       types: [DeviceType], runtimes: [Runtime], waiter: Waiter, queue: Bool,
+                                       state: inout State, context c: Context) throws -> Attempt {
+        let target = try resolve(device: device, os: os, exact: exact, types: types, runtimes: runtimes,
+                                 pool: state.pool, policy: c.policy)
+        let (type, runtime, key, description) = (target.type, target.runtime, target.key, target.description)
+        let now = c.now()
+        var devices = try c.simctl.devices()
+        reap(&state, now: now, simctl: c.simctl)
+        let lifetime = (hours ?? (tab == nil ? defaultLeaseHours : tabLeaseHours)) * 3_600
+        func done(_ acquired: Acquired) -> Attempt {
+            state.waiting.removeAll { $0.id == waiter.id }
+            return .acquired(acquired)
+        }
+        if let tab, let index = state.leases.firstIndex(where: { $0.tab == tab && $0.key == key }),
+           devices.contains(where: { $0.udid == state.leases[index].udid }) {
+            state.leases[index].expiresAt = now.addingTimeInterval(lifetime)
+            let lease = state.leases[index]
+            return done(Acquired(lease: lease, name: devices.first { $0.udid == lease.udid }?.name ?? "",
+                                 description: description, renewed: true, note: target.note))
+        }
+        let lines = c.commandLines()
+        func inUse(_ udid: String) -> Bool { lines.contains { $0.contains(udid) } }
+        // A tab has one simulator at a time: its others end first, unless a process still uses one.
+        let others = tab.map { tab in state.leases.filter { $0.tab == tab && $0.key != key } } ?? []
+        let ending = others.filter { !inUse($0.udid) }
+        let kept = others.filter { inUse($0.udid) }
+        let endingIDs = Set(ending.map(\.id))
+        let staying = state.leases.filter { !endingIDs.contains($0.id) }
+
+        let member = target.temporaryOnly ? nil
+            : try poolMember(key: key, type: type, runtime: runtime, state: &state, devices: &devices, simctl: c.simctl)
+        let reuse = member.flatMap { member in
+            staying.contains { $0.udid == member.udid } || inUse(member.udid) ? nil : member.udid
+        }
+
+        // Room: the pool's and temporary simulators that are booted or leased, less the tab's ending ones.
+        let snapshot = state
+        let booted = Set(devices.filter { $0.isBooted && (snapshot.member($0.udid) != nil || snapshot.isTemporary($0)) }.map(\.udid))
+        let before = Set(state.leases.map(\.udid)).union(booted)
+        let freeing = Set(ending.map(\.udid)).subtracting(staying.map(\.udid))
+        let occupied = Set(staying.map(\.udid)).union(booted).subtracting(freeing)
+        let swapping = before.count > occupied.count
+        if reuse.map({ !occupied.contains($0) }) ?? true {
+            var reasons: [String] = []
+            if occupied.count >= c.policy.maxBooted, !swapping {
+                let holders = occupied.sorted().map { udid -> String in
+                    if let lease = staying.first(where: { $0.udid == udid }) {
+                        return "\(describe(lease.key)) for " + (lease.tab.map { "tab \($0.prefix(8))" } ?? "a lease outside a tab")
+                    }
+                    return "\(devices.first { $0.udid == udid }?.name ?? udid), booted without a lease"
+                }
+                reasons.append("\(occupied.count) of \(c.policy.maxBooted) allowed at once are in use "
+                    + "(\(holders.joined(separator: "; "))); the limit is the \(Policy.Key.maxBooted) setting")
+            }
+            if !swapping {
+                let memory = c.memory()
+                let needed = Int64(c.policy.minFreeMemoryGB) * 1_000_000_000
+                if memory.isUnderPressure || (needed > 0 && memory.availableBytes < needed) {
+                    reasons.append("memory is short (\(StorageUpkeep.format(memory.availableBytes)) free or compressible, "
+                        + "needs \(StorageUpkeep.format(needed))\(memory.isUnderPressure ? ", and macOS reports memory pressure" : ""))")
+                }
+                let staleAfter = max(60, c.policy.pollSeconds * 10)
+                state.waiting.removeAll {
+                    $0.id != waiter.id && (now.timeIntervalSince($0.seen) > staleAfter || !c.isRunning($0.pid))
+                }
+                let ahead = state.waiting.prefix { $0.id != waiter.id }.count
+                if ahead > 0 { reasons.append(ahead == 1 ? "1 request is ahead of yours" : "\(ahead) requests are ahead of yours") }
+            }
+            if !reasons.isEmpty {
+                if queue {
+                    var entry = waiter
+                    entry.wants = description
+                    entry.seen = now
+                    if let index = state.waiting.firstIndex(where: { $0.id == waiter.id }) {
+                        state.waiting[index] = entry
+                    } else {
+                        state.waiting.insert(entry, at: state.waiting.firstIndex { $0.since > waiter.since } ?? state.waiting.count)
+                    }
+                }
+                return .waiting(reasons.joined(separator: "; ") + ".")
+            }
+        }
+
+        end(ending, in: &state, simctl: c.simctl)
+        let id = UUID().uuidString.lowercased()
+        var notes = [target.note].compactMap { $0 }
+        let udid: String, name: String
+        if let reuse {
+            udid = reuse
+            name = devices.first { $0.udid == reuse }?.name ?? ""
+        } else {
+            // A copy of a shut-down pool simulator keeps its apps; a booted one can't be copied.
+            name = "\(temporaryPrefix) · \(type.name) · \(runtime.name) · \(id.prefix(4))"
+            if let member, devices.first(where: { $0.udid == member.udid })?.isBooted == false,
+               let copy = try? c.simctl.clone(member.udid, name: name), !copy.isEmpty {
+                udid = copy
+            } else {
+                udid = try c.simctl.create(name, type: type.identifier, runtime: runtime.identifier)
+            }
+            state.temporaries[udid] = now
+            if target.temporaryOnly { notes.append("The pool doesn't keep \(description), so this is a temporary copy.") }
+        }
+        if !ending.isEmpty {
+            notes.append("Released your lease on \(ending.map { describe($0.key) }.joined(separator: " and ")) first: "
+                + "a tab has one simulator at a time.")
+        }
+        if !kept.isEmpty {
+            notes.append("Your lease on \(kept.map { describe($0.key) }.joined(separator: " and ")) stays: "
+                + "a running process still uses it.")
+        }
+        let lease = Lease(id: id, udid: udid, key: key, temporary: reuse == nil, tab: tab,
+                          acquiredAt: now, expiresAt: now.addingTimeInterval(lifetime))
+        state.leases.append(lease)
+        return done(Acquired(lease: lease, name: name, description: description,
+                             note: notes.isEmpty ? nil : notes.joined(separator: " "), released: ending))
     }
 
     /// The pool's simulator for `key`: the recorded one, else the most recently used existing one
