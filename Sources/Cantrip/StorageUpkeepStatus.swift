@@ -2,17 +2,24 @@ import SwiftUI
 
 /// Runs `StorageUpkeep` in the host about once a day: 10 minutes after launch, then whenever a
 /// day has passed since the last cleanup (including one run with `cantrip cleanup`), and on
-/// request from Settings. Work happens off the main thread, one cleanup at a time.
+/// request from Settings. Work happens off the main thread, one cleanup at a time. The simulator
+/// pool's own upkeep (`SimulatorPool.tidy`) runs every few minutes, whether or not the daily
+/// cleanup is on: idle simulators shut down and members the pool no longer keeps go once free.
 @MainActor
 final class StorageUpkeepStatus: ObservableObject {
     static let shared = StorageUpkeepStatus()
     static let interval: TimeInterval = 24 * 60 * 60
     static let firstCheckDelay: TimeInterval = 10 * 60
     static let checkInterval: TimeInterval = 60 * 60
+    static let simulatorFirstCheckDelay: TimeInterval = 60
+    static let simulatorCheckInterval: TimeInterval = 5 * 60
 
     @Published private(set) var lastReport: StorageUpkeep.Report?
     @Published private(set) var isRunning = false
     private var timer: Timer?
+    private var simulatorTimer: Timer?
+    private var tidyingSimulators = false
+    private var lastSimulatorErrors: [String] = []
     private let stateDirectory = StorageUpkeep.Configuration.standard().stateDirectory
 
     private init() {
@@ -26,6 +33,39 @@ final class StorageUpkeepStatus: ObservableObject {
         }
         timer = Timer.scheduledTimer(withTimeInterval: Self.checkInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.runIfDue() }
+        }
+        simulatorTimer?.invalidate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.simulatorFirstCheckDelay) { [weak self] in
+            self?.tidySimulators()
+        }
+        simulatorTimer = Timer.scheduledTimer(withTimeInterval: Self.simulatorCheckInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tidySimulators() }
+        }
+    }
+
+    /// `SimulatorPool.tidy`, logging what it did to the host log and the cleanup's removal log.
+    func tidySimulators() {
+        guard !tidyingSimulators else { return }
+        tidyingSimulators = true
+        let logFile = stateDirectory.appendingPathComponent("storage-upkeep.log")
+        DispatchQueue.global(qos: .utility).async {
+            let report = SimulatorPool.tidy { line in
+                Log.write("simulators: \(line)")
+                StorageUpkeep.appendLog(line, to: logFile)
+            }
+            if let report, report.removedCount > 0 {
+                let count = report.removedCount == 1 ? "1 simulator" : "\(report.removedCount) simulators"
+                Log.write("simulators: the pool's upkeep freed \(StorageUpkeep.format(report.bytesRemoved)) (\(count))")
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.tidyingSimulators = false
+                    let errors = report?.errors ?? []
+                    // The same failure every few minutes is logged once.
+                    if errors != self.lastSimulatorErrors { errors.forEach { Log.write("simulators: \($0)") } }
+                    self.lastSimulatorErrors = errors
+                }
+            }
         }
     }
 

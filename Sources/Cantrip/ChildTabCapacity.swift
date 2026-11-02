@@ -17,8 +17,9 @@ enum ChildTabCapacity {
     /// 1-minute load per core at which auto-fork waits, and at which it runs one fewer.
     static let busyLoad = 1.0
     static let elevatedLoad = 0.7
-    /// Simulator leases at which work that needs a Simulator waits.
-    static let simulatorLeaseLimit = 3
+    /// Simulator leases at which work that needs a Simulator waits: as many as the pool lets run at
+    /// once (`simulatorPoolMaxBooted`).
+    static var simulatorLeaseLimit: Int { SimulatorPool.Policy.standard().maxBooted }
 
     struct Resources: Equatable {
         /// 1-minute load average.

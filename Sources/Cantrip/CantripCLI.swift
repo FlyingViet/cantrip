@@ -65,15 +65,25 @@ enum CantripCLI {
                                   Clone node_modules, Pods and SwiftPM folders into a new git worktree, copy-on-write,
                                   from a checkout installed from the same lockfiles (default: the repository's others)
       cantrip sim acquire --device NAME [--os VERSION]
-                                  Lease a simulator to this tab and print its UDID: the pool's for that device and
-                                  iOS version, or a temporary copy while another tab has it
+                                  Lease a simulator to this tab and print its UDID: the pool's for that kind, or a
+                                  temporary copy while another tab has it. Every iPhone but the Duo shares the pool's
+                                  one iPhone (simulatorPoolPhone); the Duo has one per iOS version (default
+                                  simulatorPoolDuoOS); iPad, Apple Watch and Apple TV have one each. A tab has one
+                                  at a time: leasing another kind releases its first
+          --exact                 That exact model and iOS version (a temporary copy unless the pool keeps it)
+          --wait SECONDS          How long to wait in line when simulatorPoolMaxBooted are running or memory is
+                                  short (default simulatorPoolWaitMinutes; 0 fails at once)
           --hours N               How long the lease lasts (default: until this tab's turn ends; 4 outside a tab)
           --json
       cantrip sim release [LEASE|UDID | --all]
                                   End a lease (default: all of this tab's). Shuts the simulator down; a temporary
                                   copy is deleted
       cantrip sim list [--json]   The pool's simulators, leases and temporary copies
-      cantrip sim adopt UDID      Make an existing simulator the pool's for its device type and iOS version
+      cantrip sim adopt UDID      Make an existing simulator the pool's for its kind
+      cantrip sim tidy [--dry-run]
+                                  The pool's upkeep now (Cantrip runs it every 5 minutes): shut down simulators idle
+                                  for simulatorPoolIdleMinutes, delete members the pool no longer keeps once free,
+                                  and old temporary copies; prints the space freed
       cantrip api [--json]        The OpenAI-compatible API: where it listens, its backends and calls per consumer
       cantrip api key new         Make a key for requests that come through a proxy (printed once)
       cantrip api key clear       Remove it: proxied requests are refused again
@@ -365,15 +375,16 @@ enum CantripCLI {
     // MARK: - sim
 
     enum SimCommand: Equatable {
-        case acquire(device: String, os: String?, hours: Double?, json: Bool)
+        case acquire(device: String, os: String?, exact: Bool, hours: Double?, wait: Double?, json: Bool)
         case release(target: String?, all: Bool)
         case list(json: Bool)
         case adopt(udid: String)
+        case tidy(dryRun: Bool)
 
         static func parse(_ arguments: [String]) throws -> SimCommand {
             var words: [String] = []
-            var device: String?, os: String?, hours: Double?
-            var json = false, all = false
+            var device: String?, os: String?, hours: Double?, wait: Double?
+            var json = false, all = false, exact = false, dryRun = false
             var index = 0
             func value(_ option: String) throws -> String {
                 index += 1
@@ -392,21 +403,28 @@ enum CantripCLI {
                         throw Failure(message: "--hours needs a number of hours up to 168.", code: 2)
                     }
                     hours = number
+                case "--wait":
+                    guard let number = Double(try value(argument)), number >= 0, number <= 7_200 else {
+                        throw Failure(message: "--wait needs a number of seconds up to 7200.", code: 2)
+                    }
+                    wait = number
                 case "--json": json = true
                 case "--all": all = true
+                case "--exact": exact = true
+                case "--dry-run": dryRun = true
                 default:
                     guard !argument.hasPrefix("--") else { throw Failure(message: "Unknown option \(argument).", code: 2) }
                     words.append(argument)
                 }
                 index += 1
             }
-            let usage = "Usage: cantrip sim acquire --device NAME [--os VERSION] | release [LEASE|UDID|--all] | list | adopt UDID (see `cantrip help`)."
+            let usage = "Usage: cantrip sim acquire --device NAME [--os VERSION] [--exact] | release [LEASE|UDID|--all] | list | adopt UDID | tidy [--dry-run] (see `cantrip help`)."
             switch words.first {
             case "acquire":
                 guard words.count == 1, let device, !device.isEmpty else {
-                    throw Failure(message: "Name the device: cantrip sim acquire --device 'iPhone 17 Pro' [--os 27.0].", code: 2)
+                    throw Failure(message: "Name the device: cantrip sim acquire --device iPhone (or 'iPhone Duo' [--os 27.1]).", code: 2)
                 }
-                return .acquire(device: device, os: os, hours: hours, json: json)
+                return .acquire(device: device, os: os, exact: exact, hours: hours, wait: wait, json: json)
             case "release":
                 guard words.count <= 2, !(all && words.count == 2) else { throw Failure(message: usage, code: 2) }
                 return .release(target: words.count == 2 ? words[1] : nil, all: all)
@@ -416,6 +434,9 @@ enum CantripCLI {
             case "adopt":
                 guard words.count == 2 else { throw Failure(message: usage, code: 2) }
                 return .adopt(udid: words[1])
+            case "tidy":
+                guard words.count == 1 else { throw Failure(message: usage, code: 2) }
+                return .tidy(dryRun: dryRun)
             default:
                 throw Failure(message: usage, code: 2)
             }
@@ -426,8 +447,9 @@ enum CantripCLI {
         let tab = ProcessInfo.processInfo.environment[TabInsight.tabIDVariable].flatMap { $0.isEmpty ? nil : $0 }
         func standardError(_ text: String) { FileHandle.standardError.write(Data((text + "\n").utf8)) }
         switch try SimCommand.parse(arguments) {
-        case .acquire(let device, let os, let hours, let json):
-            let acquired = try SimulatorPool.acquire(device: device, os: os, tab: tab, hours: hours)
+        case .acquire(let device, let os, let exact, let hours, let wait, let json):
+            let acquired = try SimulatorPool.acquire(device: device, os: os, exact: exact, tab: tab, hours: hours, wait: wait,
+                                                     progress: standardError)
             let lease = acquired.lease
             if json {
                 let encoder = JSONEncoder()
@@ -438,9 +460,11 @@ enum CantripCLI {
             }
             // The UDID alone on standard output, so `UDID=$(cantrip sim acquire ...)` works.
             print(lease.udid)
-            let kind = lease.temporary ? "a temporary copy (the pool's is busy; it's deleted on release)" : "the pool's simulator"
+            let kind = !lease.temporary ? "the pool's simulator"
+                : exact ? "a temporary copy (deleted on release)" : "a temporary copy (the pool's is busy; it's deleted on release)"
             let until = tab != nil && hours == nil ? "until this tab's turn ends"
                 : "until \(lease.expiresAt.formatted(date: .omitted, time: .shortened))"
+            if let note = acquired.note { standardError(note) }
             standardError("\(acquired.renewed ? "Still yours" : "Leased"): \(acquired.name) (\(acquired.description)), \(kind), \(until).")
             standardError("Use it by UDID: xcodebuild -destination 'id=\(lease.udid)', xcrun simctl boot \(lease.udid), maestro --device \(lease.udid).")
             standardError("When done: cantrip sim release \(lease.shortID)")
@@ -459,9 +483,23 @@ enum CantripCLI {
         case .adopt(let udid):
             let member = try SimulatorPool.adopt(udid)
             print("\(member.udid) is now the pool's \(SimulatorPool.describe(member.key)).")
+        case .tidy(let dryRun):
+            guard let report = SimulatorPool.tidy(dryRun: dryRun, log: { print($0) }) else {
+                print("The pool is empty: nothing to tidy.")
+                return 0
+            }
+            report.errors.forEach(standardError)
+            if report.actions.isEmpty {
+                print(report.errors.isEmpty ? "Nothing to tidy." : "Nothing was tidied.")
+            } else {
+                let count = report.removedCount == 1 ? "1 simulator" : "\(report.removedCount) simulators"
+                print("\(dryRun ? "Would free" : "Freed") \(StorageUpkeep.format(report.bytesRemoved)) (\(count) deleted or erased).")
+            }
+            return report.errors.isEmpty ? 0 : 1
         case .list(let json):
             let state = SimulatorPool.Store.standard.read()
-            let devices = (try? SimulatorPool.Simctl.system.devices()) ?? []
+            let simctl = SimulatorPool.Simctl.system
+            let devices = (try? simctl.devices()) ?? []
             if json {
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -473,12 +511,28 @@ enum CantripCLI {
                 guard let device = devices.first(where: { $0.udid == udid }) else { return "\(udid) (missing)" }
                 return "\(udid)  \(device.state.lowercased()), \(StorageUpkeep.format(device.dataBytes)), “\(device.name)”"
             }
-            print(state.pool.isEmpty ? "The pool is empty: `cantrip sim acquire` fills it." : "Pool:")
-            for member in state.pool.sorted(by: { $0.key < $1.key }) {
+            let policy = SimulatorPool.Policy.standard()
+            let phoneKey = (try? simctl.deviceTypes()).flatMap { types in
+                (try? simctl.runtimes()).flatMap { SimulatorPool.phoneKey(policy, types: types, runtimes: $0) }
+            }
+            let leaving = SimulatorPool.leaving(state, devices: devices, phoneKey: phoneKey)
+            func member(_ member: SimulatorPool.Member) {
                 let holders = state.leases.filter { $0.udid == member.udid }
                 print("  \(SimulatorPool.describe(member.key)): \(line(member.udid))"
                     + (holders.isEmpty ? "" : "  leased \(holders.map(\.shortID).joined(separator: ", "))"))
             }
+            let members = state.pool.sorted { $0.key < $1.key }
+            print(state.pool.isEmpty ? "The pool is empty: `cantrip sim acquire` fills it." : "Pool:")
+            members.filter { leaving[$0.udid] == nil }.forEach(member)
+            if !leaving.isEmpty { print("Leaving the pool (deleted by its upkeep once free):") }
+            for leaver in members where leaving[leaver.udid] != nil {
+                member(leaver)
+                print("    \(leaving[leaver.udid]!)")
+            }
+            let booted = devices.filter { device in
+                device.isBooted && (state.member(device.udid) != nil || state.isTemporary(device))
+            }.count
+            print("Booted: \(booted) (at most \(policy.maxBooted) at once, \(SimulatorPool.Policy.Key.maxBooted)).")
             let temporary = state.leases.filter(\.temporary)
             if !temporary.isEmpty { print("Temporary copies:") }
             for lease in temporary { print("  \(SimulatorPool.describe(lease.key)): \(line(lease.udid))  leased \(lease.shortID)") }
@@ -486,6 +540,11 @@ enum CantripCLI {
             for lease in state.leases {
                 print("  \(lease.shortID) \(SimulatorPool.describe(lease.key)) \(lease.udid) "
                     + (lease.tab.map { "tab \($0.prefix(8))" } ?? "until \(lease.expiresAt.formatted(date: .omitted, time: .shortened))"))
+            }
+            if !state.waiting.isEmpty { print("Waiting in line:") }
+            for waiter in state.waiting {
+                print("  \(waiter.wants) for " + (waiter.tab.map { "tab \($0.prefix(8))" } ?? "a command outside a tab")
+                    + " since \(waiter.since.formatted(date: .omitted, time: .shortened))")
             }
         }
         return 0
