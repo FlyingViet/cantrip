@@ -13,11 +13,13 @@ import { TerminalButton } from "./transcript/TerminalPane";
 export const DELIVERY_TITLES: Record<DeliveryMode, string> = { auto: "Auto", queue: "Queue", interrupt: "Redirect", inject: "Inject" };
 
 function title(): string {
+  if (nav.logID.value) return "Background Log";
   if (nav.openTabID.value) return remote.tabTitle(remote.selectedSession.value);
   return nav.SECTIONS.find((item) => item.id === nav.section.value)?.title ?? "Chat";
 }
 
 function subtitle(): string {
+  if (nav.logID.value) return "Cantrip Home · reports from background runs";
   // Tasks and Artifacts have only a title on the Mac.
   if (!nav.openTabID.value && nav.section.value !== "chat") return "";
   if (nav.paused.value) return "Agent paused";
@@ -34,6 +36,7 @@ function subtitle(): string {
 
 export function Toolbar(): JSX.Element {
   const tab = nav.openTabID.value !== null;
+  const log = nav.logID.value !== null;
   return (
     <header class="toolbar">
       {nav.sidebarHidden.value ? (
@@ -41,12 +44,31 @@ export function Toolbar(): JSX.Element {
           <Icon name="sidebar.left" size={18} />
         </button>
       ) : null}
+      {log ? (
+        <div class="glass-group">
+          <button type="button" class="glass-btn" aria-label="Back to Background" title="Back to the Background runs"
+            data-id="home.background.log.back" onClick={() => nav.closeFullLog()}>
+            <Icon name="chevron.left" size={16} />
+            <span>Background</span>
+          </button>
+        </div>
+      ) : null}
       <div class="toolbar-title">
         <h1>{title()}</h1>
         {subtitle() ? <div class="subtitle">{subtitle()}</div> : null}
       </div>
-      {tab ? <TabToolbar /> : <HomeToolbar />}
+      {log ? <LogToolbar /> : tab ? <TabToolbar /> : <HomeToolbar />}
     </header>
+  );
+}
+
+function LogToolbar(): JSX.Element {
+  return (
+    <div class="glass-group">
+      <button type="button" class="glass-btn" aria-label="Back to Home" title="Back to Cantrip Home's chat" onClick={() => nav.showHome("chat")}>
+        <Icon name="house" size={18} />
+      </button>
+    </div>
   );
 }
 

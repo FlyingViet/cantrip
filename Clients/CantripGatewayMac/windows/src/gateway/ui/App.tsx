@@ -39,9 +39,9 @@ export function runCommand(command: GatewayCommand): void {
     case "background": nav.showBackground(); break;
     case "newTab": void nav.createTab(); break;
     case "newMessage": nav.openChat(); break;
-    case "voiceMode": if (!nav.paused.value && remote.selectedID.value) nav.sheet.value = { kind: "voiceMode" }; break;
+    case "voiceMode": if (!nav.paused.value && remote.selectedID.value && !nav.logID.value) nav.sheet.value = { kind: "voiceMode" }; break;
     case "togglePause": nav.paused.value = !nav.paused.value; break;
-    case "modelSettings": nav.openModelSettings(remote.selectedSession.value); break;
+    case "modelSettings": if (!nav.logID.value) nav.openModelSettings(remote.selectedSession.value); break;
     case "startFresh": {
       const session = remote.selectedSession.value;
       if (nav.openTabID.value && session && startFreshSupport(session) === true && !isBusy(session) && !remote.isMutating.value) {
@@ -53,7 +53,7 @@ export function runCommand(command: GatewayCommand): void {
     case "memory": nav.sheet.value = { kind: "memory" }; break;
     case "builds": nav.sheet.value = { kind: "builds" }; break;
     case "mascot": nav.sheet.value = { kind: "mascot" }; break;
-    case "toggleTerminal": if (nav.section.value === "chat" || nav.openTabID.value) nav.terminalOpen.value = !nav.terminalOpen.value; break;
+    case "toggleTerminal": if (!nav.logID.value && (nav.section.value === "chat" || nav.openTabID.value)) nav.terminalOpen.value = !nav.terminalOpen.value; break;
     case "githubSignIn": {
       // The Mac's gh CLI signs in with GitHub's device flow; Home's chat shows the code.
       const home = remote.homeSummary.value;
@@ -116,6 +116,7 @@ export function App(): JSX.Element {
 }
 
 function Detail(): JSX.Element {
+  if (nav.logID.value) return <ChatView key="log" isTab={false} log />;
   if (nav.openTabID.value) return <ChatView key="tab" isTab />;
   switch (nav.section.value) {
     case "tasks": return <TasksView />;

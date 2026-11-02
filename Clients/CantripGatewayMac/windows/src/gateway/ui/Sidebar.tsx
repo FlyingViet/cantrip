@@ -175,7 +175,7 @@ function SidebarList(): JSX.Element {
     <div class="sidebar-list" ref={listRef} role="navigation" aria-label="Home and tabs" onKeyDown={onListKeyDown}>
       {hasHome ? nav.SECTIONS.map((item, index) => {
         const badge = sectionBadge(item.id);
-        const current = openID === null && nav.section.value === item.id;
+        const current = openID === null && nav.logID.value === null && nav.section.value === item.id;
         return (
           <button key={item.id} type="button" class="sidebar-row" aria-current={current ? "true" : "false"}
             title={`${item.title} (${shortcut(`Ctrl+${index + 1}`)})`} data-section={item.id}

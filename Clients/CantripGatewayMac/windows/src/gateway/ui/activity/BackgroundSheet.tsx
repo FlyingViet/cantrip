@@ -6,6 +6,7 @@ import { computed } from "@preact/signals";
 import type { ComponentChildren, JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { HomeBackgroundHandoff, HomeBackgroundQueuedRun, HomeBackgroundRun, InputDecision, InputRequest } from "../../api/types";
+import { backgroundLogID, FULL_LOG_HINT, FULL_LOG_LABEL } from "../../state/backgroundLog";
 import { now } from "../../state/clock";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
@@ -268,6 +269,7 @@ export function BackgroundSheet(props: { focusSessionID?: string; onClose: () =>
   const waiting = needsInputRuns(snapshot);
   const others = otherRuns(snapshot);
   const runKey = snapshot?.runs.map((run) => run.id).join(",") ?? "";
+  const hasLog = backgroundLogID(snapshot) !== null;
 
   // GET /home/background every 2 s while a run waits on the user, else every 5 s, while open.
   useEffect(() => {
@@ -373,6 +375,13 @@ export function BackgroundSheet(props: { focusSessionID?: string; onClose: () =>
 
   return (
     <Sheet title="Background" onClose={props.onClose} width={620} height={640} bodyClass="act-sheet-body"
+      actions={hasLog ? (
+        <>
+          <button type="button" class="btn" title={FULL_LOG_HINT} aria-describedby="act-full-log-hint" data-id="home.background.log"
+            onClick={(event) => { nav.openFullLog(event.detail === 0); }}>{FULL_LOG_LABEL}</button>
+          <span id="act-full-log-hint" class="sr-only">{FULL_LOG_HINT}</span>
+        </>
+      ) : undefined}
       footer={<button type="button" class="btn primary" onClick={props.onClose}>Done</button>}>
       <DisconnectedNotice text="Disconnected. Showing the last known status." />
       <div class="sr-only" role="status" aria-live="polite">{announcement}</div>
