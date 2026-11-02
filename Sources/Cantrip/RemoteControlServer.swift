@@ -3591,6 +3591,16 @@ private extension RemoteControlServer {
     .policy-effect{font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid var(--line)}.policy-effect.deny{color:#b42318}.policy-effect.ask{color:#b54708}.policy-effect.allow{color:#067647}
     #policyEditor textarea{width:100%;min-height:90px;font:12px ui-monospace,monospace}#policyJSON{min-height:260px}#policyEditor button,#policyEditor select{min-height:44px}#policyEditor details{margin-top:12px}#policyEditor form{display:grid;gap:8px}
     #mcpEditor,#backendsEditor{width:min(calc(100% - 24px),760px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#mcpEditor::backdrop,#backendsEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor{width:min(calc(100% - 24px),640px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#secretsEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor button{min-height:44px}.secret-row{display:flex;gap:10px;align-items:baseline;padding:6px 0;border-top:1px solid var(--line)}.secret-row code{font-weight:600}
+    #macSettingsEditor{width:min(calc(100% - 24px),680px);max-height:92vh;overflow:auto;padding:0 18px 18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#macSettingsEditor::backdrop{background:rgba(0,0,0,.35)}#macSettingsEditor button,#macSettingsEditor .backend-link{min-height:44px}#macSettingsEditor :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .settings-top{position:sticky;top:0;z-index:2;background:Canvas}.settings-top .tasks-bar{position:static;padding:10px 0}.settings-pending{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 8px;padding:6px 10px;border:1px solid var(--orange);border-radius:10px;background:var(--surface);font-variant-numeric:tabular-nums}
+    .settings-page>h3{margin:16px 0 6px;font-size:15px}.settings-section{margin:8px 0;padding:2px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}.settings-section>h4{margin:10px 0 6px;font-size:13px}
+    .settings-section>summary{display:flex;align-items:center;gap:8px;min-height:44px}.settings-section>summary:before{content:"›";width:12px;color:var(--tertiary);font-size:17px;transition:transform .12s}.settings-section[open]>summary:before{transform:rotate(90deg)}.settings-section>summary .muted{margin-left:auto;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .settings-field{display:grid;gap:4px;padding:10px 0;border-top:1px solid var(--line)}.settings-section>h4+.settings-field{border-top:0}.settings-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}.settings-row>label{flex:1 1 160px;min-width:0}
+    .settings-field input[type=checkbox]{flex:none;width:22px;height:22px;margin:0}.settings-field input[type=range]{flex:1 1 160px}.settings-field .wide{flex:1 1 220px;min-width:0}.settings-field textarea.wide{flex-basis:100%;min-height:80px}.settings-field input[type=number],.settings-field input.port{width:110px}
+    .settings-field select,.settings-field input:not([type=checkbox]):not([type=range]),.settings-field textarea{box-sizing:border-box;height:auto;max-width:100%;min-height:36px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:Canvas;color:var(--text);font-size:14px}.settings-field :disabled{opacity:.55;cursor:default}
+    .settings-help,.settings-note,.settings-footer{margin:0;color:var(--secondary);font-size:12px;overflow-wrap:anywhere}.settings-footer{padding:0 0 10px}.settings-problem{margin:0;color:var(--orange);font-size:12px}.settings-problem:empty{display:none}
+    .settings-info{margin:0;overflow-wrap:anywhere}.settings-info .settings-label{color:var(--secondary)}.settings-info.warning,.settings-info.warning .settings-label{color:var(--orange)}.settings-info.error,.settings-info.error .settings-label{color:var(--red)}.settings-value{min-width:48px;text-align:right;font-variant-numeric:tabular-nums}
+    .control.destructive{color:var(--red)}.settings-result{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:4px;padding:8px;border:1px solid var(--line);border-radius:8px}.settings-result>p,.settings-result>strong{flex-basis:100%;margin:0}.settings-result textarea{flex:1 1 220px;min-height:36px;font:12px ui-monospace,Menlo,monospace;user-select:all}
     .mcp-row{border-top:1px solid var(--line);padding:10px 0;display:flex;flex-direction:column;gap:6px}.mcp-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.mcp-head strong{flex:1}.mcp-status{font-size:13px}.mcp-status.attn{color:var(--accent,#0a84ff)}.mcp-status.warn{color:#c76a00}
     .mcp-switches{display:flex;gap:12px;flex-wrap:wrap;font-size:13px}.mcp-page img{max-width:100%;max-height:340px;border:1px solid var(--line);border-radius:8px}#mcpEditor button,#skillsEditor button,#backendsEditor button,#backendsEditor .backend-link{min-height:44px}.backend-lines{font-size:13px;display:flex;flex-direction:column;gap:2px}.backend-code{font:600 22px ui-monospace,Menlo,monospace;letter-spacing:.08em;user-select:all}.backend-link{display:inline-flex;align-items:center}.mcp-warn{color:#c76a00;font-size:13px;margin:0}
     #desktopEditor::backdrop{background:rgba(0,0,0,.35)}#desktopEditor .tab-actions{flex-wrap:wrap}#desktopEditor button,#desktopEditor select{min-height:44px}
@@ -3729,7 +3739,7 @@ private extension RemoteControlServer {
     <span class="muted">Up to 80 characters. Leave blank for the automatic name.</span>
     <label><input id="tabLocked" type="checkbox"> Lock tab against closing or clearing</label>
     <label id="tabSectionLabel" class="hidden">Section<select id="tabSection"></select></label><input id="tabNewSection" class="hidden" maxlength="40" autocomplete="off" placeholder="New section name" aria-label="New section name">
-    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button><button id="tabBackends" type="button" class="control">Backends</button><button id="tabPolicy" type="button" class="control">Agent Policy</button><button id="tabSkills" type="button" class="control">Skills &amp; Rules</button><button id="tabSecrets" type="button" class="control">Secrets</button>
+    <button id="tabModelSettings" type="button" class="control">Model Settings</button><button id="tabStartFresh" type="button" class="control" title="Keep this tab's messages, but don't send them to the model">Start Fresh</button><button id="tabMacAccess" type="button" class="control">Mac Permissions &amp; View Mac</button><button id="tabMCP" type="button" class="control">MCP Servers</button><button id="tabBackends" type="button" class="control">Backends</button><button id="tabPolicy" type="button" class="control">Agent Policy</button><button id="tabSkills" type="button" class="control">Skills &amp; Rules</button><button id="tabSecrets" type="button" class="control">Secrets</button><button id="tabMacSettings" type="button" class="control hidden" aria-haspopup="dialog">Mac Settings</button>
     <div id="tabMoveControls" class="tab-actions hidden"><button id="tabMoveEarlier" type="button" class="control">Move earlier</button><button id="tabMoveLater" type="button" class="control">Move later</button></div>
     <div id="tabError" role="alert"></div><div class="tab-actions"><button id="tabCancel" type="button" class="control">Cancel</button><button id="tabSave" type="submit" class="control primary">Save</button></div>
     </form></dialog>
@@ -3794,6 +3804,11 @@ private extension RemoteControlServer {
     <p class="muted">Cantrip keeps one skills library and gives every backend the same skills and folder rules. Edit skills on the Mac (<code>cantrip skills edit NAME</code>).</p><div id="skillsError" role="alert"></div><div id="skillsStatus" role="status" class="muted"></div><div id="skillsList"></div></dialog>
     <dialog id="secretsEditor" aria-labelledby="secretsTitle"><div class="tasks-bar"><strong id="secretsTitle" class="grow">Secrets</strong><button id="secretsSync" type="button" class="control primary">Unlock on the Mac &amp; Sync</button><button id="secretsDone" type="button" class="control">Done</button></div>
     <p class="muted">Commands on the Mac get these through <code>cantrip secret run</code>. Only names are shown here; values never leave the Mac. Syncing shows a Bitwarden password dialog on the Mac.</p><p id="secretsStatus" role="status"></p><div id="secretsError" role="alert"></div><div id="secretsList"></div></dialog>
+    <dialog id="macSettingsEditor" aria-labelledby="macSettingsTitle"><div class="settings-top"><div class="tasks-bar"><strong id="macSettingsTitle" class="grow">Mac Settings</strong><button id="macSettingsReload" type="button" class="control">Reload</button><button id="macSettingsDone" type="button" class="control">Done</button></div>
+    <div id="macSettingsPending" class="settings-pending hidden" role="group" aria-label="A change waiting to be kept"><span id="macSettingsPendingText" class="grow"></span><button id="macSettingsKeep" type="button" class="control primary">Keep</button><button id="macSettingsUndo" type="button" class="control">Undo</button></div>
+    <div id="macSettingsError" class="settings-problem" role="alert"></div></div>
+    <p class="muted">The same settings Cantrip shows on the Mac and on every paired device. Changes save as you make them. Model tiers, backups, MCP servers, skills, the agent policy and secrets have their own screens.</p>
+    <div id="macSettingsStatus" class="sr-only" role="status" aria-live="polite"></div><div id="macSettingsBody"></div></dialog>
     <dialog id="desktopEditor" aria-labelledby="desktopTitle"><strong id="desktopTitle">Mac Permissions &amp; View Mac</strong>
     <p class="muted">Start viewing explicitly. The Mac must first allow paired clients in Cantrip settings. Screen frames and typed text stay out of chat, files and AI models. Protected dialogs may be unavailable. Phone Face ID does not authorize macOS dialogs.</p>
     <div id="desktopError" role="alert"></div><div class="tab-actions">
@@ -3833,7 +3848,7 @@ private extension RemoteControlServer {
     <dialog id="imageViewer" aria-labelledby="imageViewerTitle"><div class="viewer-bar"><strong id="imageViewerTitle" class="grow">Preview</strong><button id="imageZoom" type="button" class="control" aria-pressed="false">Actual size</button><button id="imageRetry" type="button" class="control hidden">Retry</button><button id="imageDone" type="button" class="control">Done</button></div>
     <div id="imageStage"><img id="imageFull" alt=""><p id="imageStatus" role="status" aria-live="polite"></p></div></dialog>
     <script>
-    const $=id=>document.getElementById(id);let token=localStorage.cantripToken||"",selected=null,timer=null,renderedSession=null,renderedPayload="",followOutput=true,suppressScroll=false;const expanded=new Set();
+    const $=id=>document.getElementById(id);let token=localStorage.cantripToken||"",tokenHandoff=null,selected=null,timer=null,renderedSession=null,renderedPayload="",followOutput=true,suppressScroll=false;const expanded=new Set();
     const uiRevision="__CANTRIP_UI_REVISION__",uiReloadStorageKey="cantrip.uiReload.v1";
     let pendingUIRevision=null,blockedUIRevision=null,uiReloadTimer=null,uiNavigationTimer=null,uiReloading=false,uiNavigating=false,uiRestoreFailed=false,uiActiveWrites=0,uiLastInteraction=0,uiComposing=false,uiMutationWarning="";
     function scheduleUIReload(){if(uiReloadTimer)clearTimeout(uiReloadTimer);uiReloadTimer=null;
@@ -3964,7 +3979,7 @@ private extension RemoteControlServer {
       if(sidebarLayout&&controller&&historyRead&&segments.length===4&&!new URLSearchParams(path.split("?")[1]).has("before"))path+="&recentExchanges=3";
       const deadline=controller?setTimeout(()=>controller.abort(),historyRead?20000:8000):null;if(controller)options.signal=controller.signal;
       if(!controller)uiActiveWrites++;
-      try{const response=await fetch(path,options);const data=await response.json();if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;throw error}return data}
+      try{const response=await fetch(path,options);const data=await response.json();if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;error.data=data;throw error}return data}
       catch(error){if(!controller)uiMutationWarning=`A Remote action failed: ${error.message}. Check the conversation before retrying; it was not resent.`;throw error}
       finally{if(deadline!==null)clearTimeout(deadline);if(!controller){uiActiveWrites--;scheduleUIReload()}}}
     function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
@@ -4008,7 +4023,7 @@ private extension RemoteControlServer {
     function refresh(){refreshRequested=true;if(refreshTask)return refreshTask;
       refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision;
         let listedSuccessfully=false,requestSelection=requestedID;
-        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);tabSections=listed.sections||[];sectionsSupported=listed.supportsTabSections===true;$("newSection").classList.toggle("hidden",!sectionsSupported);renderHomeInputs(listed.homeInputs||[]);
+        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);if(typeof noteMacSettings==="function")noteMacSettings(listed);tabSections=listed.sections||[];sectionsSupported=listed.supportsTabSections===true;$("newSection").classList.toggle("hidden",!sectionsSupported);renderHomeInputs(listed.homeInputs||[]);
           // Cantrip Home is pinned first when the Mac has it on; it is never closed or moved.
           const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;$("homeTasks").classList.toggle("hidden",!listed.home);$("homeArtifacts").classList.toggle("hidden",!listed.home);$("homeBackground").classList.toggle("hidden",!listed.home);
           for(const id of historyCache.keys())if(!sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}
@@ -4026,7 +4041,8 @@ private extension RemoteControlServer {
         catch(error){if(token!==requestToken||selected!==requestSelection)continue;
           if(!listedSuccessfully||error.status===401)connection(false);
           $("historyError").textContent=`${listedSuccessfully?"Could not update this conversation":"Could not refresh tabs"}: ${error.message}. Retrying...`;
-          if(error.status===401){refreshRequested=false;pair(true)}}}
+          // While this browser moves to a new pairing token, the Mac may still refuse it for a moment.
+          if(error.status===401&&!tokenHandoff){refreshRequested=false;pair(true)}}}
       })().finally(()=>{refreshTask=null;scheduleRefresh();scheduleUIReload()});return refreshTask}
     // Cantrip Home background runs live in hidden sessions that are never tabs, so their approvals
     // and questions are answered here, in place, against the run's own session.
@@ -4623,6 +4639,133 @@ private extension RemoteControlServer {
       if(data.lastError&&!data.syncing)$("secretsError").textContent=data.lastError;
       const list=$("secretsList");list.replaceChildren();for(const s of items){const row=el("div","secret-row");row.append(el("code","",s.name),el("span","muted",s.kind==="fields"?(s.fields||[]).join(" "):s.kind));list.append(row)}
       for(const skipped of data.skipped||[])list.append(el("p","muted",`Skipped ${skipped}`))}
+    let macSettingsState=null,macSettingsSupported=false;
+    // Mac Settings: the Mac's own settings, drawn from the manifest every client shares (GET/POST /api/v1/settings).
+    $("tabMacSettings").onclick=()=>{if(tabSaving||movingTab)return;$("tabEditor").close();editingTab=null;openMacSettings()};
+    $("macSettingsDone").onclick=()=>$("macSettingsEditor").close();$("macSettingsReload").onclick=()=>loadMacSettings();
+    $("macSettingsKeep").onclick=()=>answerMacSettingsPending("keep");$("macSettingsUndo").onclick=()=>answerMacSettingsPending("revert");
+    $("macSettingsEditor").addEventListener("close",()=>{const state=macSettingsState;if(state){clearTimeout(state.timer);clearTimeout(state.tick)}macSettingsState=null});
+    function openMacSettings(){macSettingsState={data:null,errors:{},error:"",queue:{},saving:false,loading:false,running:null,answering:false,result:null,open:new Set(),nodes:{},timer:null,tick:null,deadline:0,pendingID:null};
+      $("macSettingsError").textContent="";$("macSettingsStatus").textContent="";$("macSettingsPending").classList.add("hidden");$("macSettingsBody").replaceChildren(el("p","muted","Loading…"));$("macSettingsEditor").showModal();loadMacSettings()}
+    // The tab list carries settingsRevision, so an open sheet redraws when a setting changes anywhere.
+    function noteMacSettings(listed){macSettingsSupported=listed?.supportsSettings===true;$("tabMacSettings").classList.toggle("hidden",!macSettingsSupported);const state=macSettingsState;
+      if(state?.data&&typeof listed?.settingsRevision==="string"&&listed.settingsRevision!==state.data.revision&&!state.saving&&!state.running&&!state.answering)loadMacSettings()}
+    async function loadMacSettings(){const state=macSettingsState;if(!state||state.loading)return;clearTimeout(state.timer);state.loading=true;let retry=false;
+      try{const data=await api("/api/v1/settings");if(macSettingsState!==state)return;state.error="";showMacSettings(state,data)}
+      catch(error){if(macSettingsState!==state)return;retry=error.status!==404;
+        state.error=error.status===404?"Update Cantrip on the Mac to change its settings here.":state.data?`Can't reach the Mac (${error.message}). Still trying…`:(error.message||"The Mac's settings aren't available.");renderMacSettings()}
+      finally{if(macSettingsState===state){state.loading=false;if(retry){clearTimeout(state.timer);state.timer=setTimeout(loadMacSettings,2000)}}}}
+    function showMacSettings(state,data){if(!data||!Array.isArray(data.pages))return;state.data=data;const pending=data.pending,seconds=Math.max(0,Number(pending?.secondsLeft)||0);
+      // A change waiting to be kept (a new port can cut this browser off until it's undone) keeps it loading.
+      clearTimeout(state.timer);if(pending)state.timer=setTimeout(loadMacSettings,5000);state.deadline=pending?Date.now()+seconds*1000:0;if(pending&&pending.id!==state.pendingID)$("macSettingsStatus").textContent=`${pending.summary} is undone in ${seconds} seconds unless you keep it.`;
+      state.pendingID=pending?.id||null;renderMacSettings()}
+    function macSettingsValues(data){const values={};for(const page of data?.pages||[])for(const section of page.sections||[])for(const field of section.fields||[])values[field.key]=field.type==="secret"?field.isSet===true:field.value;return values}
+    function macSettingVisible(field,values){const rule=field.visibleWhen;return !rule||!Array.isArray(rule.values)||rule.values.some(value=>value===values[rule.key])}
+    function macSettingID(...parts){return "macSetting-"+parts.filter(Boolean).join("-").replace(/[^A-Za-z0-9_-]/g,"_")}
+    function macSettingNumber(text){const trimmed=String(text).trim();return /^-?[0-9]+$/.test(trimmed)?Number(trimmed):trimmed}
+    function macSettingAmount(field,value){return field.format==="percent"?`${Math.round(value*100)}%`:`${Number(value.toFixed(2))}${field.unit?" "+field.unit:""}`}
+    function renderMacSettings(){const state=macSettingsState;if(!state)return;$("macSettingsError").textContent=state.error||"";renderMacSettingsPending(state);const data=state.data;if(!data)return;
+      $("macSettingsTitle").textContent=data.mac?`Mac Settings · ${data.mac}`:"Mac Settings";
+      // A redraw keeps focus, what's being typed and the scroll position.
+      const active=document.activeElement,activeID=Object.keys(state.nodes).find(id=>state.nodes[id]===active),
+        draft=activeID&&active._saved!==undefined&&active.value!==active._saved?{value:active.value,start:active.selectionStart,end:active.selectionEnd}:null;
+      const sheet=$("macSettingsEditor"),scroll=sheet.scrollTop,values=macSettingsValues(data),pages=[];state.nodes={};
+      for(const page of data.pages){const sections=[];
+        for(const section of page.sections||[]){const fields=(section.fields||[]).filter(field=>macSettingVisible(field,values));if(!fields.length)continue;
+          const id=`${page.id}/${section.id}`,title=el(section.link?"strong":"h4","",section.title||"");title.id=macSettingID("section",id);let box;
+          if(section.link){box=el("details","settings-section");box.open=state.open.has(id);box.ontoggle=()=>{if(box.open)state.open.add(id);else state.open.delete(id)};
+            const summary=el("summary");summary.id=macSettingID("summary",id);state.nodes[summary.id]=summary;summary.append(title);if(section.summary)summary.append(el("span","muted",section.summary));box.append(summary)}
+          else{box=el("div","settings-section");box.setAttribute("role","group");box.append(title)}
+          box.setAttribute("aria-labelledby",title.id);for(const field of fields)box.append(macSettingField(state,field));
+          if(section.footer)box.append(el("p","settings-footer",section.footer));sections.push(box)}
+        if(!sections.length)continue;const node=el("section","settings-page"),heading=el("h3","",page.title||"");heading.id=macSettingID("page",page.id);node.setAttribute("aria-labelledby",heading.id);node.append(heading,...sections);pages.push(node)}
+      $("macSettingsBody").replaceChildren(...pages);sheet.scrollTop=scroll;
+      const again=activeID&&state.nodes[activeID];if(again){if(draft){again.value=draft.value;try{again.setSelectionRange(draft.start,draft.end)}catch{}}again.focus()}}
+    function macSettingField(state,field){const id=macSettingID(field.key),readOnly=field.readOnly===true,problem=state.errors[field.key],row=el("div",`settings-field ${field.type}`),line=el("div","settings-row"),notes=[];
+      const note=(className,text,part)=>{if(!text)return;const node=el("p",className,String(text));node.id=macSettingID(field.key,part);notes.push(node)};
+      note("settings-help",field.help,"help");if(readOnly)note("settings-note",field.readOnlyReason||"Read-only here.","reason");note("settings-problem",problem,"problem");
+      const label=()=>{const node=el("label","",field.label);node.htmlFor=id;return node};
+      const own=(node,part)=>{node.id=part?macSettingID(field.key,part):id;state.nodes[node.id]=node;if(readOnly)node.disabled=true;
+        if(!part){if(notes.length)node.setAttribute("aria-describedby",notes.map(item=>item.id).join(" "));if(problem)node.setAttribute("aria-invalid","true")}return node};
+      const input=type=>{const node=document.createElement("input");node.type=type;return node};
+      const button=(text,className,aria)=>{const node=el("button",className,text);node.type="button";if(aria)node.setAttribute("aria-label",aria);return node};
+      switch(field.type){
+        case "toggle":{const box=own(input("checkbox"));box.checked=field.value===true;box.onchange=()=>saveMacSetting(field.key,box.checked);line.append(box,label());break}
+        case "choice":{const select=own(document.createElement("select")),choices=Array.isArray(field.choices)?field.choices:[],index=choices.findIndex(choice=>choice.value===field.value);
+          if(index<0){const option=document.createElement("option");option.value="";option.disabled=true;option.textContent=field.value===undefined||field.value===null||field.value===""?"Not set":String(field.value);select.append(option)}
+          choices.forEach((choice,position)=>{const option=document.createElement("option");option.value=String(position);option.textContent=choice.label??String(choice.value);option.disabled=choice.disabled===true;select.append(option)});
+          select.value=index<0?"":String(index);
+          // Options carry their position: the saved value keeps its JSON type (a number stays a number).
+          select.onchange=()=>{const choice=choices[Number(select.value)];if(select.value!==""&&choice&&!choice.disabled)saveMacSetting(field.key,choice.value)};line.append(label(),select);break}
+        case "integer":{const box=own(input("number"));if(field.min!=null)box.min=String(field.min);if(field.max!=null)box.max=String(field.max);box.step=String(field.step??1);box.inputMode="numeric";
+          box.value=field.value==null?"":String(field.value);macSettingCommit(box,field.key,()=>macSettingNumber(box.value));line.append(label(),box);if(field.unit)line.append(el("span","muted",field.unit));break}
+        case "port":{const box=own(input("text")),zero=field.zeroLabel;box.className="port";box.inputMode="numeric";box.autocomplete="off";box.maxLength=5;box.placeholder=zero||field.placeholder||"";
+          box.value=field.value===0&&zero?"":field.value==null?"":String(field.value);macSettingCommit(box,field.key,()=>box.value.trim()===""&&zero?0:macSettingNumber(box.value));line.append(label(),box);break}
+        case "number":{const box=own(input("range")),min=Number(field.min??0),max=Number(field.max??1),shown=el("output","settings-value");box.min=String(min);box.max=String(max);box.step=String(field.step??(max-min)/100);box.value=String(field.value??min);
+          const show=()=>{shown.textContent=macSettingAmount(field,Number(box.value));box.setAttribute("aria-valuetext",shown.textContent)};show();shown.setAttribute("for",box.id);
+          box.oninput=show;box.onchange=()=>saveMacSetting(field.key,Number(box.value));line.append(label(),box,shown);break}
+        case "text":case "path":{const box=own(field.multiline?document.createElement("textarea"):input("text"));box.className="wide";box.autocomplete="off";if(field.type==="path")box.spellcheck=false;
+          if(field.maxLength)box.maxLength=field.maxLength;if(field.placeholder)box.placeholder=field.placeholder;box.value=field.value==null?"":String(field.value);macSettingCommit(box,field.key,()=>box.value);line.append(label(),box);break}
+        case "secret":{const set=el("span","muted",field.isSet?"Set":"Not set"),box=own(input("password")),save=own(button("Save","control",`Save ${field.label}`),"save"),clear=own(button("Clear","control",`Clear ${field.label}`),"clear");
+          set.id=macSettingID(field.key,"state");box.setAttribute("aria-describedby",[set.id,...notes.map(item=>item.id)].join(" "));box.className="wide";box.autocomplete="new-password";box._saved="";
+          if(field.maxLength)box.maxLength=field.maxLength;box.placeholder=field.isSet?"Type a new value to replace it":field.placeholder||"";clear.disabled=readOnly||field.isSet!==true;
+          save.onclick=()=>{if(!box.value)return;const value=box.value;box.value="";saveMacSetting(field.key,value)};box.onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();save.onclick()}};
+          clear.onclick=()=>saveMacSetting(field.key,"");line.append(label(),set,box,save,clear);break}
+        case "action":{const busy=state.running===field.key,run=own(button(busy?`${field.label}…`:field.label,field.destructive?"control destructive":"control"));if(busy)run.setAttribute("aria-busy","true");
+          run.onclick=()=>runMacSettingAction(field);line.append(run);break}
+        default:{const text=el("p",`settings-info${field.tone==="warning"||field.tone==="error"?" "+field.tone:""}`);text.id=id;text.append(el("span","settings-label",`${field.label}: `),field.value==null?"":String(field.value));line.append(text)}}
+      row.append(line,...notes);if(state.result?.key===field.key)row.append(macSettingResult(state));return row}
+    // Typed values save on Enter or when the field loses focus, not on every keystroke.
+    function macSettingCommit(box,key,read){box._saved=box.value;const commit=()=>{if(box.value===box._saved)return;box._saved=box.value;saveMacSetting(key,read())};
+      box.onchange=commit;box.onkeydown=event=>{if(event.key==="Enter"&&(box.tagName!=="TEXTAREA"||event.metaKey||event.ctrlKey)){event.preventDefault();commit()}}}
+    function macSettingResult(state){const result=state.result,box=el("div","settings-result");if(result.title)box.append(el("strong","",result.title));if(result.message)box.append(el("p","settings-note",result.message));
+      const copyable=(text,name,part)=>{const area=document.createElement("textarea");area.readOnly=true;area.value=text;area.rows=1;area.spellcheck=false;area.id=macSettingID(result.key,part);area.setAttribute("aria-label",name);area.onfocus=()=>area.select();state.nodes[area.id]=area;
+        const copy=el("button","control","Copy");copy.type="button";copy.id=macSettingID(result.key,part,"copy");copy.setAttribute("aria-label",`Copy the ${name.toLowerCase()}`);copy.onclick=()=>macSettingCopy(area);state.nodes[copy.id]=copy;box.append(area,copy)};
+      if(typeof result.copy==="string")copyable(result.copy,result.title||"Text","copy");
+      if(typeof result.link==="string"){copyable(result.link,"Link","link");const open=el("a","control backend-link","Open Link");open.href=result.link;open.target="_blank";open.rel="noopener";box.append(open)}
+      if(typeof result.copy==="string"||typeof result.link==="string"){const hide=el("button","control","Hide");hide.type="button";hide.onclick=()=>{state.result=null;renderMacSettings();state.nodes[macSettingID(result.key)]?.focus()};box.append(hide)}
+      return box}
+    async function macSettingCopy(area){area.focus();area.select();try{await navigator.clipboard.writeText(area.value);$("macSettingsStatus").textContent="Copied."}catch{$("macSettingsStatus").textContent="Selected. Copy it with ⌘C or Ctrl+C."}}
+    function saveMacSetting(key,value){const state=macSettingsState;if(!state?.data)return;state.queue[key]=value;delete state.errors[key];flushMacSettings(state)}
+    // One save at a time: changes made meanwhile go out next, with the revision the last save returned.
+    async function flushMacSettings(state){if(state.saving||macSettingsState!==state||!Object.keys(state.queue).length)return;const changes=state.queue;state.queue={};state.saving=true;$("macSettingsStatus").textContent="Saving…";
+      try{const data=await api("/api/v1/settings",{method:"POST",body:JSON.stringify({revision:state.data.revision,changes})});if(macSettingsState!==state)return;
+        state.errors={};state.error="";$("macSettingsStatus").textContent="Saved.";showMacSettings(state,data)}
+      catch(error){if(macSettingsState===state)macSettingsFailure(state,error)}
+      finally{state.saving=false;flushMacSettings(state)}}
+    function macSettingsFailure(state,error){const body=error.data||{};$("macSettingsStatus").textContent="";state.error=body.error||error.message||"That didn't save.";
+      if(error.status===409&&body.settings){state.errors={};showMacSettings(state,body.settings);return}
+      if(error.status===422&&body.fields&&typeof body.fields==="object")state.errors={...state.errors,...body.fields};
+      renderMacSettings()}
+    async function runMacSettingAction(field){const state=macSettingsState;if(!state?.data||state.running)return;if(field.confirmation&&!confirm(field.confirmation))return;
+      state.running=field.key;state.result=null;state.error="";$("macSettingsStatus").textContent=`${field.label}…`;renderMacSettings();
+      try{const data=await api("/api/v1/settings",{method:"POST",body:JSON.stringify({action:field.key})}),result=data?.result&&typeof data.result==="object"?data.result:{};
+        // Replace Pairing Token from here: this browser moves to the new token, then keeps the change over it.
+        if(typeof result.pairingToken==="string"&&result.pairingToken)startTokenHandoff(result.pairingToken,data.pending);
+        if(macSettingsState!==state)return;state.running=null;$("macSettingsStatus").textContent=result.message||`${field.label}: done.`;
+        state.result=result.message||typeof result.copy==="string"||typeof result.link==="string"?{key:field.key,title:result.title,message:result.message,copy:result.copy,link:result.link}:null;showMacSettings(state,data)}
+      catch(error){if(macSettingsState===state){state.running=null;macSettingsFailure(state,error)}}
+      finally{if(macSettingsState===state&&state.running===field.key){state.running=null;renderMacSettings()}}}
+    function renderMacSettingsPending(state){const pending=state.data?.pending;clearTimeout(state.tick);$("macSettingsPending").classList.toggle("hidden",!pending);if(!pending)return;
+      const left=Math.max(0,Math.ceil((state.deadline-Date.now())/1000));$("macSettingsPendingText").textContent=left?`Keep ${pending.summary}? Undoes in ${left} s.`:`Undoing ${pending.summary}…`;
+      $("macSettingsKeep").disabled=!left;$("macSettingsUndo").disabled=!left;state.tick=setTimeout(()=>{if(macSettingsState!==state)return;if(left)renderMacSettingsPending(state);else loadMacSettings()},1000)}
+    async function answerMacSettingsPending(answer){const state=macSettingsState,pending=state?.data?.pending;if(!pending||state.answering)return;state.answering=true;const handoff=tokenHandoff?.id===pending.id?tokenHandoff:null;
+      try{const data=await api("/api/v1/settings",{method:"POST",body:JSON.stringify({[answer]:pending.id})});if(handoff)endTokenHandoff(handoff,answer==="keep","",data);
+        if(macSettingsState!==state)return;state.error="";$("macSettingsStatus").textContent=answer==="keep"?`Kept ${pending.summary}.`:`Undid ${pending.summary}.`;showMacSettings(state,data)}
+      catch(error){if(handoff&&error.status===409)endTokenHandoff(handoff,true,"");if(macSettingsState===state)macSettingsFailure(state,error)}
+      finally{if(macSettingsState===state)state.answering=false}}
+    // The Mac switches tokens a moment after replying and undoes it unless kept, so keep it over the
+    // new token until the Mac takes it; if it never does, go back to the old one when the Mac would.
+    function startTokenHandoff(newToken,pending){const handoff={previous:token,token:newToken,id:pending?.id||null,until:Date.now()+Math.max(5,Number(pending?.secondsLeft)||60)*1000};
+      tokenHandoff=handoff;token=newToken;try{localStorage.cantripToken=newToken}catch{}keepNewToken(handoff)}
+    async function keepNewToken(handoff){for(let attempt=0;tokenHandoff===handoff;attempt++){await new Promise(resolve=>setTimeout(resolve,attempt===0?600:attempt<10?1000:3000));
+        if(tokenHandoff!==handoff)return;if(Date.now()>handoff.until){endTokenHandoff(handoff,false,"The Mac went back to the old pairing token, so this device uses it again.");return}
+        try{const data=await api("/api/v1/settings",handoff.id?{method:"POST",body:JSON.stringify({keep:handoff.id})}:{});endTokenHandoff(handoff,true,"",data);return}
+        catch(error){if(error.status===409){endTokenHandoff(handoff,true,"",error.data?.settings);return}}}}
+    function endTokenHandoff(handoff,kept,message,data){if(tokenHandoff!==handoff)return;tokenHandoff=null;
+      if(!kept&&token===handoff.token){token=handoff.previous;try{localStorage.cantripToken=handoff.previous}catch{}}
+      const state=macSettingsState;if(state){state.error=message;$("macSettingsStatus").textContent=kept?"This device stays paired with the new token.":message;if(data?.pages)showMacSettings(state,data);else loadMacSettings()}
+      if(token)refresh()}
     function openDesktop(){desktopState={token,lease:null,frame:null,sequence:0,timer:null,saving:false,starting:false,generation:0};$("desktopError").textContent="";$("desktopEditor").showModal();loadDesktopStatus()}
     async function loadDesktopStatus(){const state=desktopState;if(!state)return;
       try{const data=await api("/api/v1/mac-access");if(desktopState!==state||token!==state.token)return;
@@ -5262,7 +5405,7 @@ private extension RemoteControlServer {
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
     async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selectTab(data.session.id);renderedPayload="";await refresh()}
       catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
-    $("pairButton").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();historyCache.clear();clearMacImages();expandedHistory.clear();historyPaused.clear();tabDrafts.clear();selected=null;$("draft").value="";token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
+    $("pairButton").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();historyCache.clear();clearMacImages();expandedHistory.clear();historyPaused.clear();tabDrafts.clear();selected=null;$("draft").value="";tokenHandoff=null;token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
       catch(error){$("pairError").textContent=error.message}};
     // Location: off by default. While on, each message carries this device's location (about 1 km
     // unless Precise) and time zone; a fix is reused for up to 15 minutes. Needs a secure (https) page.
@@ -5451,7 +5594,7 @@ private extension RemoteControlServer {
     addEventListener("resize",placeMentionPopover);window.visualViewport?.addEventListener("resize",placeMentionPopover);
     $("draft").onkeydown=event=>{if(mentionKeydown(event))return;if(slashKeydown(event))return;if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selectTab(data.session.id);refresh()};
-    $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");artifactThumbs.clear();if($("artifactsPanel").open)$("artifactsPanel").close();historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();tabMentionLists.clear();renderMentionChips();selected=null;$("draft").value="";token="";connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null);window.cantripGateway?.unpair?.()};
+    $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");artifactThumbs.clear();if($("artifactsPanel").open)$("artifactsPanel").close();historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();tabMentionLists.clear();renderMentionChips();selected=null;$("draft").value="";token="";tokenHandoff=null;connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null);window.cantripGateway?.unpair?.()};
     // Home Tasks: the task list, each workspace's records (grouped when its list declares a groupField) and record details.
     const appleEpochSeconds=978307200,workspaceGroupsKey="cantrip.workspaceGroups.",otherGroupID=String.fromCharCode(1)+"other";
     let tasksState=null;
