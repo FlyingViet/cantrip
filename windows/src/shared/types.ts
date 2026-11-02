@@ -131,6 +131,8 @@ export interface CantripApi {
   setWindowOpacity(opacity: number): void;
   setExpanded(expanded: boolean): void;
   hide(): void;
+  /** Opens (or focuses) the Cantrip Home window. */
+  openHome(): void;
   onRunChunk(callback: (event: RunChunkEvent) => void): () => void;
   onRunExit(callback: (event: RunExitEvent) => void): () => void;
   onShortcutStatus(callback: (status: ShortcutStatus) => void): () => void;

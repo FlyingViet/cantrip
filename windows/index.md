@@ -8,7 +8,8 @@
 | `PLUGINS.md` | Plugin manifest, security, bridge, data-source, and MCP reference |
 | `README.md` | Setup, usage, scope, and safety documentation |
 | `assets/` | Windows executable and installer artwork |
-| `index.html` | Renderer HTML entry point |
+| `index.html` | Launcher HTML entry point |
+| `home.html` | Cantrip Home window HTML entry point |
 | `package.json` | Dependencies, scripts, and Windows packaging config |
 | `tsconfig.json` | Renderer/shared TypeScript configuration |
 | `tsconfig.electron.json` | Main/preload TypeScript build configuration |

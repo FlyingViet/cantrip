@@ -43,6 +43,7 @@ const attachmentsElement = requiredElement<HTMLElement>("attachments");
 const screenContextButton = requiredElement<HTMLButtonElement>("screen-context");
 const settingsToggle = requiredElement<HTMLButtonElement>("settings-toggle");
 const pluginsToggle = requiredElement<HTMLButtonElement>("plugins-toggle");
+const homeToggle = requiredElement<HTMLButtonElement>("home-toggle");
 const settingsPanel = requiredElement<HTMLElement>("settings-panel");
 const settingsClose = requiredElement<HTMLButtonElement>("settings-close");
 const settingsBackend = requiredElement<HTMLSelectElement>("settings-backend");
@@ -723,6 +724,7 @@ retryShortcutButton.addEventListener("click", async () => {
 settingsToggle.addEventListener("click", () => {
   toggleSettings(settingsPanel.classList.contains("hidden"));
 });
+homeToggle.addEventListener("click", () => window.cantrip.openHome());
 pluginsToggle.addEventListener("click", () => {
   toggleSettings(true);
   settingsPluginsSection.scrollIntoView({ behavior: "smooth", block: "start" });

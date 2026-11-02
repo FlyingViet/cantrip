@@ -7,4 +7,5 @@
 | `backendPolicy.test.ts` | Safe-by-default backend permission argument tests |
 | `update.test.ts` | Safe updater error messages and finding the newest `windows-v*` release |
 | `plugins.test.ts` | Manifest, approval summary, MCP merge, and path-containment tests |
+| `home.test.ts` | Pairing links, allow-listed Home reads, encrypted pairing store, route fallback, TLS-PSK round trip, record helpers |
 | `cards.test.ts` | Weather card documents match the Mac's fixtures (`cards/`); renderer helpers (bars, icons, link safety, skipped blocks) |

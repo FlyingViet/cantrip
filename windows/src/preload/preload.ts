@@ -80,6 +80,7 @@ const api: CantripApi = {
     ipcRenderer.send("settings:opacity", opacity),
   setExpanded: (expanded: boolean) => ipcRenderer.send("window:set-expanded", expanded),
   hide: () => ipcRenderer.send("launcher:hide"),
+  openHome: () => ipcRenderer.send("home:open"),
   onRunChunk: (callback: (event: RunChunkEvent) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: RunChunkEvent) =>
       callback(payload);

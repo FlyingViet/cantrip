@@ -21,6 +21,7 @@ import { UpdateManager } from "./updateManager";
 import { PluginRegistry } from "./plugins";
 import type { RunRequest, ShortcutStatus, UpdateState } from "../shared/types";
 import { registerWeatherIPC } from "./weather";
+import { openHomeWindow, registerHomeIPC } from "./homeWindow";
 
 const appCatalog = new AppCatalog();
 const runManager = new RunManager();
@@ -171,6 +172,7 @@ function updateTrayMenu(): void {
         click: showLauncher,
       },
       ...shortcutItems,
+      { label: "Cantrip Home", click: openHomeWindow },
       { label: "Refresh apps", click: () => void appCatalog.refresh() },
       ...updateItems,
       { type: "separator" },
@@ -317,6 +319,7 @@ function registerIpc(): void {
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
   registerWeatherIPC();
+  registerHomeIPC((event) => Boolean(launcher) && event.sender === launcher?.webContents);
   ipcMain.handle("run:start", async (_event, request: unknown) => {
     if (!request || typeof request !== "object") return { ok: false, error: "Invalid run." };
     return runManager.start(
