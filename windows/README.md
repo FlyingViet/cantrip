@@ -20,7 +20,7 @@ capture, updates, and platform limitations.
 - Sanitized GitHub-flavored Markdown responses with fenced code and tables
 - Opt-in multi-monitor screen context with removable previews and per-run cleanup
 - Opt-in location context, so weather and "near me" answers are for where the PC is
-- Weather cards: an Open-Meteo forecast under replies about the weather
+- Weather cards: an Open-Meteo forecast under replies about the weather, drawn from Cantrip's generic card blocks
 - Hash-approved plugins with sandboxed dashboards, bounded data sources, MCP
   injection, and live reload
 - Safe-by-default plan mode with an explicit **Allow agent actions** switch
@@ -93,10 +93,24 @@ An AI prompt that mentions the weather (weather, forecast, rain, snow, umbrellaâ
 also asks the model to end its reply with a fenced `weather` block naming the
 place. Cantrip hides the block, even while the reply streams, and shows a
 forecast card under the reply: the place, now, today's high and low, the next 12
-hours and 10 days, the update time and Open-Meteo's attribution. The main
-process fetches it from Open-Meteo (place names through Open-Meteo's geocoder;
-only coordinates rounded to about 1 km, no cookies), reusing a forecast for 10
-minutes and a place for a day; no key or account is needed. A block without a
+hours and 10 days, the update time and Open-Meteo's attribution.
+
+The card is drawn from Cantrip's generic card blocks (see `docs/cards.md` in the
+repository), the same card document the Mac sends to every paired client: a
+header with the big temperature, an hourly strip, a 10-day range chart, and a
+footer from the card's source (or a "Forecast unavailable" notice). The main process builds the
+same document the Mac would, and the launcher draws it block by block
+(`src/renderer/cards.ts`), so a new kind of card needs no new drawing code. It
+draws header, stat, key-value, strip, chart, list, badge and notice blocks;
+maps and images need the Mac, so they're skipped like any block it doesn't know,
+and a card with nothing it can draw shows its plain-text fallback. Card text is
+only ever set as text, never as HTML, and buttons open only `https`/`http` links.
+Cantrip for Windows has no Mac, so it shows no places, link-preview, flight or
+tool cards.
+
+The main process fetches the forecast from Open-Meteo (place names through
+Open-Meteo's geocoder; only coordinates rounded to about 1 km, no cookies),
+reusing a forecast for 10 minutes and a place for a day; no key or account is needed. A block without a
 place uses this PC's location while **Settings â†’ Location** is on. When there's
 no place, the place can't be found or Open-Meteo can't be reached, the card says
 **Forecast unavailable** and why; it never shows numbers the model wrote.

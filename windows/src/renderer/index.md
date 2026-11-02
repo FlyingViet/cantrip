@@ -6,3 +6,4 @@
 | `styles.css` | Transparent Windows launcher presentation |
 | `global.d.ts` | Typed preload API declaration |
 | `vite-env.d.ts` | Vite asset and CSS module declarations |
+| `cards.ts` | Generic card renderer: draws card documents (`docs/cards.md`) block by block |

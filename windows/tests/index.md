@@ -7,3 +7,4 @@
 | `backendPolicy.test.ts` | Safe-by-default backend permission argument tests |
 | `update.test.ts` | Safe updater error messages and finding the newest `windows-v*` release |
 | `plugins.test.ts` | Manifest, approval summary, MCP merge, and path-containment tests |
+| `cards.test.ts` | Weather card documents match the Mac's fixtures (`cards/`); renderer helpers (bars, icons, link safety, skipped blocks) |

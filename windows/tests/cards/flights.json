@@ -1,0 +1,127 @@
+{
+  "accessibilityLabel" : "Flights SFO to SEA",
+  "blocks" : [
+    {
+      "subtitle" : "Sun, Nov 15 · 1 traveler · 6 of 12 results",
+      "symbol" : "airplane",
+      "title" : "SFO → SEA",
+      "type" : "header"
+    },
+    {
+      "items" : [
+        {
+          "accessibilityLabel" : "Alaska Airlines · AS630, 3:08 PM → 5:21 PM · 2h 13m · Nonstop, price 258 USD, Cheapest, Fastest",
+          "actions" : [
+            {
+              "kind" : "open",
+              "label" : "Book",
+              "url" : "https:\/\/kiwi.com\/u\/hqtj9x"
+            }
+          ],
+          "badges" : [
+            {
+              "text" : "Cheapest",
+              "tone" : "positive"
+            },
+            {
+              "text" : "Fastest",
+              "tone" : "accent"
+            }
+          ],
+          "id" : "0f9c204351240000ebd40c5b_0",
+          "subtitle" : "3:08 PM → 5:21 PM · 2h 13m · Nonstop",
+          "symbol" : "airplane",
+          "title" : "Alaska Airlines · AS630",
+          "trailing" : "258 USD"
+        },
+        {
+          "accessibilityLabel" : "Alaska Airlines · AS68, 6:08 AM → 8:22 AM · 2h 14m · Nonstop, price 258 USD",
+          "actions" : [
+            {
+              "kind" : "open",
+              "label" : "Book",
+              "url" : "https:\/\/kiwi.com\/u\/6v4yvhb"
+            }
+          ],
+          "id" : "0f9c2043512400004282cd5b_0",
+          "subtitle" : "6:08 AM → 8:22 AM · 2h 14m · Nonstop",
+          "symbol" : "airplane",
+          "title" : "Alaska Airlines · AS68",
+          "trailing" : "258 USD"
+        },
+        {
+          "accessibilityLabel" : "Alaska Airlines · AS620, 8:58 PM → 11:13 PM · 2h 15m · Nonstop, price 258 USD",
+          "actions" : [
+            {
+              "kind" : "open",
+              "label" : "Book",
+              "url" : "https:\/\/kiwi.com\/u\/nw9r2qu"
+            }
+          ],
+          "id" : "0f9c204351240000f2cf3d1a_0",
+          "subtitle" : "8:58 PM → 11:13 PM · 2h 15m · Nonstop",
+          "symbol" : "airplane",
+          "title" : "Alaska Airlines · AS620",
+          "trailing" : "258 USD"
+        },
+        {
+          "accessibilityLabel" : "Alaska Airlines · AS591, 6:48 PM → 9:03 PM · 2h 15m · Nonstop, price 258 USD",
+          "actions" : [
+            {
+              "kind" : "open",
+              "label" : "Book",
+              "url" : "https:\/\/kiwi.com\/u\/sg5x9vu"
+            }
+          ],
+          "id" : "0f9c204351240000647a6a1e_0",
+          "subtitle" : "6:48 PM → 9:03 PM · 2h 15m · Nonstop",
+          "symbol" : "airplane",
+          "title" : "Alaska Airlines · AS591",
+          "trailing" : "258 USD"
+        },
+        {
+          "accessibilityLabel" : "Alaska Airlines · AS580, 10:39 AM → 12:56 PM · 2h 17m · Nonstop, price 258 USD",
+          "actions" : [
+            {
+              "kind" : "open",
+              "label" : "Book",
+              "url" : "https:\/\/kiwi.com\/u\/bnfhby"
+            }
+          ],
+          "id" : "0f9c2043512400000a666bc9_0",
+          "subtitle" : "10:39 AM → 12:56 PM · 2h 17m · Nonstop",
+          "symbol" : "airplane",
+          "title" : "Alaska Airlines · AS580",
+          "trailing" : "258 USD"
+        },
+        {
+          "accessibilityLabel" : "Alaska Airlines · AS1327, 8:33 AM → 10:52 AM · 2h 19m · Nonstop, price 258 USD",
+          "actions" : [
+            {
+              "kind" : "open",
+              "label" : "Book",
+              "url" : "https:\/\/kiwi.com\/u\/f7ctth"
+            }
+          ],
+          "id" : "0f9c204351240000390c4cc9_0",
+          "subtitle" : "8:33 AM → 10:52 AM · 2h 19m · Nonstop",
+          "symbol" : "airplane",
+          "title" : "Alaska Airlines · AS1327",
+          "trailing" : "258 USD"
+        }
+      ],
+      "type" : "list"
+    }
+  ],
+  "fallbackText" : "SFO → SEA — Sun, Nov 15 · 1 traveler · 6 of 12 results\n• Alaska Airlines · AS630 — 3:08 PM → 5:21 PM · 2h 13m · Nonstop — 258 USD\n• Alaska Airlines · AS68 — 6:08 AM → 8:22 AM · 2h 14m · Nonstop — 258 USD\n• Alaska Airlines · AS620 — 8:58 PM → 11:13 PM · 2h 15m · Nonstop — 258 USD\n• Alaska Airlines · AS591 — 6:48 PM → 9:03 PM · 2h 15m · Nonstop — 258 USD\n• Alaska Airlines · AS580 — 10:39 AM → 12:56 PM · 2h 17m · Nonstop — 258 USD\n• Alaska Airlines · AS1327 — 8:33 AM → 10:52 AM · 2h 19m · Nonstop — 258 USD",
+  "id" : "flights-0f9c204351240000ebd40c5b_0",
+  "source" : {
+    "attribution" : "Flights from Kiwi.com",
+    "kind" : "tool",
+    "name" : "Kiwi.com",
+    "updatedAt" : "2026-11-02T00:32:44Z",
+    "url" : "https:\/\/www.kiwi.com\/"
+  },
+  "type" : "flights",
+  "version" : 1
+}
