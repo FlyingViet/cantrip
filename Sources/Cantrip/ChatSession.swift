@@ -70,9 +70,12 @@ extension ChatMessage {
         CardComposer.mainCard(weather: weatherCard, places: placeCard, cards: cards)
     }
 
-    /// Every card under the reply, as generic blocks: the main card, then link cards.
+    /// Every card under the reply, as generic blocks: the main card, then link cards. A Home
+    /// run's result can carry several cards; they follow the main one.
     func cardDocuments(linkPreviews showsLinks: Bool) -> [CardDocument] {
-        CardComposer.documents(main: mainCard, links: showsLinks ? visibleLinkPreviews : [])
+        let extra = weatherCard == nil && placeCard == nil ? Array(cards.dropFirst()) : []
+        let documents = CardComposer.documents(main: mainCard, links: showsLinks ? visibleLinkPreviews : [])
+        return Array(documents.prefix(1)) + extra + documents.dropFirst()
     }
 
     /// Appends streamed reasoning. Reasoning after a new tool call or answer text is a new block.
@@ -284,6 +287,8 @@ final class ChatSession: ObservableObject {
     var onRunFinished: (() -> Void)?
     /// Called for every individual turn, including scheduled Home runs.
     var onTurnCompleted: ((UUID, String, String) -> Void)?
+    /// A finished Home run whose cards are still resolving: it reports completion once they do.
+    private(set) var isResolvingRunCards = false
     /// Called when the Home background conversation starts a scheduled task or incident.
     var onCantripHomeRunStarted: ((UUID, CantripHomeAutomatedRun) -> Void)?
     private(set) var remoteCompletion: RemoteCompletion?
@@ -3958,6 +3963,33 @@ final class ChatSession: ObservableObject {
         return proposal != nil || weather != nil
     }
 
+    /// A Home run's card blocks: stripped from its reply and resolved for its result. Checked
+    /// `card` blocks need no lookup; a forecast or map has `RunCards.deadline` to resolve.
+    private func beginRunCards() -> Task<Void, Never>? {
+        guard let index = messages.lastIndex(where: { $0.role == .assistant }) else { return nil }
+        var text = messages[index].text
+        let (pending, unshown) = RunCards.extract(from: &text, activities: messages[index].activities)
+        if !unshown.isEmpty { text = ([text] + unshown).filter { !$0.isEmpty }.joined(separator: "\n\n") }
+        if text != messages[index].text { messages[index].text = text }
+        guard !pending.isEmpty else { return nil }
+        let messageID = messages[index].id
+        guard pending.needsResolving else {
+            messages[index].cards = Array(pending.checked.prefix(RunCards.maximumCards))
+            return nil
+        }
+        if PlaceCardResolver.locationContextProvider == nil {
+            PlaceCardResolver.locationContextProvider = { LocationProvider.shared.contextLine }
+        }
+        isResolvingRunCards = true
+        let context = weatherContext()
+        return Task { @MainActor [weak self] in
+            let cards = await RunCards.resolve(pending, context: context)
+            guard let self, let current = self.messages.firstIndex(where: { $0.id == messageID }) else { return }
+            self.messages[current].cards = cards
+            self.persistTranscript()
+        }
+    }
+
     /// Where a weather block without a place is: the device this turn came from, else the Mac.
     private func weatherContext() -> WeatherCardResolver.Context {
         typealias Place = WeatherCardResolver.KnownPlace
@@ -4008,6 +4040,7 @@ final class ChatSession: ObservableObject {
         councilFinished = []
         councilSynthesizing = false
         if !isLocalPrivate { processOverlayBlock() }
+        let runCards = isCantripHomeBackground ? beginRunCards() : nil
         let reply = processCantripHomeBlocks()
         let hasPendingRichCard = !isLocalPrivate ? processRichCards() : false
         if let completion = pendingTurnCompletion {
@@ -4018,7 +4051,18 @@ final class ChatSession: ObservableObject {
                 visibleSummary = reply
             }
             pendingTurnCompletion = nil
-            onTurnCompleted?(completion.runID, completion.status, visibleSummary)
+            if let runCards {
+                // The run's result carries its cards, so it completes once they resolve or their
+                // deadline passes (RunCards.deadline); a card that can't resolve is left out.
+                Task { @MainActor [weak self] in
+                    await runCards.value
+                    guard let self else { return }
+                    self.isResolvingRunCards = false
+                    self.onTurnCompleted?(completion.runID, completion.status, visibleSummary)
+                }
+            } else {
+                onTurnCompleted?(completion.runID, completion.status, visibleSummary)
+            }
         }
         isStreaming = false
         isWaitingOnBackgroundWatchers = false

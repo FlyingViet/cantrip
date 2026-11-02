@@ -208,6 +208,7 @@ struct SessionTabTests {
         try await testRichCardsRemote()
         try await testWeatherCardsRemote()
         try await testCardDocuments()
+        try await testHomeCards()
         try testCantripHomeSchedules()
         try await testCantripHome()
         try await testCantripHomeArtifactThumbnails()

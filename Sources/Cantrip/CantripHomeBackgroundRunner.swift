@@ -444,7 +444,7 @@ final class CantripHomeBackgroundRunner {
     /// and task forever; fail it once it has stayed idle past the stall limit.
     func reapStalledRuns(at date: Date = Date()) {
         for (jobID, session) in Array(live) {
-            guard !session.isStreaming else {
+            guard !session.isStreaming, !session.isResolvingRunCards else {
                 idleSince[jobID] = nil
                 continue
             }
@@ -471,7 +471,8 @@ final class CantripHomeBackgroundRunner {
             text = session.messages.last { $0.role == .error }?.text ?? "The run failed."
         }
         Log.write("home: background run \(jobID.uuidString) finished: \(status)")
-        store.complete(runID: jobID, status: status, summary: text)
+        let cards = session.messages.last { $0.role == .assistant }?.cardDocuments(linkPreviews: false) ?? []
+        store.complete(runID: jobID, status: status, summary: text, cards: cards)
         // Let the finishing turn settle (notifications read its last reply) before teardown.
         DispatchQueue.main.async { [weak self] in self?.retire(session) }
     }

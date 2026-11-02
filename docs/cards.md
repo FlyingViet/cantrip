@@ -99,6 +99,15 @@ they don't know; a card with nothing they can draw shows its `fallbackText`.
 Panel cards share the map card's geometry: up to 680 pt wide (760 px on the web), 16 pt corners,
 a 1 pt border at 14% opacity, always dark, with white text at AA contrast.
 
+## Cards on Cantrip Home
+
+Scheduled-task and incident runs keep their cards with their results
+(`cards` on Background runs and on a task's runs), and workspaces show cards
+built from their records (`workspaceCards` in the tasks snapshot, and a
+record's weather and map cards from `GET /api/v1/home/tasks/<task>/records/<record>/cards`).
+`source.kind` is `records` for a card built from a workspace's records. Clients
+draw them with the same block views; see [Cantrip Home](cantrip-home.md#background-runs).
+
 ## Clients
 
 Each client has one view per block and nothing per card type:
