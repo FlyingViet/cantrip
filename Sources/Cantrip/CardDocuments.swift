@@ -734,6 +734,8 @@ enum CardValidation {
             }
             return block
         }
+        // Screen readers name the card by its header when the card doesn't name itself.
+        copy.accessibilityLabel = copy.accessibilityLabel ?? copy.blocks.first { $0.type == "header" }?.title
         return copy.blocks.isEmpty ? nil : copy
     }
 
