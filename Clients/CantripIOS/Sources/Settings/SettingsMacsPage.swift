@@ -32,6 +32,7 @@ struct SettingsMacsPage: View {
                         SettingsMacRow(
                             mac: mac,
                             isActive: servers.selectedID == mac.id,
+                            isLocal: remote.localServerID == mac.id,
                             status: status(of: mac)
                         )
                     }
@@ -120,6 +121,8 @@ struct SettingsMacRow: View {
 
     let mac: SavedServer
     let isActive: Bool
+    /// The Cantrip running on this device (Cantrip.app's Home window).
+    var isLocal = false
     let status: Status
 
     var body: some View {
@@ -141,7 +144,7 @@ struct SettingsMacRow: View {
                             .foregroundStyle(.tint)
                     }
                 }
-                Text(status.text)
+                Text(isLocal ? "Cantrip on this Mac · \(status.text)" : status.text)
                     .font(.caption)
                     .foregroundStyle(status.color)
             }
@@ -175,6 +178,7 @@ struct SettingsMacDetail: View {
     private var mac: SavedServer? { servers.servers.first { $0.id == macID } }
     private var isActive: Bool { servers.selectedID == macID }
     private var missingToken: Bool { servers.missingCredentialIDs.contains(macID) }
+    private var isLocal: Bool { remote.localServerID == macID }
 
     var body: some View {
         Form {
@@ -188,37 +192,41 @@ struct SettingsMacDetail: View {
                             .accessibilityIdentifier("settings.mac.use")
                     }
                 } footer: {
-                    Text(isActive
+                    Text(isLocal
+                         ? "The Cantrip running on this Mac. Its address and token come from Cantrip itself."
+                         : isActive
                          ? "This device uses this Mac now."
                          : "Switching moves this device's tabs, Home and settings to this Mac.")
                 }
-                Section {
-                    Button("Re-enter Pairing Token", systemImage: "key") {
-                        token = ""
-                        reentering = true
-                    }
-                    .disabled(!canChange || working)
-                    .accessibilityIdentifier("settings.mac.reenter")
-                } footer: {
-                    Text(missingToken
-                         ? "This Mac's pairing token isn't on this device, for example after moving to a new one. Enter it to connect again."
-                         : "Use this when the Mac's pairing token changed. It replaces the saved one and reconnects.")
-                }
-                Section {
-                    LabeledContent("Address", value: mac.url.isEmpty ? "Local network discovery" : mac.url)
-                    LabeledContent("Direct address", value: mac.directAddress ?? "None")
-                    LabeledContent("Tailscale only", value: mac.tailscaleOnly ? "On" : "Off")
-                } header: {
-                    Text("Advanced")
-                } footer: {
-                    Text("How this device reaches the Mac. To change them, remove the Mac and pair it again.")
-                }
-                Section {
-                    Button("Remove Mac…", systemImage: "trash", role: .destructive) { confirmingRemove = true }
+                if !isLocal {
+                    Section {
+                        Button("Re-enter Pairing Token", systemImage: "key") {
+                            token = ""
+                            reentering = true
+                        }
                         .disabled(!canChange || working)
-                        .accessibilityIdentifier("settings.mac.remove")
-                } footer: {
-                    Text("Removes this pairing and its token from this device. Nothing on the Mac is deleted.")
+                        .accessibilityIdentifier("settings.mac.reenter")
+                    } footer: {
+                        Text(missingToken
+                             ? "This Mac's pairing token isn't on this device, for example after moving to a new one. Enter it to connect again."
+                             : "Use this when the Mac's pairing token changed. It replaces the saved one and reconnects.")
+                    }
+                    Section {
+                        LabeledContent("Address", value: mac.url.isEmpty ? "Local network discovery" : mac.url)
+                        LabeledContent("Direct address", value: mac.directAddress ?? "None")
+                        LabeledContent("Tailscale only", value: mac.tailscaleOnly ? "On" : "Off")
+                    } header: {
+                        Text("Advanced")
+                    } footer: {
+                        Text("How this device reaches the Mac. To change them, remove the Mac and pair it again.")
+                    }
+                    Section {
+                        Button("Remove Mac…", systemImage: "trash", role: .destructive) { confirmingRemove = true }
+                            .disabled(!canChange || working)
+                            .accessibilityIdentifier("settings.mac.remove")
+                    } footer: {
+                        Text("Removes this pairing and its token from this device. Nothing on the Mac is deleted.")
+                    }
                 }
                 if working { ProgressView() }
                 if let error {

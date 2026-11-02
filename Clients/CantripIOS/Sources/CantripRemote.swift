@@ -3058,6 +3058,10 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var tailscaleOnly: Bool
     @Published private(set) var usageIdentity = UUID()
     let servers: ServerProfiles
+    /// The saved entry for the Cantrip running on this device itself (the Home window inside
+    /// Cantrip.app, which hands over its address and token). It can't be removed or re-keyed here.
+    /// Nil on devices that only connect to other Macs.
+    @Published var localServerID: UUID?
     @Published private(set) var selectedServerID: UUID?
     @Published private(set) var notificationStatus: String?
     @Published private(set) var isUpdatingNotifications = false
@@ -3271,6 +3275,9 @@ final class CantripRemoteModel: ObservableObject {
     /// Saves a saved server's re-entered pairing token (e.g. after moving to a new device, where
     /// Keychain tokens don't follow) and connects to it, keeping its entry and history.
     func reenterCredential(_ credential: String, for server: SavedServer) async throws {
+        guard server.id != localServerID else {
+            throw ServerConfigurationError(message: "This Mac's pairing token comes from Cantrip itself.")
+        }
         guard !isMutating, !isUploadingVideo, !isUpdatingNotifications else {
             throw ServerConfigurationError(message: "Wait for the current request to finish before changing servers.")
         }
@@ -3303,6 +3310,9 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     func removeServer(_ server: SavedServer) throws {
+        guard server.id != localServerID else {
+            throw ServerConfigurationError(message: "This Mac's own Cantrip stays in the list.")
+        }
         guard !isUpdatingNotifications else {
             throw ServerConfigurationError(message: "Wait for notification settings to finish updating.")
         }
