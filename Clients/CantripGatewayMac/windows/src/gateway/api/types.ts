@@ -2044,6 +2044,71 @@ export interface MCPSnapshot {
   revision?: string;
 }
 
+/** GET/POST /api/v1/backends (`BackendStatusMonitor.remotePayload`): each agent CLI on the Mac, its install,
+ * sign-in (account and method, never a token) and quota, checked without model calls. Older Macs answer 404. */
+export const BACKEND_IDS = ["copilot", "claude", "antigravity", "codex"] as const;
+export type BackendID = (typeof BACKEND_IDS)[number];
+export type BackendState = "ready" | "signedOut" | "outOfQuota" | "notInstalled" | "unknown";
+
+export interface BackendQuota {
+  name: string;
+  usedPercent?: number;
+  resetsAt?: string;
+}
+
+export interface BackendSignIn {
+  /** `deviceCode`: a link and a code any device can finish; `terminal`: only in Terminal on the Mac. */
+  mode: "deviceCode" | "terminal" | string;
+  command: string;
+  hint: string;
+  /** A device sign-in in progress: the page to open and the code to enter. */
+  url?: string;
+  code?: string;
+  startedAt?: string;
+  /** How the last sign-in attempt ended, or where it continues. */
+  message?: string;
+}
+
+export interface BackendHealth {
+  id: BackendID | string;
+  name: string;
+  state: BackendState | string;
+  summary: string;
+  path?: string;
+  version?: string;
+  /** Absent when the check couldn't tell. */
+  signedIn?: boolean;
+  account?: string;
+  authMethod?: string;
+  plan?: string;
+  quota?: BackendQuota[];
+  /** When a used-up account-wide limit lifts. */
+  limitedUntil?: string;
+  lastSuccessAt?: string;
+  lastAuthError?: { message: string; at: string };
+  checkedAt?: string;
+  checking?: boolean;
+  /** Routing and fallback skip it (signed out). */
+  unavailable?: boolean;
+  problem?: string;
+  signIn?: BackendSignIn;
+}
+
+export interface BackendsSnapshot {
+  backends: BackendHealth[];
+  /** Seconds between the Mac's own checks. */
+  checkInterval?: number;
+  revision?: number;
+  /** What a signIn or cancelSignIn did. */
+  message?: string;
+}
+
+/** POST /api/v1/backends bodies. */
+export type BackendsAction =
+  | { action: "check"; id?: BackendID }
+  | { action: "signIn"; id: BackendID }
+  | { action: "cancelSignIn"; id: BackendID };
+
 /** GET/POST /api/v1/skills: the one skills library Cantrip gives every backend, the folder rules it
  * mirrors and their drift. Mac-wide (not per tab); older Macs answer 404. */
 export interface SkillEntry {

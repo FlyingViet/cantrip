@@ -1,13 +1,14 @@
 // The Settings window (MacSettingsView.swift): Connection (saved Macs, add one, pairing links), Tools
-// & sign-ins (the Mac's shared MCP servers) and Voice. Runs on the Gateway origin and storage
+// & sign-ins (the Mac's backends and shared MCP servers) and Voice. Runs on the Gateway origin and storage
 // partition, so voice settings and the downloaded speech model are shared with the main window.
 import { render, type JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import "./styles/app.css";
 import "./settings.css";
 import { Icon } from "./ui/icons";
-import type { MCPSnapshot } from "./api/types";
+import type { BackendsAction, BackendsSnapshot, MCPSnapshot } from "./api/types";
 import { ConfirmLayer, confirmDialog, FormRow, FormSection, MenuLayer, openMenu, Spinner, ToastLayer } from "./ui/kit";
+import { BackendStatusList, type BackendsTransport } from "./ui/sheets/BackendStatusList";
 import { MCPServerList, type MCPTransport } from "./ui/sheets/MCPServerList";
 import { VoiceSettingsPanel } from "./ui/voice/VoiceControls";
 
@@ -39,6 +40,8 @@ interface Check { route: string; ok: boolean; message: string; milliseconds: num
 
 interface Form { name: string; url: string; directAddress: string; tailscaleOnly: boolean; token: string }
 
+interface HostReply { status: number; body?: unknown; error?: string }
+
 interface SettingsBridge {
   state(): Promise<State>;
   parseLink(link: string): Promise<{ server: Omit<Form, "token">; token: string } | { error: string }>;
@@ -48,7 +51,9 @@ interface SettingsBridge {
   remove(id: string): Promise<State | { error: string }>;
   openLog(): Promise<void>;
   /** GET or POST /api/v1/mcp through the main process, which checks the request and adds the token. */
-  mcp(request: { method: "GET" } | { method: "POST"; body: Record<string, unknown> }): Promise<{ status: number; body?: unknown; error?: string }>;
+  mcp(request: { method: "GET" } | { method: "POST"; body: Record<string, unknown> }): Promise<HostReply>;
+  /** GET or POST /api/v1/backends the same way (check, signIn, cancelSignIn). */
+  backends(request: { method: "GET" } | { method: "POST"; body: BackendsAction }): Promise<HostReply>;
   /** Runs GitHub's device sign-in in Cantrip Home, in the main window. */
   githubSignIn(): Promise<{ ok?: boolean; error?: string }>;
   openExternal(url: string): void;
@@ -64,17 +69,23 @@ declare global {
 const settings = window.gatewaySettings;
 const emptyForm: Form = { name: "", url: "", directAddress: "", tailscaleOnly: false, token: "" };
 
-async function settingsMCP(request: Parameters<SettingsBridge["mcp"]>[0]): Promise<MCPSnapshot> {
-  const reply = await settings.mcp(request);
+async function hostBody<T>(pending: Promise<HostReply>): Promise<T> {
+  const reply = await pending;
   if (reply.status >= 300 || reply.error !== undefined) {
     throw Object.assign(new Error(reply.error ?? `The Mac answered with HTTP ${reply.status}.`), { status: reply.status });
   }
-  return reply.body as MCPSnapshot;
+  return reply.body as T;
 }
 
 const mcpTransport: MCPTransport = {
-  load: () => settingsMCP({ method: "GET" }),
-  act: (body) => settingsMCP({ method: "POST", body }),
+  load: () => hostBody<MCPSnapshot>(settings.mcp({ method: "GET" })),
+  act: (body) => hostBody<MCPSnapshot>(settings.mcp({ method: "POST", body })),
+};
+
+const backendsTransport: BackendsTransport = {
+  load: () => hostBody<BackendsSnapshot>(settings.backends({ method: "GET" })),
+  act: (body) => hostBody<BackendsSnapshot>(settings.backends({ method: "POST", body })),
+  openLink: (url) => settings.openExternal(url),
 };
 
 type SettingsTab = "connection" | "tools" | "voice";
@@ -118,7 +129,9 @@ function SettingsApp(): JSX.Element {
         {tab === "connection"
           ? (state ? <Connection state={state} setState={setState} notice={notice} link={link} clearLink={() => setLink(null)} /> : <Spinner />)
           : tab === "tools"
-            ? (state?.selectedID ? <><GitHubSignIn /><MCPServerList transport={mcpTransport} /></> : <p class="callout muted">Pair a Mac on Connection first.</p>)
+            ? (state?.selectedID
+              ? <><BackendStatusList transport={backendsTransport} /><GitHubSignIn /><MCPServerList transport={mcpTransport} /></>
+              : <p class="callout muted">Pair a Mac on Connection first.</p>)
             : <VoiceSettingsPanel />}
       </div>
       <MenuLayer />

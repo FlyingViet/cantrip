@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { MCPSnapshot } from "../../api/types";
 import { Spinner } from "../kit";
 import { errorText, isUnsupported, mcpConnectLabel, mcpKind, mcpStatus } from "./sheetLogic";
+import { StatusRow } from "./StatusRow";
 // @ts-ignore -- esbuild bundles CSS imports; TypeScript has no "*.css" module declaration.
 import "./sheets.css";
 
@@ -78,19 +79,13 @@ export function MCPServerList(props: { transport: MCPTransport; tabID?: string }
         const phase = server.state?.phase ?? "";
         const name = server.name;
         return (
-          <section key={name} class="mcp-server" aria-label={name}>
-            <div class="mcp-head">
-              <strong>{name}</strong>
-              <span class="sh-secondary">{mcpKind(server)}</span>
-              <span class={`mcp-status ${status.tone}`}>{status.text}</span>
-              {server.oauth && server.enabled && (
-                ACTIVE.includes(phase)
-                  ? <button type="button" disabled={busy} onClick={() => void act({ action: "cancel", name })}>Cancel</button>
-                  : phase === "ready"
-                    ? <button type="button" disabled={busy} onClick={() => void act({ action: "signOut", name })}>Sign Out</button>
-                    : <button type="button" class="primary" disabled={busy} onClick={() => void act({ action: "connect", name })}>{mcpConnectLabel(server)}</button>
-              )}
-            </div>
+          <StatusRow key={name} name={name} kind={mcpKind(server)} status={status} actions={server.oauth && server.enabled && (
+            ACTIVE.includes(phase)
+              ? <button type="button" disabled={busy} onClick={() => void act({ action: "cancel", name })}>Cancel</button>
+              : phase === "ready"
+                ? <button type="button" disabled={busy} onClick={() => void act({ action: "signOut", name })}>Sign Out</button>
+                : <button type="button" class="primary" disabled={busy} onClick={() => void act({ action: "connect", name })}>{mcpConnectLabel(server)}</button>
+          )}>
             {server.state && (ACTIVE.includes(phase) || phase === "failed" || phase === "locked") && (
               <div class="mcp-page">
                 {server.state.message && <p class={phase === "failed" || phase === "locked" ? "sh-warning" : "sh-secondary"}>{server.state.message}</p>}
@@ -118,7 +113,7 @@ export function MCPServerList(props: { transport: MCPTransport; tabID?: string }
                   onChange={(event) => void act({ action: "setTab", name, tab: tabID, enabled: (event.target as HTMLInputElement).checked })} /> This tab</label>
               )}
             </div>
-          </section>
+          </StatusRow>
         );
       })}
     </div>
