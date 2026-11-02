@@ -2,10 +2,12 @@ import Darwin
 import Foundation
 
 /// Simulators shared by agent tabs, so tabs testing at the same time never drive the same one and
-/// per-task simulators don't pile up. The pool keeps one simulator per device type and OS version.
-/// `cantrip sim acquire` leases it to a tab, or makes a temporary copy when another tab holds it.
-/// Releasing (or the tab's turn ending) shuts it down and deletes a temporary copy. `sweep`, run by
-/// `StorageUpkeep`, cleans up what was left behind.
+/// per-task simulators don't pile up. The pool stays small: iPhone apps have one layout, so every
+/// iPhone request shares one iPhone (`Policy.phone`); the iPhone Duo folds, so it keeps one per iOS
+/// version; and there is one iPad, Apple Watch and Apple TV. `cantrip sim acquire` leases the
+/// pool's simulator to a tab, or makes a temporary copy when another tab holds it (`--exact` for a
+/// model or OS the pool doesn't keep). Releasing (or the tab's turn ending) shuts it down and
+/// deletes a temporary copy. `sweep`, run by `StorageUpkeep`, cleans up what was left behind.
 enum SimulatorPool {
     /// Names of simulators the pool makes. Adopted ones keep their names.
     static let poolPrefix = "Cantrip Pool"
@@ -17,6 +19,87 @@ enum SimulatorPool {
     struct Failure: LocalizedError {
         let message: String
         var errorDescription: String? { message }
+    }
+
+    // MARK: - Policy
+
+    /// What the pool hands out; settings of the same names (`cantrip config set simulatorPoolPhone …`).
+    struct Policy: Equatable {
+        /// Every iPhone request but the Duo's gets this model: iPhone apps have one layout.
+        var phone = "iPhone 17 Pro"
+        /// Its iOS version; empty for the newest installed one that runs it.
+        var phoneOS = ""
+        /// The iPhone Duo's iOS version when a request names none (each version has its own simulator).
+        var duoOS = "27.1"
+
+        enum Key {
+            static let phone = "simulatorPoolPhone"
+            static let phoneOS = "simulatorPoolPhoneOS"
+            static let duoOS = "simulatorPoolDuoOS"
+        }
+
+        static func standard(_ defaults: UserDefaults = .standard) -> Policy {
+            var policy = Policy()
+            func text(_ key: String) -> String? { defaults.string(forKey: key)?.trimmingCharacters(in: .whitespaces) }
+            if let phone = text(Key.phone), !phone.isEmpty { policy.phone = phone }
+            if let os = text(Key.phoneOS) { policy.phoneOS = os }
+            if let os = text(Key.duoOS) { policy.duoOS = os }
+            return policy
+        }
+    }
+
+    /// Kinds of simulator the pool keeps one of. The iPhone Duo folds, so each of its iOS versions
+    /// keeps its own; other iPhones share one, and so do iPads, watches and TVs. Anything else
+    /// (Apple Vision Pro) keeps one per device type and OS version.
+    enum Family: Hashable {
+        case phone, duo, tablet, watch, tv
+        case other(String)
+
+        init(deviceName name: String) {
+            let lower = name.trimmingCharacters(in: .whitespaces).lowercased()
+            if lower.hasPrefix("iphone") || lower == "duo" {
+                self = lower.contains("duo") ? .duo : .phone
+            } else if lower.hasPrefix("ipad") {
+                self = .tablet
+            } else if lower.hasPrefix("apple watch") || lower.hasPrefix("watch") {
+                self = .watch
+            } else if lower.hasPrefix("apple tv") {
+                self = .tv
+            } else {
+                self = .other(lower)
+            }
+        }
+
+        /// The family of a pool key ("iPhone Duo|27.2").
+        init(key: String) { self.init(deviceName: SimulatorPool.typeName(ofKey: key)) }
+
+        /// One simulator per device type and OS version rather than one for the whole family.
+        var perVersion: Bool {
+            switch self {
+            case .duo, .other: return true
+            case .phone, .tablet, .watch, .tv: return false
+            }
+        }
+
+        var platform: String {
+            switch self {
+            case .watch: return "watchOS"
+            case .tv: return "tvOS"
+            case .other(let name) where name.hasPrefix("apple vision"): return "visionOS"
+            default: return "iOS"
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .phone: return "iPhone"
+            case .duo: return "iPhone Duo"
+            case .tablet: return "iPad"
+            case .watch: return "Apple Watch"
+            case .tv: return "Apple TV"
+            case .other(let name): return name
+            }
+        }
     }
 
     // MARK: - Simulators
@@ -127,7 +210,7 @@ enum SimulatorPool {
 
     // MARK: - Pool and leases
 
-    /// The pool's simulator for one device type and OS version ("iPhone Duo|27.2").
+    /// The pool's simulator for one kind ("iPhone 17 Pro|27.0", "iPhone Duo|27.2"): see `Family`.
     struct Member: Codable, Equatable {
         var key: String
         var udid: String
@@ -204,28 +287,37 @@ enum SimulatorPool {
         /// Maestro, simctl) is using it.
         var commandLines: () -> [String] = { StorageUpkeep.ProcessSnapshot.current().commandLines }
         var now: () -> Date = Date.init
+        var policy = Policy.standard()
     }
 
     /// For agents' system instructions: lease simulators instead of making them.
     static func agentGuidance(command: String) -> String {
         """
-        Simulators on this Mac are shared. To run an app or tests in one, lease it: \
-        `\(command) sim acquire --device 'iPhone 17 Pro' [--os 27.0]` prints a UDID that's yours \
-        until your turn ends (a temporary copy when another tab has the pool's). Use it only by \
-        UDID: `xcodebuild -destination 'id=UDID'`, `xcrun simctl boot UDID`, `maestro --device UDID`. \
-        Never make simulators with `simctl create` or `simctl clone`, and never delete or erase \
-        them. When you're done, `\(command) sim release` shuts it down (and deletes a temporary \
-        copy); Cantrip also does this when your turn ends.
+        Simulators on this Mac are shared and few. To run an app or tests in one, lease it: \
+        `\(command) sim acquire --device iPhone` prints a UDID that's yours until your turn ends. \
+        iPhone apps have one layout, so test them on that single pool iPhone: don't ask for a \
+        particular iPhone model or iOS version unless the bug only happens there (then add \
+        `--exact`, which makes a temporary copy). Only the iPhone Duo has a simulator per iOS \
+        version (`--device 'iPhone Duo' [--os 27.1]`); iPad, Apple Watch and Apple TV have one each. \
+        Use it only by UDID: `xcodebuild -destination 'id=UDID'`, `xcrun simctl boot UDID`, \
+        `maestro --device UDID`. Never make simulators with `simctl create` or `simctl clone`, and \
+        never delete or erase them. When you're done, `\(command) sim release` shuts it down (and \
+        deletes a temporary copy); Cantrip also does this when your turn ends.
         """
     }
 
     static func key(type: DeviceType, runtime: Runtime) -> String { "\(type.name)|\(runtime.version)" }
 
-    /// "iPhone Duo|27.2" → "iPhone Duo, iOS 27.2" given the runtime's name.
-    static func describe(_ key: String, platform: String = "iOS") -> String {
+    /// "iPhone Duo|27.2" → "iPhone Duo".
+    static func typeName(ofKey key: String) -> String {
+        String(key.split(separator: "|", maxSplits: 1).first ?? Substring(key))
+    }
+
+    /// "iPhone Duo|27.2" → "iPhone Duo, iOS 27.2".
+    static func describe(_ key: String) -> String {
         let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return key }
-        return "\(parts[0]), \(platform) \(parts[1])"
+        return "\(parts[0]), \(Family(deviceName: parts[0]).platform) \(parts[1])"
     }
 
     static func resolveType(_ name: String, in types: [DeviceType]) throws -> DeviceType {
@@ -259,6 +351,101 @@ enum SimulatorPool {
         throw Failure(message: "\(type.name) has no installed runtime for \(os). Installed: \(installed.joined(separator: ", ")).")
     }
 
+    /// Whether `os` ("27", "27.0", "iOS 27.0") names `runtime`.
+    static func matches(_ os: String, _ runtime: Runtime) -> Bool {
+        let os = os.trimmingCharacters(in: .whitespaces)
+        let version = os.split(separator: " ").last.map(String.init) ?? os
+        return runtime.version == version || runtime.name.lowercased() == os.lowercased()
+            || runtime.version.hasPrefix(version + ".")
+    }
+
+    /// What a request gets.
+    struct Target: Equatable {
+        var type: DeviceType
+        var runtime: Runtime
+        var key: String
+        /// A model or OS the pool doesn't keep, asked for with `exact`: a temporary copy.
+        var temporaryOnly = false
+        /// Why it isn't what was asked for.
+        var note: String?
+
+        var description: String { "\(type.name), \(runtime.name)" }
+    }
+
+    /// The pool's iPhone: `Policy.phone` on `Policy.phoneOS` (the newest that runs it when empty).
+    static func phone(_ policy: Policy, types: [DeviceType], runtimes: [Runtime]) throws -> (DeviceType, Runtime) {
+        guard let type = try? resolveType(policy.phone, in: types) else {
+            throw Failure(message: "The pool's iPhone, “\(policy.phone)” (the \(Policy.Key.phone) setting), isn't an "
+                + "installed simulator device type. Set another: cantrip config set \(Policy.Key.phone) 'iPhone 17 Pro'.")
+        }
+        return (type, try resolveRuntime(policy.phoneOS.isEmpty ? nil : policy.phoneOS, for: type, in: runtimes))
+    }
+
+    /// Maps a request onto the pool: any iPhone but the Duo gets the pool's iPhone, an iPad, watch or
+    /// TV gets the pool's one of those when it has one, and the Duo gets its simulator for that iOS
+    /// version (`Policy.duoOS` when none is named). With `exact`, the model and OS asked for: the
+    /// pool's when it keeps that kind, otherwise a temporary copy.
+    static func resolve(device: String, os: String?, exact: Bool, types: [DeviceType], runtimes: [Runtime],
+                        pool: [Member], policy: Policy) throws -> Target {
+        let os = os.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0.trimmingCharacters(in: .whitespaces) }
+        var family = Family(deviceName: device)
+        var asked: DeviceType?
+        if case .other = family {
+            let type = try resolveType(device, in: types)
+            asked = type
+            family = Family(deviceName: type.name)
+        }
+        func duoRuntime(_ type: DeviceType) throws -> Runtime {
+            if let os { return try resolveRuntime(os, for: type, in: runtimes) }
+            if let chosen = try? resolveRuntime(policy.duoOS, for: type, in: runtimes) { return chosen }
+            return try resolveRuntime(nil, for: type, in: runtimes)
+        }
+        func target(_ type: DeviceType, _ runtime: Runtime, note: String? = nil) -> Target {
+            Target(type: type, runtime: runtime, key: key(type: type, runtime: runtime), note: note)
+        }
+        if exact {
+            let type = try asked ?? resolveType(device, in: types)
+            let runtime = family == .duo ? try duoRuntime(type) : try resolveRuntime(os, for: type, in: runtimes)
+            var chosen = target(type, runtime)
+            chosen.temporaryOnly = !pool.contains { $0.key == chosen.key }
+            return chosen
+        }
+        let askedFor = os.map { "\(device) on \($0)" } ?? device
+        switch family {
+        case .phone:
+            let (type, runtime) = try phone(policy, types: types, runtimes: runtimes)
+            let sameModel = device.trimmingCharacters(in: .whitespaces).lowercased() == type.name.lowercased()
+                || device == type.identifier
+            let differs = !sameModel && device.trimmingCharacters(in: .whitespaces).lowercased() != "iphone"
+                || os.map { !matches($0, runtime) } == true
+            return target(type, runtime, note: differs
+                ? "Asked for \(askedFor). iPhone apps have one layout, so every iPhone request shares the pool's "
+                    + "\(type.name), \(runtime.name). For a bug only that model or version shows, add --exact."
+                : nil)
+        case .duo:
+            let type = try asked ?? resolveType(device, in: types)
+            return target(type, try duoRuntime(type))
+        case .tablet, .watch, .tv:
+            if let member = pool.first(where: { Family(key: $0.key) == family }),
+               let type = types.first(where: { $0.name == typeName(ofKey: member.key) }),
+               let runtime = runtimes.first(where: {
+                   $0.isAvailable && $0.supportedTypes.contains(type.identifier) && member.key == key(type: type, runtime: $0)
+               }) {
+                let generic = device.trimmingCharacters(in: .whitespaces).lowercased() == family.label.lowercased()
+                let same = (generic || (asked ?? (try? resolveType(device, in: types))) == type)
+                    && os.map { matches($0, runtime) } != false
+                return target(type, runtime, note: same ? nil
+                    : "Asked for \(askedFor). The pool keeps one \(family.label): \(type.name), \(runtime.name). "
+                        + "For a bug only that model or version shows, add --exact.")
+            }
+            let type = try asked ?? resolveType(device, in: types)
+            return target(type, try resolveRuntime(os, for: type, in: runtimes))
+        case .other:
+            let type = try asked ?? resolveType(device, in: types)
+            return target(type, try resolveRuntime(os, for: type, in: runtimes))
+        }
+    }
+
     struct Acquired: Codable {
         var lease: Lease
         var name: String
@@ -266,17 +453,19 @@ enum SimulatorPool {
         var description: String
         /// The tab already held this lease; it was renewed.
         var renewed = false
+        /// How the request was mapped onto the pool, when it isn't what was asked for.
+        var note: String?
     }
 
-    /// Leases a simulator for `device` on `os` (newest when nil). The pool's own when it's free,
+    /// Leases a simulator for `device` on `os` (see `resolve`). The pool's own when it's free,
     /// otherwise a temporary copy. A tab asking again for the same kind gets its lease back.
-    static func acquire(device: String, os: String?, tab: String?, hours: Double? = nil,
+    static func acquire(device: String, os: String?, exact: Bool = false, tab: String?, hours: Double? = nil,
                         context c: Context = Context()) throws -> Acquired {
-        let type = try resolveType(device, in: try c.simctl.deviceTypes())
-        let runtime = try resolveRuntime(os, for: type, in: try c.simctl.runtimes())
-        let key = key(type: type, runtime: runtime)
-        let description = "\(type.name), \(runtime.name)"
+        let types = try c.simctl.deviceTypes(), runtimes = try c.simctl.runtimes()
         return try c.store.locked { state in
+            let target = try resolve(device: device, os: os, exact: exact, types: types, runtimes: runtimes,
+                                     pool: state.pool, policy: c.policy)
+            let (type, runtime, key, description) = (target.type, target.runtime, target.key, target.description)
             let now = c.now()
             var devices = try c.simctl.devices()
             reap(&state, now: now, simctl: c.simctl)
@@ -286,17 +475,27 @@ enum SimulatorPool {
                 state.leases[index].expiresAt = now.addingTimeInterval(lifetime)
                 let lease = state.leases[index]
                 return Acquired(lease: lease, name: devices.first { $0.udid == lease.udid }?.name ?? "", description: description,
-                                renewed: true)
+                                renewed: true, note: target.note)
+            }
+            let id = UUID().uuidString.lowercased()
+            let copyName = "\(temporaryPrefix) · \(type.name) · \(runtime.name) · \(id.prefix(4))"
+            if target.temporaryOnly {
+                let udid = try c.simctl.create(copyName, type: type.identifier, runtime: runtime.identifier)
+                state.temporaries[udid] = now
+                let lease = Lease(id: id, udid: udid, key: key, temporary: true, tab: tab,
+                                  acquiredAt: now, expiresAt: now.addingTimeInterval(lifetime))
+                state.leases.append(lease)
+                return Acquired(lease: lease, name: copyName, description: description,
+                                note: "The pool doesn't keep \(description), so this is a temporary copy.")
             }
             let member = try poolMember(key: key, type: type, runtime: runtime, state: &state, devices: &devices, simctl: c.simctl)
             let lines = c.commandLines()
             let busy = state.leases.contains { $0.udid == member.udid } || lines.contains { $0.contains(member.udid) }
             var udid = member.udid
             var name = devices.first { $0.udid == member.udid }?.name ?? ""
-            let id = UUID().uuidString.lowercased()
             if busy {
                 // A copy of a shut-down pool simulator keeps its apps; a booted one can't be copied.
-                name = "\(temporaryPrefix) · \(type.name) · \(runtime.name) · \(id.prefix(4))"
+                name = copyName
                 let source = devices.first { $0.udid == member.udid }
                 if source?.isBooted == false, let copy = try? c.simctl.clone(member.udid, name: name), !copy.isEmpty {
                     udid = copy
@@ -308,7 +507,7 @@ enum SimulatorPool {
             let lease = Lease(id: id, udid: udid, key: key, temporary: busy, tab: tab,
                               acquiredAt: now, expiresAt: now.addingTimeInterval(lifetime))
             state.leases.append(lease)
-            return Acquired(lease: lease, name: name, description: description)
+            return Acquired(lease: lease, name: name, description: description, note: target.note)
         }
     }
 
@@ -357,22 +556,34 @@ enum SimulatorPool {
         return (try? simctl.rename(device.udid, to: name)) == nil ? nil : name
     }
 
-    /// Makes an existing simulator the pool's for its device type and OS version.
+    /// Makes an existing simulator the pool's for its kind (`Family`), replacing the one it had. The
+    /// pool's iPhone has to be `Policy.phone` on its OS.
     @discardableResult
     static func adopt(_ udid: String, context c: Context = Context()) throws -> Member {
         let devices = try c.simctl.devices()
         guard let device = devices.first(where: { $0.udid.caseInsensitiveCompare(udid) == .orderedSame }), device.isAvailable else {
             throw Failure(message: "No available simulator has the UDID \(udid).")
         }
-        guard let type = try c.simctl.deviceTypes().first(where: { $0.identifier == device.typeIdentifier }),
-              let runtime = try c.simctl.runtimes().first(where: { $0.identifier == device.runtimeIdentifier }) else {
+        let types = try c.simctl.deviceTypes(), runtimes = try c.simctl.runtimes()
+        guard let type = types.first(where: { $0.identifier == device.typeIdentifier }),
+              let runtime = runtimes.first(where: { $0.identifier == device.runtimeIdentifier }) else {
             throw Failure(message: "\(device.name)'s device type or runtime isn't installed.")
+        }
+        let family = Family(deviceName: type.name)
+        if family == .phone {
+            let (phoneType, phoneRuntime) = try phone(c.policy, types: types, runtimes: runtimes)
+            guard phoneType == type, phoneRuntime.identifier == runtime.identifier else {
+                throw Failure(message: "The pool's only iPhone is \(phoneType.name), \(phoneRuntime.name) (the "
+                    + "\(Policy.Key.phone) and \(Policy.Key.phoneOS) settings): adopt one of those, or change them first.")
+            }
         }
         return try c.store.locked { state in
             guard !state.isTemporary(device) else { throw Failure(message: "\(device.name) is a temporary copy.") }
             let member = Member(key: key(type: type, runtime: runtime), udid: device.udid)
             _ = renameOnAdopting(device, type: type, runtime: runtime, simctl: c.simctl)
-            state.pool.removeAll { $0.key == member.key || $0.udid == member.udid }
+            state.pool.removeAll {
+                $0.key == member.key || $0.udid == member.udid || (!family.perVersion && Family(key: $0.key) == family)
+            }
             state.pool.append(member)
             state.pool.sort { $0.key < $1.key }
             return member

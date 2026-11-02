@@ -211,7 +211,7 @@ final class ChildTabCoordinator {
         }
         let command = TabInsight.command
         lines.append("The parent tab's ID is \(parent.id.uuidString). When you need its context, read its conversation (read-only): `\(command) tab read \(parent.id.uuidString)` (--turns N for more). To ask it something only it can answer: `\(command) tab ask \(parent.id.uuidString) \"question\"`; it waits until the parent's current turn ends, so prefer reading.")
-        lines.append("Leave these to the parent tab, which runs them after your work merges: restarting or deploying Cantrip, TestFlight uploads, releases and installs on devices; if one is needed, say so in your Summary. For Simulator runs, lease your own simulator: `\(command) sim acquire --device 'iPhone 17 Pro' [--os 27.0]` prints its UDID; use it by UDID (`-destination 'id=UDID'`, `simctl boot UDID`) and those runs never wait. Runs on any other simulator wait their turn. Your lease ends with your turn, or with `\(command) sim release`.")
+        lines.append("Leave these to the parent tab, which runs them after your work merges: restarting or deploying Cantrip, TestFlight uploads, releases and installs on devices; if one is needed, say so in your Summary. For Simulator runs, lease your own simulator: `\(command) sim acquire --device iPhone` (or `--device 'iPhone Duo' [--os 27.1]`) prints its UDID; use it by UDID (`-destination 'id=UDID'`, `simctl boot UDID`) and those runs don't wait for other tabs' tests. Runs on any other simulator wait their turn. Your lease ends with your turn, or with `\(command) sim release`.")
         lines.append("End your final reply with a \"Summary:\" section of one or two sentences.)")
         return lines.joined(separator: "\n")
     }
