@@ -332,6 +332,15 @@ do {
     expect(c.store.read().leases.count == 1, "the expired lease is gone")
     try SimulatorPool.release(all: true, context: c)
 
+    // An expired lease on a simulator a test still runs on loses its lease, not its simulator.
+    let outside = try SimulatorPool.acquire(device: "iPhone Duo", os: "27.2", tab: nil, hours: 1, context: c)
+    fake.update(outside.lease.udid) { $0.state = "Booted" }
+    let running = context(fake, lines: ["maestro test --device \(outside.lease.udid)"], at: now.addingTimeInterval(2 * 3_600))
+    _ = SimulatorPool.sweep(SimulatorPool.SweepOptions(), dryRun: false, context: running)
+    expect(c.store.read().leases.isEmpty, "the expired lease ends")
+    expect(fake.entry(outside.lease.udid)?.state == "Booted", "but the simulator the test uses keeps running")
+    fake.update(outside.lease.udid) { $0.state = "Shutdown" }
+
     // Adopting makes a chosen simulator the pool's for its kind.
     let member = try SimulatorPool.adopt("bbbb431d-0000-0000-0000-000000000000", context: c)
     expect(member.key == "iPhone Duo|27.2" && c.store.read().pool.filter { $0.key == member.key }.count == 1,

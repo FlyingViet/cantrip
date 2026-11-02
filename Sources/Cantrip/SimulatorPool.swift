@@ -633,7 +633,9 @@ enum SimulatorPool {
         let (type, runtime, key, description) = (target.type, target.runtime, target.key, target.description)
         let now = c.now()
         var devices = try c.simctl.devices()
-        reap(&state, now: now, simctl: c.simctl)
+        let lines = c.commandLines()
+        func inUse(_ udid: String) -> Bool { lines.contains { $0.contains(udid) } }
+        reap(&state, now: now, simctl: c.simctl, inUse: inUse)
         let lifetime = (hours ?? (tab == nil ? defaultLeaseHours : tabLeaseHours)) * 3_600
         func done(_ acquired: Acquired) -> Attempt {
             state.waiting.removeAll { $0.id == waiter.id }
@@ -653,8 +655,6 @@ enum SimulatorPool {
                                  description: lease.key == key ? description : describe(lease.key), renewed: true,
                                  note: lease.key == key ? target.note : nil))
         }
-        let lines = c.commandLines()
-        func inUse(_ udid: String) -> Bool { lines.contains { $0.contains(udid) } }
         // A tab has one simulator at a time: its others end first, unless a process still uses one.
         let others = tab.map { tab in state.leases.filter { $0.tab == tab && $0.key != key } } ?? []
         let ending = others.filter { !inUse($0.udid) }
@@ -880,9 +880,13 @@ enum SimulatorPool {
         }
     }
 
-    /// Ends leases past their time.
-    private static func reap(_ state: inout State, now: Date, simctl: Simctl) {
-        end(state.leases.filter { $0.expiresAt <= now }, in: &state, simctl: simctl)
+    /// Ends leases past their time. A simulator a running process still uses only loses its lease:
+    /// it isn't shut down or deleted under the process; the upkeep tidies it once it's free.
+    private static func reap(_ state: inout State, now: Date, simctl: Simctl, inUse: (String) -> Bool) {
+        let expired = state.leases.filter { $0.expiresAt <= now }
+        let busy = Set(expired.filter { inUse($0.udid) }.map(\.id))
+        state.leases.removeAll { busy.contains($0.id) }
+        end(expired.filter { !busy.contains($0.id) }, in: &state, simctl: simctl)
     }
 
     // MARK: - Cleanup
@@ -980,7 +984,7 @@ enum SimulatorPool {
             let lines = c.commandLines()
             let now = c.now()
             func work(_ state: inout State) {
-                if !dryRun { reap(&state, now: now, simctl: c.simctl) }
+                if !dryRun { reap(&state, now: now, simctl: c.simctl, inUse: { udid in lines.contains { $0.contains(udid) } }) }
                 let live = Set(state.leases.filter { $0.expiresAt > now }.map(\.udid))
                 report.leased = live.count
                 report.simulators = devices.count
