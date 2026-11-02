@@ -45,7 +45,7 @@ struct MacHomeWindow: View {
         .focusedSceneValue(\.startFreshTabID, startFreshTabID)
         .sheet(isPresented: $navigation.showingBackground) {
             CantripHomeBackgroundView(
-                remote: remote, openLog: nil, openSession: nil,
+                remote: remote, openLog: { navigation.openBackgroundLog() }, openSession: nil,
                 openTab: { navigation.openTab($0) }
             )
             .macSheetFrame(width: 620, height: 640)

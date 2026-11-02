@@ -149,6 +149,23 @@ final class MacHomeNavigationTests: XCTestCase {
         XCTAssertFalse(navigation.showingBackground)
     }
 
+    /// Background's Full Log opens Home's background log once the Mac has named it; until then
+    /// the list stays open.
+    func testFullLogWaitsForTheLogSession() throws {
+        let memory = ServerCredentialStore(read: { _ in nil }, write: { _, _ in }, remove: { _ in })
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        let remote = CantripRemoteModel(servers: ServerProfiles(kind: .cantrip, defaults: defaults, credentials: memory))
+        let env = HermesEnv(servers: ServerProfiles(kind: .hermes, defaults: defaults, credentials: memory),
+                            defaults: defaults)
+        let navigation = MacHomeNavigation()
+        navigation.attach(env: env, remote: remote)
+        navigation.showBackground()
+        XCTAssertNil(remote.homeBackground?.sessionID)
+        navigation.openBackgroundLog()
+        XCTAssertTrue(navigation.showingBackground, "no log session yet: nothing to open")
+        XCTAssertEqual(env.executionLane, .home)
+    }
+
     /// Project tabs open in Home's detail pane (sidebar rows, handoff cards, Background) and
     /// any Home section, ⌘1-3 or Background brings Home back.
     func testTabsOpenInPlaceAndHomeSectionsReturn() throws {

@@ -49,6 +49,20 @@ final class MacHomeNavigation: ObservableObject {
         }
     }
 
+    /// Opens Home's background log (the runs' reports, with their cards) in the detail pane, as
+    /// Background's Full Log does on iPhone. The log is reachable by ID but never listed as a tab.
+    func openBackgroundLog() {
+        guard let env, let remote, let id = remote.homeBackground?.sessionID else { return }
+        closeAll()
+        showingDirectLocal = false
+        if isTabOpen {
+            Task { await remote.selectSession(id) }
+        } else {
+            remote.prepareToOpenHomeBackgroundLog()
+            env.select(.cantrip)
+        }
+    }
+
     /// Leaves an open tab for Home, optionally on one section.
     func showHome(_ section: CantripHomeSection? = nil) {
         showingDirectLocal = false
