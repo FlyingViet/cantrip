@@ -1,12 +1,13 @@
 import type { JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
-import { cachedImage, loadLinkPreviewImage, loadMapTile } from "../../api/client";
-import type { RemoteLinkPreview, RemotePlaceCard, RemotePlacePin, RemoteWeatherCard } from "../../api/types";
+import { cachedImage, loadLinkPreviewImage } from "../../api/client";
+import type { RemoteLinkPreview, RemotePlaceCard, RemoteWeatherCard } from "../../api/types";
 import { Icon, type IconName } from "../icons";
 import { bridge } from "../../bridge";
+import { MapComposition, type MapSpec } from "./CardMap";
 import {
-  initialZoomForDelta, isSafePublicUrl, latToTileY, lonToTileX, placeDirectionsUrl, placeGlyph, placeNote, pinOffsets, pinWidth,
-  weatherAttributionUrl, weatherChance, weatherDetail, weatherIcon, weatherRanges, weatherSpoken, weatherTint, weatherUnitName,
+  isSafePublicUrl, placeDirectionsUrl, placeGlyph, placeNote, weatherAttributionUrl, weatherChance, weatherDetail, weatherIcon,
+  weatherRanges, weatherSpoken, weatherTint, weatherUnitName,
 } from "./richCardLogic";
 
 function WeatherGlyph(props: { symbol: string | undefined; size?: 16 | 18 | 28 }): JSX.Element {
@@ -97,29 +98,35 @@ export function LinkPreviewStack(props: { cards: RemoteLinkPreview[] | undefined
   );
 }
 
-function LinkPreviewCard(props: { card: RemoteLinkPreview }): JSX.Element {
-  const { card } = props;
-  const cacheKey = card.imageID ? `link-preview:${card.imageID}` : "";
-  const [heroSrc, setHeroSrc] = useState<string | null>(cacheKey ? cachedImage(cacheKey) ?? null : null);
+/** A public link preview's image the Mac cached (`GET /api/v1/link-previews/image`), or null until it loads or when it can't. */
+export function useLinkPreviewImage(imageID: string | undefined): string | null {
+  const cacheKey = imageID ? `link-preview:${imageID}` : "";
+  const [src, setSrc] = useState<string | null>(cacheKey ? cachedImage(cacheKey) ?? null : null);
 
   useEffect(() => {
-    if (!card.imageID) {
-      setHeroSrc(null);
+    if (!imageID) {
+      setSrc(null);
       return;
     }
     let live = true;
-    void loadLinkPreviewImage(card.imageID).then(
+    void loadLinkPreviewImage(imageID).then(
       (url) => {
-        if (live) setHeroSrc(url);
+        if (live) setSrc(url);
       },
       () => {
-        if (live) setHeroSrc(null);
+        if (live) setSrc(null);
       },
     );
     return () => {
       live = false;
     };
-  }, [card.imageID]);
+  }, [imageID]);
+  return src;
+}
+
+function LinkPreviewCard(props: { card: RemoteLinkPreview }): JSX.Element {
+  const { card } = props;
+  const heroSrc = useLinkPreviewImage(card.imageID);
 
   return (
     <button
@@ -142,113 +149,25 @@ function LinkPreviewCard(props: { card: RemoteLinkPreview }): JSX.Element {
   );
 }
 
-function MapTileImg(props: { z: number; x: number; y: number; left: number; top: number }): JSX.Element | null {
-  const { z, x, y, left, top } = props;
-  const maxTile = 1 << z;
-  const wrappedX = ((x % maxTile) + maxTile) % maxTile;
-  const validY = y >= 0 && y < maxTile;
-  const cacheKey = `map-tile:${z}/${wrappedX}/${y}`;
-  const [src, setSrc] = useState<string | null>(validY ? cachedImage(cacheKey) ?? null : null);
-
-  useEffect(() => {
-    if (!validY) {
-      setSrc(null);
-      return;
-    }
-    let live = true;
-    void loadMapTile(z, wrappedX, y).then(
-      (url) => {
-        if (live) setSrc(url);
-      },
-      () => {
-        if (live) setSrc(null);
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [z, wrappedX, y, validY]);
-
-  if (!src) return null;
-  return <img class="place-map-tile" src={src} alt="" style={{ left: `${left}px`, top: `${top}px` }} />;
-}
-
 export function PlaceCardView(props: { card: RemotePlaceCard | undefined }): JSX.Element | null {
   const card = props.card;
   if (!card || !Array.isArray(card.places) || !card.places.length) return null;
-
-  const [zoom, setZoom] = useState<number>(() =>
-    initialZoomForDelta(Math.max(card.latitudeDelta || 0.04, card.longitudeDelta || 0.04)),
-  );
-  const [center, setCenter] = useState<{ lat: number; lon: number }>({
-    lat: card.centerLatitude,
-    lon: card.centerLongitude,
-  });
-  const [selectedID, setSelectedID] = useState<string>(card.places[0].id);
-
-  const mapW = 580;
-  const mapH = 310;
-  const centerTX = lonToTileX(center.lon, zoom);
-  const centerTY = latToTileY(center.lat, zoom);
-  const baseTX = Math.floor(centerTX);
-  const baseTY = Math.floor(centerTY);
-  const offsetX = mapW / 2 - (centerTX - baseTX) * 256;
-  const offsetY = mapH / 2 - (centerTY - baseTY) * 256;
-
-  const tiles: { dx: number; dy: number; tx: number; ty: number; left: number; top: number }[] = [];
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -2; dx <= 2; dx++) {
-      tiles.push({
-        dx,
-        dy,
-        tx: baseTX + dx,
-        ty: baseTY + dy,
-        left: Math.round(offsetX + dx * 256),
-        top: Math.round(offsetY + dy * 256),
-      });
-    }
-  }
-
-  // Close places: later pins move to the nearest free spot so every name stays readable.
-  const points = card.places.map((place) => ({
-    x: mapW / 2 + (lonToTileX(place.longitude, zoom) - centerTX) * 256,
-    y: mapH / 2 + (latToTileY(place.latitude, zoom) - centerTY) * 256,
-  }));
-  const moves = pinOffsets(points.map((point, index) => ({ ...point, w: pinWidth(card.places[index].name), h: 24 })), mapW, mapH);
+  const places = new Map(card.places.map((place) => [place.id, place]));
+  const map: MapSpec = {
+    latitude: card.centerLatitude, longitude: card.centerLongitude,
+    latitudeDelta: card.latitudeDelta, longitudeDelta: card.longitudeDelta,
+    pins: card.places.map((place) => ({ id: place.id, title: place.name, latitude: place.latitude, longitude: place.longitude })),
+    attribution: "© OpenStreetMap · Apple Maps",
+    label: card.places.length === 1 ? `Map of ${card.places[0].name}` : `Map of ${card.places.length} places`,
+  };
 
   return (
     <section class="place-card" aria-label={card.query || "Recommended places"}>
-      <div class="place-map-surface">
-        {tiles.map((t) => (
-          <MapTileImg key={`${zoom}:${t.tx}:${t.ty}`} z={zoom} x={t.tx} y={t.ty} left={t.left} top={t.top} />
-        ))}
-        {card.places.map((place, index) => {
-          const px = points[index].x;
-          const py = points[index].y;
-          const [moveX, moveY] = moves[index];
-          return (
-            <button
-              key={place.id}
-              type="button"
-              class={`place-pin${selectedID === place.id ? " active" : ""}`}
-              style={{
-                left: `${Math.round(px)}px`, top: `${Math.round(py)}px`,
-                ...(moveX || moveY ? { transform: `translate(calc(-50% + ${moveX}px), calc(-50% + ${moveY}px))` } : {}),
-              }}
-              onClick={() => {
-                setSelectedID(place.id);
-                bridge.openExternal(placeDirectionsUrl(place));
-              }}
-            >
-              <span class="place-pin-dot" aria-hidden="true">{placeGlyph(place)}</span>
-              <span class="place-pin-label">{place.name}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div class="place-list-overlay">
-        {card.places.map((place) => {
+      <MapComposition
+        map={map}
+        pinDot={(pin) => placeGlyph(places.get(pin.id)!)}
+        onPinClick={(pin) => bridge.openExternal(placeDirectionsUrl(places.get(pin.id)!))}
+        legend={({ selectedID, select }) => card.places.map((place) => {
           const metaParts: string[] = [];
           if (typeof place.rating === "number") {
             metaParts.push(
@@ -258,14 +177,13 @@ export function PlaceCardView(props: { card: RemotePlaceCard | undefined }): JSX
           if (place.priceLevel) metaParts.push(place.priceLevel);
           if (place.category) metaParts.push(place.category);
           const cleanPhone = place.phone ? place.phone.replace(/[^0-9+]/g, "") : "";
+          const note = placeNote(place);
           return (
             <div
               key={place.id}
+              data-pin-id={place.id}
               class={`place-row${selectedID === place.id ? " selected" : ""}`}
-              onClick={() => {
-                setSelectedID(place.id);
-                setCenter({ lat: place.latitude, lon: place.longitude });
-              }}
+              onClick={() => select(place.id)}
             >
               <div class="place-row-name">{place.name}</div>
               {metaParts.length ? <div class="place-row-meta">{metaParts.join(" · ")}</div> : null}
@@ -276,10 +194,7 @@ export function PlaceCardView(props: { card: RemotePlaceCard | undefined }): JSX
               ) : place.address ? (
                 <div class="place-row-meta">{place.address}</div>
               ) : null}
-              {(() => {
-                const note = placeNote(place);
-                return note ? <div class={`place-row-meta${note.warning ? " place-row-warning" : ""}`}>{note.text}</div> : null;
-              })()}
+              {note ? <div class={`place-row-meta${note.warning ? " place-row-warning" : ""}`}>{note.text}</div> : null}
               <div class="place-row-actions" onClick={(e) => e.stopPropagation()}>
                 <button
                   type="button"
@@ -302,18 +217,7 @@ export function PlaceCardView(props: { card: RemotePlaceCard | undefined }): JSX
             </div>
           );
         })}
-      </div>
-
-      <div class="place-zoom-controls">
-        <button type="button" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(18, z + 1))}>
-          +
-        </button>
-        <button type="button" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(3, z - 1))}>
-          −
-        </button>
-      </div>
-
-      <div class="place-attribution">© OpenStreetMap · Apple Maps</div>
+      />
     </section>
   );
 }

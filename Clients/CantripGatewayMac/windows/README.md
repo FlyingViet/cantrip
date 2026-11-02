@@ -55,10 +55,15 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   dialog in Downloads and writes the Mac's original file straight to disk; an artifact in a
   folder also offers **Save "<folder>" Folder as Zip…** for every artifact in that folder.
   Downloads use the paired routes only (direct TLS-PSK or HTTPS), never a link.
-- **Weather cards.** A reply about the weather shows the forecast card the Mac built from
-  Open-Meteo, like the map card: the place and whose location it is, now, today's high and
-  low, the next 12 hours and 10 days, the update time and Open-Meteo's attribution, or
-  **Forecast unavailable** and why. Every hour and day has a screen reader label.
+- **Cards.** Cards under a reply are drawn from the generic blocks the Mac sends (`cards`), so a
+  new kind of card needs no Gateway update: weather (now, the next 12 hours and 10 days, or
+  **Forecast unavailable** and why), places on an interactive map with their list (floating over
+  the map, or under it in a narrow window; choosing a place focuses its pin), link previews with
+  the page's image, flights from a Kiwi.com search (cheapest and fastest marked, **Book**) and
+  cards from tools, such as a package's status. Panel cards end with the update time and their
+  source's attribution; buttons open only public web pages (a place's phone number is shown, not
+  dialed), and every row has a screen reader label. Replies from older Macs keep their weather,
+  map and link cards.
 - **Sheets.** Background runs (answer a waiting run in place), a tab's background tasks and
   queue (each message's suggested plan, **Run in child tab**, Send now, Remove), Model Settings (with the Mac-wide usage limit fallbacks: add, reorder and remove backups, pick each one's model and effort, and list a backend again, the Mac's own included, with another model; and Private Local), Rename, Usage Limits (Claude Code, Antigravity, Codex and Copilot, with each model's own limits), Cantrip Memory (formatted
   Markdown or its source), GitHub Builds, Update & Rebuild Cantrip, Mac Permissions & View Mac, MCP Servers, and Skills & Rules

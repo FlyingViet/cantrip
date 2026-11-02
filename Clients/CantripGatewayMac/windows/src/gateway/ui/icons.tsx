@@ -1,6 +1,8 @@
 // Icons: Lucide outlines standing in for the Mac app's SF Symbols, keyed by SF Symbol-like names.
 import {
-  Activity, Antenna, Archive, ArrowDown, ArrowUp, ArrowUpDown, AudioWaveform, Bell, Bot, Box, Brain, Calendar, Check,
+  Activity, Antenna, Archive, ArrowDown, ArrowUp, ArrowUpDown, AudioWaveform, BedDouble, Bell, Bot, Box, Brain, BriefcaseMedical,
+  CakeSlice, Calendar, Check, Coffee, CreditCard, DollarSign, Dumbbell, Fuel, Globe, GraduationCap, Landmark, Package, Phone, Plane,
+  Route, ShoppingBag, ShoppingCart, Tag, Ticket, TreeDeciduous, Truck, Utensils, Wine,
   ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Circle, CircleCheck, CircleDot, CircleEllipsis, CircleHelp,
   Cloud, CloudAlert, CloudFog, CloudDrizzle, CloudHail, CloudLightning, CloudMoon, CloudMoonRain, CloudRain, CloudRainWind,
   CloudSnow, CloudSun, CloudSunRain, MoonStar, Navigation, Sun,
@@ -41,9 +43,26 @@ const ICONS = {
   "cloud.heavyrain.fill": CloudRainWind, "cloud.sleet.fill": CloudSnow, "cloud.snow.fill": CloudSnow,
   "cloud.sun.rain.fill": CloudSunRain, "cloud.moon.rain.fill": CloudMoonRain, "cloud.bolt.rain.fill": CloudLightning,
   "cloud.hail.fill": CloudHail, "exclamationmark.icloud": CloudAlert, "location.fill": Navigation,
+  // Card symbols the Mac sends (docs/cards.md): places' pins, flights, tool cards and action buttons.
+  airplane: Plane, "star.fill": Star, "shippingbox.fill": Package, phone: Phone, "phone.fill": Phone, globe: Globe,
+  "cup.and.saucer.fill": Coffee, "fork.knife": Utensils, "birthday.cake.fill": CakeSlice, mappin: MapPin,
+  "mappin.and.ellipse": MapPin, "cross.case.fill": BriefcaseMedical, "wineglass.fill": Wine, "bed.double.fill": BedDouble,
+  "cart.fill": ShoppingCart, "bag.fill": ShoppingBag, "tree.fill": TreeDeciduous, "building.columns.fill": Landmark,
+  "fuelpump.fill": Fuel, "figure.run": Dumbbell, "graduationcap.fill": GraduationCap,
+  "arrow.triangle.turn.up.right.diamond.fill": Route, "box.truck.fill": Truck, "creditcard": CreditCard,
+  "dollarsign.circle": DollarSign, "tag.fill": Tag, "ticket.fill": Ticket, "exclamationmark.triangle.fill": TriangleAlert,
+  "info.circle.fill": Info, "checkmark.circle.fill": CircleCheck, "xmark.circle.fill": CircleX,
 } satisfies Record<string, IconNode>;
 
 export type IconName = keyof typeof ICONS;
+
+/** The icon for an SF Symbol name from the Mac (exact, or without ".fill"), or nothing for one the Gateway doesn't have. */
+export function symbolIcon(symbol: unknown): IconName | undefined {
+  if (typeof symbol !== "string" || !symbol) return undefined;
+  if (Object.hasOwn(ICONS, symbol)) return symbol as IconName;
+  const outline = symbol.replace(/\.fill$/, "");
+  return outline !== symbol && Object.hasOwn(ICONS, outline) ? (outline as IconName) : undefined;
+}
 
 export function Icon(props: { name: IconName; size?: 12 | 14 | 16 | 18 | 20 | 22 | 24 | 28 | 56; class?: string; label?: string }): JSX.Element {
   const node = ICONS[props.name] as IconNode;

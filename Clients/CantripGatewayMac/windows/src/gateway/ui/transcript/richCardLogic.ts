@@ -42,6 +42,31 @@ export function initialZoomForDelta(delta: number): number {
   return 11;
 }
 
+/** The first and last tile (relative to the base tile, whose corner sits at `offset`) covering `size` pixels. */
+export function tileSpan(offset: number, size: number): [number, number] {
+  return [Math.floor(-offset / 256) + 0, Math.ceil((size - offset) / 256) - 1];
+}
+
+/**
+ * The region's zoom, or up to three steps out, until every pin and its label fits in the part of the map
+ * nothing covers (`visible`, centered on the map's focal point).
+ */
+export function fitZoom(
+  pins: { latitude: number; longitude: number; w: number }[], center: { lat: number; lon: number }, start: number,
+  visible: { width: number; height: number },
+): number {
+  const floor = Math.max(3, start - 3);
+  for (let zoom = start; zoom > floor; zoom--) {
+    const cx = lonToTileX(center.lon, zoom), cy = latToTileY(center.lat, zoom);
+    const fits = pins.every((pin) => {
+      const dx = (lonToTileX(pin.longitude, zoom) - cx) * 256, dy = (latToTileY(pin.latitude, zoom) - cy) * 256;
+      return Math.abs(dx) + pin.w / 2 + 8 <= visible.width / 2 && Math.abs(dy) + 20 <= visible.height / 2;
+    });
+    if (fits) return zoom;
+  }
+  return floor;
+}
+
 /** A pin's icon: the Mac's emoji, or one from the category for cards from older Macs. */
 export function placeGlyph(place: RemotePlacePin): string {
   if (place.glyph && [...place.glyph].length <= 2) return place.glyph;

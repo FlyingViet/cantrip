@@ -23,6 +23,7 @@ import { MCPAppStack } from "./MCPApp";
 import { BrowserCard, usesBrowser } from "./BrowserPreview";
 import { MentionText } from "./TabMentions";
 import { Markdown, type InlineImages } from "./Markdown";
+import { CardStack } from "./Cards";
 import { LinkPreviewStack, PlaceCardView, WeatherCardView } from "./RichCards";
 import { ThreadLaneRow, ThreadQuote, ThreadRepliesButton } from "./ThreadTags";
 
@@ -559,9 +560,15 @@ export function MessageRow(props: {
           {apps.length ? <MCPAppStack sessionID={session.id} apps={apps} /> : null}
           {usesBrowser(message.activities) ? <BrowserCard live={props.streaming} /> : null}
           {!isError ? <ReplyText message={message} session={session} settled={settled} /> : null}
-          {!isError && message.weatherCard ? <WeatherCardView card={message.weatherCard} /> : null}
-          {!isError && message.placeCard ? <PlaceCardView card={message.placeCard} /> : null}
-          {!isError && message.linkPreviews?.length ? <LinkPreviewStack cards={message.linkPreviews} /> : null}
+          {isError ? null : Array.isArray(message.cards) && message.cards.length ? (
+            <CardStack cards={message.cards} />
+          ) : (
+            <>
+              {message.weatherCard ? <WeatherCardView card={message.weatherCard} /> : null}
+              {message.placeCard ? <PlaceCardView card={message.placeCard} /> : null}
+              {message.linkPreviews?.length ? <LinkPreviewStack cards={message.linkPreviews} /> : null}
+            </>
+          )}
           {handoffs.length ? <div class="handoff-stack">{handoffs.map((handoff) => <HandoffCard key={handoff.id} handoff={plainMentionsDeep(handoff)} />)}</div> : null}
           {thinking ? <ThinkingIndicator class="muted" /> : null}
           {isError ? (
