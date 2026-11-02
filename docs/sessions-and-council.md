@@ -254,7 +254,8 @@ match ([details](updating-and-troubleshooting.md#new-worktrees-reuse-installed-p
   Mac first: it waits while the load is above one per core or less than 15 GB
   is free where worktrees live, runs one fewer child overall while the load is
   above 0.7 per core or less than 30 GB is free, and work that needs a
-  Simulator waits while 3 are leased. A waiting message keeps its place and
+  Simulator waits while as many are leased as the pool lets run at once
+  (`simulatorPoolMaxBooted`, default 2). A waiting message keeps its place and
   its chip says what it waits for (*Auto-forks when a child tab finishes (3 of
   3 running for this tab)*, *Auto-forks when the Mac is less busy (load 12.5
   on 10 cores)*); Cantrip checks again when a child stops and every minute

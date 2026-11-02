@@ -68,8 +68,11 @@ enum CantripCLI {
                                   Lease a simulator to this tab and print its UDID: the pool's for that kind, or a
                                   temporary copy while another tab has it. Every iPhone but the Duo shares the pool's
                                   one iPhone (simulatorPoolPhone); the Duo has one per iOS version (default
-                                  simulatorPoolDuoOS); iPad, Apple Watch and Apple TV have one each
+                                  simulatorPoolDuoOS); iPad, Apple Watch and Apple TV have one each. A tab has one
+                                  at a time: leasing another kind releases its first
           --exact                 That exact model and iOS version (a temporary copy unless the pool keeps it)
+          --wait SECONDS          How long to wait in line when simulatorPoolMaxBooted are running or memory is
+                                  short (default simulatorPoolWaitMinutes; 0 fails at once)
           --hours N               How long the lease lasts (default: until this tab's turn ends; 4 outside a tab)
           --json
       cantrip sim release [LEASE|UDID | --all]
@@ -368,14 +371,14 @@ enum CantripCLI {
     // MARK: - sim
 
     enum SimCommand: Equatable {
-        case acquire(device: String, os: String?, exact: Bool, hours: Double?, json: Bool)
+        case acquire(device: String, os: String?, exact: Bool, hours: Double?, wait: Double?, json: Bool)
         case release(target: String?, all: Bool)
         case list(json: Bool)
         case adopt(udid: String)
 
         static func parse(_ arguments: [String]) throws -> SimCommand {
             var words: [String] = []
-            var device: String?, os: String?, hours: Double?
+            var device: String?, os: String?, hours: Double?, wait: Double?
             var json = false, all = false, exact = false
             var index = 0
             func value(_ option: String) throws -> String {
@@ -395,6 +398,11 @@ enum CantripCLI {
                         throw Failure(message: "--hours needs a number of hours up to 168.", code: 2)
                     }
                     hours = number
+                case "--wait":
+                    guard let number = Double(try value(argument)), number >= 0, number <= 7_200 else {
+                        throw Failure(message: "--wait needs a number of seconds up to 7200.", code: 2)
+                    }
+                    wait = number
                 case "--json": json = true
                 case "--all": all = true
                 case "--exact": exact = true
@@ -410,7 +418,7 @@ enum CantripCLI {
                 guard words.count == 1, let device, !device.isEmpty else {
                     throw Failure(message: "Name the device: cantrip sim acquire --device iPhone (or 'iPhone Duo' [--os 27.1]).", code: 2)
                 }
-                return .acquire(device: device, os: os, exact: exact, hours: hours, json: json)
+                return .acquire(device: device, os: os, exact: exact, hours: hours, wait: wait, json: json)
             case "release":
                 guard words.count <= 2, !(all && words.count == 2) else { throw Failure(message: usage, code: 2) }
                 return .release(target: words.count == 2 ? words[1] : nil, all: all)
@@ -430,8 +438,9 @@ enum CantripCLI {
         let tab = ProcessInfo.processInfo.environment[TabInsight.tabIDVariable].flatMap { $0.isEmpty ? nil : $0 }
         func standardError(_ text: String) { FileHandle.standardError.write(Data((text + "\n").utf8)) }
         switch try SimCommand.parse(arguments) {
-        case .acquire(let device, let os, let exact, let hours, let json):
-            let acquired = try SimulatorPool.acquire(device: device, os: os, exact: exact, tab: tab, hours: hours)
+        case .acquire(let device, let os, let exact, let hours, let wait, let json):
+            let acquired = try SimulatorPool.acquire(device: device, os: os, exact: exact, tab: tab, hours: hours, wait: wait,
+                                                     progress: standardError)
             let lease = acquired.lease
             if json {
                 let encoder = JSONEncoder()

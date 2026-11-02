@@ -161,6 +161,11 @@ func context(_ fake: FakeSimctl, lines: [String] = [], at time: Date = now, fold
     context.commandLines = { lines }
     context.now = { time }
     context.policy = SimulatorPool.Policy()
+    // Room limits are tested on their own; elsewhere nothing waits.
+    context.policy.maxBooted = 8
+    context.policy.waitMinutes = 0
+    context.policy.pollSeconds = 0.02
+    context.memory = { .unknown }
     return context
 }
 
@@ -351,6 +356,129 @@ do {
     expect(c.store.read().pool.count == 1, "so the pool still has one iPhone")
 } catch {
     expect(false, "one iPhone threw \(error)")
+}
+
+// MARK: - Room: one simulator per tab, a couple at once, enough memory
+
+do {
+    let fake = FakeSimctl()
+    let phoneUDID = "PHONE000-0000-0000-0000-000000000000"
+    let duo271 = "DUO27100-0000-0000-0000-000000000000", duo272 = "DUO27200-0000-0000-0000-000000000000"
+    fake.devices = [
+        .init(udid: phoneUDID, name: "Cantrip Pool · iPhone 17 Pro · iOS 27.0", type: FakeSimctl.pro,
+              runtime: FakeSimctl.ios270, lastUsed: now),
+        .init(udid: duo271, name: "iPhone Duo", type: FakeSimctl.duo, runtime: FakeSimctl.ios271, lastUsed: now),
+        .init(udid: duo272, name: "iPhone Duo", type: FakeSimctl.duo, runtime: FakeSimctl.ios272, lastUsed: now),
+    ]
+    var c = context(fake, folder: "room")
+    c.now = Date.init
+    c.policy.maxBooted = 2
+    func leases(_ tab: String) -> [SimulatorPool.Lease] { c.store.read().leases.filter { $0.tab == tab } }
+    func creations() -> Int { fake.mutations().filter { ["create", "clone"].contains($0.first) }.count }
+
+    // A tab's second acquire releases its first.
+    let phone = try SimulatorPool.acquire(device: "iPhone", os: nil, tab: "tab-a", context: c)
+    fake.update(phone.lease.udid) { $0.state = "Booted" }
+    let duo = try SimulatorPool.acquire(device: "iPhone Duo", os: nil, tab: "tab-a", context: c)
+    expect(duo.lease.udid == duo271 && duo.released.map(\.id) == [phone.lease.id],
+           "a tab asking for another kind gives up its first lease")
+    expect(duo.note?.contains("one simulator at a time") == true, "and is told so: \(duo.note ?? "nil")")
+    expect(fake.entry(phoneUDID)?.state == "Shutdown", "the first simulator is shut down")
+    expect(leases("tab-a").map(\.id) == [duo.lease.id], "the tab holds one lease")
+    var building = c
+    building.commandLines = { ["xcodebuild test -destination id=\(duo271)"] }
+    let phoneAgain = try SimulatorPool.acquire(device: "iPhone", os: nil, tab: "tab-a", context: building)
+    expect(phoneAgain.released.isEmpty && leases("tab-a").count == 2 && phoneAgain.note?.contains("stays") == true,
+           "a lease a running build still uses stays")
+    try SimulatorPool.release(tab: "tab-a", context: c)
+
+    // Two at once; a third waits instead of booting.
+    _ = try SimulatorPool.acquire(device: "iPhone 17 Pro", os: nil, tab: "tab-a", context: c)
+    _ = try SimulatorPool.acquire(device: "iPhone Duo", os: "27.2", tab: "tab-b", context: c)
+    let made = creations()
+    do {
+        _ = try SimulatorPool.acquire(device: "iPhone 18 Pro", os: nil, tab: "tab-c", wait: 0, context: c)
+        expect(false, "a third simulator isn't leased while two are in use")
+    } catch {
+        expect("\(error.localizedDescription)".contains("2 of 2"), "the refusal says why: \(error.localizedDescription)")
+    }
+    expect(creations() == made, "and no copy was made")
+    expect(c.store.read().waiting.isEmpty, "a request that doesn't wait isn't left in line")
+
+    // Waiting ones get room as leases end, first come first served.
+    let lock = NSLock()
+    var order: [String] = [], results: [String: SimulatorPool.Acquired] = [:], messages: [String] = []
+    let group = DispatchGroup()
+    for (index, request) in [("tab-c", "iPhone Duo", "27.2"), ("tab-d", "iPhone 17", nil)].enumerated() {
+        group.enter()
+        DispatchQueue.global().async {
+            defer { group.leave() }
+            Thread.sleep(forTimeInterval: Double(index) * 0.2)
+            let got = try? SimulatorPool.acquire(device: request.1, os: request.2, tab: request.0, wait: 20, context: c,
+                                                progress: { message in lock.withLock { messages.append(message) } })
+            lock.withLock {
+                order.append(request.0)
+                results[request.0] = got
+            }
+        }
+    }
+    Thread.sleep(forTimeInterval: 0.6)
+    expect(c.store.read().waiting.map(\.tab) == ["tab-c", "tab-d"], "both wait in line in order: \(c.store.read().waiting.map(\.tab))")
+    expect(lock.withLock { messages.contains { $0.contains("2 of 2") } && messages.contains { $0.contains("ahead of yours") } },
+           "waiting requests say why: \(lock.withLock { messages })")
+    expect(creations() == made, "nothing was made while they waited")
+    try SimulatorPool.release(tab: "tab-b", context: c)
+    Thread.sleep(forTimeInterval: 0.6)
+    expect(lock.withLock { order } == ["tab-c"], "the first in line gets the first room: \(lock.withLock { order })")
+    try SimulatorPool.release(tab: "tab-a", context: c)
+    group.wait()
+    expect(order == ["tab-c", "tab-d"], "then the next")
+    expect(results["tab-c"]?.lease.udid == duo272 && results["tab-c"]?.lease.temporary == false, "tab-c got the Duo it waited for")
+    expect(results["tab-d"]?.lease.udid == phoneUDID && results["tab-d"]?.lease.temporary == false,
+           "tab-d got the pool's iPhone once it was free, not a copy")
+    expect(c.store.read().waiting.isEmpty, "the line is empty")
+    try SimulatorPool.release(all: true, context: c)
+
+    // Short memory: nothing new boots, but a tab swapping kinds boots nothing new.
+    var tight = c
+    tight.policy.minFreeMemoryGB = 4
+    tight.memory = { .init(pressureLevel: 1, availableBytes: 2_000_000_000) }
+    expect((try? SimulatorPool.acquire(device: "iPhone", os: nil, tab: "tab-e", wait: 0, context: tight)) == nil,
+           "low free plus compressible memory refuses a boot")
+    tight.memory = { .init(pressureLevel: 4, availableBytes: 9_000_000_000) }
+    do {
+        _ = try SimulatorPool.acquire(device: "iPhone", os: nil, tab: "tab-e", wait: 0, context: tight)
+        expect(false, "memory pressure refuses a boot")
+    } catch {
+        expect(error.localizedDescription.contains("memory pressure"), "and says so: \(error.localizedDescription)")
+    }
+    _ = try SimulatorPool.acquire(device: "iPhone", os: nil, tab: "tab-e", context: c)
+    let swapped = try SimulatorPool.acquire(device: "iPhone Duo", os: nil, tab: "tab-e", context: tight)
+    expect(swapped.released.count == 1, "a swap goes ahead while memory is short")
+    try SimulatorPool.release(all: true, context: c)
+
+    // A waiter whose process is gone doesn't hold the line.
+    var gone = c
+    gone.isRunning = { $0 != 424_242 }
+    try c.store.locked {
+        $0.waiting = [.init(id: "dead", tab: "tab-x", pid: 424_242, wants: "iPhone", since: Date(), seen: Date())]
+    }
+    expect((try? SimulatorPool.acquire(device: "iPhone", os: nil, tab: "tab-f", wait: 0, context: gone)) != nil,
+           "a dead waiter is skipped")
+    expect(c.store.read().waiting.isEmpty, "and dropped")
+    try SimulatorPool.release(all: true, context: c)
+} catch {
+    expect(false, "room threw \(error)")
+}
+
+// A pool file from before the line existed keeps its simulators.
+do {
+    let store = SimulatorPool.Store(directory: root.appendingPathComponent("old-file"))
+    try FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+    try Data(#"{"leases":[],"pool":[{"key":"iPhone Duo|27.1","udid":"2262F186"}],"temporaries":{}}"#.utf8).write(to: store.file)
+    expect(store.read().pool == [.init(key: "iPhone Duo|27.1", udid: "2262F186")], "an older pool file still reads")
+} catch {
+    expect(false, "old file threw \(error)")
 }
 
 // MARK: - Two tabs at once

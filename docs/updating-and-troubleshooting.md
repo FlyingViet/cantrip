@@ -426,6 +426,23 @@ simulator the pool's for its kind. Agents in Copilot and Claude Code tabs are
 told to lease simulators this way, and a child tab's runs on its own leased
 simulator don't wait for other tabs' tests.
 
+Simulators take a lot of memory, so only a couple run at once:
+
+- **One per tab.** Leasing another kind ends the tab's other leases first
+  (`acquire` says so), unless a running process (xcodebuild, Maestro, simctl)
+  still names that simulator.
+- **At most 2 at once** (`simulatorPoolMaxBooted`, 1–8): pool simulators and
+  temporary copies that are booted or leased count. Beyond that, `acquire`
+  waits in line, first come first served, says why on standard error, and
+  gives up after 10 minutes (`simulatorPoolWaitMinutes`, 0–120; `--wait
+  SECONDS` for one request, 0 to fail at once) instead of making another copy.
+- **Enough memory.** Nothing new is leased while macOS reports memory pressure
+  or free plus compressible memory (`memory_pressure`'s "free percentage") is
+  under 4 GB (`simulatorPoolMinFreeMemoryGB`, 0 turns it off). A tab swapping
+  kinds boots nothing new, so it goes ahead.
+
+Child tabs that need a Simulator wait to auto-fork while that many are leased.
+
 ## Find diagnostics for a bug report
 
 On Mac:
