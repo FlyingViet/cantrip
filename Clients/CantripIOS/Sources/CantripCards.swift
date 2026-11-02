@@ -835,6 +835,7 @@ struct CantripCardBadge: View {
         .padding(.horizontal, 7)
         .padding(.vertical, 2)
         .background(Capsule().fill(badge.tone == nil || badge.tone == "neutral" ? Color.white.opacity(0.1) : color.opacity(0.16)))
+        .fixedSize()
     }
 }
 
@@ -862,8 +863,11 @@ struct CantripCardItemRow: View {
                     ForEach(Array(actions.enumerated()), id: \.offset) { _, entry in
                         Button { openURL(entry.1) } label: {
                             Label(entry.0.label ?? "Open", systemImage: CantripCardStyle.actionSymbol(entry.0.kind))
+                                .labelStyle(.titleAndIcon)
                                 .font(.system(size: 11.5, weight: .semibold))
                                 .foregroundStyle(.white.opacity(0.9))
+                                .lineLimit(1)
+                                .fixedSize()
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 5)
                                 .background(Capsule().fill(Color.white.opacity(0.1)))
