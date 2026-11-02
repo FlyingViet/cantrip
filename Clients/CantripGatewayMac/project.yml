@@ -1,0 +1,180 @@
+name: CantripGatewayMac
+options:
+  bundleIdPrefix: com.itzhoang
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.2.13"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: "9M3XNFG4J7"
+    CODE_SIGN_STYLE: Automatic
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: "2.0.0"
+  Qwen3TTS:
+    url: https://github.com/AtomGradient/swift-qwen3-tts
+    branch: main
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    revision: c79c4106b954f81205113c3343e5a7e59a1089b5
+schemes:
+  CantripHomeWindow:
+    build:
+      targets:
+        CantripHomeWindow: all
+  CantripGatewayMac:
+    build:
+      targets:
+        CantripGatewayMac: all
+    test:
+      targets:
+        - CantripGatewayMacTests
+targets:
+  CantripGatewayMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+      - path: Hermes/Sources
+        excludes:
+          - App.swift
+          - Info.plist
+          - Hermes.entitlements
+          - Assets.xcassets
+      - path: Hermes/Shared
+      - path: Resources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Cantrip Gateway Mac
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleIconName: AppIcon
+        LSApplicationCategoryType: public.app-category.productivity
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        NSHumanReadableCopyright: ""
+        NSMicrophoneUsageDescription: "Cantrip Gateway uses the microphone for voice conversations with Cantrip Home."
+        NSSpeechRecognitionUsageDescription: "Cantrip Gateway transcribes your speech so you can talk to Cantrip Home hands-free."
+        NSLocationUsageDescription: "When you turn on Share location in Settings, Cantrip Gateway sends this Mac's approximate location with each message so answers about weather and places near you are for where you are."
+        NSLocationWhenInUseUsageDescription: "When you turn on Share location in Settings, Cantrip Gateway sends this Mac's approximate location with each message so answers about weather and places near you are for where you are."
+        NSLocalNetworkUsageDescription: "Cantrip Gateway discovers and connects securely to your paired Cantrip on the local network."
+        NSBonjourServices:
+          - _cantrip-remote._tcp
+        # `cantrip pair` links (cantripagent://pair?...) open the pairing confirmation.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.itzhoang.cantripgateway.mac.links
+            CFBundleURLSchemes:
+              - cantripagent
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSAppleEventsUsageDescription: Tools you turn on for the local model (MCP servers on this Mac) can control apps such as Mail to read or act on your data. Each tool asks you first unless you allow it.
+    settings:
+      base:
+        PRODUCT_NAME: "Cantrip Gateway Mac"
+        # Same module name as the iOS app, so the shared Hermes tests run here unchanged.
+        PRODUCT_MODULE_NAME: Hermes
+        PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.cantripgateway.mac
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: Sources/App/CantripGatewayMac.entitlements
+        ENABLE_HARDENED_RUNTIME: NO
+      configs:
+        # Debug runs (UI tests, fixture hosts) keep their own settings and saved servers.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.cantripgateway.mac.debug
+        # Notarized Developer ID releases require the hardened runtime.
+        Release:
+          ENABLE_HARDENED_RUNTIME: YES
+    dependencies:
+      - package: MarkdownUI
+      - package: Qwen3TTS
+      - package: FluidAudio
+  # Cantrip.app's Window interface: the same Home window as a plug-in bundle Cantrip loads
+  # (Cantrip's `make app` builds it with CODE_SIGNING_ALLOWED=NO and signs it with the app).
+  CantripHomeWindow:
+    type: bundle
+    platform: macOS
+    sources:
+      - path: Embedded
+      - path: Sources
+        excludes:
+          - App/CantripGatewayMacApp.swift
+          - App/CantripGatewayMac.entitlements
+          - Info.plist
+      - path: Hermes/Sources
+        excludes:
+          - App.swift
+          - Info.plist
+          - Hermes.entitlements
+          - Assets.xcassets
+      - path: Hermes/Shared
+    info:
+      path: Embedded/Info.plist
+      properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSPrincipalClass: CantripHomeWindowPlugin
+    settings:
+      base:
+        PRODUCT_NAME: CantripHomeWindow
+        PRODUCT_MODULE_NAME: Hermes
+        PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.cantrip.homewindow
+        WRAPPER_EXTENSION: bundle
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) CANTRIP_EMBEDDED"
+        ENABLE_HARDENED_RUNTIME: NO
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: MarkdownUI
+      - package: Qwen3TTS
+      - package: FluidAudio
+  CantripGatewayMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+      # Shared logic suites that do not render UIKit views run against the Mac build.
+      # Push-alert registration is iOS-only (no APNs environment on the Mac).
+      - path: Hermes/Tests/CantripRoutingTests.swift
+      - path: Hermes/Tests/CantripHistoryTests.swift
+      - path: Hermes/Tests/CantripMutationTests.swift
+      - path: Hermes/Tests/CantripImageTransportTests.swift
+      - path: Hermes/Tests/ServerProfilesTests.swift
+      - path: Hermes/Tests/CantripDirectAddressTests.swift
+      - path: Hermes/Tests/CantripPairingLinkTests.swift
+      - path: Hermes/Tests/CantripGzipTests.swift
+      - path: Hermes/Tests/CantripArtifactDownloadTests.swift
+      - path: Hermes/Tests/CantripLocationSharingTests.swift
+      - path: Hermes/Tests/CantripTabBackTransitionTests.swift
+      - path: Hermes/Tests/CantripMCPAppTests.swift
+      - path: Hermes/Tests/CantripPromptUsageTests.swift
+      - path: Hermes/Tests/CantripQueueTests.swift
+      - path: Hermes/Tests/CantripStartFreshTests.swift
+      - path: Hermes/Tests/ChatTabTests.swift
+      - path: Hermes/Tests/CantripHomeWorkspaceGroupTests.swift
+      - path: Hermes/Tests/DictationTextTests.swift
+      - path: Hermes/Tests/DictationPipelineTests.swift
+      - path: Hermes/Tests/BackendSlashCommandsTests.swift
+      - path: Hermes/Tests/ComposerPasteTests.swift
+      - path: Hermes/Tests/CantripTabSectionsTests.swift
+      - path: Hermes/Tests/CantripChildTabsTests.swift
+      - path: Hermes/Tests/CantripThreadTagsTests.swift
+      - path: Hermes/Tests/CantripTabMentionsTests.swift
+      - path: Hermes/Tests/CantripTerminalTests.swift
+      - path: Hermes/Tests/CantripRichCardTests.swift
+      - path: Hermes/Tests/CantripWeatherCardTests.swift
+      - path: Hermes/Tests/CantripCardTests.swift
+      - path: Hermes/Tests/CantripHomeCardTests.swift
+      - path: Hermes/Tests/CantripDeleteMessageTests.swift
+      - path: Hermes/Tests/CantripSkillsTests.swift
+      - path: Hermes/Tests/CantripBackendsTests.swift
+    dependencies:
+      - target: CantripGatewayMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.itzhoang.cantripgateway.mac.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Cantrip Gateway Mac.app/Contents/MacOS/Cantrip Gateway Mac"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES

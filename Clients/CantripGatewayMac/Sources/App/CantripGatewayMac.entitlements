@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hardened runtime: voice conversations need the microphone. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <!-- MCP servers the local model uses may script other apps (e.g. Mail) on your behalf. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    <!-- Settings › Location (off by default) sends this Mac's location with messages. -->
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
+</dict>
+</plist>

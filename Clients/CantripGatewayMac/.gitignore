@@ -1,0 +1,11 @@
+# Xcode / generated
+*.xcodeproj
+xcuserdata/
+DerivedData/
+build/
+.DS_Store
+
+# Swift Package Manager
+.swiftpm/
+.build/
+.spm/

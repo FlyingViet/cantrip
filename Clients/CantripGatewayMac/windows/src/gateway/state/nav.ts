@@ -1,0 +1,170 @@
+// Window navigation (MacHomeNavigation.swift): Home's sections, the open project tab, and sheets.
+import { batch, effect, signal } from "@preact/signals";
+import type { DeliveryMode, RemoteSessionSummary } from "../api/types";
+import { toast } from "../ui/kit";
+import { closeBackgroundLog, openBackgroundLog, shownSessionID } from "./backgroundLog";
+import * as remote from "./remote";
+
+export type Section = "chat" | "tasks" | "artifacts";
+
+export const SECTIONS: { id: Section; title: string; icon: "bubble.left.and.bubble.right" | "checklist" | "square.grid.2x2" }[] = [
+  { id: "chat", title: "Chat", icon: "bubble.left.and.bubble.right" },
+  { id: "tasks", title: "Tasks", icon: "checklist" },
+  { id: "artifacts", title: "Artifacts", icon: "square.grid.2x2" },
+];
+
+export type SheetState =
+  | { kind: "background"; focusSessionID?: string }
+  | { kind: "rename"; sessionID: string }
+  /** A section's name: a new one (filing `fileTabID` in it) or a rename of `sectionID`. */
+  | { kind: "sectionName"; sectionID?: string; fileTabID?: string }
+  | { kind: "modelSettings"; sessionID: string }
+  | { kind: "inputRequests"; sessionID: string }
+  | { kind: "macAccess" }
+  | { kind: "mcpServers"; tabID?: string }
+  | { kind: "skills" }
+  | { kind: "usage" }
+  | { kind: "memory" }
+  | { kind: "builds" }
+  | { kind: "mascot" }
+  | { kind: "maintenance" }
+  | { kind: "voiceMode" }
+  | { kind: "queue"; sessionID: string }
+  | { kind: "backgroundTasks"; sessionID: string }
+  | { kind: "promptReader"; title: string; text: string };
+
+function persisted<T>(key: string, initial: T) {
+  let value = initial;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw !== null) value = JSON.parse(raw) as T;
+  } catch { /* first launch */ }
+  const state = signal<T>(value);
+  effect(() => {
+    try { localStorage.setItem(key, JSON.stringify(state.value)); } catch { /* storage full */ }
+  });
+  // The Settings window shares this storage (Pause Agent is a switch there): follow its changes.
+  addEventListener("storage", (event) => {
+    if (event.key !== key || event.newValue === null) return;
+    try { state.value = JSON.parse(event.newValue) as T; } catch { /* not ours */ }
+  });
+  return state;
+}
+
+export const section = signal<Section>("chat");
+/** The project tab shown in the detail pane; null shows Home's section. */
+export const openTabID = signal<string | null>(null);
+/** Home's background log (Background › Full Log), shown read-only in the detail pane; never a tab, as the Mac never lists it. */
+export const logID = signal<string | null>(null);
+export const sheet = signal<SheetState | null>(null);
+export const sidebarHidden = persisted("gateway.sidebarHidden", false);
+/** The open tab's terminal pane under its conversation (Ctrl+`). */
+export const terminalOpen = persisted("gateway.terminalOpen", false);
+export const terminalHeight = persisted("gateway.terminalHeight", 240);
+/** Same key as the Mac app ("hermes.paused"): no requests are sent while paused. */
+export const paused = persisted("hermes.paused", false);
+/** How the next message reaches a working tab; back to Auto after each send (like the Mac). */
+export const deliveryMode = signal<DeliveryMode>("auto");
+/** Text to put in the composer when Chat opens (Tasks/Artifacts "+"). */
+export const composerPrefill = signal<string | null>(null);
+/** Bumped to move keyboard focus into the composer. */
+export const composerFocusRequest = signal(0);
+/** The question a chat reply answers, when the user picked one (else the first). */
+export const chosenQuestion = signal<{ sessionID: string; requestID: string } | null>(null);
+
+// The chat shows the background log or the open tab, else Home; Home's tasks/artifacts refresh only while Home shows.
+effect(() => {
+  const target = shownSessionID(logID.value, openTabID.value, remote.homeID.value ?? null);
+  remote.setHomeDataWanted(openTabID.value === null && logID.value === null);
+  remote.select(target);
+});
+
+// A tab closed elsewhere (the Mac, another device) returns to Home. Only a list requested after
+// the tab opened counts, so a list already in flight can't close a tab that was just created.
+let openedTab: string | null = null;
+let openedAt = 0;
+effect(() => {
+  const id = openTabID.value;
+  if (id !== openedTab) {
+    openedTab = id;
+    openedAt = Date.now();
+  }
+  if (id && remote.listed.value && remote.listedAt.value > openedAt && !remote.sessions.value.some((item) => item.id === id)) {
+    openTabID.value = null;
+    deliveryMode.value = "auto";
+  }
+});
+
+export const isTabOpen = (): boolean => openTabID.value !== null;
+
+export function closeAll(): void {
+  sheet.value = null;
+}
+
+export function openTab(id: string): void {
+  closeAll();
+  logID.value = null;
+  if (openTabID.value !== id) deliveryMode.value = "auto";
+  openTabID.value = id;
+  composerFocusRequest.value++;
+}
+
+export function showHome(target?: Section): void {
+  if (target) section.value = target;
+  logID.value = null;
+  if (openTabID.value !== null) {
+    openTabID.value = null;
+    deliveryMode.value = "auto";
+  }
+}
+
+export function openChat(prefill?: string): void {
+  showHome("chat");
+  if (prefill !== undefined) composerPrefill.value = prefill;
+  composerFocusRequest.value++;
+}
+
+export function showBackground(focusSessionID?: string): void {
+  showHome();
+  sheet.value = { kind: "background", focusSessionID };
+}
+
+/** Whether the log's transcript shows a focus ring when it takes focus: only when Full Log was pressed from the keyboard. */
+export const logFocus = { visible: false };
+
+/** Background › Full Log: the background runs' reports, from the Mac's background log session. */
+export function openFullLog(fromKeyboard = false): boolean {
+  logFocus.visible = fromKeyboard;
+  return batch(() => openBackgroundLog({ sheet, openTabID, logID }, remote.homeBackground.peek()));
+}
+
+/** Back from the log: to the Background sheet it came from, or to Home. */
+export function closeFullLog(toBackground = true): void {
+  batch(() => closeBackgroundLog({ sheet, openTabID, logID }, toBackground));
+}
+
+export async function createTab(): Promise<void> {
+  if (remote.isMutating.value || !remote.listed.value) return;
+  try {
+    const session = await remote.createTab();
+    openTab(session.id);
+  } catch (error) {
+    toast(`Couldn't open a new tab: ${(error as Error).message}`);
+  }
+}
+
+/** Closes a tab; closing the open one returns to Home. */
+export async function closeTab(id: string): Promise<void> {
+  const wasOpen = openTabID.value === id;
+  try {
+    await remote.closeTab(id);
+    if (wasOpen && openTabID.value === id) showHome();
+  } catch (error) {
+    toast(`Couldn't close the tab: ${(error as Error).message}`);
+  }
+}
+
+export function openModelSettings(session: RemoteSessionSummary | null | undefined): void {
+  if (!session) return;
+  sheet.value = { kind: "modelSettings", sessionID: session.id };
+}

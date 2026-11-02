@@ -1,0 +1,278 @@
+{
+ "sessionID": "231C484E-0E50-43E0-9ADF-4295F3AC8956",
+ "revision": "11A20436-7C68-4712-A95A-7AC0BE7395B1",
+ "maxParallel": 3,
+ "runningCount": 0,
+ "queued": [],
+ "runs": [
+  {
+   "summary": "Two things on the calendar today; clear and cool in Seattle.",
+   "kind": "task",
+   "taskID": "25F62850-F6ED-4BBB-9403-1C8EBEA6B9E7",
+   "finishedAt": 815291853.004285,
+   "canStop": false,
+   "id": "D13394FA-93E6-487D-837D-25DA55EC62D3",
+   "route": "hidden",
+   "label": "Personal operations briefing",
+   "status": "succeeded",
+   "startedAt": 815291851.528767,
+   "cards": [
+    {
+     "accessibilityLabel": "Weather for Seattle, WA",
+     "source": {
+      "name": "Open-Meteo",
+      "url": "https://open-meteo.com/",
+      "attribution": "Weather data by Open-Meteo.com",
+      "kind": "resolver",
+      "updatedAt": "2026-11-02T06:14:58Z"
+     },
+     "fallbackText": "Seattle, WA\nClear\nH 49°  L 39° · 1% precip. · Feels like 35°\n40°\nNow 40° · 11 PM 39° · 12 AM 39° · 1 AM 38° · 2 AM 37° · 3 AM 37° · 4 AM 37° · 5 AM 36° · 6 AM 37° · 7 AM 37° · 8 AM 37° · 9 AM 42° · 10 AM 46°\nToday 39°–49°\nMon 36°–53°\nTue 14% 44°–58°\nWed 74% 42°–56°\nThu 62% 46°–56°\nFri 62% 49°–59°\nSat 39% 50°–61°\nSun 47% 48°–55°\nMon 53% 49°–58°\nTue 62% 53°–63°",
+     "type": "weather",
+     "blocks": [
+      {
+       "type": "header",
+       "lines": [
+        "Clear",
+        "H 49°  L 39° · 1% precip. · Feels like 35°"
+       ],
+       "stat": {
+        "value": "40°",
+        "symbol": "moon.stars.fill",
+        "accessibilityLabel": "Now 40 degrees Fahrenheit, Clear"
+       },
+       "title": "Seattle, WA"
+      },
+      {
+       "type": "strip",
+       "items": [
+        {
+         "label": "Now",
+         "symbol": "moon.stars.fill",
+         "value": "40°",
+         "accessibilityLabel": "Now, 40 degrees Fahrenheit, Clear"
+        },
+        {
+         "label": "11 PM",
+         "symbol": "moon.stars.fill",
+         "value": "39°",
+         "accessibilityLabel": "11 PM, 39 degrees Fahrenheit, Clear"
+        },
+        {
+         "label": "12 AM",
+         "symbol": "moon.stars.fill",
+         "value": "39°",
+         "accessibilityLabel": "12 AM, 39 degrees Fahrenheit, Clear"
+        },
+        {
+         "label": "1 AM",
+         "symbol": "moon.stars.fill",
+         "value": "38°",
+         "accessibilityLabel": "1 AM, 38 degrees Fahrenheit, Clear"
+        },
+        {
+         "label": "2 AM",
+         "symbol": "moon.stars.fill",
+         "value": "37°",
+         "accessibilityLabel": "2 AM, 37 degrees Fahrenheit, Clear"
+        },
+        {
+         "label": "3 AM",
+         "symbol": "moon.stars.fill",
+         "value": "37°",
+         "accessibilityLabel": "3 AM, 37 degrees Fahrenheit, Clear"
+        },
+        {
+         "label": "4 AM",
+         "symbol": "moon.stars.fill",
+         "value": "37°",
+         "accessibilityLabel": "4 AM, 37 degrees Fahrenheit, Clear"
+        },
+        {
+         "label": "5 AM",
+         "symbol": "moon.stars.fill",
+         "value": "36°",
+         "accessibilityLabel": "5 AM, 36 degrees Fahrenheit, Clear"
+        },
+        {
+         "label": "6 AM",
+         "symbol": "cloud.fill",
+         "value": "37°",
+         "accessibilityLabel": "6 AM, 37 degrees Fahrenheit, Cloudy"
+        },
+        {
+         "label": "7 AM",
+         "symbol": "cloud.sun.fill",
+         "value": "37°",
+         "accessibilityLabel": "7 AM, 37 degrees Fahrenheit, Partly cloudy"
+        },
+        {
+         "label": "8 AM",
+         "symbol": "cloud.fill",
+         "value": "37°",
+         "accessibilityLabel": "8 AM, 37 degrees Fahrenheit, Cloudy"
+        },
+        {
+         "label": "9 AM",
+         "symbol": "cloud.fill",
+         "value": "42°",
+         "accessibilityLabel": "9 AM, 42 degrees Fahrenheit, Cloudy"
+        },
+        {
+         "label": "10 AM",
+         "symbol": "cloud.fill",
+         "value": "46°",
+         "accessibilityLabel": "10 AM, 46 degrees Fahrenheit, Cloudy"
+        }
+       ],
+       "accessibilityLabel": "Hourly forecast"
+      },
+      {
+       "type": "chart",
+       "items": [
+        {
+         "high": 49,
+         "accessibilityLabel": "Today, Fog, high 49, low 39 degrees Fahrenheit",
+         "lowText": "39°",
+         "symbol": "cloud.fog.fill",
+         "low": 39,
+         "label": "Today",
+         "highText": "49°"
+        },
+        {
+         "high": 53,
+         "accessibilityLabel": "Mon, Cloudy, high 53, low 36 degrees Fahrenheit",
+         "lowText": "36°",
+         "symbol": "cloud.fill",
+         "low": 36,
+         "label": "Mon",
+         "highText": "53°"
+        },
+        {
+         "high": 58,
+         "accessibilityLabel": "Tue, Cloudy, high 58, low 44 degrees Fahrenheit, 14 percent chance of precipitation",
+         "lowText": "44°",
+         "symbol": "cloud.fill",
+         "low": 44,
+         "label": "Tue",
+         "note": "14%",
+         "highText": "58°"
+        },
+        {
+         "high": 56,
+         "accessibilityLabel": "Wed, Light rain, high 56, low 42 degrees Fahrenheit, 74 percent chance of precipitation",
+         "lowText": "42°",
+         "symbol": "cloud.rain.fill",
+         "low": 42,
+         "label": "Wed",
+         "note": "74%",
+         "highText": "56°"
+        },
+        {
+         "high": 56,
+         "accessibilityLabel": "Thu, Cloudy, high 56, low 46 degrees Fahrenheit, 62 percent chance of precipitation",
+         "lowText": "46°",
+         "symbol": "cloud.fill",
+         "low": 46,
+         "label": "Thu",
+         "note": "62%",
+         "highText": "56°"
+        },
+        {
+         "high": 59,
+         "accessibilityLabel": "Fri, Cloudy, high 59, low 49 degrees Fahrenheit, 62 percent chance of precipitation",
+         "lowText": "49°",
+         "symbol": "cloud.fill",
+         "low": 49,
+         "label": "Fri",
+         "note": "62%",
+         "highText": "59°"
+        },
+        {
+         "high": 61,
+         "accessibilityLabel": "Sat, Cloudy, high 61, low 50 degrees Fahrenheit, 39 percent chance of precipitation",
+         "lowText": "50°",
+         "symbol": "cloud.fill",
+         "low": 50,
+         "label": "Sat",
+         "note": "39%",
+         "highText": "61°"
+        },
+        {
+         "high": 55,
+         "accessibilityLabel": "Sun, Light drizzle, high 55, low 48 degrees Fahrenheit, 47 percent chance of precipitation",
+         "lowText": "48°",
+         "symbol": "cloud.drizzle.fill",
+         "low": 48,
+         "label": "Sun",
+         "note": "47%",
+         "highText": "55°"
+        },
+        {
+         "high": 58,
+         "accessibilityLabel": "Mon, Light drizzle, high 58, low 49 degrees Fahrenheit, 53 percent chance of precipitation",
+         "lowText": "49°",
+         "symbol": "cloud.drizzle.fill",
+         "low": 49,
+         "label": "Mon",
+         "note": "53%",
+         "highText": "58°"
+        },
+        {
+         "high": 63,
+         "accessibilityLabel": "Tue, Light drizzle, high 63, low 53 degrees Fahrenheit, 62 percent chance of precipitation",
+         "lowText": "53°",
+         "symbol": "cloud.drizzle.fill",
+         "low": 53,
+         "label": "Tue",
+         "note": "62%",
+         "highText": "63°"
+        }
+       ],
+       "max": 63,
+       "min": 36,
+       "accessibilityLabel": "10-day forecast",
+       "kind": "range"
+      }
+     ],
+     "id": "weather-seattle, wa",
+     "version": 1
+    },
+    {
+     "fallbackText": "Today — Calendar\n• Team standup — 9:30 AM – 9:45 AM\n• Dentist — 2:00 PM – 3:00 PM",
+     "accessibilityLabel": "Today",
+     "source": {
+      "name": "calendar_events",
+      "kind": "tool",
+      "updatedAt": "2026-11-02T05:57:32Z"
+     },
+     "version": 1,
+     "blocks": [
+      {
+       "type": "header",
+       "subtitle": "Calendar",
+       "title": "Today"
+      },
+      {
+       "type": "list",
+       "items": [
+        {
+         "subtitle": "9:30 AM – 9:45 AM",
+         "title": "Team standup"
+        },
+        {
+         "subtitle": "2:00 PM – 3:00 PM",
+         "title": "Dentist"
+        }
+       ]
+      }
+     ],
+     "type": "custom",
+     "id": "run-card-1"
+    }
+   ],
+   "model": "Copilot's default model",
+   "handoffs": []
+  }
+ ],
+ "supportsStop": true
+}

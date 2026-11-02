@@ -1,0 +1,128 @@
+{
+ "cards": [
+  {
+   "accessibilityLabel": "Weather for Seattle, WA, Thu, Nov 5 – Sat, Nov 7",
+   "blocks": [
+    {
+     "subtitle": "Thu, Nov 5 – Sat, Nov 7",
+     "subtitleSymbol": "calendar",
+     "title": "Seattle, WA",
+     "type": "header"
+    },
+    {
+     "accessibilityLabel": "3-day forecast",
+     "items": [
+      {
+       "accessibilityLabel": "Today, Cloudy, high 56, low 46 degrees Fahrenheit, 62 percent chance of precipitation",
+       "high": 56,
+       "highText": "56°",
+       "label": "Today",
+       "low": 46,
+       "lowText": "46°",
+       "note": "62%",
+       "symbol": "cloud.fill"
+      },
+      {
+       "accessibilityLabel": "Fri, Cloudy, high 59, low 49 degrees Fahrenheit, 62 percent chance of precipitation",
+       "high": 59,
+       "highText": "59°",
+       "label": "Fri",
+       "low": 49,
+       "lowText": "49°",
+       "note": "62%",
+       "symbol": "cloud.fill"
+      },
+      {
+       "accessibilityLabel": "Sat, Cloudy, high 61, low 50 degrees Fahrenheit, 39 percent chance of precipitation",
+       "high": 61,
+       "highText": "61°",
+       "label": "Sat",
+       "low": 50,
+       "lowText": "50°",
+       "note": "39%",
+       "symbol": "cloud.fill"
+      }
+     ],
+     "kind": "range",
+     "max": 61,
+     "min": 46,
+     "type": "chart"
+    }
+   ],
+   "fallbackText": "Seattle, WA — Thu, Nov 5 – Sat, Nov 7\nToday 62% 46°–56°\nFri 62% 49°–59°\nSat 39% 50°–61°",
+   "id": "record-A0AC3AA5-E310-49D3-8F71-24F46CE97542-0",
+   "source": {
+    "attribution": "Weather data by Open-Meteo.com",
+    "kind": "resolver",
+    "name": "Open-Meteo",
+    "updatedAt": "2026-11-02T06:14:58Z",
+    "url": "https://open-meteo.com/"
+   },
+   "type": "weather",
+   "version": 1
+  },
+  {
+   "accessibilityLabel": "Places for Climate Pledge Arena",
+   "blocks": [
+    {
+     "accessibilityLabel": "Map of Climate Pledge Arena",
+     "attribution": "Apple Maps · © OpenStreetMap",
+     "latitude": 47.6220927,
+     "latitudeDelta": 0.025,
+     "longitude": -122.3540014,
+     "longitudeDelta": 0.035,
+     "pins": [
+      {
+       "glyph": "🏃",
+       "id": "place-1-68819",
+       "latitude": 47.6220927,
+       "longitude": -122.3540014,
+       "symbol": "figure.run",
+       "title": "Climate Pledge Arena"
+      }
+     ],
+     "type": "map"
+    },
+    {
+     "items": [
+      {
+       "accessibilityLabel": "Climate Pledge Arena, Stadium, 334 First Ave N, Seattle, WA 98109, United States",
+       "actions": [
+        {
+         "kind": "directions",
+         "label": "Directions",
+         "url": "https://maps.apple.com/?q=Climate%20Pledge%20Arena&ll=47.622093,-122.354001"
+        },
+        {
+         "kind": "call",
+         "label": "Call",
+         "url": "tel:+12065550100"
+        },
+        {
+         "kind": "website",
+         "label": "Website",
+         "url": "https://climatepledgearena.com"
+        }
+       ],
+       "detail": "334 First Ave N, Seattle, WA 98109, United States",
+       "glyph": "🏃",
+       "id": "place-1-68819",
+       "pinID": "place-1-68819",
+       "subtitle": "Stadium",
+       "symbol": "figure.run",
+       "title": "Climate Pledge Arena"
+      }
+     ],
+     "mapLinked": true,
+     "title": "Climate Pledge Arena",
+     "type": "list"
+    }
+   ],
+   "fallbackText": "• Climate Pledge Arena — Stadium — 334 First Ave N, Seattle, WA 98109, United States",
+   "id": "record-A0AC3AA5-E310-49D3-8F71-24F46CE97542-1",
+   "type": "places",
+   "version": 1
+  }
+ ],
+ "refreshAfter": 300
+}
