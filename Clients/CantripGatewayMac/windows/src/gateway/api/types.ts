@@ -518,6 +518,137 @@ export interface RemoteWeatherCard {
   daily?: { date: string; label: string; high: number; low: number; condition: string; symbol: string; precipitationChance?: number }[];
 }
 
+// MARK: - Card documents (`CardDocument.snapshot`, docs/cards.md)
+//
+// Every card under a reply, made of building blocks each client draws once. Symbols are SF Symbol
+// names; clients draw the ones they know and otherwise `glyph` (an emoji). Clients skip block types
+// they don't know and show `fallbackText` for a card with nothing they can draw.
+
+/** "positive" green, "negative" red, "warning" amber, "accent" blue, "neutral" muted. */
+export type RemoteCardTone = "positive" | "negative" | "warning" | "accent" | "neutral";
+
+/** Opens `url` (https, http or tel only). `kind` picks the icon: "open", "directions", "call" or "website". */
+export interface RemoteCardAction {
+  kind: string;
+  label: string;
+  url: string;
+}
+
+export interface RemoteCardSource {
+  /** "resolver", "tool" or "preview". */
+  kind: string;
+  name?: string;
+  attribution?: string;
+  url?: string;
+  /** ISO 8601. */
+  updatedAt?: ISO8601String;
+}
+
+export interface RemoteCardBadge {
+  text: string;
+  /** A {@link RemoteCardTone}; anything else draws neutral. */
+  tone?: string;
+  symbol?: string;
+}
+
+export interface RemoteCardStat {
+  value: string;
+  label?: string;
+  symbol?: string;
+  detail?: string;
+  accessibilityLabel?: string;
+}
+
+export interface RemoteCardRow {
+  key: string;
+  value: string;
+  symbol?: string;
+}
+
+/** An entry in a strip, chart or list; each block uses the fields it needs. */
+export interface RemoteCardItem {
+  id?: string;
+  label?: string;
+  title?: string;
+  subtitle?: string;
+  detail?: string;
+  symbol?: string;
+  glyph?: string;
+  value?: string;
+  note?: string;
+  /** Tints `note` ({@link RemoteCardTone}). */
+  tone?: string;
+  low?: number;
+  high?: number;
+  lowText?: string;
+  highText?: string;
+  trailing?: string;
+  /** A mapLinked list's row: the previous map block's pin. */
+  pinID?: string;
+  badges?: RemoteCardBadge[];
+  actions?: RemoteCardAction[];
+  accessibilityLabel?: string;
+}
+
+export interface RemoteCardPin {
+  id: string;
+  title: string;
+  latitude: number;
+  longitude: number;
+  glyph?: string;
+  symbol?: string;
+}
+
+/** `type`: header, stat, keyValue, strip, chart, list, map, image, badges or notice (others are skipped). */
+export interface RemoteCardBlock {
+  type: string;
+  title?: string;
+  subtitle?: string;
+  subtitleSymbol?: string;
+  symbol?: string;
+  lines?: string[];
+  stat?: RemoteCardStat;
+  value?: string;
+  label?: string;
+  detail?: string;
+  text?: string;
+  tone?: string;
+  /** chart: "range" or "bar". */
+  kind?: string;
+  rows?: RemoteCardRow[];
+  items?: RemoteCardItem[];
+  badges?: RemoteCardBadge[];
+  min?: number;
+  max?: number;
+  pins?: RemoteCardPin[];
+  latitude?: number;
+  longitude?: number;
+  latitudeDelta?: number;
+  longitudeDelta?: number;
+  /** list: right after a map, its items are that map's pins (`pinID`), shown as its legend. */
+  mapLinked?: boolean;
+  attribution?: string;
+  /** image: `GET /api/v1/link-previews/image?id=<imageID>` (only images the Mac cached). */
+  imageID?: HexSHA256;
+  aspectRatio?: number;
+  accessibilityLabel?: string;
+}
+
+export interface RemoteCardDocument {
+  version: number;
+  id: string;
+  /** What it is ("weather", "places", "link", "flights", …): for logs and tests; never branched on. */
+  type: string;
+  /** "panel" (default) or "link" (compact; the whole card opens `action.url`). */
+  style?: string;
+  accessibilityLabel?: string;
+  action?: RemoteCardAction;
+  source?: RemoteCardSource;
+  /** The card as plain text, for a client that can't draw it. */
+  fallbackText?: string;
+  blocks: RemoteCardBlock[];
+}
+
 /** One transcript message (`RemoteHistory.message` + `messageSnapshot`). */
 export interface RemoteMessage {
   id: UUIDString;
@@ -563,6 +694,11 @@ export interface RemoteMessage {
   placeCard?: RemotePlaceCard;
   /** Forecast card for the reply's `weather` block; omitted when none. */
   weatherCard?: RemoteWeatherCard;
+  /**
+   * Every card under the reply as generic blocks: the main card first, then link cards. When
+   * present, draw these instead of `weatherCard`, `placeCard` and `linkPreviews` (kept for older clients).
+   */
+  cards?: RemoteCardDocument[];
 }
 
 /** A Home message's thread tag: the prompt that started its thread. */
