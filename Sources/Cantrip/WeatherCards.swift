@@ -739,196 +739,22 @@ enum WeatherLinkFilter {
     }
 }
 
-// MARK: - Mac card view
+// MARK: - Range bar (the cards' chart block)
 
-struct WeatherCardView: View {
-    let card: WeatherCard
-
-    static let panel = Color(red: 0.11, green: 0.12, blue: 0.14)
-    static let rain = Color(red: 0.49, green: 0.77, blue: 1.0)
-
-    var body: some View {
-        let presented = WeatherPresentation(card)
-        VStack(alignment: .leading, spacing: 0) {
-            header(presented)
-            if card.isAvailable {
-                Divider().overlay(Color.white.opacity(0.1))
-                hourly(presented)
-                Divider().overlay(Color.white.opacity(0.1))
-                daily(presented)
-            }
-            Divider().overlay(Color.white.opacity(0.1))
-            footer
-        }
-        .foregroundStyle(.white)
-        .frame(maxWidth: 680, alignment: .leading)
-        .background(
-            LinearGradient(colors: [Color(red: 0.13, green: 0.19, blue: 0.28), Self.panel],
-                           startPoint: .top, endPoint: .bottom)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.14), lineWidth: 1)
-        )
-        .environment(\.colorScheme, .dark)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Weather for \(card.place)")
-    }
-
-    private func header(_ presented: WeatherPresentation) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(card.place).font(.system(size: 15, weight: .semibold)).lineLimit(2)
-                if let note = card.placeNote {
-                    Label(note, systemImage: "location.fill")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.white.opacity(0.72))
-                }
-                if card.isAvailable, let current = card.current {
-                    Text(presented.condition).font(.system(size: 13)).foregroundStyle(.white.opacity(0.85))
-                    Text(detailLine(current)).font(.system(size: 12)).foregroundStyle(.white.opacity(0.72))
-                } else {
-                    Label("Forecast unavailable", systemImage: "exclamationmark.icloud")
-                        .font(.system(size: 13, weight: .semibold))
-                        .padding(.top, 4)
-                    Text(card.unavailable ?? "Ask again in a moment.")
-                        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.75))
-                }
-            }
-            Spacer(minLength: 8)
-            if card.isAvailable, let current = card.current {
-                HStack(spacing: 6) {
-                    Image(systemName: presented.symbol).symbolRenderingMode(.multicolor).font(.system(size: 26))
-                    Text("\(current.temperature)°").font(.system(size: 38, weight: .light)).monospacedDigit()
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Now \(current.temperature) \(WeatherPresentation.unitName(card.unit)), \(presented.condition)")
-            }
-        }
-        .padding(14)
-    }
-
-    private func detailLine(_ current: WeatherCard.Current) -> String {
-        var parts: [String] = []
-        if let today = card.days.first {
-            parts.append("H \(today.high)°  L \(today.low)°")
-            if let chance = today.precipitationChance { parts.append("\(chance)% precip.") }
-        }
-        if let feels = current.feelsLike, abs(feels - current.temperature) >= 3 { parts.append("Feels like \(feels)°") }
-        return parts.joined(separator: " · ")
-    }
-
-    private func hourly(_ presented: WeatherPresentation) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(Array(presented.hours.enumerated()), id: \.offset) { _, hour in
-                    VStack(spacing: 5) {
-                        Text(hour.label).font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.8))
-                        Image(systemName: hour.symbol).symbolRenderingMode(.multicolor).font(.system(size: 17))
-                            .frame(height: 20)
-                        Text(chanceText(hour.precipitationChance))
-                            .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Self.rain)
-                        Text("\(hour.temperature)°").font(.system(size: 13.5, weight: .semibold)).monospacedDigit()
-                    }
-                    .frame(width: 48)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(hourLabel(hour))
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 10)
-        }
-    }
-
-    private func daily(_ presented: WeatherPresentation) -> some View {
-        let lowest = presented.days.map(\.low).min() ?? 0
-        let highest = presented.days.map(\.high).max() ?? 1
-        return VStack(spacing: 0) {
-            ForEach(Array(presented.days.enumerated()), id: \.offset) { index, day in
-                HStack(spacing: 10) {
-                    Text(day.label).font(.system(size: 13, weight: .medium)).frame(width: 46, alignment: .leading)
-                    Image(systemName: day.symbol).symbolRenderingMode(.multicolor).font(.system(size: 15))
-                        .frame(width: 24)
-                    Text(chanceText(day.precipitationChance))
-                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Self.rain)
-                        .frame(width: 34, alignment: .leading)
-                    Text("\(day.low)°").font(.system(size: 13)).foregroundStyle(.white.opacity(0.7))
-                        .monospacedDigit().frame(width: 34, alignment: .trailing)
-                    WeatherRangeBar(low: day.low, high: day.high, lowest: lowest, highest: highest)
-                        .frame(height: 5)
-                    Text("\(day.high)°").font(.system(size: 13, weight: .semibold))
-                        .monospacedDigit().frame(width: 34, alignment: .trailing)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(dayLabel(day))
-                if index < presented.days.count - 1 {
-                    Divider().overlay(Color.white.opacity(0.06)).padding(.leading, 14)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private var footer: some View {
-        HStack(spacing: 6) {
-            if let updated = card.updatedAt {
-                Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
-            }
-            Spacer(minLength: 6)
-            Button(WeatherCard.attribution) {
-                if let url = URL(string: WeatherCard.attributionURL) { NSWorkspace.shared.open(url) }
-            }
-            .buttonStyle(.plain)
-            .underline()
-            .accessibilityAddTraits(.isLink)
-        }
-        .font(.system(size: 11))
-        .foregroundStyle(.white.opacity(0.68))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-    }
-
-    private func chanceText(_ chance: Int?) -> String {
-        guard let chance, chance >= 10 else { return " " }
-        return "\(chance)%"
-    }
-
-    private func hourLabel(_ hour: WeatherPresentation.Hour) -> String {
-        var text = "\(hour.label), \(hour.temperature) \(WeatherPresentation.unitName(card.unit)), \(hour.condition)"
-        if let chance = hour.precipitationChance, chance >= 10 { text += ", \(chance) percent chance of precipitation" }
-        return text
-    }
-
-    private func dayLabel(_ day: WeatherPresentation.Day) -> String {
-        var text = "\(day.label), \(day.condition), high \(day.high), low \(day.low) \(WeatherPresentation.unitName(card.unit))"
-        if let chance = day.precipitationChance, chance >= 10 { text += ", \(chance) percent chance of precipitation" }
-        return text
-    }
-}
-
-/// A day's low-to-high span on the week's scale, like the map card's other compact chrome.
+/// A low-to-high span on the chart's scale (`range` within 0...1), as in the forecast's 10 days.
 struct WeatherRangeBar: View {
-    let low: Int
-    let high: Int
-    let lowest: Int
-    let highest: Int
+    let range: ClosedRange<Double>
 
     var body: some View {
         GeometryReader { geometry in
-            let span = Double(max(1, highest - lowest))
-            let start = Double(low - lowest) / span
-            let end = Double(high - lowest) / span
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.14))
                 Capsule()
                     .fill(LinearGradient(colors: [Color(red: 0.35, green: 0.78, blue: 0.98),
                                                   Color(red: 1.0, green: 0.80, blue: 0.25)],
                                          startPoint: .leading, endPoint: .trailing))
-                    .frame(width: max(5, geometry.size.width * (end - start)))
-                    .offset(x: geometry.size.width * start)
+                    .frame(width: max(5, geometry.size.width * (range.upperBound - range.lowerBound)))
+                    .offset(x: geometry.size.width * range.lowerBound)
             }
         }
         .accessibilityHidden(true)
