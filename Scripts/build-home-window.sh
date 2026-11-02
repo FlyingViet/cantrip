@@ -1,24 +1,20 @@
 #!/bin/bash
-# Builds the Home window plug-in (Cantrip's Window interface) from the CantripGatewayMac submodule
-# into .build/home-window. Optional: without Xcode, xcodegen or the submodule it explains why and
-# exits 0, and Cantrip builds with the panel only. CANTRIP_SKIP_HOME_WINDOW=1 skips it.
+# Builds the Home window plug-in (Cantrip's Window interface) from Clients/CantripGatewayMac (which
+# compiles Clients/CantripIOS) into .build/home-window. Optional: without Xcode, xcodegen or those
+# folders it explains why and exits 0, and Cantrip builds with the panel only.
+# CANTRIP_SKIP_HOME_WINDOW=1 skips it.
 # With CANTRIP_BUILD_ROOT set (a build disk, such as a NAS), its DerivedData goes there, one folder per
 # checkout; when that folder can't be written it builds locally. SwiftPM checkouts stay in .build,
 # cloned copy-on-write from the main checkout's so a worktree doesn't fetch them again.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-SRC="${HOME_WINDOW_SOURCE:-External/CantripGatewayMac}"
+SRC="${HOME_WINDOW_SOURCE:-Clients/CantripGatewayMac}"
 OUT=".build/home-window"
 skip() { echo "Home window: skipped ($1). Cantrip builds with the panel only." >&2; rm -rf "$OUT/CantripHomeWindow.bundle"; exit 0; }
 
 [ "${CANTRIP_SKIP_HOME_WINDOW:-0}" = 1 ] && skip "CANTRIP_SKIP_HOME_WINDOW=1"
-# Follow the pinned commit (a pull or Update & Rebuild may have moved it); offline keeps what's there.
-if [ -f .gitmodules ] && grep -q "$SRC" .gitmodules; then
-    git submodule update --init --recursive "$SRC" >/dev/null 2>&1 || true
-fi
 [ -f "$SRC/project.yml" ] || skip "no CantripGatewayMac source at $SRC"
-[ -f "$SRC/Hermes/project.yml" ] || git -C "$SRC" submodule update --init >/dev/null 2>&1 || true
-[ -f "$SRC/Hermes/project.yml" ] || skip "the Hermes submodule in $SRC is missing"
+[ -f "$SRC/../CantripIOS/project.yml" ] || skip "no CantripIOS source next to $SRC"
 command -v xcodegen >/dev/null 2>&1 || skip "xcodegen isn't installed (brew install xcodegen)"
 xcodebuild -version >/dev/null 2>&1 || skip "full Xcode isn't installed (the Command Line Tools can't build it)"
 sdk=$(xcrun --sdk macosx --show-sdk-version 2>/dev/null || echo 0)

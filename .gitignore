@@ -6,6 +6,9 @@
 Resources/AppIcon.icns
 *.xcodeproj
 .swiftpm/
+# The Gateway submodule's checkout, left behind by clones from before Clients/ (git keeps a
+# removed submodule's files).
+/External/CantripGatewayMac/
 
 # Local plugin installations; keep the committed example fixture.
 Examples/plugins/*
