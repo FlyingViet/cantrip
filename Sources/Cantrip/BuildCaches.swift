@@ -273,10 +273,14 @@ enum BuildCaches {
         var buildRoots: [URL]
         var sharedCaches: [SharedCache]
         var agentIdle: TimeInterval = 3 * 86_400
+        /// Agents' DerivedData folders go sooner: each is about 2 GB, and builds make them again.
+        var agentDerivedDataIdle: TimeInterval = 6 * 3_600
         var repositoryIdle: TimeInterval = 7 * 86_400
         var orphanIdle: TimeInterval = 86_400
         var now = Date()
         var git = "/usr/bin/git"
+        /// A fresh look at running processes right before each removal (a build may have started).
+        var currentProcesses: (() -> StorageUpkeep.ProcessSnapshot)? = nil
         /// Runs a cleanup command; tests replace it.
         var run: (String, [String]) -> Bool = { command, arguments in
             (try? ProcessRunner.run("/usr/bin/env", [command] + arguments, environment: ToolPath.environment(),
@@ -342,6 +346,8 @@ enum BuildCaches {
         var path: String
         var bytes: Int64
         var reason: String
+        /// `StorageUpkeep.Report.Category` raw value; absent in reports from older versions.
+        var category: String? = nil
     }
 
     struct Report: Codable {
@@ -360,7 +366,11 @@ enum BuildCaches {
                       log: (String) -> Void = { _ in }) -> Report {
         var report = Report()
         let verb = dryRun ? "would remove" : "removed"
-        func remove(_ url: URL, reason: String) {
+        func remove(_ url: URL, reason: String, category: StorageUpkeep.Report.Category) {
+            if let fresh = o.currentProcesses?(), fresh.uses(url.path) {
+                log("build cache \(url.path) kept: a process started using it")
+                return
+            }
             let bytes = StorageUpkeep.allocatedSize(url)
             if !dryRun {
                 do { try StorageUpkeep.removeTree(url) } catch {
@@ -368,15 +378,17 @@ enum BuildCaches {
                     return
                 }
             }
-            report.removed.append(Removal(path: url.path, bytes: bytes, reason: reason))
+            report.removed.append(Removal(path: url.path, bytes: bytes, reason: reason, category: category.rawValue))
             log("build cache \(url.path) \(verb): \(StorageUpkeep.format(bytes)), \(reason)")
         }
 
         // Agents' ad hoc DerivedData and package clones in ~/.cache/Cantrip.
         for found in buildFolders(in: o.agentCache, maxDepth: 3) {
             let idle = idleSince(found.url, shape: found.shape)
-            guard o.now.timeIntervalSince(idle) >= o.agentIdle, !processes.uses(found.url.path) else { continue }
-            remove(found.url, reason: "agent \(found.shape.label) unused for \(days(o.now, idle)) days")
+            let limit = found.shape == .derivedData ? o.agentDerivedDataIdle : o.agentIdle
+            guard o.now.timeIntervalSince(idle) >= limit, !processes.uses(found.url.path) else { continue }
+            remove(found.url, reason: "agent \(found.shape.label) unused for \(age(o.now, idle))",
+                   category: .agentBuildFolders)
         }
 
         // Git-ignored Xcode and SwiftPM output inside checkouts.
@@ -389,7 +401,8 @@ enum BuildCaches {
                     let idle = idleSince(found.url, shape: found.shape)
                     guard o.now.timeIntervalSince(idle) >= o.repositoryIdle, !processes.uses(found.url.path),
                           isIgnored(found.url, git: o.git) else { continue }
-                    remove(found.url, reason: "\(found.shape.label) unused for \(days(o.now, idle)) days")
+                    remove(found.url, reason: "\(found.shape.label) unused for \(days(o.now, idle)) days",
+                           category: .checkoutBuildOutput)
                 }
             }
         }
@@ -400,7 +413,7 @@ enum BuildCaches {
                 guard let workspace = workspacePath(found.url), isGone(workspace) else { continue }
                 let idle = idleSince(found.url, shape: found.shape)
                 guard o.now.timeIntervalSince(idle) >= o.orphanIdle, !processes.uses(found.url.path) else { continue }
-                remove(found.url, reason: "its project \(workspace) no longer exists")
+                remove(found.url, reason: "its project \(workspace) no longer exists", category: .orphanedBuildFolders)
             }
         }
 
@@ -513,8 +526,16 @@ enum BuildCaches {
 
     enum Shape: String {
         case derivedData, packageClones
+        /// A build tool's git-ignored output folder by its usual name (.build, build, node_modules, dist...).
+        case output
 
-        var label: String { self == .derivedData ? "DerivedData" : "SwiftPM checkouts" }
+        var label: String {
+            switch self {
+            case .derivedData: return "DerivedData"
+            case .packageClones: return "SwiftPM checkouts"
+            case .output: return "build output"
+            }
+        }
     }
 
     /// What xcodebuild writes into a DerivedData folder, and SwiftPM into a clones folder
@@ -533,8 +554,11 @@ enum BuildCaches {
         guard let names = try? Set(FileManager.default.contentsOfDirectory(atPath: url.path)), !names.isEmpty else {
             return nil
         }
+        // `xcodebuild -derivedDataPath` folders don't always write info.plist; Build beside its logs or
+        // indexes still says DerivedData when nothing else is there.
         if names.isSubset(of: derivedDataNames),
-           workspacePath(url) != nil || (names.contains("Logs") && names.contains("SourcePackages")) {
+           workspacePath(url) != nil || (names.contains("Logs") && names.contains("SourcePackages"))
+            || (names.contains("Build") && !names.isDisjoint(with: ["Logs", "Index.noindex", "CompilationCache.noindex"])) {
             return .derivedData
         }
         if names.isSubset(of: packageCloneNames), names.contains("checkouts"), names.contains("repositories") {
@@ -597,7 +621,7 @@ enum BuildCaches {
     /// top. A resolve that changes nothing writes nothing in SwiftPM's clones, but git reads each
     /// checkout's index, so its access time counts too.
     static func idleSince(_ url: URL, shape: Shape) -> Date {
-        var newest = newestChange(url, depth: shape == .derivedData ? 2 : 1)
+        var newest = newestChange(url, depth: shape == .packageClones ? 1 : 2)
         if shape == .packageClones {
             let checkouts = url.appendingPathComponent("checkouts")
             for name in (try? FileManager.default.contentsOfDirectory(atPath: checkouts.path)) ?? [] {
@@ -633,6 +657,43 @@ enum BuildCaches {
             }
         }
         return newest
+    }
+
+    /// Folder names build tools write their output to (Gradle, Xcode, SwiftPM, npm, Electron).
+    static let outputNames: Set<String> = [".build", "build", ".spm", "DerivedData", "node_modules", "dist",
+                                           "dist-electron", "release"]
+
+    /// The git-ignored build output inside a worktree (its submodules included): folders named for
+    /// build output, and DerivedData or SwiftPM-checkout folders by their contents. Not inside them.
+    static func outputFolders(in worktree: URL, git: String, maxDepth: Int = 4) -> [(url: URL, shape: Shape)] {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
+        guard let walker = FileManager.default.enumerator(at: worktree, includingPropertiesForKeys: keys, options: [],
+                                                          errorHandler: { _, _ in true }) else { return [] }
+        let base = worktree.standardizedFileURL.pathComponents.count
+        var found: [(URL, Shape)] = []
+        for case let url as URL in walker {
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isDirectory == true,
+                  values.isSymbolicLink != true else { continue }
+            let name = url.lastPathComponent
+            if name == ".git" || name.hasSuffix(".xcodeproj") || name.hasSuffix(".xcworkspace") || name.hasSuffix(".app") {
+                walker.skipDescendants()
+                continue
+            }
+            let shape = shape(of: url) ?? (outputNames.contains(name) ? .output : nil)
+            if let shape {
+                walker.skipDescendants()
+                if isIgnored(url, git: git) { found.append((url, shape)) }
+                continue
+            }
+            if url.standardizedFileURL.pathComponents.count - base >= maxDepth { walker.skipDescendants() }
+        }
+        return found
+    }
+
+    /// "7 hours" or "3 days".
+    private static func age(_ now: Date, _ since: Date) -> String {
+        let hours = Int(now.timeIntervalSince(since) / 3_600)
+        return hours >= 48 ? "\(hours / 24) days" : "\(hours) hours"
     }
 
     /// Whether the git checkout holding `url` ignores it (nothing tracked inside is ever removed).

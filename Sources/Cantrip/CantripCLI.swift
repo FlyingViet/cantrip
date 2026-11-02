@@ -267,6 +267,9 @@ enum CantripCLI {
                 && report.caches?.errors.isEmpty != false ? 0 : 1
         }
         print(report.summary)
+        if !report.categoryLines.isEmpty {
+            print((dryRun ? "Would free: " : "Freed: ") + report.categoryLines.joined(separator: ", ") + ".")
+        }
         if !report.keptSummary.isEmpty { print("Kept " + report.keptSummary.joined(separator: ", ") + ".") }
         for worktree in report.worktreesKept {
             print("Kept worktree \(worktree.path): \(worktree.reason ?? "")")
@@ -289,6 +292,7 @@ enum CantripCLI {
         if !dryRun, report.bytesRemoved > 0 {
             print("Each removal is listed in \(configuration.stateDirectory.path)/storage-upkeep.log.")
         } else if dryRun, !list, report.sessionsRemoved + report.worktreesRemoved.count
+                    + (report.worktreeOutputRemoved?.count ?? 0)
                     + (report.simulators?.actions.count ?? 0) + (report.caches?.count ?? 0) > 0 {
             print("Add --list to name each one.")
         }

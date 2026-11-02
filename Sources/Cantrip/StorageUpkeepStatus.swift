@@ -1,8 +1,11 @@
 import SwiftUI
+import UserNotifications
 
 /// Runs `StorageUpkeep` in the host about once a day: 10 minutes after launch, then whenever a
-/// day has passed since the last cleanup (including one run with `cantrip cleanup`), and on
-/// request from Settings. Work happens off the main thread, one cleanup at a time. The simulator
+/// day has passed since the last cleanup (including one run with `cantrip cleanup`), on request
+/// from Settings, and when free space falls under 20 GB (checked every 5 minutes; at most hourly
+/// while it stays low). If a low-space cleanup leaves under 15 GB, one alert names what's largest;
+/// the next goes only after space has recovered. Work happens off the main thread, one cleanup at a time. The simulator
 /// pool's own upkeep (`SimulatorPool.tidy`) runs every few minutes, whether or not the daily
 /// cleanup is on: idle simulators shut down and members the pool no longer keeps go once free.
 @MainActor
@@ -13,11 +16,17 @@ final class StorageUpkeepStatus: ObservableObject {
     static let checkInterval: TimeInterval = 60 * 60
     static let simulatorFirstCheckDelay: TimeInterval = 60
     static let simulatorCheckInterval: TimeInterval = 5 * 60
+    static let freeSpaceCheckInterval: TimeInterval = 5 * 60
+    private static let lowDiskKey = "storageLowDiskGuard"
 
     @Published private(set) var lastReport: StorageUpkeep.Report?
     @Published private(set) var isRunning = false
     private var timer: Timer?
     private var simulatorTimer: Timer?
+    private var freeSpaceTimer: Timer?
+    /// Paired devices get the low-space alert through it.
+    weak var remote: RemoteControlServer?
+    var postsMacNotifications = false
     private var tidyingSimulators = false
     private var lastSimulatorErrors: [String] = []
     private let stateDirectory = StorageUpkeep.Configuration.standard().stateDirectory
@@ -41,6 +50,69 @@ final class StorageUpkeepStatus: ObservableObject {
         simulatorTimer = Timer.scheduledTimer(withTimeInterval: Self.simulatorCheckInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tidySimulators() }
         }
+        freeSpaceTimer?.invalidate()
+        freeSpaceTimer = Timer.scheduledTimer(withTimeInterval: Self.freeSpaceCheckInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkFreeSpace() }
+        }
+    }
+
+    /// Cleans up now when free space is low (`StorageUpkeep.LowDiskGuard`), and alerts once if the
+    /// cleanup couldn't free enough.
+    func checkFreeSpace() {
+        guard AppSettings.shared.storageUpkeepEnabled, !isRunning else { return }
+        var state = Self.loadGuard()
+        let configuration = StorageUpkeep.Configuration.standard()
+        guard let free = StorageUpkeep.freeBytes(configuration.sessionRoot) else { return }
+        // Decided here (cheap), so the work below only starts when a cleanup is due.
+        var probe = state
+        guard probe.shouldRun(free: free, now: configuration.now) else {
+            if probe != state { Self.saveGuard(probe) }
+            return
+        }
+        isRunning = true
+        let logFile = stateDirectory.appendingPathComponent("storage-upkeep.log")
+        DispatchQueue.global(qos: .utility).async {
+            var alert: (String, String)?
+            let report = StorageUpkeep.lowDiskRun(configuration, guard: &state, free: {
+                StorageUpkeep.freeBytes(configuration.sessionRoot)
+            }, alert: { alert = ($0, $1) }, log: { line in
+                if line.hasPrefix("free space") || line.hasPrefix("low disk") { StorageUpkeep.appendLog(line, to: logFile) }
+            })
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.isRunning = false
+                    Self.saveGuard(state)
+                    if let report {
+                        self.lastReport = report
+                        Log.write("storage-upkeep: low disk (\(StorageUpkeep.format(free)) free): \(report.summary)")
+                    }
+                    if let alert { self.sendAlert(title: alert.0, body: alert.1) }
+                }
+            }
+        }
+    }
+
+    private func sendAlert(title: String, body: String) {
+        Log.write("storage-upkeep: alert: \(title). \(body)")
+        remote?.notifyNotice(title: title, body: body, kind: "storageLow")
+        guard postsMacNotifications else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
+    private static func loadGuard() -> StorageUpkeep.LowDiskGuard {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return UserDefaults.standard.data(forKey: lowDiskKey)
+            .flatMap { try? decoder.decode(StorageUpkeep.LowDiskGuard.self, from: $0) } ?? StorageUpkeep.LowDiskGuard()
+    }
+
+    private static func saveGuard(_ state: StorageUpkeep.LowDiskGuard) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(state) { UserDefaults.standard.set(data, forKey: lowDiskKey) }
     }
 
     /// `SimulatorPool.tidy`, logging what it did to the host log and the cleanup's removal log.
@@ -108,7 +180,7 @@ final class StorageUpkeepStatus: ObservableObject {
                 : "Not run yet."
         }
         let when = report.finishedAt.formatted(.relative(presentation: .named))
-        var text = "Last cleanup \(when): \(report.summary)"
+        var text = "Last cleanup \(when)\(report.lowDisk == true ? " (space was low)" : ""): \(report.summary)"
         if let free = report.freeBytesAfter { text += " \(StorageUpkeep.format(free)) free." }
         return text
     }
@@ -127,11 +199,13 @@ struct StorageUpkeepView: View {
                 .font(.caption)
                 .toggleStyle(.checkbox)
                 .help("Removes Copilot session folders nothing has used for the set number of days, and agent git "
-                    + "worktrees (in session folders, ~/.cache/Cantrip or temporary folders) that are clean, unchanged "
-                    + "for 3 days and whose commits are on a branch. Sessions of open or closed tabs, ones named in "
-                    + "memory notes, ones in use and anything with uncommitted or unpushed work stay. Also removes "
-                    + "build output the next build makes again (DerivedData and SwiftPM checkouts nothing used for "
-                    + "days, git-ignored ones only in your checkouts) and trims package caches over their caps.")
+                    + "worktrees (in session folders, ~/.cache/Cantrip or temporary folders) that are clean and either "
+                    + "pushed and unchanged for a day, or unchanged for 3 days with their commits on a branch, "
+                    + "submodules included. Worktrees that stay lose their git-ignored build output (DerivedData, "
+                    + ".build, build, node_modules, dist) after 12 idle hours; agents' own DerivedData folders go "
+                    + "after 6. Open tabs' and child tabs' worktrees, locked ones, ones in use, sessions of tabs or "
+                    + "named in memory notes, and anything uncommitted or unpushed stay. Also trims package caches "
+                    + "over their caps, and runs early when free space falls under 20 GB.")
             if settings.storageUpkeepEnabled {
                 Stepper(value: $settings.storageSessionRetentionDays, in: StorageUpkeep.sessionRetentionDays) {
                     Text("Keep unused sessions for \(settings.storageSessionRetentionDays) days")

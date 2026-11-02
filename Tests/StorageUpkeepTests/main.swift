@@ -242,6 +242,46 @@ write("keep\n", to: notASession.appendingPathComponent("a.txt"))
 let uppercase = sessionRoot.appendingPathComponent(UUID().uuidString)
 write("keep\n", to: uppercase.appendingPathComponent("a.txt"))
 
+// Build output in a worktree that stays: a dirty branch with a commit nowhere else.
+let wip = worktree("wip-worktree", ["-b", "wip"])
+write("wip\n", to: wip.appendingPathComponent("wip.txt"))
+git(["add", "."], in: wip)
+git(["commit", "-q", "-m", "wip work"], in: wip)
+write("draft\n", to: wip.appendingPathComponent("draft.txt"))
+write("dependency\n", to: wip.appendingPathComponent("node_modules/pkg/index.js"))
+// An open tab works in this one: nothing in it is touched.
+let tabOpen = worktree("tab-open-worktree")
+write("dependency\n", to: tabOpen.appendingPathComponent("node_modules/pkg/index.js"))
+
+// Submodules: the project embeds a library from its own remote.
+let libRemote = root.appendingPathComponent("lib.git")
+git(["init", "-q", "--bare", libRemote.path])
+let libSeed = root.appendingPathComponent("lib-seed")
+git(["init", "-q", libSeed.path])
+write("lib\n", to: libSeed.appendingPathComponent("lib.txt"))
+git(["add", "."], in: libSeed)
+git(["commit", "-q", "-m", "lib"], in: libSeed)
+git(["remote", "add", "origin", libRemote.path], in: libSeed)
+git(["push", "-q", "origin", "main"], in: libSeed)
+let allowFiles = ["-c", "protocol.file.allow=always"]
+git(allowFiles + ["submodule", "--quiet", "add", libRemote.path, "lib"], in: project)
+git(["commit", "-q", "-m", "add lib"], in: project)
+git(["push", "-q", "origin", "main"], in: project)
+// Clean and pushed with its submodule checked out: git won't remove it, so the folder goes and its record is pruned.
+let withSubmodule = worktree("submodule-worktree")
+git(allowFiles + ["submodule", "--quiet", "update", "--init"], in: withSubmodule)
+// Its submodule holds a commit nowhere else (and the worktree a commit recording it).
+let subUnpushed = worktree("submodule-unpushed-worktree")
+git(allowFiles + ["submodule", "--quiet", "update", "--init"], in: subUnpushed)
+write("local\n", to: subUnpushed.appendingPathComponent("lib/local.txt"))
+git(["add", "."], in: subUnpushed.appendingPathComponent("lib"))
+git(["commit", "-q", "-m", "local lib work"], in: subUnpushed.appendingPathComponent("lib"))
+git(["add", "lib"], in: subUnpushed)
+git(["commit", "-q", "-m", "bump lib"], in: subUnpushed)
+// A worktree of the submodule's own repository (proj/.git/modules/lib), where child tabs keep theirs.
+let moduleWorktree = cache.appendingPathComponent("worktrees/lib-worktree")
+git(["worktree", "add", "-q", "--detach", moduleWorktree.path], in: project.appendingPathComponent("lib"))
+
 write(#"{"version":1,"backfilled":true,"sessions":{"\#(UUID().uuidString)":["\#(referenced.lastPathComponent)","\#(tabWorktreeSession.lastPathComponent)"]}}"#,
       to: cache.appendingPathComponent("session-output-folders.json"))
 
@@ -251,10 +291,11 @@ let configuration = StorageUpkeep.Configuration(
     transcriptFolders: [cache.appendingPathComponent("chats"), cache.appendingPathComponent("home")],
     memoryVault: vault,
     repositoryParents: [coding, home],
-    worktreeSearchRoots: [cache],
+    worktreeSearchRoots: [cache, cache.appendingPathComponent("worktrees")],
     agentRoots: [sessionRoot, cache],
     stateDirectory: cache,
     sessionRetention: 14 * 86_400,
+    protectedPaths: [tabOpen.path],
     now: testNow,
     processes: {
         StorageUpkeep.ProcessSnapshot(
@@ -267,11 +308,14 @@ let configuration = StorageUpkeep.Configuration(
 let sessionsRemoved = [old, deadLock, pushedClone, readOnly, generated, sessionWorktree]
 let sessionsKept = [recent, referenced, linked, noted, liveLock, dirtyRepo, unpushedClone, stashed, processCwd, worktreeHost,
                     orphanBranch, checkoutsFolder, bareRemote, tabWorktreeSession, notASession, uppercase]
-let worktreesRemoved = [detachedSaved, branchWithCommits, withIgnored, sessionWorktree.appendingPathComponent("files/wt")]
+let worktreesRemoved = [detachedSaved, branchWithCommits, withIgnored, sessionWorktree.appendingPathComponent("files/wt"),
+                        withSubmodule, moduleWorktree]
 let expectedKept: [URL: String] = [
     dirty: "1 uncommitted file", detachedUnique: "detached commits on no branch", locked: "locked",
-    touched: "changed in the last 3 days", committed: "committed to in the last 3 days",
-    busy: "in use by a running process",
+    touched: "changed in the last day", committed: "committed to in the last 3 days",
+    busy: "in use by a running process", wip: "1 uncommitted file",
+    tabOpen: "an open tab or a child tab in progress works in it",
+    subUnpushed: "submodule lib has uncommitted or unpushed work",
     tabWorktreeSession.appendingPathComponent("files/tab-wt"): "its session belongs to a tab or Home run",
 ]
 
@@ -287,6 +331,8 @@ do {
     expect(report.worktreesRemoved.count == worktreesRemoved.count,
            "dry run counts \(worktreesRemoved.count) worktrees: \(report.worktreesRemoved.map(\.path))")
     expect((sessionsRemoved + worktreesRemoved).allSatisfy(exists), "a dry run deletes nothing")
+    expect(exists(wip.appendingPathComponent("node_modules")) && report.worktreeOutputRemoved?.count == 1,
+           "a dry run lists build output without removing it: \(report.worktreeOutputRemoved?.map(\.path) ?? [])")
     expect(git(["worktree", "list", "--porcelain"], in: project).contains("missing-worktree"),
            "a dry run prunes no worktree records")
     expect(!exists(cache.appendingPathComponent("storage-upkeep.json"))
@@ -345,6 +391,24 @@ do {
     expect(report.worktreesRemoved.count == worktreesRemoved.count, "report lists the removed worktrees")
     expect(git(["rev-parse", "--verify", "-q", "feature"], in: project).count == 40,
            "a removed worktree's branch and commits stay in the repository")
+    // A worktree that stays loses only its build output.
+    expect(!exists(wip.appendingPathComponent("node_modules")), "an idle dirty worktree's build output goes")
+    expect(exists(wip.appendingPathComponent("wip.txt")) && exists(wip.appendingPathComponent("draft.txt"))
+           && git(["rev-parse", "--verify", "-q", "wip"], in: project).count == 40,
+           "its committed, uncommitted and unpushed work stays")
+    expect(report.worktreeOutputRemoved?.map(\.path) == [wip.appendingPathComponent("node_modules").path],
+           "only that worktree's output went: \(report.worktreeOutputRemoved?.map(\.path) ?? [])")
+    expect(exists(tabOpen.appendingPathComponent("node_modules")), "an open tab's worktree keeps its build output")
+    expect(!git(["worktree", "list", "--porcelain"], in: project).contains("submodule-worktree/")
+           && !git(["worktree", "list", "--porcelain"], in: project).contains("submodule-worktree\n"),
+           "the worktree with a submodule is removed and its record pruned")
+    expect(!git(["worktree", "list", "--porcelain"], in: project.appendingPathComponent("lib")).contains("lib-worktree"),
+           "a worktree of the submodule's own repository is removed")
+    expect(exists(subUnpushed.appendingPathComponent("lib/local.txt")), "a submodule's unpushed commit keeps its worktree")
+    let categories = report.bytesByCategory ?? [:]
+    expect((categories["worktrees"] ?? 0) > 0 && (categories["worktreeBuildOutput"] ?? 0) > 0
+           && (categories["sessions"] ?? 0) > 0, "bytes freed per kind: \(categories)")
+    expect(report.summary.contains("build output folder"), "the summary names build output: \(report.summary)")
     for (path, reason) in expectedKept {
         expect(exists(path), "kept worktree \(path.lastPathComponent)")
         let entry = report.worktreesKept.first { StorageUpkeep.resolved($0.path) == StorageUpkeep.resolved(path.path) }
@@ -359,6 +423,8 @@ do {
 
     let saved = StorageUpkeep.lastReport(in: cache)
     expect(saved?.sessionsRemoved == report.sessionsRemoved && saved?.dryRun == false, "the report is saved")
+    expect(saved?.bytesByCategory == report.bytesByCategory && saved?.worktreeOutputRemoved?.count == 1,
+           "the saved report has bytes per kind and the build output removed")
     let log = (try? String(contentsOf: cache.appendingPathComponent("storage-upkeep.log"), encoding: .utf8)) ?? ""
     expect(log.contains("session \(old.lastPathComponent) removed") && log.contains("test in /tmp: fixture"),
            "each removal is logged with what made it")
@@ -398,6 +464,48 @@ do {
     let report = StorageUpkeep.perform(clock, dryRun: false)
     expect(report?.worktreesRemoved.count == 1 && report?.sessionsRemoved == 1 && !exists(folder),
            "worktree and its session go together: \(report?.sessionsKept ?? [:]) \(report?.worktreesKept ?? [])")
+}
+
+// MARK: - Low disk
+
+do {
+    let base = root.appendingPathComponent("low-disk")
+    let sessions = base.appendingPathComponent("session-state")
+    let state = base.appendingPathComponent("cache")
+    try! fm.createDirectory(at: sessions, withIntermediateDirectories: true)
+    write(String(repeating: "x", count: 200_000), to: state.appendingPathComponent("worktrees/big-worktree/file.bin"))
+    var low = StorageUpkeep.Configuration(
+        sessionRoot: sessions, outputFolders: base.appendingPathComponent("none.json"), memoryVault: nil,
+        repositoryParents: [], worktreeSearchRoots: [], agentRoots: [sessions], stateDirectory: state,
+        sessionRetention: 14 * 86_400, now: realNow,
+        processes: { StorageUpkeep.ProcessSnapshot(workingDirectories: [], commandLines: []) }
+    )
+    let gigabyte = StorageUpkeep.LowDiskGuard.gigabyte
+    var guardState = StorageUpkeep.LowDiskGuard()
+    var free = 30 * gigabyte
+    var alerts: [(title: String, body: String)] = []
+    func check() -> StorageUpkeep.Report? {
+        StorageUpkeep.lowDiskRun(low, guard: &guardState, free: { free }, alert: { alerts.append(($0, $1)) })
+    }
+    expect(check() == nil && alerts.isEmpty, "plenty of space: no cleanup")
+    free = 10 * gigabyte
+    let first = check()
+    expect(first?.lowDisk == true && alerts.count == 1, "low space runs a cleanup and alerts once: \(alerts)")
+    expect(alerts.first?.title.hasPrefix("Only ") == true && alerts.first?.title.hasSuffix(" free on the Mac") == true
+           && alerts.first?.body.contains("big-worktree") == true, "the alert names what's largest: \(alerts)")
+    expect(StorageUpkeep.lastReport(in: state)?.lowDisk == true, "the saved report says low space started it")
+    expect(check() == nil && alerts.count == 1, "no second cleanup within the hour")
+    low.now = realNow.addingTimeInterval(2 * 3_600)
+    expect(check() != nil && alerts.count == 1, "a later cleanup while space stays low doesn't alert again")
+    free = 25 * gigabyte
+    low.now = realNow.addingTimeInterval(4 * 3_600)
+    expect(check() == nil && !guardState.alerted, "space recovered: the alert is armed again")
+    free = 18 * gigabyte
+    low.now = realNow.addingTimeInterval(6 * 3_600)
+    expect(check() != nil && alerts.count == 1, "under 20 GB cleans up; 18 GB left isn't low enough to alert")
+    free = 9 * gigabyte
+    low.now = realNow.addingTimeInterval(8 * 3_600)
+    expect(check() != nil && alerts.count == 2, "low again after recovering: one new alert")
 }
 
 // MARK: - Live process inventory

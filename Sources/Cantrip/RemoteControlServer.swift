@@ -281,13 +281,18 @@ final class RemoteControlServer {
 
     /// A backend went signed out or out of quota, or is back (BackendStatusMonitor sends each once).
     func notifyBackendStatus(title: String, body: String) {
+        notifyNotice(title: title, body: body, kind: "backendStatus")
+    }
+
+    /// A one-off push to paired devices with its own words (`kind`: backendStatus, storageLow).
+    func notifyNotice(title: String, body: String, kind: String) {
         guard !token.isEmpty else { return }
         notificationLifecycleLock.lock()
         let activation = notificationLifecycleTask
         notificationLifecycleLock.unlock()
         Task {
             await activation?.value
-            await notifications.enqueueNotice(title: title, body: body, kind: "backendStatus")
+            await notifications.enqueueNotice(title: title, body: body, kind: kind)
         }
     }
 
