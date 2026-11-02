@@ -4,7 +4,7 @@
  * Authoritative sources (Swift):
  * - Server (what the host encodes): Cantrip/Sources/Cantrip/RemoteControlServer.swift and its
  *   models (RemoteHistory, CantripHome*, Remote*, ChatSession, GitHubBuildMonitor, CopilotUsage...).
- * - Mac/iOS client (what Cantrip Gateway sends/decodes): CantripGatewayMac/Hermes/Sources/CantripRemote.swift
+ * - Mac/iOS client (what Cantrip Gateway sends/decodes): Clients/CantripIOS/Sources/CantripRemote.swift
  *   and related Cantrip*.swift files.
  * Where they disagree, these types follow the server and say so.
  *

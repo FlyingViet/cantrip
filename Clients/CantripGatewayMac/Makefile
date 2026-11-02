@@ -14,8 +14,8 @@ SIGN_IDENTITY ?= Apple Development
 
 .PHONY: project build test release install dmg
 
+# The shared Home code is Clients/CantripIOS (module Hermes), referenced by project.yml.
 project:
-	@test -f Hermes/project.yml || git submodule update --init
 	xcodegen generate
 
 build: project

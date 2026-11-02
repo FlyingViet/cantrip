@@ -1,4 +1,4 @@
-// Pip, Cantrip Home's mascot: a port of Hermes/Sources/CantripMascot.swift (mood rules, outfits and
+// Pip, Cantrip Home's mascot: a port of Clients/CantripIOS/Sources/CantripMascot.swift (mood rules, outfits and
 // CantripMascotRenderer) to Canvas 2D. Geometry is in unit coordinates scaled by the canvas size,
 // exactly as in Swift, so keep the two in step when either changes.
 

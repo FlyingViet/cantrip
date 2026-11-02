@@ -3,7 +3,7 @@
 Native macOS Cantrip Home. See README.md for architecture and usage.
 
 ## Build / test
-- `make project` (submodule + `xcodegen generate`; the `.xcodeproj` is git-ignored),
+- `make project` (`xcodegen generate`; the `.xcodeproj` is git-ignored),
   `make test`, `make build`, `make install` (Release → /Applications).
 - QA against a real host server without the real pairing token: launch the Debug app
   with `-CantripUITestRemoteURL http://127.0.0.1:<port> -CantripUITestRemoteToken <token>
@@ -14,8 +14,9 @@ Native macOS Cantrip Home. See README.md for architecture and usage.
   clears the Debug app's saved servers.
 
 ## Rules
-- Home logic lives in the `Hermes` submodule (the iOS app). Never fork it here:
-  fix shared behavior in Hermes, push it there, then bump the submodule.
+- Home logic lives in the iOS app at `../CantripIOS` (module `Hermes`), which project.yml
+  compiles directly. Never fork it here: fix shared behavior there, in the same commit as the
+  Mac change, and run `make test` here and the iOS tests before pushing.
 - This repo holds only Mac UI and platform stand-ins (`Sources/Platform`). Prefer
   an AppKit stand-in here over editing shared code; when shared code must change,
   use `#if os(iOS)` guards that leave iOS behavior identical.
