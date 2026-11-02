@@ -500,6 +500,11 @@ do {
     } catch {
         expect(error.localizedDescription.contains("memory pressure"), "and says so: \(error.localizedDescription)")
     }
+    var unchecked = tight
+    unchecked.policy.minFreeMemoryGB = 0
+    let anyway = try SimulatorPool.acquire(device: "iPhone", os: nil, tab: "tab-e", wait: 0, context: unchecked)
+    expect(!anyway.lease.temporary, "0 GB turns the memory check off, pressure included")
+    try SimulatorPool.release(tab: "tab-e", context: c)
     _ = try SimulatorPool.acquire(device: "iPhone", os: nil, tab: "tab-e", context: c)
     let swapped = try SimulatorPool.acquire(device: "iPhone Duo", os: nil, tab: "tab-e", context: tight)
     expect(swapped.released.count == 1, "a swap goes ahead while memory is short")
