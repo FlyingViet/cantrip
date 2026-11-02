@@ -311,7 +311,7 @@ struct MacHomeWindow: View {
                 if navigation.showingDirectLocal || isTabOpen {
                     Button("Back to Home", systemImage: "house") { navigation.showHome() }
                 }
-                SettingsLink { Label("Settings…", systemImage: "gearshape") }
+                MacSettingsLink { Label("Settings…", systemImage: "gearshape") }
             }
         } label: {
             Label("More", systemImage: paused ? "pause.circle" : "ellipsis.circle")

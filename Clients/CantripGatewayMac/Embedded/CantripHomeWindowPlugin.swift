@@ -48,6 +48,7 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
     private let voice = VoiceController()
     private let navigation = MacHomeNavigation()
     private let directLocal = DirectLocalChat()
+    private var settingsWindow: NSWindow?
     private var connected: (url: String, token: String)?
 
     init(onClose: @escaping () -> Void) {
@@ -91,9 +92,28 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
         if env.executionLane == .home { await remote.selectHome() }
     }
 
+    /// Settings (the same pages as Gateway Mac's), in a window of its own: Cantrip.app has no
+    /// SwiftUI Settings scene for `SettingsLink` to open.
+    func showSettings() {
+        if settingsWindow == nil {
+            let root = MacSettingsView(env: env, remote: remote, voice: voice, directLocal: directLocal)
+                .preferredColorScheme(.dark)
+            let window = NSWindow(contentViewController: NSHostingController(rootView: root))
+            window.title = "Cantrip Home Settings"
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.isReleasedWhenClosed = false
+            window.setFrameAutosaveName("CantripHomeSettingsWindow")
+            if !window.setFrameUsingName("CantripHomeSettingsWindow") { window.center() }
+            settingsWindow = window
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+    }
+
     private func makeWindow() {
         let root = MacHomeWindow(env: env, remote: remote, voice: voice, navigation: navigation,
                                  directLocal: directLocal)
+            .environment(\.macOpenSettings, { [weak self] in self?.showSettings() })
             .preferredColorScheme(.dark)
         let hosting = NSHostingController(rootView: root)
         hosting.sceneBridgingOptions = [.toolbars, .title]
@@ -110,6 +130,7 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        settingsWindow?.close()
         voice.stopListening(finalize: false)
         voice.stopSpeaking()
         remote.setAppActive(false)
