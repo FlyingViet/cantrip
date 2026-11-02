@@ -1058,6 +1058,9 @@ final class ChatSession: ObservableObject {
     private func completeRun(status: String, summary: String = "") {
         guard let runID = currentRunID else { return }
         let finishedAt = Date()
+        if status == "succeeded", !isLocalPrivate, let kind = runningBackendKind {
+            BackendStatusMonitor.shared.runSucceeded(kind)
+        }
         if !isPrivate, !isLocalPrivate {
             if status == "succeeded" {
                 recordLastRunOutcome(.init(status: .done, finishedAt: finishedAt))
@@ -2263,7 +2266,9 @@ final class ChatSession: ObservableObject {
            let fallback = BackendFallback.next(after: backendKind, model: ownModel, chain: settings.limitFallbackEntries,
                                                homeRun: isCantripHomeRun, model: chainModel),
            let fallbackKind = fallback.kind {
-            limitNotice = "\(limitedLabel(backendKind, model: ownModel)) is at its usage limit until \(BackendFallback.untilLabel(until))."
+            limitNotice = (until == .distantFuture
+                ? "\(limitedLabel(backendKind, model: ownModel)) isn't signed in on the Mac."
+                : "\(limitedLabel(backendKind, model: ownModel)) is at its usage limit until \(BackendFallback.untilLabel(until)).")
                 + " Using \(backupRun(fallback).label)."
             // A tier picks the backup's model itself; otherwise Antigravity sizes it from the model it stands in for.
             if fallbackKind == .antigravity, requestedBackend != .antigravity, backupRun(fallback).tier == nil {
@@ -3346,6 +3351,10 @@ final class ChatSession: ObservableObject {
     /// on it until the user taps Continue there. Tabs nobody watches (child tabs, Home handoffs)
     /// wait out network drops and auto-resume once instead, then pause the same way.
     private func handleRunInterruption(errorText: String) {
+        // A sign-in error is remembered on the backend's status and checked right away.
+        if !isLocalPrivate, let kind = runningBackendKind ?? currentRunBackend {
+            BackendStatusMonitor.shared.runFailed(kind, message: errorText)
+        }
         // Orphan any late events from the dead run (a backend can emit a
         // trailing .done/.failure after the first failure) and make sure
         // its process is really gone before a resume relaunches it.

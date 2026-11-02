@@ -23,6 +23,7 @@ final class HostServices {
 
     func start(recoveryReport: CrashRecovery.Report?) {
         UsageTracker.shared.startAutoRefresh()
+        BackendStatusMonitor.shared.start(postsMacNotifications: postsMacNotifications)
         // Each CLI's own rules join the agent policy once; its deny rules go back into each CLI.
         DispatchQueue.global(qos: .utility).async { AgentPolicySetup.run() }
         SecretsHub.shared.start()
@@ -94,6 +95,7 @@ final class HostServices {
         }
         self.remoteControlServer = remoteControlServer
         MCPHost.shared.start(remote: remoteControlServer, postsMacNotifications: postsMacNotifications)
+        BackendStatusMonitor.shared.remote = remoteControlServer
         WatchInternetRoute.shared.start(server: remoteControlServer)
         CantripHomeStore.shared.onHandoff = { [weak self] run, handoff in
             guard let self else { return }

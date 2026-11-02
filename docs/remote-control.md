@@ -242,6 +242,35 @@ environment credential is in the Mac's keychain, never its name or value) and
 `enabled`) or `setTab` (`tab`, `enabled`), and returns the list. Sign-in tokens
 never leave the Mac.
 
+## Backend status
+
+Cantrip checks that each agent CLI (Copilot CLI, Claude Code, Antigravity,
+Codex) is installed and signed in: on launch, every 30 minutes, right after a
+run fails with a sign-in error, and on Check Now. The checks never call a model:
+`claude auth status`, Codex's app server `account/read` (else `codex login
+status`), `agy -p /usage` and Copilot's account lookup, each with a time limit
+so a slow CLI on a loaded Mac can't hold anything up. Results are kept in
+`~/.cache/Cantrip/backend-status.json`, so a tab never waits for a check.
+
+A backend that a check finds signed out (confirmed by a second check) is
+skipped by routing, usage-limit backups and scheduled Home runs, which start on
+their backup instead, until a check finds it signed in. It sends one alert (a
+push with `kind: backendStatus`, plus a Mac notification) and one more when it's
+back; running out of quota alerts the same way. A check that can't tell (a
+timeout, an unexpected answer) never takes a backend out of routing.
+
+`GET /api/v1/backends` returns `backends`, each with `id`, `name`, `state`
+(`ready`, `signedOut`, `outOfQuota`, `notInstalled` or `unknown`), `summary`,
+`path`, `version`, `signedIn`, `account`, `authMethod`, `plan`, `quota`
+(`name`, `usedPercent`, `resetsAt`), `limitedUntil`, `lastSuccessAt`,
+`lastAuthError`, `checkedAt`, `checking`, `unavailable`, `problem` and `signIn`
+(`mode`, `command`, `hint`, and while a device sign-in waits its `url` and
+`code`). `POST` takes `{"action": "check"}` (optionally with an `id`),
+`{"action": "signIn", "id"}` or `{"action": "cancelSignIn", "id"}`. Copilot CLI
+and Codex sign in with their device flow, whose link and code every client
+shows; Claude Code and Antigravity sign in only on the Mac, so Sign In opens
+Terminal there. Tokens and keys never leave the Mac.
+
 ## Start fresh
 
 **Start Fresh**, next to **Model Settings** in the same menus, keeps a tab and

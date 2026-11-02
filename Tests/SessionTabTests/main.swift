@@ -196,6 +196,7 @@ struct SessionTabTests {
         try await testRunContinuity()
         try await testModelTiers()
         try await testUsageLimitFallback()
+        try await testBackendStatus()
         try await testOpenAIEndpoint()
         try await testStopPausesTheQueue()
         try await testMCPSharing()

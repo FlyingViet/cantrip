@@ -4437,6 +4437,8 @@ struct SettingsView: View {
             Divider().opacity(0.3)
             StorageUpkeepView()
             Divider().opacity(0.3)
+            BackendsStatusView()
+            Divider().opacity(0.3)
             MCPServersView()
             Divider().opacity(0.3)
             AgentPolicyView()
@@ -4623,7 +4625,8 @@ struct SettingsView: View {
                     Text("\(index + 1).").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     Text(kind.rawValue).font(.caption).lineLimit(1)
                     if let until = BackendLimitTracker.shared.limitedUntil(kind, model: settings.effectiveModel(kind, chosen: settings.resolvedModel(kind, chosen: entry.model))) {
-                        Text("at its limit until \(BackendFallback.untilLabel(until))").font(.caption2).foregroundStyle(.orange)
+                        Text(until == .distantFuture ? "signed out" : "at its limit until \(BackendFallback.untilLabel(until))")
+                            .font(.caption2).foregroundStyle(.orange)
                     }
                     Spacer(minLength: 4)
                     Button { moveFallback(at: index, by: -1) } label: { Image(systemName: "chevron.up") }

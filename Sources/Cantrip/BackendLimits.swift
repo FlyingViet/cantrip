@@ -92,6 +92,25 @@ final class BackendLimitTracker {
     private let lock = NSLock()
     private var limitedUntil: [BackendKind: Date] = [:]
     private var scopeLimitedUntil: [ScopeKey: Date] = [:]
+    /// Backends a check found signed out (BackendStatusMonitor), with why.
+    private var unavailable: [BackendKind: String] = [:]
+
+    /// Marks `kind` unusable (signed out) until a check finds it signed in; nil clears it.
+    func setUnavailable(_ kind: BackendKind, reason: String?) {
+        let changed: Bool = lock.withLock {
+            let before = unavailable[kind]
+            unavailable[kind] = reason
+            return before != reason
+        }
+        if changed {
+            Log.write("routing: \(kind.rawValue) " + (reason.map { "unavailable (\($0))" } ?? "available again"))
+        }
+    }
+
+    /// Why `kind` can't be used at all right now (signed out), or nil.
+    func unavailableReason(_ kind: BackendKind) -> String? {
+        lock.withLock { unavailable[kind] }
+    }
 
     /// The quota a model's requests count against, where the backend keeps one per model: Claude's
     /// model tiers and Antigravity's model groups (Claude and GPT share one, Argon has its own,
@@ -141,8 +160,15 @@ final class BackendLimitTracker {
     }
 
     /// When `kind` can be used again: the whole backend's limit, and with `model` also that model's
-    /// scope; nil when it can be used now.
+    /// scope; nil when it can be used now. A signed-out backend is never usable (`.distantFuture`),
+    /// so routing, fallback and backups pass it over like a used-up one.
     func limitedUntil(_ kind: BackendKind, model: String? = nil, now: Date = Date()) -> Date? {
+        if unavailableReason(kind) != nil { return .distantFuture }
+        return usageLimitedUntil(kind, model: model, now: now)
+    }
+
+    /// `limitedUntil` for usage limits only, without a signed-out backend's `.distantFuture`.
+    func usageLimitedUntil(_ kind: BackendKind, model: String? = nil, now: Date = Date()) -> Date? {
         lock.withLock {
             var dates: [Date] = []
             if let date = limitedUntil[kind] {
@@ -207,6 +233,7 @@ enum BackendFallback {
     }
 
     static func untilLabel(_ date: Date, now: Date = Date()) -> String {
+        if date == .distantFuture { return "you sign in again" }
         let formatter = DateFormatter()
         formatter.dateStyle = Calendar.current.isDate(date, inSameDayAs: now) ? .none : .short
         formatter.timeStyle = .short
