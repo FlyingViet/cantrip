@@ -9,7 +9,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/FlyingViet/CantripGatewayMac.git"
+    "url": "https://github.com/FlyingViet/cantrip.git",
+    "directory": "Clients/CantripGatewayMac/windows"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-gateway.mjs",
