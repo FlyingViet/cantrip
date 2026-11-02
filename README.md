@@ -24,14 +24,14 @@ live sessions.
 |---|---|---|
 | **Cantrip** (host) | macOS 14+, Universal | [`Sources/Cantrip/`](Sources/Cantrip/) |
 | **Cantrip for Windows** | Windows 10/11 x64 | [`windows/`](windows/) |
-| **Cantrip Agent** | iPhone, iPad (iOS 26+) | [FlyingViet/CantripIOS](https://github.com/FlyingViet/CantripIOS) |
-| **Cantrip Gateway Mac** | macOS 26+ | [FlyingViet/CantripGatewayMac](https://github.com/FlyingViet/CantripGatewayMac) |
-| **Cantrip Gateway for Windows** | Windows 10/11 x64 | [CantripGatewayMac/windows](https://github.com/FlyingViet/CantripGatewayMac/tree/main/windows) |
+| **Cantrip Agent** | iPhone, iPad (iOS 26+) | [`Clients/CantripIOS/`](Clients/CantripIOS/) |
+| **Cantrip Gateway Mac** | macOS 26+ | [`Clients/CantripGatewayMac/`](Clients/CantripGatewayMac/) |
+| **Cantrip Gateway for Windows** | Windows 10/11 x64 | [`Clients/CantripGatewayMac/windows/`](Clients/CantripGatewayMac/windows/) |
 | Browser remote | Any modern browser | Served by the Mac host |
 
 Cantrip Agent (formerly AgentGateway) is the native iPhone/iPad client.
 Cantrip Gateway Mac brings the same Home and project tabs to a Mac window by
-compiling Cantrip Agent's shared Swift code as a submodule. Pair either one
+compiling Cantrip Agent's shared Swift code from `Clients/CantripIOS`. Pair either one
 under **Settings > Remote control**; see [Remote control](docs/remote-control.md).
 On macOS 26 the Cantrip menu bar app can also show that same window itself,
 in place of the panel, with no pairing: see
@@ -169,8 +169,8 @@ the phone apps, [approvals and secure input](docs/remote-control.md#remote-appro
 |---|---|
 | Mac host ([`Sources/Cantrip/`](Sources/Cantrip/)) | From the repo root: `make build`, `make test` |
 | Windows ([`windows/`](windows/)) | From `windows/`: `npm ci`, then `npm run build` / `npm test` |
-| [Cantrip Agent](https://github.com/FlyingViet/CantripIOS) | XcodeGen iOS project; see its README |
-| [Cantrip Gateway Mac](https://github.com/FlyingViet/CantripGatewayMac) | XcodeGen Mac project with Hermes as a submodule; see its README |
+| Cantrip Agent ([`Clients/CantripIOS/`](Clients/CantripIOS/)) | XcodeGen iOS project; see its README |
+| Cantrip Gateway Mac ([`Clients/CantripGatewayMac/`](Clients/CantripGatewayMac/)) | XcodeGen Mac project that compiles `Clients/CantripIOS`; from its folder: `make test`. Windows: `windows/` in that folder |
 
 See the [plugin reference](PLUGINS.md), [backend onboarding guide](BACKEND-ONBOARDING.md),
 [Windows parity checklist](windows/PARITY.md) and [app artwork](Resources/README.md).

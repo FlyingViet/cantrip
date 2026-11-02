@@ -733,7 +733,7 @@ Remote prompts use the host's configured backend and action permissions.
 
 **Before you start:** install a current Cantrip Agent build (iOS/iPadOS 26+).
 Cantrip Agent is a separate app; installing Cantrip does not install it.
-See the [Cantrip Agent repository](https://github.com/FlyingViet/CantripIOS) for its
+See [Cantrip Agent's README](../Clients/CantripIOS/README.md) for its
 installation information.
 
 1. Put the phone/tablet and host Mac on the same local network.
@@ -1197,7 +1197,7 @@ Use **Change server** to configure a different host.
 
 ## 2c. Connect from a Windows PC
 
-[Cantrip Gateway for Windows](https://github.com/FlyingViet/CantripGatewayMac/tree/main/windows)
+[Cantrip Gateway for Windows](../Clients/CantripGatewayMac/windows/)
 shows this web client (Home chat, project tabs, Tasks and Artifacts) in a Windows
 app that connects over the encrypted LAN listener. On the Mac, run
 `cantrip pair --direct` and paste the printed link into the app's **Connection

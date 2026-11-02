@@ -24,8 +24,8 @@ the same.
 The window talks to Cantrip's server on this Mac only (127.0.0.1). If Remote
 control is off, Cantrip runs that server just for the window, with no
 network listener. The window is built when you build Cantrip with full Xcode
-and xcodegen installed (`make app` builds it from the CantripGatewayMac
-submodule). Without them, Cantrip builds with the panel only and the setting
+and xcodegen installed (`make app` builds it from
+`Clients/CantripGatewayMac`). Without them, Cantrip builds with the panel only and the setting
 explains what's missing. **Option+Shift+Space** (send the selected text)
 still opens the panel.
 

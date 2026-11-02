@@ -6,7 +6,8 @@ Cantrip Home as a native macOS app: the same Home as the Cantrip Agent iPhone ap
 ## Install
 
 1. Download **CantripGatewayMac-*.dmg** from the
-   [latest release](https://github.com/FlyingViet/CantripGatewayMac/releases/latest).
+   newest [Gateway Mac release](https://github.com/FlyingViet/cantrip/releases?q=gateway-mac-v&expanded=true) (tagged `gateway-mac-v…`). Releases up to
+   1.2.13 stay on the archived [FlyingViet/CantripGatewayMac](https://github.com/FlyingViet/CantripGatewayMac/releases).
 2. Open it and drag **Cantrip Gateway Mac** to **Applications**. Releases are signed with
    Developer ID and notarized by Apple, so the app opens normally.
 3. Pair it with [Cantrip](https://github.com/FlyingViet/cantrip) (see
@@ -24,14 +25,14 @@ Tasks and Artifacts over the same encrypted connection).
 
 ## How it shares the iOS app's logic
 
-The iOS app lives in [FlyingViet/CantripIOS](https://github.com/FlyingViet/CantripIOS). This repo
-includes it as the `Hermes` git submodule and compiles its `Sources/` and `Shared/`
+The iOS app lives next to this folder in [`Clients/CantripIOS`](../CantripIOS/). `project.yml`
+compiles its `Sources/` and `Shared/`
 directly, so pairing, LAN/Tailscale routing, history paging, sending, input requests,
 tasks, artifacts, background runs, MCP Apps and voice all run the exact same code.
 The Swift module is even named `Hermes`, so the shared logic test suites run here
 unchanged.
 
-Only Mac-specific code lives in this repo:
+Only Mac-specific code lives in this folder:
 
 | Folder | What |
 | --- | --- |
@@ -42,15 +43,15 @@ Only Mac-specific code lives in this repo:
 | `Tests` | Mac tests; `project.yml` also runs the shared Hermes logic suites |
 
 The shared files need no Mac-specific knowledge beyond `#if os(iOS)` guards around
-UIKit-only classes, which this repo replaces with AppKit versions of the same names.
+UIKit-only classes, which this folder replaces with AppKit versions of the same names.
 
 ## Build from source
 
 Requires macOS 26, Xcode 26+ and XcodeGen (`brew install xcodegen`).
 
 ```sh
-git clone --recurse-submodules https://github.com/FlyingViet/CantripGatewayMac.git
-cd CantripGatewayMac
+git clone https://github.com/FlyingViet/cantrip.git
+cd cantrip/Clients/CantripGatewayMac
 make install   # Release build copied to /Applications
 make test      # Mac tests + shared Hermes logic suites
 make build     # Debug build in build/Debug
@@ -102,7 +103,7 @@ you click **Pair**.
 
 Every route is end-to-end encrypted with the pairing token. The connection code, host API
 and capability checks are shared with the iPhone app; see
-[Host API](https://github.com/FlyingViet/CantripIOS#host-api) in the CantripIOS README and
+[Host API](../CantripIOS/README.md#host-api) in the Cantrip Agent README and
 Cantrip's [remote-control guide](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md).
 If a control shows an update notice, update and relaunch Cantrip on the host Mac.
 

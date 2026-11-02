@@ -100,11 +100,11 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
 - Hermes history, durable runs, and memory keys are scoped by server and lane.
   The migrated server retains its original history and memory namespace.
 - The gateway URL defaults to empty so each user points at their own server.
-- Cantrip Gateway Mac (`FlyingViet/CantripGatewayMac`) compiles `Sources/` and
-  `Shared/` for macOS through a git submodule, so Home logic stays identical.
+- Cantrip Gateway Mac (`../CantripGatewayMac`) compiles `Sources/` and
+  `Shared/` for macOS, so Home logic stays identical.
   Keep UIKit, ActivityKit and AVAudioSession use behind `#if os(iOS)` (imports
   behind `#if canImport(UIKit)`); the Mac repo supplies AppKit equivalents.
-  After changing shared code, run `make test` there before bumping its submodule.
+  After changing shared code, run `make test` there before pushing.
 - The Apple Watch app (`CantripWatch` target, `Watch/`, tests in `WatchTests/`) is kept out of
   `Sources/` and `Shared/` so Gateway Mac never compiles it. It records m4a (AAC mono 16 kHz) for
   the Mac to transcribe (watchOS has no Speech framework), speaks replies with

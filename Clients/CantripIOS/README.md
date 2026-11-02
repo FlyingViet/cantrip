@@ -1,8 +1,8 @@
 # Hermes — iOS client (Cantrip Agent, formerly AgentGateway)
 
-This repository is [FlyingViet/CantripIOS](https://github.com/FlyingViet/CantripIOS),
-renamed from `Hermes` on 2026-10-25 (GitHub redirects the old URL). The Xcode
-project, scheme and Swift module are still named Hermes.
+This folder is `Clients/CantripIOS` in [FlyingViet/cantrip](https://github.com/FlyingViet/cantrip). It was
+the FlyingViet/CantripIOS repository (renamed from `Hermes` on 2026-10-25), now an archive. The
+Xcode project, scheme and Swift module are still named Hermes.
 
 <img src="Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png" width="128" alt="Cantrip: a pearl-violet C casting a golden spark" />
 
@@ -36,8 +36,8 @@ Cantrip Agent is a client for [Cantrip](https://github.com/FlyingViet/cantrip), 
 harness on your Mac. Cantrip runs the agents (Claude Code, Copilot, Codex or a local
 model) and owns every tab, queue, run journal and Home task, so work continues while the
 phone sleeps. The app pairs with it, sends prompts and shows the live sessions.
-[Cantrip Gateway Mac](https://github.com/FlyingViet/CantripGatewayMac) compiles this
-repo's code to do the same in a Mac window.
+[Cantrip Gateway Mac](../CantripGatewayMac/) compiles this
+folder's code to do the same in a Mac window.
 
 ```
   Cantrip Agent (iPhone/iPad)                        Cantrip on your Mac (harness)
@@ -1447,7 +1447,7 @@ Restart the gateway. (Without this, chat + voice still work — you just won't s
 
 ```sh
 brew install xcodegen          # one-time
-git clone <this repo> && cd Hermes
+git clone https://github.com/FlyingViet/cantrip.git && cd cantrip/Clients/CantripIOS
 xcodegen generate              # creates Hermes.xcodeproj from project.yml
 open Hermes.xcodeproj
 ```
