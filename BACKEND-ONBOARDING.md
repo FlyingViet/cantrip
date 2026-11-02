@@ -91,7 +91,7 @@ working or deliberately unsupported with a clear message.
 | `cantrip tab ask`/`read` | `CANTRIP_TAB_ID` in the agent's environment (`tabID` set by `ChatSession`) | `TabInsight.swift` | 0b9c00a |
 | `sudo`/`ssh` prompts | `RemoteAskpass` broker on the child process | `RemoteAskpass.swift` | 087f1c5 |
 | Reply visibility | `ReplyVisibility.guidance` in the session's system message | `Backend.swift` | f3ca958, 05b8c08 |
-| Cards | `CardComposer.richCardGuidance(command:)` (the `weather` block and the generic `card` block) in the session's system message and Home's protocol; `cantrip weather` for the card's numbers; tool cards (Kiwi `search-flight`, a tool's `"cantrip/card"`) and checking a `card` block need the tool's result in `ToolActivity.output` | `CardDocuments.swift`, `WeatherCards.swift`; spec in `docs/cards.md` | b353dfc |
+| Cards | `CardComposer.richCardGuidance(command:)` (the `weather` block and the generic `card` block) in the session's system message and Home's protocol; `cantrip weather` for the card's numbers; tool cards (Kiwi `search-flight`, a tool's `"cantrip/card"`) and checking a `card` block need the tool's result in `ToolActivity.output`; Home runs learn run-result cards from `RunCards.guidance` in the background protocol, and a run's `card` block is checked against its own `ToolActivity.output` | `CardDocuments.swift`, `WeatherCards.swift`; spec in `docs/cards.md` | b353dfc |
 | Terminal CLI | `cantrip ask --backend <name>` aliases | `CLIServer.swift`, `HostControl.swift` | 84827f8 |
 
 Codex (0.166.0), as wired in `CodexBackend` and `CodexAppServer`:
