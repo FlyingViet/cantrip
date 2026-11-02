@@ -1,0 +1,393 @@
+import SwiftUI
+
+/// One card per handoff. A handoff's card starts under the Home reply that made it; once the tab
+/// reports back (asks, finishes, fails or stops), Cantrip posts a result card into Home's chat that
+/// carries the handoff from then on, so the original card is hidden rather than shown twice.
+enum CantripHandoffCards {
+    /// Handoffs that already have a result card in the loaded transcript.
+    static func reportedIDs(in transcript: [CantripRemoteMessage]) -> Set<String> {
+        Set(transcript.compactMap { $0.isHandoffResult ? $0.handoffResult?.delegationID : nil })
+    }
+
+    /// The message with only the handoff cards that are still its own to show.
+    static func visible(_ message: CantripRemoteMessage, reported: Set<String>) -> CantripRemoteMessage {
+        guard !reported.isEmpty, let handoffs = message.delegations,
+              handoffs.contains(where: { reported.contains($0.id) }) else { return message }
+        var visible = message
+        visible.delegations = handoffs.filter { !reported.contains($0.id) }
+        return visible
+    }
+}
+
+/// Home replies' handoffs to project tabs, shown like nested tasks.
+struct CantripHandoffStack: View {
+    let handoffs: [CantripRemoteDelegation]
+    var onOpenTab: ((String) -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(handoffs) { handoff in
+                CantripHandoffCard(handoff: handoff, onOpenTab: onOpenTab)
+            }
+        }
+    }
+}
+
+/// A compact handoff card: status, tab, summary, elapsed time and Open tab. The tab's own
+/// narration, results and errors stay in the tab, so a card stays a couple of lines tall.
+struct CantripHandoffCard: View {
+    let handoff: CantripRemoteDelegation
+    var onOpenTab: ((String) -> Void)?
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .caption) private var iconSize: CGFloat = 18
+
+    private var stacksRows: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    var body: some View {
+        if handoff.status.isActive {
+            TimelineView(.periodic(from: Date(), by: 1)) { timeline in
+                card(now: timeline.date)
+            }
+        } else {
+            card(now: Date())
+        }
+    }
+
+    private var tabTitle: String {
+        let title = CantripSubagentFormat.trimmed(handoff.tabTitle)
+        return title.isEmpty ? "Project tab" : title
+    }
+
+    private var summary: String {
+        let summary = CantripSubagentFormat.trimmed(CantripTabMentions.plain(handoff.summary))
+        return summary.isEmpty ? CantripSubagentFormat.trimmed(CantripTabMentions.plain(handoff.prompt)) : summary
+    }
+
+    private var canOpenTab: Bool {
+        onOpenTab != nil && !CantripSubagentFormat.trimmed(handoff.tabID).isEmpty
+    }
+
+    /// Older Macs only say so in the tab's latest status.
+    var needsAnswer: Bool {
+        guard handoff.status == .running else { return false }
+        let latest = CantripSubagentFormat.trimmed(handoff.latestStatus)
+        return handoff.needsInput || latest == "Needs your answer" || latest == "Waiting for your input"
+    }
+
+    var statusText: String {
+        if needsAnswer { return "Needs your answer" }
+        switch handoff.status {
+        case .queued: return "Queued in tab"
+        case .running: return "Working in tab"
+        case .completed: return "Done in tab"
+        case .failed: return "Failed in tab"
+        case .cancelled: return "Stopped"
+        }
+    }
+
+    @ViewBuilder
+    private func card(now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            header
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibilityLabel(now: now))
+
+            let footer = stacksRows
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+                : AnyLayout(HStackLayout(alignment: .center, spacing: 8))
+            footer {
+                Text(CantripSubagentFormat.elapsedLabel(
+                    startedAt: handoff.startedAt, finishedAt: handoff.finishedAt, now: now
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+                if !stacksRows { Spacer(minLength: 8) }
+                if canOpenTab {
+                    Button {
+                        onOpenTab?(handoff.tabID)
+                    } label: {
+                        Label("Open tab", systemImage: "arrow.up.right.square")
+                            .font(.caption.weight(.semibold))
+                            .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Open \(tabTitle) tab")
+                }
+            }
+            .padding(.leading, stacksRows ? 0 : iconSize + 8)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        // The 44pt Open tab target already leaves room below its label.
+        .padding(.bottom, canOpenTab ? 0 : 10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color(.separator).opacity(0.24))
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 8) {
+            statusIcon
+                .font(.caption)
+                .frame(width: iconSize, height: iconSize)
+            VStack(alignment: .leading, spacing: 4) {
+                let statusRow = stacksRows
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+                    : AnyLayout(HStackLayout(spacing: 6))
+                statusRow {
+                    Text(statusText)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(needsAnswer ? Color.primary : Color.secondary)
+                        .lineLimit(stacksRows ? nil : 1)
+                    Label(tabTitle, systemImage: "rectangle.stack")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                        .lineLimit(stacksRows ? 2 : 1)
+                }
+                Text(summary)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(stacksRows ? 4 : 2)
+                    .multilineTextAlignment(.leading)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        if needsAnswer {
+            Image(systemName: "questionmark.bubble.fill")
+                .foregroundStyle(CantripHomeBackgroundStyle.activeTint)
+        } else {
+            switch handoff.status {
+            case .queued:
+                Image(systemName: "clock").foregroundStyle(.secondary)
+            case .running:
+                ProgressView().controlSize(.small)
+            case .completed:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            case .failed:
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            case .cancelled:
+                Image(systemName: "stop.circle.fill").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func accessibilityLabel(now: Date) -> String {
+        let elapsed = CantripSubagentFormat.elapsedAccessibilityLabel(
+            startedAt: handoff.startedAt, finishedAt: handoff.finishedAt, now: now
+        )
+        return "\(statusText), \(tabTitle): \(summary). \(elapsed)"
+    }
+}
+
+/// A handoff's card once its tab has reported back: its question for the user, its outcome, or why
+/// it failed or stopped. Cantrip posts it once into Home's chat and updates it in place (including
+/// back to working after an answer); it replaces the card under the reply that made the handoff.
+/// The text is the tab's own, shown only as data.
+struct CantripHandoffResultCard: View {
+    let result: CantripRemoteHandoffResult
+    var onOpenTab: ((String) -> Void)?
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .caption) private var iconSize: CGFloat = 18
+
+    private var stacksRows: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    private var tabTitle: String {
+        let title = CantripSubagentFormat.trimmed(result.tabTitle)
+        return title.isEmpty ? "Project tab" : title
+    }
+
+    private var summary: String { CantripSubagentFormat.trimmed(result.summary) }
+    private var detail: String { CantripSubagentFormat.trimmed(result.detail) }
+
+    private var canOpenTab: Bool {
+        onOpenTab != nil && !CantripSubagentFormat.trimmed(result.tabID).isEmpty
+    }
+
+    var statusText: String {
+        switch result.state {
+        case .working: return "Working in tab"
+        case .needsInput: return "Needs your answer"
+        case .completed: return "Done in tab"
+        case .failed: return "Failed in tab"
+        case .cancelled: return "Stopped"
+        case .other: return "Handoff update"
+        }
+    }
+
+    private var tint: Color {
+        switch result.state {
+        case .completed: return .green
+        case .needsInput: return CantripHomeBackgroundStyle.activeTint
+        case .failed: return .orange
+        case .working: return .accentColor
+        case .cancelled, .other: return Color(.tertiaryLabel)
+        }
+    }
+
+    var timeText: String { timeText(now: Date()) }
+
+    func timeText(now: Date) -> String {
+        if result.state == .working, result.finishedAt == nil, let startedAt = result.startedAt {
+            return CantripSubagentFormat.elapsedLabel(startedAt: startedAt, finishedAt: nil, now: now)
+        }
+        func clock(_ time: TimeInterval) -> String {
+            Date(timeIntervalSince1970: time).formatted(date: .omitted, time: .shortened)
+        }
+        if let finished = result.finishedAt {
+            let took = CantripSubagentFormat.elapsedLabel(
+                startedAt: result.startedAt, finishedAt: finished, now: Date()
+            )
+            return result.startedAt == nil ? "Finished \(clock(finished))" : "Finished \(clock(finished)) · took \(took)"
+        }
+        return result.updatedAt.map { "Updated \(clock($0))" } ?? ""
+    }
+
+    var body: some View {
+        if result.state == .working {
+            TimelineView(.periodic(from: Date(), by: 1)) { timeline in
+                card(now: timeline.date)
+            }
+        } else {
+            card(now: Date())
+        }
+    }
+
+    private func card(now: Date) -> some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(tint)
+                .frame(width: 3)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                header
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(headerAccessibilityLabel)
+                if !detail.isEmpty {
+                    Text(verbatim: detail)
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .lineLimit(stacksRows ? nil : 6)
+                        .multilineTextAlignment(.leading)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, stacksRows ? 0 : iconSize + 8)
+                }
+                footer(now: now)
+                    .padding(.leading, stacksRows ? 0 : iconSize + 8)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, canOpenTab ? 0 : 10)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color(.separator).opacity(0.24))
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var headerAccessibilityLabel: String {
+        let label = summary.isEmpty ? "" : ": \(summary)"
+        return "Handoff. \(statusText), \(tabTitle)\(label)"
+    }
+
+    private func timeAccessibilityLabel(now: Date) -> String {
+        guard result.state == .working, result.finishedAt == nil, let startedAt = result.startedAt else {
+            return timeText(now: now)
+        }
+        return CantripSubagentFormat.elapsedAccessibilityLabel(startedAt: startedAt, finishedAt: nil, now: now)
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 8) {
+            statusIcon
+                .font(.caption)
+                .frame(width: iconSize, height: iconSize)
+            VStack(alignment: .leading, spacing: 4) {
+                let statusRow = stacksRows
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+                    : AnyLayout(HStackLayout(spacing: 6))
+                statusRow {
+                    Text(statusText)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(result.state == .needsInput ? Color.primary : Color.secondary)
+                        .lineLimit(stacksRows ? nil : 1)
+                    Label(tabTitle, systemImage: "rectangle.stack")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                        .lineLimit(stacksRows ? 2 : 1)
+                }
+                if !summary.isEmpty {
+                    Text(summary)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(stacksRows ? 4 : 2)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch result.state {
+        case .needsInput:
+            Image(systemName: "questionmark.bubble.fill").foregroundStyle(tint)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(tint)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(tint)
+        case .working:
+            ProgressView().controlSize(.small)
+        case .cancelled, .other:
+            Image(systemName: "stop.circle.fill").foregroundStyle(.secondary)
+        }
+    }
+
+    private func footer(now: Date) -> some View {
+        let layout = stacksRows
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 8))
+        return layout {
+            Text(timeText(now: now))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(timeAccessibilityLabel(now: now))
+            if !stacksRows { Spacer(minLength: 8) }
+            if canOpenTab {
+                Button {
+                    onOpenTab?(result.tabID)
+                } label: {
+                    Label("Open tab", systemImage: "arrow.up.right.square")
+                        .font(.caption.weight(.semibold))
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Open \(tabTitle) tab")
+            }
+        }
+    }
+}

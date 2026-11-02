@@ -1,0 +1,15 @@
+# Xcode / generated
+*.xcodeproj
+xcuserdata/
+DerivedData/
+build/
+.DS_Store
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# Secrets (the API key lives in the Keychain, never the repo)
+*.env
+secrets/
+.spm/

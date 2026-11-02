@@ -1,0 +1,672 @@
+import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
+import XCTest
+@testable import Hermes
+
+final class ImageRequestProtocol: URLProtocol {
+    static var handler: ((URLRequest) throws -> (Int, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        do {
+            let handler = try XCTUnwrap(Self.handler)
+            let (status, data) = try handler(request)
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: status,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            ))
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+}
+
+final class CantripImageTransportTests: XCTestCase {
+    private let sessionID = "00000000-0000-0000-0000-000000000001"
+
+    override func tearDown() {
+        ImageRequestProtocol.handler = nil
+        super.tearDown()
+    }
+
+    private func api() throws -> CantripRemoteAPI {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ImageRequestProtocol.self]
+        return CantripRemoteAPI(
+            transport: .remote(try XCTUnwrap(URL(string: "https://cantrip.example"))),
+            token: "test-pairing-token",
+            urlSession: URLSession(configuration: configuration)
+        )
+    }
+
+    private func snapshot(support: Bool?) throws -> Data {
+        var session: [String: Any] = [
+            "id": sessionID, "title": "Test", "workdir": "/tmp",
+            "isStreaming": false, "canResume": false, "councilMode": false,
+            "queuedCount": 0,
+        ]
+        if let support { session["supportsImageAttachments"] = support }
+        return try JSONSerialization.data(withJSONObject: ["session": session])
+    }
+
+    private func tabSnapshot() -> Data {
+        Data("""
+        {"session":{"id":"\(sessionID)","title":"Project","customTitle":"Project",
+        "isLocked":true,"supportsTabMetadata":true,"workdir":"/tmp","isStreaming":true,
+        "canResume":false,"councilMode":false,"queuedCount":0}}
+        """.utf8)
+    }
+
+    func testLegacyHostsDoNotReceiveTabMetadataMutations() async throws {
+        let response = try snapshot(support: nil)
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            return (200, response)
+        }
+        do {
+            _ = try await api().updateTab(id: sessionID, name: "Project", isLocked: true)
+            XCTFail("Old hosts must show the update notice")
+        } catch CantripRemoteError.tabMetadataUnsupported {}
+        XCTAssertEqual(methods, ["GET"])
+    }
+
+    func testRenameAndLockAreAuthenticatedPartialUpdates() async throws {
+        let response = tabSnapshot()
+        var bodies: [[String: Any]] = []
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-pairing-token")
+            if request.httpMethod == "POST" {
+                XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.sessionID)/metadata")
+                let data: Data
+                if let body = request.httpBody {
+                    data = body
+                } else {
+                    let stream = try XCTUnwrap(request.httpBodyStream)
+                    stream.open()
+                    defer { stream.close() }
+                    var bytes = [UInt8](repeating: 0, count: 1024)
+                    var collected = Data()
+                    while stream.hasBytesAvailable {
+                        let count = stream.read(&bytes, maxLength: bytes.count)
+                        guard count >= 0 else { throw try XCTUnwrap(stream.streamError) }
+                        if count == 0 { break }
+                        collected.append(contentsOf: bytes.prefix(count))
+                    }
+                    data = collected
+                }
+                bodies.append(try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any]))
+            }
+            return (200, response)
+        }
+        let client = try api()
+        let renamed = try await client.updateTab(id: sessionID, name: " Project ")
+        XCTAssertEqual(renamed.customTitle, "Project")
+        XCTAssertEqual(renamed.isLocked, true)
+        XCTAssertTrue(renamed.isStreaming)
+        _ = try await client.updateTab(id: sessionID, isLocked: false)
+        _ = try await client.updateTab(id: sessionID, name: " ")
+        XCTAssertEqual(bodies[0]["customTitle"] as? String, "Project")
+        XCTAssertNil(bodies[0]["isLocked"], "Renaming must not overwrite a concurrent lock")
+        XCTAssertEqual(bodies[1]["isLocked"] as? Bool, false)
+        XCTAssertNil(bodies[1]["customTitle"], "Unlocking must not overwrite a concurrent rename")
+        XCTAssertEqual(bodies[2]["customTitle"] as? String, "")
+        XCTAssertEqual(methods, ["GET", "POST", "GET", "POST", "GET", "POST"])
+    }
+
+    func testTabMutationsAreNotReplayedAndLockedHostErrorsSurface() async throws {
+        let response = tabSnapshot()
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            if request.httpMethod == "POST" { throw URLError(.networkConnectionLost) }
+            return (200, response)
+        }
+        do {
+            _ = try await api().updateTab(id: sessionID, isLocked: true)
+            XCTFail("Uncertain changes must surface")
+        } catch {}
+        XCTAssertEqual(methods, ["GET", "POST"])
+
+        methods = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            return (409, Data(#"{"error":"Unlock this tab first"}"#.utf8))
+        }
+        do {
+            _ = try await api().closeSession(id: sessionID)
+            XCTFail("Host lock must protect against stale client state")
+        } catch CantripRemoteError.http(let status, let message) {
+            XCTAssertEqual(status, 409)
+            XCTAssertEqual(message, "Unlock this tab first")
+        }
+        XCTAssertEqual(methods, ["POST"])
+    }
+
+    func testLegacyHostIsNeverSentAnImageMutation() async throws {
+        for support: Bool? in [nil, false] {
+            let response = try snapshot(support: support)
+            var requests = 0
+            ImageRequestProtocol.handler = { request in
+                requests += 1
+                XCTAssertEqual(request.httpMethod, "GET")
+                return (200, response)
+            }
+            do {
+                _ = try await api().send(
+                    "Look at this", mode: .queue, sessionID: sessionID,
+                    images: [ChatImageAttachment(data: Data([1, 2, 3]))]
+                )
+                XCTFail("Unsupported hosts must reject image sends")
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains("updated Cantrip host"))
+            }
+            XCTAssertEqual(requests, 1, "Never POST text without its images")
+        }
+    }
+
+    func testImageSendPreflightsThenPostsOnceWithAuthentication() async throws {
+        let response = try snapshot(support: true)
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-pairing-token")
+            if request.httpMethod == "POST" {
+                XCTAssertEqual(request.timeoutInterval, 12, "Mutations retain their longer deadline")
+                XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.sessionID)/messages")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                return (202, response)
+            }
+            XCTAssertEqual(request.timeoutInterval, 20, "Session reads include complete message content")
+            return (200, response)
+        }
+        let result = try await api().send(
+            "", mode: .interrupt, sessionID: sessionID,
+            images: [ChatImageAttachment(data: Data([1, 2, 3]))]
+        )
+        XCTAssertEqual(methods, ["GET", "POST"])
+        XCTAssertEqual(result.id, sessionID)
+    }
+
+    func testFailedImageMutationIsNotReplayed() async throws {
+        let response = try snapshot(support: true)
+        var mutations = 0
+        ImageRequestProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                mutations += 1
+                return (400, Data(#"{"error":"Invalid image"}"#.utf8))
+            }
+            return (200, response)
+        }
+        do {
+            _ = try await api().send(
+                "Look", mode: .inject, sessionID: sessionID,
+                images: [ChatImageAttachment(data: Data([1, 2, 3]))]
+            )
+            XCTFail("The server error must surface")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Invalid image"))
+        }
+        XCTAssertEqual(mutations, 1)
+    }
+
+    func testTextOnlyConfirmsReachabilityWithoutRequiringNewHostCapabilities() async throws {
+        let response = try snapshot(support: nil)
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            return (202, response)
+        }
+        _ = try await api().send("Hello", mode: .queue, sessionID: sessionID)
+        XCTAssertEqual(methods, ["GET", "POST"])
+    }
+
+    func testImageReadsAreAuthenticatedBoundedAndPinnedToTheirSession() async throws {
+        let imageID = UUID().uuidString + "/image-1.jpg"
+        let bytes = Data([1, 2, 3])
+        let response = try JSONSerialization.data(withJSONObject: ["data": bytes.base64EncodedString()])
+        var paths: [String] = []
+        ImageRequestProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertNotNil(request.value(forHTTPHeaderField: "Authorization"))
+            XCTAssertEqual(request.timeoutInterval, 3)
+            XCTAssertNil(request.httpBody)
+            paths.append(try XCTUnwrap(request.url?.path))
+            return (200, response)
+        }
+        let client = try api()
+        let thumbnail = try await client.imageData(sessionID: sessionID, imageID: imageID, thumbnail: true)
+        let full = try await client.imageData(sessionID: sessionID, imageID: imageID, thumbnail: false)
+        XCTAssertEqual(thumbnail, bytes)
+        XCTAssertEqual(full, bytes)
+        XCTAssertEqual(paths, [
+            "/api/v1/sessions/\(sessionID)/attachments/\(imageID)/thumbnail",
+            "/api/v1/sessions/\(sessionID)/attachments/\(imageID)",
+        ])
+        for invalid in ["../image-1.jpg", imageID + "/../../secret", imageID + "?path=/etc/passwd",
+                        UUID().uuidString + "/image-5.jpg"] {
+            do {
+                _ = try await client.imageData(sessionID: sessionID, imageID: invalid, thumbnail: false)
+                XCTFail("Invalid references must not be sent")
+            } catch CantripRemoteError.invalidResponse {}
+        }
+        XCTAssertEqual(paths.count, 2)
+    }
+
+    func testMissingAndUnauthorizedImagesSurfaceErrors() async throws {
+        let imageID = UUID().uuidString + "/image-1.jpg"
+        for status in [401, 404, 500] {
+            ImageRequestProtocol.handler = { _ in (status, Data(#"{"error":"Image unavailable"}"#.utf8)) }
+            do {
+                _ = try await api().imageData(sessionID: sessionID, imageID: imageID, thumbnail: true)
+                XCTFail("Must show an image failure")
+            } catch CantripRemoteError.authentication {
+                XCTAssertEqual(status, 401)
+            } catch CantripRemoteError.http(let code, _) {
+                XCTAssertEqual(code, status)
+            }
+        }
+        ImageRequestProtocol.handler = { _ in
+            let bytes = Data(repeating: 0, count: ImageAttachmentProcessor.maximumImageBytes + 1)
+            return (200, try JSONSerialization.data(withJSONObject: ["data": bytes.base64EncodedString()]))
+        }
+        do {
+            _ = try await api().imageData(sessionID: sessionID, imageID: imageID, thumbnail: false)
+            XCTFail("Oversized responses must be rejected")
+        } catch ImageAttachmentError.invalidImage {}
+    }
+
+    func testGeneratedPreviewRoutesAreAuthenticatedBoundedAndDistinctFromUploads() async throws {
+        let imageID = "previews/\(UUID().uuidString)/\(String(repeating: "a", count: 64)).jpg"
+        let bytes = Data(repeating: 1, count: ImageAttachmentProcessor.maximumImageBytes + 1)
+        let response = try JSONSerialization.data(withJSONObject: ["data": bytes.base64EncodedString()])
+        var paths: [String] = []
+        ImageRequestProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertNotNil(request.value(forHTTPHeaderField: "Authorization"))
+            paths.append(try XCTUnwrap(request.url?.path))
+            return (200, response)
+        }
+        let client = try api()
+        for thumbnail in [true, false] {
+            let received = try await client.imageData(sessionID: sessionID, imageID: imageID, thumbnail: thumbnail)
+            XCTAssertEqual(received, bytes)
+        }
+        XCTAssertEqual(paths, [
+            "/api/v1/sessions/\(sessionID)/\(imageID)/thumbnail",
+            "/api/v1/sessions/\(sessionID)/\(imageID)",
+        ])
+        for invalid in [imageID + "/extra", imageID + "?path=/etc/passwd",
+                        imageID.replacingOccurrences(of: ".jpg", with: ".png"),
+                        "previews/not-a-message/\(String(repeating: "a", count: 64)).jpg"] {
+            do {
+                _ = try await client.imageData(sessionID: sessionID, imageID: invalid, thumbnail: false)
+                XCTFail("Invalid preview references must not be sent")
+            } catch CantripRemoteError.invalidResponse {}
+        }
+        XCTAssertEqual(paths.count, 2)
+        ImageRequestProtocol.handler = { _ in
+            (200, try JSONSerialization.data(withJSONObject: [
+                "data": Data(repeating: 0, count: GeneratedImagePreview.maximumImageBytes + 1).base64EncodedString()
+            ]))
+        }
+        do {
+            _ = try await client.imageData(sessionID: sessionID, imageID: imageID, thumbnail: false)
+            XCTFail("Generated previews retain a strict response limit")
+        } catch ImageAttachmentError.invalidImage {}
+    }
+
+#if os(iOS)
+    @MainActor
+    func testImageCacheIsSeparatedBySizeAndClearedOnRepairing() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ImageRequestProtocol.self]
+        let remote = CantripRemoteModel(urlSession: URLSession(configuration: configuration))
+        defer { remote.clearConfiguration() }
+        let imageID = UUID().uuidString + "/image-1.jpg"
+        var imageReads = 0
+        var invalidPixels = false
+        let pixels = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 16, height: 8))
+            .image { $0.fill(CGRect(x: 0, y: 0, width: 16, height: 8)) }
+            .jpegData(compressionQuality: 0.8))
+        let response = try JSONSerialization.data(withJSONObject: ["data": pixels.base64EncodedString()])
+        ImageRequestProtocol.handler = { request in
+            if request.url?.path.contains("/attachments/") == true {
+                imageReads += 1
+                return (200, invalidPixels ? Data(#"{"data":"AQID"}"#.utf8) : response)
+            }
+            return (200, Data(#"{"sessions":[]}"#.utf8))
+        }
+        let configured = await remote.configure(url: "https://cantrip.example", pairingToken: "image-test-token")
+        XCTAssertTrue(configured, remote.errorMessage ?? "")
+        for _ in 0..<2 {
+            _ = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: true)
+        }
+        XCTAssertEqual(imageReads, 1)
+        _ = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: false)
+        XCTAssertEqual(imageReads, 2)
+        let reconfigured = await remote.configure(url: "https://another-cantrip.example", pairingToken: "new-image-test-token")
+        XCTAssertTrue(reconfigured, remote.errorMessage ?? "")
+        _ = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: true)
+        XCTAssertEqual(imageReads, 3, "A new pairing must not reuse another Mac's image cache")
+        invalidPixels = true
+        do {
+            _ = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: false)
+            XCTFail("Invalid pixels must show an error, not enter the cache")
+        } catch ImageAttachmentError.invalidImage {}
+        invalidPixels = false
+        _ = try await remote.image(sessionID: sessionID, imageID: imageID, thumbnail: false)
+        XCTAssertEqual(imageReads, 5, "Retry must fetch again after a decode failure")
+    }
+#endif
+
+    func testAutoOnLegacyHostDoesNotSendAMutation() async throws {
+        let response = try snapshot(support: nil)
+        var requests = 0
+        ImageRequestProtocol.handler = { request in
+            requests += 1
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (200, response)
+        }
+        do {
+            _ = try await api().send("Actually, explain it instead", mode: .auto, sessionID: sessionID)
+            XCTFail("Auto must not silently fall back on an old host")
+        } catch CantripRemoteError.autoDeliveryUnsupported { }
+        XCTAssertEqual(requests, 1)
+    }
+
+    func testAutoPreflightsAndPostsExactlyOnce() async throws {
+        let data = try snapshot(support: true)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var host = try XCTUnwrap(object["session"] as? [String: Any])
+        host["supportsAutoDelivery"] = true
+        object["session"] = host
+        let response = try JSONSerialization.data(withJSONObject: object)
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            return (request.httpMethod == "POST" ? 202 : 200, response)
+        }
+        _ = try await api().send("The config is in /config", mode: .auto, sessionID: sessionID)
+        XCTAssertEqual(methods, ["GET", "POST"])
+        let body = try JSONEncoder().encode(CantripMessageBody(text: "Hello", mode: .auto, images: []))
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(encoded["mode"] as? String, "auto")
+    }
+
+    func testQueuedSendAndRefreshReturnAuthoritativeQueue() async throws {
+        let queued = Data(
+            """
+            {"session":{"id":"\(sessionID)","title":"Test","workdir":"/tmp",
+            "isStreaming":true,"canResume":false,"councilMode":false,"queuedCount":2,
+            "queued":[{"id":"mac-prompt","text":"From the Mac"},
+                      {"id":"phone-prompt","text":"From the phone"}],"messages":[]}}
+            """.utf8
+        )
+        let drained = try snapshot(support: true)
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            XCTAssertEqual(request.url?.path.hasPrefix("/api/v1/sessions/\(self.sessionID)"), true)
+            return request.httpMethod == "POST" ? (202, queued) : (200, drained)
+        }
+        let client = try api()
+        let accepted = try await client.send("From the phone", mode: .queue, sessionID: sessionID)
+        XCTAssertEqual(accepted.queued?.map(\.id), ["mac-prompt", "phone-prompt"])
+        XCTAssertEqual(accepted.queuedCount, 2)
+        let refreshed = try await client.session(id: sessionID)
+        XCTAssertEqual(refreshed.queuedCount, 0)
+        XCTAssertEqual(methods, ["GET", "POST", "GET"], "Preparation and queue reads must not replay the send")
+    }
+
+    private func queueSnapshot(
+        ids: [String], support: Bool? = true, sendNow: Bool? = true, streaming: Bool = true,
+        messages: [[String: Any]]? = nil
+    ) throws -> Data {
+        var session: [String: Any] = [
+            "id": sessionID, "title": "Test", "workdir": "/tmp",
+            "isStreaming": streaming, "canResume": false, "councilMode": false,
+            "queuedCount": ids.count,
+            "queued": ids.map { ["id": $0, "text": "Continue"] },
+            "messages": messages ?? [
+                ["id": "active-reply", "role": "assistant", "text": "Still working",
+                 "thinking": "", "activities": []] as [String: Any],
+            ],
+        ]
+        if let support { session["supportsQueueRemoval"] = support }
+        if let sendNow { session["supportsQueueSendNow"] = sendNow }
+        return try JSONSerialization.data(withJSONObject: ["session": session])
+    }
+
+    func testQueueRemovalUsesStableIDAndPreservesOtherPromptsAndActiveTask() async throws {
+        let ids = (1...3).map { String(format: "00000000-0000-0000-0000-%012d", $0) }
+        let before = try queueSnapshot(ids: ids)
+        let after = try queueSnapshot(ids: [ids[0], ids[2]])
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Authorization"),
+                "Bearer test-pairing-token"
+            )
+            if request.httpMethod == "DELETE" {
+                XCTAssertEqual(
+                    request.url?.path,
+                    "/api/v1/sessions/\(self.sessionID)/queue/\(ids[1])"
+                )
+                return (200, after)
+            }
+            XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.sessionID)")
+            return (200, before)
+        }
+        let result = try await api().removeQueuedPrompt(id: ids[1], sessionID: sessionID)
+        XCTAssertEqual(methods, ["GET", "DELETE"])
+        XCTAssertEqual(result.queued?.map(\.id), [ids[0], ids[2]])
+        XCTAssertEqual(result.queuedCount, 2)
+        XCTAssertTrue(result.isStreaming)
+        XCTAssertEqual(result.transcript.first?.text, "Still working")
+    }
+
+    func testRemovingLastPromptReturnsAnEmptyQueue() async throws {
+        let id = "00000000-0000-0000-0000-000000000002"
+        let before = try queueSnapshot(ids: [id])
+        let after = try queueSnapshot(ids: [])
+        ImageRequestProtocol.handler = { request in
+            (200, request.httpMethod == "DELETE" ? after : before)
+        }
+        let result = try await api().removeQueuedPrompt(id: id, sessionID: sessionID)
+        XCTAssertEqual(result.queuedCount, 0)
+        XCTAssertEqual(result.queued, [])
+        XCTAssertTrue(result.isStreaming)
+    }
+
+    func testLegacyHostsDoNotReceiveQueueRemovalMutations() async throws {
+        for support: Bool? in [nil, false] {
+            let response = try queueSnapshot(ids: ["pending"], support: support)
+            var methods: [String] = []
+            ImageRequestProtocol.handler = { request in
+                methods.append(request.httpMethod ?? "")
+                return (200, response)
+            }
+            do {
+                _ = try await api().removeQueuedPrompt(id: "pending", sessionID: sessionID)
+                XCTFail("An older host must show the update message")
+            } catch CantripRemoteError.queueRemovalUnsupported {}
+            XCTAssertEqual(methods, ["GET"])
+        }
+    }
+
+    func testQueueRemovalConflictAndHostErrorsSurfaceWithoutOtherMutations() async throws {
+        for status in [409, 500] {
+            let response = try queueSnapshot(ids: ["pending"])
+            var methods: [String] = []
+            ImageRequestProtocol.handler = { request in
+                methods.append(request.httpMethod ?? "")
+                if request.httpMethod == "DELETE" {
+                    return (status, Data(#"{"error":"Removal rejected by host"}"#.utf8))
+                }
+                return (200, response)
+            }
+            do {
+                _ = try await api().removeQueuedPrompt(id: "pending", sessionID: sessionID)
+                XCTFail("The host error must be surfaced without cancelling the task")
+            } catch CantripRemoteError.http(let actualStatus, let message) {
+                XCTAssertEqual(actualStatus, status)
+                XCTAssertEqual(message, "Removal rejected by host")
+            }
+            XCTAssertEqual(methods, ["GET", "DELETE"])
+        }
+    }
+
+    func testQueueRemovalLostResponseIsNotReplayed() async throws {
+        let response = try queueSnapshot(ids: ["pending"])
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            if request.httpMethod == "DELETE" {
+                throw URLError(.networkConnectionLost)
+            }
+            return (200, response)
+        }
+        do {
+            _ = try await api().removeQueuedPrompt(id: "pending", sessionID: sessionID)
+            XCTFail("Unconfirmed removal must not look successful")
+        } catch CantripRemoteError.transport {}
+        XCTAssertEqual(methods, ["GET", "DELETE"])
+    }
+
+    func testUnauthenticatedQueueRemovalNeverReachesTheMutation() async throws {
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            return (401, Data(#"{"error":"invalid pairing token"}"#.utf8))
+        }
+        do {
+            _ = try await api().removeQueuedPrompt(id: "pending", sessionID: sessionID)
+            XCTFail("Authentication errors must be surfaced")
+        } catch CantripRemoteError.authentication {}
+        XCTAssertEqual(methods, ["GET"])
+    }
+
+    private func requestBody(_ request: URLRequest) throws -> Data {
+        if let body = request.httpBody { return body }
+        let stream = try XCTUnwrap(request.httpBodyStream)
+        stream.open()
+        defer { stream.close() }
+        var bytes = [UInt8](repeating: 0, count: 1024)
+        var collected = Data()
+        while stream.hasBytesAvailable {
+            let count = stream.read(&bytes, maxLength: bytes.count)
+            guard count >= 0 else { throw try XCTUnwrap(stream.streamError) }
+            if count == 0 { break }
+            collected.append(contentsOf: bytes.prefix(count))
+        }
+        return collected
+    }
+
+    func testQueueSendNowPostsEmptyBodyForStableIDAndReturnsTheSession() async throws {
+        let ids = (1...3).map { String(format: "00000000-0000-0000-0000-%012d", $0) }
+        let before = try queueSnapshot(ids: ids)
+        let after = try queueSnapshot(ids: [ids[0], ids[2]], messages: [
+            ["id": "active-reply", "role": "assistant", "text": "Still working",
+             "thinking": "", "activities": []] as [String: Any],
+            ["id": ids[1], "role": "user", "text": "Continue", "thinking": "", "activities": []],
+        ])
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            if request.httpMethod == "POST" {
+                XCTAssertEqual(
+                    request.url?.path,
+                    "/api/v1/sessions/\(self.sessionID)/queue/\(ids[1])/send"
+                )
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+                let body = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: try self.requestBody(request)) as? [String: Any]
+                )
+                XCTAssertTrue(body.isEmpty, "Send now takes an empty JSON object")
+                return (200, after)
+            }
+            XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.sessionID)")
+            return (200, before)
+        }
+        let result = try await api().sendQueuedPromptNow(id: ids[1], sessionID: sessionID)
+        XCTAssertEqual(methods, ["GET", "POST"], "One capability read, then a single write")
+        XCTAssertEqual(result.queued?.map(\.id), [ids[0], ids[2]])
+        XCTAssertEqual(result.queuedCount, 2)
+        XCTAssertTrue(result.isStreaming)
+        XCTAssertEqual(result.transcript.map(\.id), ["active-reply", ids[1]])
+    }
+
+    func testLegacyHostsDoNotReceiveQueueSendNowMutations() async throws {
+        for support: Bool? in [nil, false] {
+            let response = try queueSnapshot(ids: ["pending"], sendNow: support)
+            var methods: [String] = []
+            ImageRequestProtocol.handler = { request in
+                methods.append(request.httpMethod ?? "")
+                return (200, response)
+            }
+            do {
+                _ = try await api().sendQueuedPromptNow(id: "pending", sessionID: sessionID)
+                XCTFail("An older host must show the update message")
+            } catch CantripRemoteError.queueSendNowUnsupported {}
+            XCTAssertEqual(methods, ["GET"])
+        }
+    }
+
+    func testQueueSendNowConflictsSurfaceTheHostMessage() async throws {
+        let messages = [
+            "This message is no longer queued. It may have started or been removed on another device.",
+            "Answer the question above first, then send this message.",
+            "The current task is still starting. Try again in a moment.",
+        ]
+        for message in messages {
+            let response = try queueSnapshot(ids: ["pending"])
+            var methods: [String] = []
+            ImageRequestProtocol.handler = { request in
+                methods.append(request.httpMethod ?? "")
+                if request.httpMethod == "POST" {
+                    return (409, try JSONSerialization.data(withJSONObject: ["error": message]))
+                }
+                return (200, response)
+            }
+            do {
+                _ = try await api().sendQueuedPromptNow(id: "pending", sessionID: sessionID)
+                XCTFail("A conflict must not look like a sent message")
+            } catch CantripRemoteError.http(let status, let received) {
+                XCTAssertEqual(status, 409)
+                XCTAssertEqual(received, message)
+            }
+            XCTAssertEqual(methods, ["GET", "POST"])
+        }
+    }
+
+    func testQueueSendNowLostResponseIsNotReplayed() async throws {
+        let response = try queueSnapshot(ids: ["pending"])
+        var methods: [String] = []
+        ImageRequestProtocol.handler = { request in
+            methods.append(request.httpMethod ?? "")
+            if request.httpMethod == "POST" {
+                throw URLError(.networkConnectionLost)
+            }
+            return (200, response)
+        }
+        do {
+            _ = try await api().sendQueuedPromptNow(id: "pending", sessionID: sessionID)
+            XCTFail("An unconfirmed send must not look successful")
+        } catch CantripRemoteError.transport {}
+        XCTAssertEqual(methods, ["GET", "POST"])
+    }
+}

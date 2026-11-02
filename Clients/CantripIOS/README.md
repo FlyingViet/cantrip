@@ -1,0 +1,1674 @@
+# Hermes — iOS client (Cantrip Agent, formerly AgentGateway)
+
+This repository is [FlyingViet/CantripIOS](https://github.com/FlyingViet/CantripIOS),
+renamed from `Hermes` on 2026-10-25 (GitHub redirects the old URL). The Xcode
+project, scheme and Swift module are still named Hermes.
+
+<img src="Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png" width="128" alt="Cantrip: a pearl-violet C casting a golden spark" />
+
+The app icon shares Cantrip's **C and golden spark** mark. Its opaque 1024px
+source comes from `Resources/CantripIcon.png` in the Cantrip repository;
+regenerate it there with `make artwork`, then copy it to
+`Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png`. Do not add rounded
+corners or transparent padding to the iOS asset; the system applies the mask.
+
+A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.com/) — by **voice** and **chat** — instead of being stuck in Telegram or Discord.
+
+- 💬 **Durable streaming chat** — tasks continue on the Mac if iOS suspends or
+  closes; reopen the app to recover the current status and final response
+- 🎙️ **Voice mode** — local Parakeet EOU transcription plus a full-screen,
+  hands-free *listen → think → speak* loop
+- ⚡ **`/` autocomplete** + a **Skills browser** (tap a skill to run it)
+- 🔘 **Action Button / Shortcuts / Siri** — "Talk to Hermes" jumps straight into voice mode
+- 💾 **Persistent history** — reopen to your prior conversation
+- 🔑 **Your gateway, your key** — points at *your* Hermes server, nothing hardcoded
+- 📡 **Cantrip tabs** — every project tab on your Mac lives in Cantrip Home's drawer and
+  uses the same chat, dictation, hands-free voice, and TTS interface
+- 🔗 **`@` mention a tab** — suggestions as you type; the message points at exactly that tab
+
+> The app is a thin, secure client. All the intelligence (skills, memory, tools) lives in **your** Hermes gateway. You bring the gateway + an API key; the app does the rest.
+
+---
+
+## Connect to Cantrip
+
+Cantrip Agent is a client for [Cantrip](https://github.com/FlyingViet/cantrip), the agent
+harness on your Mac. Cantrip runs the agents (Claude Code, Copilot, Codex or a local
+model) and owns every tab, queue, run journal and Home task, so work continues while the
+phone sleeps. The app pairs with it, sends prompts and shows the live sessions.
+[Cantrip Gateway Mac](https://github.com/FlyingViet/CantripGatewayMac) compiles this
+repo's code to do the same in a Mac window.
+
+```
+  Cantrip Agent (iPhone/iPad)                        Cantrip on your Mac (harness)
+  Cantrip Gateway Mac          ── pairing token ──►    Remote control API  /api/v1
+                                  LAN: TLS-PSK          Cantrip Home + project tabs
+                                  Tailscale Serve       queue · run journal · recovery
+                                  Direct IP:port        Claude Code · Copilot · Codex · local
+```
+
+### 1. Enable Remote control on the Mac
+
+1. Install Cantrip ([quick start](https://github.com/FlyingViet/cantrip#quick-start)) and
+   set up one AI backend.
+2. Press **Option+Space**, open the **gear** and check **Remote control daemon**.
+3. Check **Cantrip Home** to use the app's Chat, Tasks and Artifacts screens. Cantrip must
+   stay running for scheduled tasks.
+4. Click **Copy pairing token** and move it to the phone privately. The token gives full
+   control of that Mac's agents; **Regenerate** disconnects every paired client.
+
+### 2. Pair the app
+
+Open **Settings › Macs › Pair a Mac**. Paste the **Pairing token**, add a name if you like,
+fill in the route below (the direct address and Tailscale only are under **Advanced**) and tap
+**Pair**. The first Mac you pair becomes the active one; switch to another from its page in
+**Macs**. Allow Local Network access when asked.
+
+Or run `cantrip pair` on the host (handy on a headless Mac or a codespace) and scan its QR
+code with the iPhone Camera, or open the link it prints on a Mac with Cantrip Gateway. The
+app shows the host's name, routes and the token's last four characters, saves nothing until
+you tap **Pair**, then adds and connects to the server like **Add Server**.
+
+| Route | Use it when | What to enter |
+|---|---|---|
+| Local network | Phone and Mac are on the same network | Nothing more. The app finds the Mac with Bonjour (`_cantrip-remote._tcp`). |
+| Tailscale Serve | Home and away | **Tailscale URL**, e.g. `https://your-mac.your-tailnet.ts.net`, after running `tailscale serve --bg http://127.0.0.1:8765` on the Mac. Used first whenever it works; LAN is the fallback unless **Tailscale only** is on. |
+| Direct address | The Mac can't run Tailscale (e.g. a work laptop) | Set **Direct port** (e.g. `8766`) in that Mac's Cantrip settings, then enter **Direct address** as `IP:port`, e.g. `192.168.0.152:8766`. Works wherever the phone can route to that IP, such as through a router's Tailscale subnet route. |
+
+Send a short prompt to confirm. The work runs on the Mac, not the phone.
+
+Optional, on the Mac:
+
+- **Push alerts** for finished tabs and questions need an APNs key in
+  `~/.config/Cantrip/apns.json`; see
+  [push setup](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md#cantrip-agent-completion-notifications).
+- **View Mac** needs **Allow paired clients to view and control this Mac** checked in
+  Cantrip, plus Screen Recording (and Accessibility for control).
+- The **Builds** tab lists over-the-air installs published to `~/Sites/ota`; see
+  [Cantrip Home](https://github.com/FlyingViet/cantrip/blob/main/docs/cantrip-home.md#builds).
+
+### Host API
+
+The app uses Cantrip's authenticated REST API under `/api/v1/`, sending
+`Authorization: Bearer <pairing token>` with every request. Over Tailscale, Serve proxies
+HTTPS to Cantrip's loopback port (default 8765). On the local-network and direct-address
+routes, the same HTTP requests run inside TLS 1.2 with a pre-shared key (SHA-256 of the
+pairing token, identity `cantrip-remote-v1`), so they're end-to-end encrypted without
+certificates. See `CantripRemoteAPI` and `CantripLANProtocol` in
+[`Sources/CantripRemote.swift`](Sources/CantripRemote.swift).
+
+`cantrip pair` prints a pairing link (percent-encoded values):
+
+```
+cantripagent://pair?v=1&name=<label>&token=<token>[&url=<https base URL>][&direct=<host:port>][&tailscaleOnly=1]
+```
+
+`token` (32-128 base64url characters) is required; `url` and `direct` follow the Tailscale URL
+and direct address rules above, and `tailscaleOnly=1` needs a `url`. With neither, the app finds
+the host on the local network. A newer `v` asks the user to update the app. See
+`CantripPairingLink` in [`Sources/CantripPairing.swift`](Sources/CantripPairing.swift).
+
+| Endpoint | Used for |
+|---|---|
+| `GET /api/v1/sessions`, `GET /api/v1/sessions/{id}` | Tab list; a tab's transcript, status, queue and capability flags |
+| `POST /api/v1/sessions/{id}/messages` | Send; `mode` is `auto` (default), `queue`, `interrupt` (Redirect) or `inject`. With Settings › Location on, `location: {latitude, longitude, label, accuracy, precise, timeZone, age, device}` (coarse fixes rounded to 0.01°); the Mac adds a note for that message only and reports `supportsClientLocation` on sessions; a malformed `location` is `400` |
+| `DELETE /api/v1/sessions/{id}/queue/{promptID}`, `POST …/queue/{promptID}/send` | Remove a queued prompt, or Send now |
+| `POST /api/v1/sessions/{id}/queue/{promptID}/fork`, `POST …/children/{childID}/{action}` | Child tabs (`supportsChildTabs`): run a queued prompt in a child tab (`{session, childID}`; `409` with the reason when it can't), and a child card's actions (`open`, `requeue`, `discard`, `resolve`, `keepParent`, `keepChild`, `leave`, `retry`, `merge`); queued prompts carry `plan` (`supportsQueuePlans`), children `parentID` and `child`, the parent's card message `childResult` |
+| `/api/v1/sessions/{id}/input` | Answer approvals, questions and secure input |
+| `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename, lock and file in a section (`sectionID`), reorder, per-tab model settings |
+| `/api/v1/sections`, `/api/v1/sections/{id}` | Tab sections: list, add (`name`), rename or reorder (`PATCH name/position`), delete; only when the list has `supportsTabSections` |
+| `POST /api/v1/sessions/{id}/start-fresh` | Start Fresh (no body): the next prompt starts a new model session, history stays; `409` while the tab is busy or for Cantrip Home |
+| `POST /api/v1/sessions/{id}/resume` | Without a body, resumes the tab's paused run (`canResume`). With `{"messageID"}` (`supportsContinueFromMessage`), continues the failed run whose error row is in `continuableMessageIDs`; `409` with the reason while the tab works, while the Mac is offline, or when the row no longer offers it |
+| `POST /api/v1/sessions/{id}/delete-message` | Delete Message (`supportsDeleteMessage`): `{"messageID"}` deletes the whole exchange that message belongs to (the prompt and its replies) from the tab's history and the model's context, and returns the tab's (paged) snapshot. `400` for a bad body, `404` when the message is no longer in the conversation, `409` while the tab works. Works in every tab, Cantrip Home's chat and Private Local |
+| `GET /api/v1/sessions/{id}/commands` | The tab's (or Home's) backend slash commands, custom commands and skills for `/` suggestions; called only when the snapshot has `supportsBackendCommands` |
+| (fields) `supportsTabMentions`, `mentionable` | `@` suggestions in that composer; which tabs may be suggested. Picked tabs travel in the message text as `@[Title](cantrip-tab:<UUID>)` |
+| `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
+| `GET /api/v1/home/artifacts/{id}/file`, `GET /api/v1/home/artifacts/{id}/folder` | Save / Share (`supportsDownloads` on the artifact list): the registered artifact's original bytes, or an uncompressed zip of every registered artifact in its top-level folder, streamed as an attachment with `Content-Length` and the file name in `Content-Disposition` (`filename*` UTF-8). Never gzipped; `404` for an unknown artifact or, for `folder`, one at the top level. Clients write the body straight to disk on both routes |
+| `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
+| `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, usage limits (Copilot at the top level, Claude Code under `claude`, plus `activeBackend`), View Mac |
+| `GET/POST /api/v1/model-tiers` | **Settings › Models › Model tiers** (Mac-wide): `{tiers, backends: [{id, label, models: [{id, label, efforts, price}], cells: [{tier, label, choices: [{model, effort, label, offered, price}], isDefault, model, effort, note}]}], revision}`. A cell's page reorders, removes and adds models and sets each one's effort; each change POSTs `{revision, backend, tier, choices: [{model, effort}]}`, and **Use Cantrip's Defaults** `{revision, backend, tier, reset: true}`. `supportsModelTiers` on session lists; older hosts `404` and the section says to update the Mac |
+| `GET/POST /api/v1/usage-fallback` | Usage-limit backups in **Settings › Models** (Mac-wide): `{backends, entries, backend, primary, choices, primaryChoice, limited, limitedModels, revision}`; the section lists the backups in order (each entry's `label`, and "at its limit until" its `limitedUntilLabel`) with **Add a backup**, up/down and **Remove**, plus **Model** and **Effort** menus from `choices[].models` for backends that have them. A backend can be listed again with another model, the Mac's own too (`primaryChoice`): Add offers "<Backend> with another model" while one of its models (`""` = `defaultModelID`) is free, and each row's Model menu leaves out models the backend's other backups (or the Mac itself) run. Rows are edited by position and each change saves right away with POST `{revision, entries}` (the whole chain: each backup's `backend`, `model`, `effort`; a `400` says why, e.g. a duplicate), or `{revision, resetLimits: true}` for **Try every backend again** (whole backends in `limited`, model quotas in `limitedModels`). Macs that send no `limitedModels` list each backend once; Macs that send no `entries` get `{revision, backends}`, and Macs from before the chain send no `backends`: one backup, set with `{revision, backend}` (`""` = off). `supportsUsageFallback` on session lists; older hosts `404` and the section stays hidden |
+| `GET /api/v1/skills` | Skills & Rules (Mac-wide): `{library, backends, skills, rules, drift, driftCheckedAt, checking}`; each skill has `name`, `description`, `enabled`, the `backends` that see it and `problems`; each rule `folder`, `lines` and optional `mirror`; each drift finding `path` and `problem`. `driftCheckedAt` (ISO 8601) is absent or `null` until the check has run. Older hosts `404` and the sheet says to update Cantrip on the Mac |
+| `POST /api/v1/skills` | `{"action":"setEnabled","name","enabled"}` (on or off for every backend), `{"action":"sync"}` (relink; the reply adds `messages`) or `{"action":"check"}` (starts the drift check; poll `GET` every ~2 s while `checking`). Replies with the same payload as `GET`; a `400 {"error"}` is shown as written and not retried |
+| `GET /api/v1/backends` | Settings › Tools & sign-ins › Backends: `{backends, checkInterval, revision}`, one entry per agent CLI (`copilot`, `claude`, `antigravity`, `codex`) with `name`, `state` (`ready`, `signedOut`, `outOfQuota`, `notInstalled`, `unknown`), `summary`, optional `path`, `version`, `signedIn`, `account`, `authMethod`, `plan`, `quota` (`[{name, usedPercent, resetsAt}]`), `limitedUntil`, `lastSuccessAt`, `lastAuthError {message, at}`, `checkedAt`, `problem`, plus `checking`, `unavailable` (routing skips it) and `signIn {mode: deviceCode|terminal, command, hint, url?, code?, startedAt?, message?}`. Never a token. Checks run on launch, every 30 min and after a sign-in error; poll every ~8 s, ~1.5 s while `checking` or a `signIn.code` is pending. Older hosts `404` |
+| `POST /api/v1/backends` | `{"action":"check"}` (all) or `{"action":"check","id"}`, `{"action":"signIn","id"}` (Copilot and Codex start their device sign-in, whose `url` and `code` appear in later reads; Claude Code and Antigravity open Terminal on the Mac) and `{"action":"cancelSignIn","id"}`. Replies with the `GET` payload, plus `message` for sign-in actions. A backend that goes signed out or out of quota sends one push (`kind: backendStatus`, opens Backends) and one more when it's back |
+| `GET /api/v1/voice/vocabulary` | Dictation names: project, tab, note, task and tracker terms plus the busiest people (handles, optional names); older hosts reply `404` and the app falls back to tab and task titles |
+| `GET /api/v1/link-previews/image`, `GET /api/v1/map-tile` | Rich cards on assistant messages (`linkPreviews`, `placeCard`): cached Open Graph preview images (`?id=`) and OpenStreetMap raster tiles (`?z=&x=&y=`) |
+
+Responses of 4 KB or more come gzip-compressed when the request sends
+`Accept-Encoding: gzip`: URLSession does this on the Tailscale route, and `CantripLANRequest`
+requests and decodes it ([`Sources/CantripGzip.swift`](Sources/CantripGzip.swift)) on the
+local-network route. The app polls every 1.5 s while the tab on screen (or Home) is working
+and every 5 s otherwise; Cantrip Gateway Mac slows to 15 s while another app is frontmost.
+
+New features are gated by capability flags in session snapshots (for example
+`supportsQueueSendNow`, `supportsTabReordering` or `supportsStartFresh`), so an older Mac
+shows an update notice instead of failing. Snapshots may also carry `repeatedErrorMessageID`,
+the latest error when it repeats the one before it; that error row offers **Start Fresh** and
+**Change Model**. `continuableMessageIDs` lists the error rows that offer **Continue**.
+`deletedMessageIDs` lists messages deleted from the tab (on any device); the app drops them from
+every page it holds, including older pages it loaded. A message with role `freshStart` is Cantrip's Start Fresh divider, never a
+model reply. When an app feature needs a newer host, update and relaunch Cantrip on
+the Mac. Sends are never replayed automatically after a connection failure. The full
+reference is Cantrip's
+[remote-control guide](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md).
+
+## How it works (Hermes gateway)
+
+```
+  iPhone (Cantrip Agent) ──HTTPS + bearer key──►  private network / tunnel
+                                                        │
+                                                        ▼
+                                       Hermes gateway api_server  (:8642)
+                                         POST /v1/runs       (durable task)
+                                         GET  /v1/runs/:id   (recovery)
+                                         GET  /events        (live SSE)
+                                         GET  /v1/commands    (optional)
+                                                        │
+                                                        ▼
+                                            Your Hermes agent
+                                       (skills · memory · tools · model)
+```
+
+The app speaks the gateway's **OpenAI-compatible API server** (`gateway/platforms/api_server.py`), which is the *full agent* — not the raw inference shim.
+
+## Cantrip tabs (inside Cantrip Home)
+
+Cantrip Home is the front door: there is no separate Remote lane. Your Mac's project tabs
+live in Home's **tab drawer**: tap the top-left **Tabs** button (its badge counts working
+tabs, or shows **?** while a tab or background job waits for you) or swipe right from the
+left edge. The drawer has **+** for a new tab, **Search tabs**, a pinned **Cantrip Home**
+row, a **Background jobs** row (scheduled and automated runs), then every tab with a spinner
+while it works (its live status in orange), its latest outcome when idle, and how long ago
+it last ran. Touch and hold a tab, then drag, to reorder it (no handles; not while searching);
+a still hold opens Rename, Lock, Move, Model Settings, Start Fresh, Tools for This Tab and Close. A connection line
+sits at the bottom.
+
+A tab opens full screen with **‹ Home** on the left, its name and **Working / Idle** state in
+the center, and a **⋯** menu on the right: **All Tabs**, the tab's actions, delivery mode,
+usage limits, Resume, voice mode and the Mac menu items. Stop, queued prompts, input
+requests, attachments, per-tab models and history paging work as before. **‹ Home** or a
+right swipe from the left edge returns to Home. The swipe drags the tab with your finger over
+Home, like a navigation back swipe: let go past about a third of the width (or flick) to
+finish, or earlier to stay in the tab. Home shows its latest look until its conversation has
+reloaded; with Reduce Motion, **‹ Home** switches without sliding. Handoff cards' **Open tab**, a tab's push
+notification and the Tabs widget open the tab the same way. On an iPhone Duo, folded or
+unfolded, a tab has no **‹ Home**: the right swipe from the left edge, or **Tabs** at the bottom of
+the side bar when folded (the sidebar button when unfolded), brings out the tab list instead, so you
+can switch straight to another tab or pick Cantrip Home, pinned at the top. Tab ages and outcomes need
+Cantrip host e8e5c0b or later; older hosts show names and live status only.
+
+With a Hermes gateway saved, **Settings › Models › Run on › Backends** chooses which execution
+backends appear in the picker; tap **Edit** to drag them into your preferred order. Cantrip Home
+always stays visible because it holds your tabs. A saved Cantrip Remote lane selection opens Home.
+
+The composer mic is **push-to-talk dictation**: recording starts on touch-down,
+and releasing a hold finishes at once (no end-of-speech wait). A quick **tap**
+starts hands-off dictation; tap again to finish. The text lands in the composer
+for editing instead of being sent, and the mic stays beside Send so you can keep
+dictating. **Double-tap** the mic to open full-screen **continuous voice mode**
+and talk hands-free through the *listen → think → speak* loop. Close voice mode
+to end the loop. This works in Cantrip Home and its tabs, Copilot, and Private
+Local (local chats also have an **∞** button beside the composer), and VoiceOver
+offers a **Continuous voice mode** action on the mic.
+
+With Reduce Motion enabled the drawer's spinners stay still; VoiceOver announces each tab's
+state, latest line and age. The **Auto** delivery dropdown is in the tab's **⋯** menu;
+choose a manual mode there for a one-message override.
+
+The connected-server indicator sits at the left end of the antenna/usage row,
+with Auto beside usage. On narrow screens the server name collapses to a
+computer/status icon; tap it for the full server name and connection state.
+There is no refresh button: the app polls the Mac every 1.5 seconds while the
+tab you're viewing is working, has queued messages or the connection is down,
+every 5 seconds otherwise, and at once when it comes to the front. Session
+status and errors remain below the header when present; **Retry conversation**
+reloads one that failed to load.
+
+While the selected tab is working, a compact red **Stop** icon is visible inside
+the right side of the message composer, beside Send/microphone. Send remains
+available for queued prompts; there is no need to open a menu to stop. It stops
+the prompt on the Mac and clears that tab's queued prompts, without deleting
+the tab or its conversation. Locked tabs can still be stopped. The button
+shows a spinner while the request is pending and is disabled when
+disconnected or another request is in flight. A failed request is shown in
+the Remote error banner; it is never automatically retried.
+
+Tap the **stacked-tabs icon at the top left** or swipe right from the **left edge**
+to open the Cantrip **Tabs** drawer; **Settings** is the gear in its footer, beside the
+connection line. The **hamburger menu is at the top right**. On Duo's vertical toolbar in Home, **Tabs and the
+white hamburger menu sit at the top**, as in Home's iPhone header, and Home's Chat,
+Tasks, Artifacts and Builds take the bottom of the vertical toolbar. In a project tab, the back pill sits near the bottom, with a separate
+**Settings gear** and the **white hamburger menu at the top**.
+The hamburger stays white when paused, with a small orange pause badge. Select a
+tab to return to chat; swipe left on the drawer header or backdrop, tap outside,
+or use **Close tabs** to dismiss
+without changing tabs. The drawer shows the selected tab, activity, locks, and
+queued counts, with a **New Tab** button at the bottom. Opening it dismisses the
+keyboard without clearing your draft. Stop and the circled **+** attachment icon
+retain 44-point tap targets. New Tab and tab actions live in the
+drawer rather than duplicate top-bar buttons. Resume (when available) and New
+conversation remain in the shared chat's hamburger menu.
+
+The hamburger menu holds only this tab's actions, in labeled sections: **Model &
+conversation** (Model Settings, Start Fresh, Tools for This Tab, Delivery, Resume),
+**Tab** (Rename, Lock, Move to Section, Move Up/Down) and Close Tab. Voice Mode opens from
+the composer's microphone (double-tap it, or its VoiceOver action). **Pause Agent**, Memory, Usage Limits, the mascot, **Update & rebuild Cantrip**, **Mac
+permissions & View Mac** and **Skills & Rules** are in Settings; Builds and Background jobs are in Home and the
+Tabs drawer.
+
+### Settings
+
+Settings opens on a status card (the Mac in use and how this device reaches it, what new
+tabs run on, and the usage-limit backups) with the **Pause Agent** switch under it: while
+it's on, this device sends nothing, on any tab, and chat shows **Agent paused** with
+**Resume** in place of the composer (the menu icon keeps an orange pause badge). Then the
+same pages as Gateway Mac:
+
+| Page | What's there |
+|---|---|
+| Macs | Each paired Mac with an **Active** badge and when this device last reached it. A Mac's page has **Use This Mac**, **Re-enter Pairing Token**, its addresses under **Advanced**, and **Remove Mac…**. **Pair a Mac** walks through pairing. Hermes gateways show here only while one is saved. |
+| Models | What new tabs run (read-only; change it on the Mac), **Model tiers** (each backend's models for Fast, Standard and Deep, with Copilot's prices), the **Usage-limit backups** and **Usage Limits**. |
+| Tools & sign-ins | **GitHub on your Mac**: **Sign In…** runs GitHub's device sign-in for the Mac's GitHub CLI in Cantrip Home, whose chat shows the code to enter at github.com (it was **Sign in to GitHub on Mac** in a tab's menu). Then the Mac's shared MCP servers, in the same words as Cantrip's own Settings: each row shows its state (including "Credentials in Mac keychain" and when a sign-in's token ends), which backends use it, and **Connect** (**Retry** after a failed sign-in, with the Mac's reason); a row opens its sign-in and per-backend switches. Gateway Mac shows the switches in each row, as Cantrip does. Clients see state and send actions; credentials stay on the Mac. |
+| Memory | The Mac's memory files, read-only. |
+| Voice | Speech recognition, dictation vocabulary, the reply voice and the pause before sending. |
+| Location | **Share location with messages** (off by default) and **Precise location**. While on, each message you send carries this device's location (rounded to about 1 km unless Precise is on), a place name and its time zone, so weather and "near me" answers are for where you are; the Mac tells the model to use it and name the place. While off, the Mac's own location stands in and the reply says so. When In Use permission only: one fix when you send, reused for up to 15 minutes, never in the background. It goes only to the paired Mac with that message and isn't saved in Cantrip's memory, the conversation or its logs. **Current location** shows the place it would send. |
+| Notifications | Completion and input alerts, the widget and the Live Activity. |
+| Appearance | The mascot and **Show reasoning steps**. |
+| About & Updates | This app's version, **Update & rebuild Cantrip**, **Mac permissions & View Mac** and **Skills & Rules**. |
+
+Each page says who its settings change: **This device**, **All tabs on <Mac>** or, in a
+tab's Model Settings, **This tab**. Changes save as you make them. On an unfolded iPhone Duo
+the list and the open page sit side by side and the last page opened comes back; folded,
+the page shows alone with its back button.
+
+In regular-width iPad layouts, **Tabs** becomes a native sidebar beside the chat.
+Selecting, creating, or renaming a tab leaves this sidebar open; **Close tabs**
+hides it, and the menu's **Tabs** action brings it back. Other iPhone layouts (and an unfolded Duo with its sidebar closed) and compact iPad windows retain
+the left-edge drawer. Resizing uses the same
+detail navigation hierarchy, preserving the composer and conversation rather
+than rebuilding them. Tab switching remains disabled during sends and image
+imports.
+
+Touch and hold a drawer row to **Rename Tab**, **Lock Tab** / **Unlock Tab**, or
+**Close Session** (delete the tab). A regular tap selects the tab. Each row's
+**...** menu also keeps these actions.
+To reorder tabs, drag a row's **three-line handle** to its new position, or use
+**Move Tab Up** / **Move Tab Down** in its actions menu. This works in both the
+compact drawer and the wide sidebar, including locked or working tabs, without
+switching the selected conversation or clearing the draft. The native list
+slides neighboring tabs out of the way and scrolls at its edges while dragging.
+The drawer stays open after a drop, showing the new order while it saves.
+Failed moves restore the previous order and show the error inside the tab panel.
+Order is saved on
+the host Mac, survives its restart, and syncs to Cantrip and other Remote clients.
+Update and reopen the host first: these controls require `supportsTabReordering`.
+
+Tabs can also be grouped into sections, like Slack's sidebar. Touch and hold a tab and
+choose **Move to Section** (or **New Section**); a section header's **⋯** (or touch and hold)
+has Rename, New Tab Here, Move Up/Down, Delete and **Edit Sections**, which lists every
+section to drag into order (touch and hold), rename (tap), delete (swipe) or add. **New Section** at the end of the
+tab list makes an empty section that stays until you delete it. Deleting a section with tabs
+asks first; its tabs move back to Tabs and stay open. Tap a header to collapse it; a collapsed
+section still shows the open tab and tabs that are working or waiting for you. The Mac keeps
+the sections, names and order (every device shows the same ones); collapsing is per device.
+Dragging a tab onto another section's tabs or header moves it there; dragging a section's
+header onto another reorders sections. Needs an updated Mac (`supportsTabSections`).
+Moves use an authenticated read-only preflight and a single write; an uncertain
+write is not replayed automatically.
+
+Names and locks
+are saved on the host Mac and sync with local
+Cantrip, other Macs' Remote views, and browser clients. A lock icon marks
+protected tabs; unlock before closing a session or using New Conversation.
+Sending, stopping/resuming work, and queue removal remain available.
+These controls require the host's `supportsTabMetadata` capability; update
+and reopen Cantrip first.
+
+For the Hermes **Copilot** and **Private Local** conversations, use the
+top-left menu's **Rename Tab** and **Lock Tab** actions. Each lane keeps its
+own name and lock across app restarts and lane switches; a lock blocks the
+destructive New Conversation action. Names are up to 80 characters, and
+leaving a name blank restores its automatic label. Locks are accidental-close
+protection, not encryption or a password.
+
+When prompts are waiting, a **Queued messages** card above the composer shows
+the count and next prompt. Tap it to read the full queue in execution order;
+it refreshes with the session and clears as prompts start. This includes
+prompts queued on the Mac or another device. Queue contents require the
+matching Cantrip host update and relaunch; older hosts show the count and an
+explicit update notice instead.
+
+Use a queued prompt's **trash button**, or swipe left and tap **Remove**, to
+remove it from the Mac's queue without stopping the current task. Removal
+requires an updated, relaunched Cantrip host. Controls are disabled while
+disconnected or a request is pending; the queue changes only after the Mac
+confirms removal. If the prompt has already started, it is not cancelled.
+
+To push a queued prompt through without waiting, tap **Send now** on the
+Queued messages card (it sends the next prompt), or use a prompt's arrow
+button or swipe right in the queue. The Mac delivers it into the current turn
+right away; a step it was waiting on, such as a watcher, moves to the
+background and keeps running, as do background agents. An idle tab simply
+starts the prompt. Hosts that cannot steer the current turn redirect instead.
+Send now requires the host's `supportsQueueSendNow` capability; if the prompt
+has already started or been removed, or the Mac is waiting on an answer, the
+Mac's reason is shown and nothing else changes.
+
+**Child tabs.** While a tab works, each queued prompt shows the Mac's suggested
+plan (*Independent: can run in a child tab*, *Batched: same tab-list code*,
+*Waits: releases run one at a time*, …). The branch button on a prompt, or a
+right swipe, runs it now in a **child tab**: its own tab under this one, on its
+own git branch, that merges back into this tab's branch when it's done. With
+Auto delivery, the Mac starts independent ones on its own when their files
+don't overlap this tab's work; their card says *Started automatically*, and
+**Run in this tab instead** (while the child works) stops it and puts the
+request back at the front of this tab's queue. Child
+tabs are indented under their parent with a branch mark and can't be dragged
+away; open one to watch or steer it (its banner names the parent and branch,
+with **Open Parent**). The parent shows one card per child: tap its tag for the
+request, the child's replies and the files it changed; the card shows the
+summary and state (Working, Merged into main · 4 files +169 −9, …) and, on a
+merge conflict, asks: **Keep both, then run the tests (Recommended)**, keep
+either side, or leave it unmerged (then **Try Again** or **Discard**). Needs a
+Cantrip host with `supportsChildTabs`; older hosts show children as ordinary
+tabs and cards as text.
+
+Tap the conversation or session controls to dismiss the keyboard, or drag the
+conversation to dismiss it interactively. Chat stays at the latest message
+while following a reply, but scrolling up lets you read earlier messages
+without being pulled back down. Tap **Latest** to resume following.
+
+Long prompts use compact plain-text previews in all chat lanes and the Cantrip
+queue. Tap **Read full prompt** to read bounded pages or **Copy all** for the
+original text. This limits layout work, not the text sent to the agent.
+Replies continue streaming normally; prompts remain one complete message.
+For host-side responsiveness improvements, also update and reopen Cantrip on
+the Mac (memory preparation and transcript encoding now run off the UI thread).
+
+### Saved servers
+
+Macs are paired from **Settings › Macs › Pair a Mac**. With a Hermes gateway saved, the
+same page also lists Hermes gateways, where **Add Hermes Gateway** gives each one an optional
+name, its URL and its own API key; tap **Add Server** to save it. The form clears only after a
+successful save, ready for another server; adding does not replace or switch
+your current connection. Tap a server in the saved list to select and connect.
+The selected server is marked with a checkmark and restored when the app reopens.
+
+You can save multiple servers of either type, with one Hermes gateway and one
+Cantrip Remote server selected at a time. Credentials are stored separately in
+Keychain. Existing configurations are automatically kept as saved servers.
+Hermes servers keep separate Copilot/Private Local histories, tab metadata,
+durable run state, and memory keys. Cantrip sessions remain on their owning Mac;
+switching clears the previous host's displayed sessions and cached images before
+loading the new host. Switching does not stop work on a Mac.
+
+Swipe or touch and hold a saved server to **Remove Server**, then confirm.
+Removing the active configuration disconnects it; it does not delete chats or
+cancel work on that server. A failed save keeps the form and shows the error.
+
+Tokens and API keys are saved in Keychain for this device only, so they never
+leave it in a backup or device-to-device transfer. A new or restored iPhone
+keeps the saved server list but not the tokens, and those rows show **Pairing
+token missing**. Tap the row (or swipe or touch and hold, then **Re-enter
+Pairing Token**), enter the token, and tap **Save and Connect**; the server keeps
+its place, selection, and history. Adding the same URL again, or opening a
+pairing link for it, also restores the token on the saved entry instead of
+failing. Use **Re-enter Pairing Token** on any saved server after rotating its
+token or fixing a typo.
+
+For Cantrip, enter the pairing token from the corresponding Mac. Without
+a saved URL, Cantrip Agent discovers Cantrip on the same local network with Bonjour and connects
+directly using forward-secret TLS with the pairing token as a pre-shared key.
+Save Cantrip's Tailscale Serve HTTPS URL to prefer Tailscale both at home and
+away. The URL is stored in app preferences and the token is stored in Keychain.
+Automatic routing tries Tailscale first and never probes or switches to LAN
+while Tailscale works. If Tailscale fails, reads can fall back to LAN; independent
+read-only probes restore Tailscale after two consecutive authenticated successes,
+at least three seconds apart, without blocking LAN refreshes. Routine Tailscale reads
+have a three-second total deadline; failed Tailscale routes back off for 15 seconds.
+LAN connection attempts and reads have a two-second deadline; failed LAN routes
+back off for 30 seconds. Discovery changes do not clear the backoff. When all
+routes are cooling down, reads retry one route instead of locking out recovery.
+Late failures cannot displace a newer successful route. Longer mutation and
+image-upload deadlines are unchanged.
+
+Before sending or changing a session, the app performs an authenticated read
+to confirm reachability and any required host capabilities. This read can
+fall back to LAN and try cooling-down routes if necessary, without waiting
+for polling. The write is then sent once, on the exact route that passed
+preparation; a background route change cannot move it to an unchecked host.
+
+**Direct address** (optional) saves a Mac's encrypted listener as `host:port`,
+for a Mac that can't run Tailscale but is reachable another way, such as a home
+router advertising a Tailscale subnet route (e.g. `192.168.0.152:8766`). On that
+Mac, set **Direct port** under Cantrip's Settings > Remote control; its status
+line shows the address to enter. The connection uses the same TLS-PSK protocol
+and pairing token as Bonjour discovery, so it stays end-to-end encrypted and the
+plain HTTP API is never exposed. It is tried after the Tailscale URL and any
+Bonjour match, with three-second connection and read deadlines, and **Tailscale
+only** keeps it (that mode skips only Bonjour). A profile can have just a direct
+address. The Home Screen widget and background Live Activity updates fetch only
+through the Tailscale URL, so a direct-only profile doesn't feed them.
+
+Enable **Tailscale only (skip the local network)** under **Advanced** when pairing a Mac to bypass
+LAN discovery; this requires a saved Tailscale URL and Tailscale connectivity
+when using a tailnet address. Automatic mode remains the default, and LAN-only
+use still works without a saved URL. Sends and other mutations are never
+automatically replayed after a connection failure: check the session before
+sending again, since the host may already have accepted the request. If route
+selection or the preparatory read fails, the error instead says the request
+was not sent; retrying it cannot duplicate a write from that attempt.
+
+A green dot beside the session picker means the app has recently
+completed an authenticated request; gray means the connection is unconfigured,
+unavailable, unauthenticated, paused in the background, or stale. Each successful
+list/detail request renews connectivity; the ten-second stale window allows a
+bounded failover plus the polling interval without flickering disconnected.
+The dot indicates recent connectivity, not acknowledgement of a particular send.
+
+### Long conversations and unreliable connections
+
+With an updated Cantrip host, the app shows the **latest three complete
+prompt-and-reply exchanges**, matching native Mac Remote. A new or running prompt
+counts as the newest exchange. Sending a follow-up keeps the preceding two
+exchanges instead of replacing them with only the latest response.
+Scrolling up loads older history automatically, starting about a screen before
+the top, all the way back to the start of the conversation. There is nothing to
+tap: a small **Loading older messages…** row shows while a page downloads, short
+pages keep loading while less than a screen of history sits above you, and your
+reading position stays put as messages are inserted (including under the header).
+Only one page downloads at a time, and nothing is requested once the start is
+reached. VoiceOver users get the next page when focus reaches the top row. Every
+loaded message includes complete text, reasoning, and all tool input/output by
+default; there is no separate detail download on updated hosts. Opening a tab or
+polling never prefetches older pages. A failed page pauses automatic loading and
+shows **Retry** in that row; a history reset or cache clear also clears it.
+Older pages target 30 messages and 192 KiB, but always include at least one whole message
+and extend back to its user prompt when available. Large answers or
+multi-response turns can exceed the soft count/size limits so the prompt stays
+visible before its output. The initial three exchanges and send acknowledgements
+keep all their continuation/council responses even beyond those limits.
+The host retains its live history, and
+submitted/queued prompts are not truncated. The full-details button remains
+available for older hosts that still send previews.
+
+The tab list publishes independently of conversation downloads. If a detail
+read times out, cached messages remain visible with a separate retry notice;
+a successful tab-list read still counts as a working connection. Failed
+connection reads show **Reconnecting...**. Cached conversations are scoped to
+the selected server and cleared when its configuration changes.
+
+Unchanged session revisions skip conversation downloads entirely. Foreground
+polling waits 1.5 seconds while any tab is working/queued or recovering, and
+5 seconds while idle. Unexpanded transcripts roll forward to the latest three
+exchanges, with up to five tabs cached. Older history loaded by scrolling
+stays expanded through polling and cached-tab selection.
+Ungrouped legacy pages retain the 120-message cache limit; unpaged legacy
+snapshots remain intact so their older messages do not become inaccessible. Lightweight
+reads retain 3-second HTTPS / 2-second LAN deadlines.
+Conversation pages and full-message downloads allow up to 20 seconds without
+blocking the polling/mutation gate; tab polling continues during slow recent-page
+loads. LAN connection establishment still has a 2-second deadline, and uncertain
+mutations are never replayed.
+
+These changes need both the updated phone app and an updated, reopened Mac
+host, including three-exchange mutation acknowledgements. Older hosts remain
+readable but may still return smaller recent pages or full snapshots. Older
+history paging covers messages currently available in the live session.
+
+**Auto** is the default for Cantrip typed and voice messages. A bounded,
+tool-free inference on the Mac distinguishes useful context, changes of
+direction, and follow-up tasks. Clear changes can redirect; context injects
+when supported; uncertainty, unsupported routing backends, and inference
+failures stay queued. The host reports the delivery decision below the session
+controls. The small delivery menu retains one-message Queue/Redirect/Inject
+overrides, then resets to Auto.
+
+Update and reopen the Mac host before using Auto. Cantrip Agent checks
+`supportsAutoDelivery` before sending; older hosts show an update notice
+without sending or discarding the draft. Manual modes remain compatible.
+The router uses Copilot Mini, Claude Haiku, or the configured local model;
+the local lane never falls back to a cloud provider. This changes Cantrip
+Remote only, not the Hermes gateway's own execution lanes.
+
+In a Cantrip session, tap the circled **+** on the left inside the composer
+(**Attach images or video** in VoiceOver) to choose photos/screenshots from
+Photos, select image files, or paste a copied image. You can also paste straight into the
+message box: touch and hold it and choose **Paste** (or press ⌘V on a keyboard) with a copied
+photo, screenshot, video or file, and it's attached. Copied text still pastes as text. Tap a draft thumbnail to
+view the full image, or use **x** to remove it before sending. Up to four images can be sent
+at once; each is oriented, resized to at most 2048 pixels per side, and
+JPEG-compressed to at most 1 MB without the original photo's location metadata.
+Image drafts are scoped to their session and are kept in memory if sending
+fails. They are not automatically retried: after a lost connection, check the
+session before resending to avoid duplicates.
+
+Attachments require the updated **macOS Cantrip host** with a Claude, Copilot,
+or Codex backend; older hosts and unsupported backends are blocked explicitly.
+The Mac stores the uploaded files under
+`~/.cache/Cantrip/remote-attachments/` so queued and recovered runs can open
+them, using the same image-file tools as local Cantrip attachments. This does
+not capture or consume any context staged by the person at the Mac. Image
+attachments currently apply to **Cantrip Remote**, not the Hermes gateway's
+Copilot/Private Local lanes or shell/slash commands.
+
+Sent and queued images appear as **tappable thumbnails instead of Mac file
+paths**. Tap to open a full-screen, aspect-fit viewer; pinch or double-tap to
+zoom, drag to pan, and tap **Done** to return. Previously uploaded images also
+work when their files remain on the Mac and their session is open.
+This requires the updated Cantrip host as well as Cantrip Agent; older hosts
+retain their text-only attachment display. Downloads use the existing paired
+Tailscale/LAN connection, with an in-memory cache cleared when pairing changes.
+Missing files or connection failures show a retry state, not a blank image.
+
+### Generated previews in replies
+
+With **both Cantrip Agent and the Mac Cantrip host updated**, assistant-generated
+PNG/JPEG screenshots appear inline where they are referenced in the reply.
+Tap to open the full-screen viewer and pinch or double-tap to zoom. Failed
+loads show a retry action. No public image hosting or temporary Safari gallery
+is required; images use the existing paired Tailscale/LAN connection.
+
+The agent should save output directly under `~/.cache/Cantrip/` or in its own
+Copilot session files folder (subfolders are fine) and include a standalone
+Markdown image, for example
+`![Landscape preview](~/.cache/Cantrip/landscape-preview.png)`. Absolute paths
+and local `file:` URLs are supported too. Tapping a Markdown link to the same
+kind of image opens the full-screen viewer. Up to eight previews per message
+are supported; arbitrary paths, other tabs' folders, upload directories and
+code examples do not grant file access. Private Local retains its plain-text
+output behavior.
+
+Inline previews are at most 960 pixels; full-screen images retain up to 4096
+pixels per side, with a 4 MiB delivery limit and source metadata removed.
+After the first successful load, the Mac keeps a session-scoped copy so the
+preview survives source-file cleanup and host restarts. Cached previews still
+require a current reference in that session's assistant history. Older replies
+can display previews if their source images remain available. Update and reopen
+the host to activate delivery; a Cantrip Agent-only update cannot read Mac files.
+
+Questions that wait for your answer ("Copilot needs your answer") show their
+images too, in the reply panel above the composer and in Cantrip Home's
+Background list. The question reads like a reply, and its images sit in one
+row of thumbnails above the answers. A bold label right above an image becomes
+its caption. Tap a thumbnail for the full-screen viewer. An image placed right
+under a line of text, with no blank line between, also shows in replies.
+Approvals keep their exact text.
+
+### Interactive views in replies
+
+With **both Cantrip Agent and the Mac Cantrip host updated**, interactive MCP
+App views that Copilot tools return, such as Mobbin screen galleries, appear
+above the reply. Swipe sideways through a gallery and tap a screen to open it
+in Safari. Each view runs isolated in its own web view and can load only the
+domains its server declared. If a view asks to send a message, Cantrip Agent
+shows the exact text for approval first. Views are hidden when **Show
+interactive MCP App views** is off on the Mac.
+
+### Link preview and inline map cards in replies
+
+When an assistant reply links to a public web page (such as an Apple Store
+product page), the Mac fetches and caches its Open Graph metadata without
+cookies and attaches up to three `linkPreviews` cards (`title`, `siteName`,
+`domain`, optional cached `imageID` via `/api/v1/link-previews/image`). Tapping
+a card opens the URL in Safari or the default browser. Private, loopback, LAN,
+`*.ts.net`, and signed/token URLs stay plain links and are never unfurled.
+
+When an assistant reply includes a `cantrip-places` block (or recommends real
+places resolved by the Mac with Apple MapKit and OpenStreetMap Nominatim), the
+message carries a `placeCard` with numbered pins, ratings, categories,
+open/closed status when known, and tap-through actions for **Directions**,
+**Call**, and **Website**. Native iOS and macOS clients render an interactive
+MapKit map with numbered markers — floating a scrollable place list over the
+map when the card is at least 600 pt wide, and stacking the list below the map
+on narrower cards (iPhone, iPhone Duo folded or unfolded beside the sidebar).
+The camera is fitted so every pin and its label sit in the area the list
+doesn't cover. The Mac leaves out link cards for links the map already covers
+(a place's website, or a link named for a place).
+
+When a reply asks about the weather, it ends with a `weather` block naming the
+place, and the message carries a `weatherCard` the Mac built from Open-Meteo
+(never numbers the model wrote): the place and whose location it is ("Your
+iPhone's location", "The Mac's location"), now, today's high and low, the next
+12 hours and 10 days, the update time and Open-Meteo's attribution. If the Mac
+can't get a forecast the card says **Forecast unavailable** and why. The card
+uses the map card's container (680 pt wide at most, dark), every hour and day has
+a VoiceOver label, and a malformed card never stops the message from showing.
+Link cards for weather sites are left out under it.
+
+### Live agent browser preview
+
+When the Mac has an agent-only Chrome driven by an MCP server named `browser`,
+replies that used it show a card with a live picture of the tab the agent is
+working in. While the reply is running the card is marked **Live** and
+refreshes about once a second while it's on screen; afterwards it shows the
+latest view. Tap it for a full-screen view (about three frames a second) with
+the page title and address; pinch or double-tap to zoom, **Done** to return.
+It's view only, and the Mac never shows browser-internal pages such as a
+password manager's popup. Needs an updated Mac Cantrip host
+(`GET /api/v1/browser/frame`).
+
+### Subagent monitors in replies
+
+With **both Cantrip Agent and the Mac Cantrip host updated**, replies that spawn
+Copilot subagents show live monitor cards. Foreground cards stay pinned above
+the composer, so they don't scroll away as the reply grows. Active background
+tasks use a compact **Background task** button above the composer; tap it to open
+a sheet with every running watcher and its details. Cantrip Home moves this into
+its top-left **Background** button instead. When a subagent finishes,
+its card moves into its reply at the point it ended, after the paragraph that
+was being written. Each card shows the subagent name, status, its latest
+reasoning step, elapsed time and token count.
+Expand a card for its reasoning steps, the latest subagent message or an error,
+and tap **Stop** on a running or waiting card to stop just that subagent.
+
+### Cantrip Home
+
+**Cantrip Home** is the default lane, backed by one permanent, hidden session on the
+paired Mac, with every project tab in its drawer (above). Turn it on in the Mac Cantrip
+settings. It keeps the model selection, tools, attachments, voice, input requests and
+streaming chat of tabs, and uses bottom **Chat**, **Tasks**, **Artifacts** and
+**Builds** destinations. These use Apple's native Liquid Glass tab bar, which moves into
+the system vertical edge automatically on iPhone Duo.
+
+Home's chat header features **Pip**, a mascot: a fluffy purple hooded plush with
+a star pin, shown large and centered above the conversation with a bold name
+pill, Muse-style, while glass **Background** and menu buttons float in the top
+corners. Pip also greets you in an empty chat and names the
+composer ("Message Pip…"). Messages rest below it and scroll softly
+underneath. Tap the mascot or pill to switch backends. Its expression follows
+the session and changes as a run moves between steps: blinking at rest,
+thinking with sparkles while reasoning, scanning with a magnifying glass while
+reading or searching, spinning gears with focused brows while running commands
+or editing, a typing bubble while the reply streams, leaning in while you
+dictate, chatting while a reply is read aloud, curious when Cantrip needs your
+answer, worried with a sweat drop after an error, and dozing while
+disconnected; it hops happily when a reply finishes. VoiceOver reads the same
+status, except work, which is announced only by the status row above the
+composer; Reduce Motion or Low Power Mode holds a still pose. While a run
+streams, its status shows only above the composer, so the header stays
+translucent. Choose **Customize Mascot** from Home's menu to switch
+looks: the default **Starry Plush**, a green **Dino Hoodie** with felt
+spikes, hood eyes and soft teeth, or **Panda Kitty**, a blue-grey British
+Shorthair cat with a round cartoon face, big copper eyes and whiskers in a
+panda onesie with round black ears, pink toe-bean paws and a bamboo-leaf clip,
+whose tail sways with its mood and puffs up when something goes wrong. A live preview cycles through each mood, and
+you can rename Pip there too (up to 20 characters; blank restores Pip). Choices
+are saved on the device. Backend menus and Settings still call the lane Cantrip
+Home.
+
+On a cold launch (not when resuming from the background), the launch screen
+shows Pip in the Dino Hoodie on black, in light and dark mode alike, since the
+app is dark-only. The splash then picks up from that exact frame: Pip hops
+hello and the **Cantrip** wordmark fades in, and about a second later
+everything fades into the app. The app restores and reconnects underneath the
+whole time. The splash leaves as soon as the visible chat is ready (1–1.5 s
+total), never waits on a slow reconnection, and skips straight to the target
+for notification and link launches. Tap it to skip. With Reduce Motion or Low
+Power Mode, Pip stays still and the splash only crossfades. VoiceOver ignores
+it. `LaunchPip` in the asset catalog is rendered from `CantripLaunchPipBadge`.
+After changing Pip's renderer, regenerate it with
+`TEST_RUNNER_CANTRIP_LAUNCH_ART_DIR=<dir> xcodebuild test ...
+-only-testing:HermesTests/CantripLaunchSplashTests/testRenderLaunchArt`, then
+copy the PNGs into `LaunchPip.imageset`. A pixel test fails if the asset and
+the splash's first frame drift apart.
+
+When replies from different threads interleave (a background agent finishing
+after you've moved on, or a handoff's result card), Home draws them like inline
+replies in Messages: a reply from another thread quotes the prompt that started
+it in a small blue bubble, joined to the reply by a curved line in the left
+margin. Replies right after it in the same thread don't quote it again: the line
+runs on past them and curves into the last one. That prompt says **N Replies ›**
+under it. Tap either to open the
+whole thread over the blurred chat (the prompt and every message in it, whole);
+**✕** closes it. The thread comes from the Mac, so it opens even when the
+prompt is in older history that hasn't loaded, and it refreshes while open.
+Gateway Mac shows the same over its window.
+
+Background work stays out of Home's chat. The top-left **Background** button
+shows a count and pulses while anything runs; tap it for one sheet with the
+chat's own watchers (with **Stop**), queued runs, and recent scheduled-task and
+incident runs from the Mac's hidden background conversation with their status,
+timing and full result. **Full Log** opens that conversation. Scheduled and
+incident runs need Cantrip host v1.0-121 or later.
+
+When a background run needs you, the **Background** button shows a **?** badge,
+and the sheet lists the run under **Needs your input** with its approval or
+question right there: **Approve once**, **Deny**, a choice, or a typed answer.
+The answer goes to that run's hidden session, which continues; nothing opens as a
+Remote tab. A Tasks row whose run is waiting shows **Needs your input** with
+**Respond**, which opens the same request. The push for a background run's
+request (**Cantrip Home needs your input**) opens Home's Background list on that
+run. Answering in place needs Cantrip host v1.0-131 or later; on older hosts,
+**Open** shows the live run, which now stays open while it polls.
+
+Home reads each message for intent. Questions, status checks and other
+references to a project are answered right in Home. When you ask for changes to
+a project that has an open Cantrip tab, Home hands the work to that tab
+and shows a nested task card under its reply: live status while the tab works,
+the tab's result when it finishes, and **Open tab** to jump straight to it.
+
+Create automations or structured trackers conversationally in Chat. Automations
+can use one-time, interval, or weekday schedules. A tracker carries a validated
+field and presentation schema, so Tasks renders native searchable list, detail,
+add and edit screens without task-specific app code; records can also be updated
+through Chat. Long-text values use full-width, left-aligned blocks so generated
+bullets and multi-line summaries remain readable. Tasks still supports review,
+editing, pause, resume, deletion and
+recent run outcomes. Touch and hold any task, then drag it to reorder the list;
+VoiceOver offers **Move up** and **Move down** actions. The drop shows
+immediately, is saved on the Mac, and syncs to other devices; a failed save
+restores the previous order. Reordering needs an updated Mac host
+(`supportsReordering`). Scheduled results appear in the Home conversation.
+Documents and media created as Home deliverables are collected automatically in
+Artifacts. Images and videos show thumbnails (videos with a play badge and
+duration); documents and audio keep type icons. Thumbnails load lazily, at most
+three at a time, and are cached in memory and on disk until the file changes;
+unpairing deletes them. An updated Mac host is needed for thumbnails; older hosts
+show the type icons. Images open in the full-screen viewer, and everything else
+opens in the system preview. The menu on each artifact (or touch and hold) saves
+the original file: **Save to Files…** and **Share…** (AirDrop, Mail, other apps)
+on iPhone and the Duo, **Save As…** in a Save panel opened in Downloads on
+Gateway Mac. Artifacts in a folder, such as a knowledge graph with its data and
+playbook, also save or share the whole folder as one zip. Files come straight
+from the paired Mac over Tailscale or the encrypted local network and are written
+to disk as they arrive; nothing gets a public link, and the temporary copy is
+removed once the share sheet or Files closes. The same menu can permanently
+delete the file from the paired Mac.
+
+**Builds** lists every app build on the Mac's private over-the-air install page
+(`~/Sites/ota`, published with `ota-publish.py`), read through the paired host's
+`GET /api/v1/home/builds` route. One card per page entry shows the app icon, title,
+version (build), publish time, size, profile type and note, with a prominent
+**Install**; older builds sit behind a disclosure, and pull to refresh reloads the
+list. Install first checks that the page answers (it is tailnet-only), then hands
+the build's `itms-services` link to iOS, which shows its install prompt; if Tailscale
+is off, the build is gone, or iOS can't open the link, an alert says what to do.
+Installing Cantrip Agent itself asks first, and entries sharing a bundle ID (Brane
+Controller and Crooner) say that one replaces the other. The tab is read-only and
+iPhone-only (Gateway Mac has no installer); icons are cached by build in Caches.
+
+The full-screen image viewer (Artifacts and chat images) works like Photos: at
+minimum zoom, drag the image up or down and it shrinks while the screen behind
+shows through; let go past a short distance or flick to close it back into its
+thumbnail, or let go early to spring back. While zoomed in, drags pan instead.
+**Done** and VoiceOver's two-finger scrub (or the **Close image** action) also
+close it, and Reduce Motion replaces the zoom and shrink with fades. Real-touch
+checks live in the `HermesUITests` scheme, which launches a DEBUG-only fixture
+(`-CantripUITestImageViewer`). Scheduled work runs only while
+Cantrip is running on the Mac.
+
+### Reasoning steps in replies
+
+Cantrip replies show a **Reasoning** section with one titled step for each
+reasoning block, usually one per model call, instead of tool calls such as
+shell commands. While a reply runs, the collapsed section shows the latest step.
+Tap a step to read the rest of it. Tool calls are still shown on the Mac and in
+the browser Remote. A Mac host without this update shows all of a reply's
+reasoning as one step.
+
+### Prompt context
+
+A small line under each prompt you send shows how many tokens were in the
+model's context and how full its window is, for example **38.2k tokens of
+context · 19% of 200k**. Tap it for the breakdown: system instructions, tool
+definitions, the conversation so far, this message's estimated size and how much
+of it Cantrip added (memory and context), then the run's model calls, input
+tokens with the cached share, output tokens and the latest context size. Copilot
+tabs report the full breakdown; Claude Code reports totals. A Mac host without
+this update shows no line.
+
+### Video analysis
+
+Use the composer's **+ > Video Library** or **Choose Video File** to attach
+one MOV/MP4 clip, up to **100 MB and five minutes**, instead of images. Tap its
+preview to play it locally, or remove it before sending. Add a question if
+desired; a video-only message asks the agent to analyze the clip.
+
+The original video is uploaded to your paired Mac, including its **audio and
+metadata**. Cantrip verifies its SHA256 and decodes four oriented, timestamped
+preview frames for an initial visual overview. These are sparse samples, not
+continuous video understanding. The agent also receives the original file path
+so it can inspect motion, additional frames, or audio with its available tools.
+**Audio is not automatically transcribed or analyzed.** Sent/queued messages
+show the video description, sample times, and tappable frame thumbnails.
+
+Preparation/upload progress and cancellation appear above the composer.
+Transfers use confirmed, idempotent 1 MiB chunks; retrying a retained draft
+resumes from the Mac's confirmed offset. Tab polling continues during upload.
+No agent prompt is submitted until uploading and preview preparation succeed.
+The final message is still a one-shot mutation: if its acknowledgement is lost,
+check the session before resending. Pausing or backgrounding the app cancels a
+pending video upload, keeping the draft for retry while the app remains alive.
+
+Originals live in `~/.cache/Cantrip/remote-videos/` on the Mac; preview images
+use the existing image attachment store. Sent videos remain available to
+queued/recovered work. Unsubmitted uploads reserve at most 500 MB total;
+uploads older than 24 hours are reclaimed when starting another upload.
+Drafts are temporary and scoped to the selected server/session; this is not a
+background upload service or a persistent offline outbox.
+
+Both apps must be updated, and the Mac host reopened. A Claude, Copilot, or
+Codex backend is required (`supportsVideoAttachments`). Legacy hosts are
+blocked before uploading; videos cannot accompany shell/slash commands or
+image attachments. The browser/Mac Remote composer remains text-only.
+
+### Usage limits (Claude Code and Copilot)
+
+The **usage gauge next to the Local/Remote antenna lane picker** shares its
+icon size and row beneath the chat title. It shows **AI credits used / total**
+in compact form (for example, `35.5K / 1M`). Used credits are total minus remaining;
+additional usage is reported separately. Tap it for the full credit amounts, a secondary percentage
+progress bar, the reset date/time, additional-usage status, account, and
+last-checked time. It works from every chat lane without switching sessions.
+
+The sheet (**Usage Limits**) also shows Claude Code's 5-hour session and weekly
+limits with reset times, and on a Mac running Claude Code the header gauge
+leads with the Claude window closest to its limit (for example `Week 32%`).
+
+This reads the accounts signed in on your **Cantrip Mac** (Claude Code and the
+`gh`/Copilot sign-in), not a phone login or a per-chat token estimate. Existing
+Remote pairing is used for the read-only `/api/v1/copilot/usage` endpoint;
+credentials never reach the phone. Claude's limits need Cantrip 1.1.4 or later;
+an older host shows only the Copilot allowance, and a much older one an explicit
+update notice.
+
+The Mac refreshes at most once per minute, shared with its Usage panel. Mobile
+polling stops in the background. Pull-to-refresh reads the host cache without
+bypassing its throttle. Failed or old readings say **Stale**; unavailable data
+shows **--**, not zero or a full allowance. Re-pairing clears the old account.
+Credit amounts use the account's reported units directly, with up to two decimal
+places in details. Positive amounts below `0.01` display as `<0.01`, not zero.
+Missing amounts are explicitly unavailable; they are not estimated from rounded
+percentages. Legacy request plans retain request labels, and unlimited plans
+show **Unlimited**. Reset dates use your local time, and remaining budget does
+not rule out short-term/model throttling.
+
+### Cantrip memory
+
+Open **hamburger menu > Cantrip Memory** to browse the connected Mac's saved
+environment/conventions (`MEMORY.md`), preferences (`USER.md`), procedure notes,
+and daily session history. The list shows filenames, sizes, and last-updated
+times; search filters filenames across the vault, not just the loaded page.
+Core files also show their character usage and configured cap when opened.
+
+This is read-only: it does not edit files, create a memory folder, record
+retrieval usage, or send a prompt to an agent. Saved files remain readable when
+memory is disabled on the Mac. Only regular Markdown files in the configured
+memory folder and its `sessions` directory are exposed; hidden files, symlinks,
+hard links, and other directories are excluded.
+
+The list loads 50 files at a time; **Load more files** fetches the next page.
+Opening a file requests one UTF-8-safe 16 KiB page; **Previous** and **Next**
+read the rest without downloading the entire folder. Each page ends at a line
+break (the next page starts there), so it renders on its own.
+
+Files show as formatted Markdown (headings, lists, tables, code, links) by
+default; **Markdown source** shows the exact saved text instead, and the choice
+is remembered. A code block that continues onto the next page stays a code
+block there. Both views allow selection and load nothing from outside the Mac:
+images show a placeholder, and only web and mail links open, in the browser.
+If a file changes between pages, **Reload file** starts with its current
+contents rather than joining different versions. Refresh/retry failures are
+visible, and changing the paired server clears the viewer's state.
+
+Requires updated Cantrip Agent and an updated, reopened Cantrip host. Older
+hosts show an update notice. Uses existing paired LAN/Tailscale access; memory
+reads have a 20-second content deadline and do not block chat polling or sends.
+
+### Skills & Rules
+
+Open **hamburger menu > Skills & Rules** under **Cantrip Mac** (or the same action in
+a tab's menu) to see the one skills library Cantrip on the Mac gives every backend.
+Skills are Mac-wide, not per tab, and are edited on the Mac (`cantrip skills edit NAME`).
+
+- Each skill has an on/off switch (for every backend), its description, which backends see
+  it ("Seen by: …" or "No backend sees it") and any problems as warning lines.
+- **Relink** links everything again and briefly lists what changed.
+- **Folder rules** lists each folder's rules file and its line count, with the file it's
+  mirrored to.
+- **Drift** lists rules files that have drifted; **Check now** runs the check on the Mac
+  ("Checking…" while it runs, then "Last checked …" or "No drift found").
+
+The sheet reads every 10 seconds while open, and every 2 seconds while a drift check runs.
+A refused change shows the Mac's reason; nothing retries on its own. Macs whose Cantrip
+doesn't share skills yet show an update notice instead. Cantrip Gateway Mac and Windows
+offer the same screen.
+
+### Saved Private Local tab in Cantrip Remote
+
+The updated Mac provides a permanent **Private Local** tab. It keeps conversation
+history and run recovery on the Mac while routing inference **only to your
+self-hosted Ollama server**. "Local" is the self-hosted label, not a requirement
+that inference runs on the Cantrip Mac. The server can be on another computer
+or NAS. It never uses the legacy Hermes Private Local lane or falls
+back to Copilot/cloud models; Hermes does not need to be enabled.
+
+Open this tab's **Chat menu > Private Local Settings**, or its tab actions, to
+set your self-hosted server's HTTPS base URL, installed model, context tokens and
+system prompt. **Load server models** reads that server's installed models through
+Cantrip. Install models on the chosen server, which must be reachable from the
+Cantrip Mac. LAN/Tailscale HTTPS URLs and reverse-proxy base paths are supported.
+HTTP is allowed only on loopback; `http://127.0.0.1:11434` still means the Mac,
+not the phone. Save while idle; stale/busy writes are rejected and uncertain
+writes are never replayed. The same configuration is available in Cantrip.
+
+This tab cannot be closed, cleared, unlocked or changed into a cloud tab.
+It is text-only: tools, shell/slash execution, Council, shared-memory logging,
+push summaries and automatic external content are disabled. Auto queues locally,
+and drafts stay with their tabs. Model input context remains bounded even though
+the full saved conversation is retained. The configured Ollama service must be
+yours and trusted, not a managed-cloud inference gateway. Cloud aliases,
+unencrypted non-loopback URLs and automatic redirects are refused; TLS
+certificate validation stays enabled.
+
+Remote access remains **Cantrip Agent -> Cantrip Mac -> self-hosted model server**.
+This is saved self-hosted chat, **not incognito or additional encryption at rest**.
+The Mac account, backups and paired devices can access its history. It is separate
+from Cantrip's older unsaved Private mode. Selected conversation context is sent
+to your configured server for inference, so that server's logging/storage policy
+also applies. Updated native builds and a host reopen are required.
+
+### Per-tab model settings
+
+Open **Chat menu > Model Settings**, or use **Model Settings** in a tab's
+actions, to change its model, reasoning effort and context window. **Model** opens a
+picker: **Auto (Mac default)** first (it follows the Mac), then the tiers **Fast**,
+**Standard** and **Deep** with what each is for and the model it runs now, then the Mac's
+models grouped by the tier that lists them, each with its context window and Copilot's
+price. **Effort** is a segmented control (a menu when it doesn't fit), and the context window
+is under **Advanced**. The model list is read again from the Mac each time the sheet opens.
+
+Each change saves on the Mac at once, for this tab only, while the tab, queue and shell
+are idle; the Mac rejects busy changes and the sheet shows why. Uncertain writes are never
+replayed. Switching servers closes the sheet. The usage-limit backups, which are for every
+tab, are in **Settings › Models**.
+
+The next prompt uses the saved options without clearing the visible transcript.
+Copilot rebuilds its runtime with recent conversation history, rather than
+transferring the previous model's full internal context. Standard/Long labels
+show input budgets; the advertised maximum is shown separately. Long context
+may cost more. **Refresh models** reads account metadata without sending a
+prompt; errors retain the cached catalog.
+
+### Slash commands and skills
+
+Type `/` at the start of a tab's or Home's composer to list the commands, custom commands and
+skills of that tab's backend on the Mac (Copilot, Claude Code or Codex), filtered as you type.
+Each row shows the command, its argument hint, a description and where it comes from.
+Tapping a command that takes no argument sends it right away; anything else is inserted so
+you can type the argument. **/model** opens the tab's **Model Settings** where the tab has
+them. Commands Cantrip can't run from a phone stay listed but dimmed, with the reason. The
+list closes once you type a space, never shows for paths such as `/Users/...`, and holds
+at most 50 rows in a scrollable area above the composer, about two and a half rows tall.
+On iPhone Duo unfolded with the sidebar open there is no pop-up: the sidebar's **Skills** section
+(grouped as *Your skills & commands*, *Built-in* and a collapsed *Can't run here*) filters as
+you type, highlights the best match and opens itself if collapsed; with a hardware keyboard
+Up/Down, Tab, Return and Escape drive the highlight as on Gateway Mac. Tapping a skill there
+follows the same rules.
+
+The list comes from `GET /api/v1/sessions/{id}/commands`, cached per tab for 30 seconds and
+refetched when the tab's folder or model settings change. Older Macs without
+`supportsBackendCommands` show no list, and a failed request never blocks sending: the text
+is sent exactly as typed. Logic and matching rules live in
+[`Sources/BackendSlashCommands.swift`](Sources/BackendSlashCommands.swift). Debug builds
+launched with `-CantripUITestBackendCommands` serve a generic fixture list, and
+`-CantripUITestComposerText /pl` types into the composer for screenshots
+(`-CantripUITestSlashScrollToEnd`, `-CantripUITestHardwareKeyboard` and
+`-CantripUITestChooseSlashCommand usage` scroll, highlight and choose a row).
+
+### Mention a tab with @
+
+Type `@` at the start of a word in Home's or a tab's composer to list the open tabs you can
+point the message at (child tabs too, never private or Private Local tabs, Home itself or the
+tab you're writing in), in the tab list's order and filtered as you type (case and accents
+ignored; title, then word starts, then anywhere in the title, then the project folder; at
+most 8 rows). Each row shows the tab's status glyph, its title and what tells it apart:
+*Child of …*, the project folder, *Working* or *Needs your answer*. Picking one inserts
+`@Title ` and a chip above the composer; the chip's ✕ removes the mention and its text, and
+deleting the text drops the chip. Two picked tabs with the same title get distinct labels
+(`@Sony TV (tv-two)`, else `@Sony TV 2`). An `@` inside a word (`a@b.com`) never opens the
+list, and a space with no match closes it. With a hardware keyboard, Up/Down move the
+highlight, Return or Tab picks (Return doesn't send while a row is highlighted) and Escape
+hides the list for that `@`. The list shows above the composer in every layout, iPhone Duo's
+sidebar layout included.
+
+Sending turns each picked mention into `@[Title](cantrip-tab:<UUID>)` inside the normal
+message text (same endpoint), so Cantrip on the Mac acts on exactly that tab. Transcripts,
+queue rows and thread quotes show it as a bold **@Title** (a link that opens the tab while
+it's open); copies and previews read `@Title`. Text typed by hand without picking stays
+plain. Needs a Mac whose sessions report `supportsTabMentions` (and `mentionable` on the
+tabs); older Macs show no list. Logic in
+[`Sources/CantripTabMentions.swift`](Sources/CantripTabMentions.swift), views in
+[`Sources/CantripTabMentionViews.swift`](Sources/CantripTabMentionViews.swift).
+
+### Start fresh in a tab
+
+**Start Fresh** (after **Model Settings** in the Chat menu and a tab's actions) keeps the
+tab's name, folder, model settings, lock and every visible message, but its next prompt
+starts a brand-new model session: nothing above the divider Cantrip adds (**Started fresh —
+earlier messages aren't sent to the model**) is sent to the model. Use it when a tab keeps
+failing because of an earlier turn. When the latest error repeats the previous one, that
+error also shows **Start Fresh** and **Change Model** (**Private Local Settings** for the
+Private Local tab) buttons.
+
+Start Fresh is unavailable while the tab is working or has queued messages, and in Cantrip
+Home. It requires the host's `supportsStartFresh` capability; older Macs show an update
+notice. The Mac's reason is shown if it refuses, and nothing is deleted.
+
+### Continue a failed task
+
+When a task fails or times out on the Mac, including after a dropped network, it doesn't retry
+by itself. It stops on its error message, which shows **Continue**, and messages queued behind it
+wait. Tap **Continue** to pick the task up from where it stopped; the queue runs after it. To go
+ahead without it, use **Send now** on a queued message: the failed message keeps **Continue**, so
+you can come back to it later, and it continues as a new run with the original request.
+
+Continue checks with the Mac first, so a row that no longer offers it (the task already continued,
+or the tab is working) is refused with the Mac's reason, and nothing is sent. Macs without
+`supportsContinueFromMessage` keep the tab's **Resume** instead; the tab's Resume is hidden while
+an error row offers Continue.
+
+### Delete a message
+
+Long-press a prompt or an error in a tab or Cantrip Home's chat (right-click on Gateway Mac) and
+choose **Delete Message**, then **Delete** to confirm. Cantrip on the Mac removes the message and
+the rest of its exchange (the prompt and its reply) from the tab's history, so the model doesn't
+have them anymore; this can't be undone. To delete a reply, delete its prompt. The same menu has
+**Copy**. Replies have no menu, so their text keeps the system's selection (partial copy, Look Up,
+Translate). Delete Message shows only while the tab isn't working, on Macs with
+`supportsDeleteMessage`, and never on Start Fresh dividers, handoff results or child tab cards.
+Messages deleted on another device disappear here too, from loaded older messages and open
+threads as well. If the Mac refuses (the tab started working, or the message is already gone),
+its reason is shown and nothing changes. Logic and the menu are in
+[`Sources/CantripDeleteMessage.swift`](Sources/CantripDeleteMessage.swift).
+
+### Update and rebuild the Cantrip Mac
+
+Open **hamburger menu > Update & Rebuild Cantrip** under **Cantrip Mac** for the selected
+saved Mac. The screen shows running/installed build identities, source branch,
+local edits, newer commits after **Check for Updates**, and live build output.
+
+**Update & Rebuild** fetches `origin/main`, fast-forwards a clean `main` checkout,
+and runs the Mac's existing signed `make app` packaging. It refuses dirty or
+diverged source rather than stashing, resetting, or rebasing your work.
+**Rebuild Current Source** builds local edits without pulling. Both leave the
+current Mac app running; use the separately confirmed **Restart Cantrip** to
+activate the installed build and reconnect.
+
+Builds and restart require every Mac tab, queue, and shell command to be idle,
+including private tabs. Restart checks again just before quitting; no work is
+automatically stopped. The Mac owns the job, so closing or backgrounding
+Cantrip Agent does not cancel a build. Reopen this screen to recover progress.
+If an acknowledgement is lost, **Retry Pending Request** reuses the saved request
+ID, not a new build. Status from the previous connection remains labeled stale
+until a refresh succeeds.
+
+Requires a one-time update of both apps and reopening the Mac host to enable
+the maintenance API. `Cantrip.app` must run from its source checkout with
+Git access, Xcode tools, and signing already configured on the Mac. Commands and
+paths are fixed by the host, not supplied by the phone. This does not install
+Cantrip Agent updates or upload TestFlight builds.
+
+### Cantrip input requests
+
+When a supported agent needs an answer, its question and suggested answers
+**extend the normal composer**, sharing one lightly rounded rectangular surface.
+Type directly in the **Your reply** field with **Auto** delivery, including images,
+or tap a rectangular suggested answer. Long questions and choices scroll within
+the extension so the message field stays available. With multiple questions,
+use the question-count menu to choose one. There is no separate **Reply in chat**
+button or answer form. **View Questions in Chat** in tab actions opens the
+conversation, not a modal. Approve/Deny and device-login actions remain inline.
+Only **passwords and passphrases** open the **Secure Input** modal.
+The same request appears on the Mac and in browser/Cantrip Remote; only the first valid answer is accepted.
+Requests expire after ten minutes and are cancelled by Stop, redirect or
+execution termination. They do not survive a host restart or replay automatically.
+
+Supported: native Copilot tool permissions/questions, Claude Code permissions/
+AskUserQuestion, ACP allow-once/deny, and verified system OpenSSH/`sudo -A`
+askpass requests from supported Cantrip-run processes. Existing automatic
+permission settings remain in effect; turn **Act on my behalf** off on the Mac
+for manual approvals. Private Local remains tool-free. Arbitrary terminal
+password prompts and macOS Touch ID/Keychain/TCC dialogs are not forwarded.
+
+Secure input goes to the verified waiting program, not the LLM, transcript,
+run journal, command arguments or notification payload. Ordinary question
+answers do go to the agent and are saved in chat history: **do not enter credentials in a question or chat**.
+Secure text clears when submitted or dismissed. Responses pin the original
+saved Mac/tab/request; stale requests fail and uncertain responses are not
+retried or silently turned into queued tasks. An older host can still accept
+text-only question replies, but attached replies require the updated Mac host.
+Explicit Queue/Redirect/Inject delivery remains separate from answering a question.
+
+For GitHub, use **Settings › Tools & sign-ins › GitHub on your Mac › Sign In…**
+(it runs in Cantrip Home and opens it), or send `/login github` in any tab. The
+Mac's `gh` CLI starts device login; the request shows the GitHub page and
+temporary code. GitHub Builds points to the same row when the Mac isn't signed in. Password/2FA stay on GitHub's website, and only
+the CLI's successful exit confirms login. The Mac may store the resulting
+credential through the normal GitHub CLI credential store.
+
+### Face ID and Mac Permissions / View Mac
+
+Cantrip Agent requires **Face ID or Touch ID** before approvals, action confirmations,
+password/passphrase submission and starting a Mac viewing/control session.
+Ordinary question replies in chat do not require biometrics. Biometrics
+must be enrolled; authentication cancellation/failure sends nothing. Deny and
+Cancel remain available. This is an app-side guard, not a remotely transferable
+macOS authorization or device-attested signature.
+If Face ID finishes before its system sheet closes, Cantrip Agent waits for the
+app to become active before proceeding. Backgrounding or cancelling still
+requires fresh authentication.
+
+Open **hamburger menu > Mac Permissions & View Mac** under **Cantrip Mac**, or the same action
+in a tab's menu. See Cantrip's permission status and supported Keychain issues,
+then open the relevant settings on the Mac. Full Disk Access needs manual review.
+Touch ID status refers to the Mac; it cannot be satisfied with phone Face ID.
+
+View Mac is disabled until someone enables **Allow paired clients to view and
+control this Mac** in Cantrip settings on the host. Screen Recording is required
+for viewing, Accessibility for control. Once enabled, holders of the pairing
+token can start sessions; keep that token private. Choose view-only or control,
+authenticate, pick a display and zoom. Tap the destination field/window before
+typing or sending keys/scroll. Typed text goes to the Mac's actual focused
+field: verify focus before entering a password.
+The keyboard/pointer control preference is remembered on this device, but is not
+an active session or a permission grant. Each session requires authentication;
+**Done** ends the current session, and reopening Mac Access does not reconnect.
+
+Sessions use in-memory encrypted snapshots about once a second, with basic
+click/right-click/double-click, text, navigation keys and scroll. No images or
+typed input are saved by Cantrip/Cantrip Agent or sent to an AI model by this
+feature. The receiving Mac app may still store what you type. Keys and frames
+are discarded when the view closes/backgrounds. Host leases expire after five
+minutes or60seconds without activity; the Mac can stop them immediately.
+Layout changes, stale frames and replayed input are rejected.
+
+The viewing key travels over the existing paired transport: use trusted
+LAN/Tailscale/HTTPS access. This is not a separately deployed end-to-end relay,
+and a third-party TLS-terminating proxy remains in the trust path.
+
+Supported missing-permission/Keychain-read conditions also generate generic
+**Cantrip Mac needs attention** notifications under the existing input-alert
+setting. Tap to open Mac Access; it never automatically starts capture or
+control. The app does not watch every other application's dialogs. Protected
+macOS dialogs may block capture/input and still need local interaction.
+
+### Cantrip completion and input alerts
+
+Select a saved Mac, then enable **Settings › Notifications › Cantrip alerts > Completion and
+input-needed alerts**. Successful completion of a tab's entire queue sends its
+name and a brief final-answer excerpt. Tap the notification to reopen the
+correct saved Mac and conversation. Private, stopped and failed runs do not
+generate success notifications. This does not apply to the Hermes gateway.
+
+The app icon's badge counts tabs with an alert you haven't looked at yet,
+finished or asking. Opening a tab (here, in Cantrip Gateway Mac or in the Mac's
+panel) clears it from the badge on every device and from Notification Center.
+If no badge appears, turn on **Badges** under iOS Settings > Notifications >
+Cantrip Agent. Badges need an updated Mac host.
+
+**Cantrip needs your input** alerts contain only a generic notice, not the
+question, command, tab title, password or login code. Tapping opens the original
+Mac/tab's conversation, with the pending question or secure-input button inline;
+it never opens an ordinary-question modal or approves anything. A resolved/expired
+request cannot be answered from an old alert. Unsent attention retries are
+removed when resolved; previously delivered Apple banners may remain.
+
+Alerts use **Apple push from the Mac**, not background polling. They require
+the updated host with an APNs signing key configured at
+`~/.config/Cantrip/apns.json` (see the Cantrip remote-control guide), the Apple
+Push Notifications capability/provisioning for `com.itzhoang.hermbot`, and a new
+signed Cantrip Agent build. Debug uses sandbox APNs; Release/TestFlight uses
+production. An App Store Connect upload key is not an APNs key.
+
+The setting is per saved Mac, persists while the phone is locked or another
+Mac is selected, and requires a connection to disable it before removing that
+server. A saved Mac whose pairing token is missing on this phone (for example
+after moving to a new iPhone) can be removed without that step: removal forgets
+the alert setting on this phone only and never asks the Mac to unregister, which
+could stop another phone's alerts. A phone set up from another phone's transfer
+or backup gets its own alert registration; alerts that were on resume after you
+re-enter that Mac's pairing token. **Check notification setup** shows missing
+configuration/provider errors rather than pretending alerts are ready. Mac and
+phone need internet; opening the tab still requires your paired LAN/Tailscale
+connection. The Mac
+must remain running with Remote enabled. Apple delivery and Focus/Lock Screen
+settings determine when the alert appears; delivery is not guaranteed.
+The tab title and preview pass through Apple and can appear on your Lock Screen.
+There is no extra AI summarization request or third-party notification relay.
+
+### Cantrip Tabs widget and Live Activity
+
+Add **Cantrip Tabs** from the Home Screen widget gallery in medium (4x2) or
+large (4x4) size. It lists the selected Mac's tabs: needs input first, then
+running tabs with a live timer, then finished tabs (**Done**, **Failed** or
+**Stopped**) with how long ago they ended. The large size adds each running
+tab's current step, subagent count and queued prompts. Tap the widget to open
+Cantrip Agent, or tap a row to open that tab.
+
+While any tab is running or needs input, a **Live Activity** shows the same rows
+on the Lock Screen and in the Dynamic Island, with a timer for the longest
+running tab. It ends about a minute after the last tab finishes and stays on the
+Lock Screen for 15 minutes. Turn it on or off with the **Live Activity** switch
+in the Tabs list, the hamburger menu, or **Settings > Widget and Live
+Activity**. Turning it on while tabs are running starts it right away; iOS
+Settings can also disable Live Activities for the app.
+
+The Mac refreshes both with Apple push (widget refreshes and Live Activity
+updates), using the same `~/.config/Cantrip/apns.json` key as alerts, and needs
+an updated Mac host (`/api/v1/live-status`). iOS budgets widget refreshes, so
+the widget can lag by a few minutes; timers keep counting on their own. Away
+from the app, the widget reads status over the saved Tailscale URL; a
+local-network-only pairing refreshes the widget whenever the app is open.
+Private tabs are never included. Tab titles and current steps can appear on the
+Lock Screen and are hidden when iOS redacts widgets on a locked device.
+
+### Cantrip on Apple Watch
+
+The **Cantrip** watch app talks to Cantrip Home: tap the microphone, speak, and
+the watch sends the clip to your Mac, which transcribes it and sends it to Home
+like a typed message (it shows in Home on every client). The watch shows what
+it heard and Home's reply, and speaks the reply (turn off **Speak replies** in
+the watch's settings to only read it). It stops listening after a short pause,
+or tap again to send sooner. **Ask Cantrip** also works from Siri and
+Shortcuts on the watch ("Ask Cantrip").
+
+Set up: pair Cantrip Agent on the iPhone with your Mac over Tailscale (an HTTPS
+`*.ts.net` URL), open Cantrip on the watch and tap **Set up with your iPhone**.
+The watch makes its own signing key (kept in the Secure Enclave), and the
+iPhone registers it with the selected Mac using its pairing token; the token
+never leaves the iPhone. Remove a watch from Cantrip on the Mac.
+
+The watch reaches the Mac through the iPhone's Tailscale URL while it's using
+the iPhone's connection. To use it away from the iPhone, turn on the internet
+route in Cantrip on the Mac; it serves only the watch's voice requests, each
+signed by the watch. Needs an updated Mac host (`/api/v1/voice`,
+`/api/v1/watch/devices`).
+
+### GitHub build queue
+
+Open **hamburger menu > GitHub Builds** from any chat lane to see builds
+across the Mac's configured app runners. **Building now** shows active jobs,
+followed by one numbered **Build queue** across all apps, including workflows
+whose runner is not yet known. Each entry includes the app, workflow run/attempt,
+job/current step, branch/commit, elapsed time, and **Open in GitHub**.
+The runner list shows online/offline, busy/idle, and when each app was checked.
+
+Queue positions are estimates: jobs with available runners come first, then
+jobs waiting for busy runners, then other workflow/offline waits, with stale
+entries last. Each group is ordered by workflow creation time, oldest first.
+**Up next (estimated)** marks the first eligible job on an online runner; each
+entry explains what it is waiting for. Blocked or unknown-eligibility workflows
+are not presented as up next. Incomplete, failed, or stale readings suppress
+the up-next estimate and never claim an empty queue.
+
+This is read-only and separate from the chat's queued prompts. It does not
+change build scheduling: GitHub does not expose a guaranteed cross-repository
+execution order, and separate runners can start in parallel.
+The aggregate queue uses the existing host endpoint; no additional Mac update
+is needed if GitHub Builds already works. The screen refreshes while
+open and foregrounded; the Mac contacts GitHub at most once a minute.
+Pull-to-refresh reads the latest cached snapshot without bypassing that limit.
+Failures keep explicitly stale data rather than claiming the queue is empty.
+
+This feature requires an updated, reopened **Cantrip Mac host** as well as
+Cantrip Agent. It uses the existing Remote pairing and the Mac's `gh auth login`;
+no GitHub token is entered into or sent to the phone. The host's
+`~/.config/Cantrip/github-builds.json` lists app/repository/runner mappings.
+See [host setup and permissions](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md#see-github-builds-in-agentgateway).
+An older host displays an update notice.
+
+---
+
+## Prerequisites
+
+- A running **Hermes agent** (`~/.hermes`) on a machine you control (Mac, Linux box, etc.).
+- **Xcode 26+** on a Mac to build the app, an **iOS 26+** device, and an **Apple ID** to run it on your device (a free account works for personal use).
+- An HTTPS path to the gateway, using a private network such as Tailscale/WireGuard
+  or an authenticated HTTPS tunnel.
+
+---
+
+## Part 1 — Set up the gateway (server)
+
+### 1. Generate an API key
+
+```sh
+openssl rand -hex 32          # copy the output — this is your API_SERVER_KEY
+```
+
+### 2. Enable the API server
+
+The api_server turns on automatically once a key is set. Add these to **`~/.hermes/.env`** (the key gate is `gateway/config.py` — `API_SERVER_KEY` set *or* `API_SERVER_ENABLED=true`):
+
+```sh
+API_SERVER_KEY=<paste the key from step 1>
+API_SERVER_HOST=0.0.0.0      # 0.0.0.0 so your phone can reach it; 127.0.0.1 = localhost-only
+API_SERVER_PORT=8642
+```
+
+> 🔒 The adapter **refuses to bind to a non-localhost address without a key** — so `0.0.0.0` is safe: every `/v1/*` request requires the Bearer key (constant-time checked). Only `/health` is open.
+
+### 3. Configure the Copilot execution lane
+
+The app requests named model routes so a future private-local conversation can
+never silently fall back to Copilot. Keep Copilot as the default for now:
+
+```yaml
+# ~/.hermes/config.yaml
+model:
+  default: copilot-shim
+  provider: ollama
+
+gateway:
+  api_server:
+    extra:
+      model_routes:
+        copilot-coding:
+          model: copilot-shim
+          provider: ollama
+          base_url: http://127.0.0.1:11437/v1
+```
+
+The **Private Local** lane remains disabled in the app until the gateway
+advertises a separate `local-private` route.
+
+### 4. Restart the gateway
+
+However you run Hermes — e.g. if it's a launchd service:
+
+```sh
+launchctl kickstart -k "gui/$(id -u)/ai.hermes.gateway"
+```
+
+…or just `hermes gateway run --replace`. Channels (Telegram/Discord/etc.) reconnect in a few seconds.
+
+### 5. Verify locally
+
+```sh
+KEY=<your key>
+curl -s http://127.0.0.1:8642/health
+curl -s -X POST http://127.0.0.1:8642/v1/runs \
+  -H "Authorization: Bearer $KEY" \
+  -H "Idempotency-Key: setup-check-1" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"copilot-coding","input":"say hi"}'
+```
+
+You should get `{"status":"ok",…}` and then a JSON reply. A request **without** the key must return **401**.
+
+### 6. Expose only the gateway over HTTPS
+
+Prefer a private Tailscale/WireGuard network. An authenticated Cloudflare
+Tunnel or another HTTPS reverse proxy also works:
+
+```sh
+cloudflared tunnel route dns <tunnel-name> agent.yourdomain.com
+# map agent.yourdomain.com → http://localhost:8642 in your tunnel config, then run the tunnel
+```
+
+The bearer key still gates every request. If the endpoint is publicly
+addressable, put an identity-aware access layer in front of it as defense in
+depth. Never expose the local-model or Copilot-shim ports directly.
+
+### 7. (Optional) Enable `/` suggestions + the Skills browser
+
+The app's command autocomplete and **Skills** list need a small extra endpoint. Add `GET /v1/commands` to `gateway/platforms/api_server.py` — register the route alongside the others and add this handler:
+
+```python
+async def _handle_commands(self, request):
+    auth_err = self._check_auth(request)
+    if auth_err:
+        return auth_err
+    from hermes_cli.commands import telegram_menu_commands, telegram_bot_commands
+    menu, hidden = telegram_menu_commands(max_commands=200)
+    core = {n.lstrip("/").lower() for n, _ in telegram_bot_commands()}
+    cmds = [{
+        "command": "/" + n.lstrip("/"),
+        "description": d,
+        "kind": "command" if n.lstrip("/").lower() in core else "skill",
+    } for n, d in menu]
+    return web.json_response({"object": "hermes.api_server.commands",
+                              "commands": cmds, "hidden_count": hidden})
+```
+
+```python
+# in the route-registration block:
+self._app.router.add_get("/v1/commands", self._handle_commands)
+```
+
+Restart the gateway. (Without this, chat + voice still work — you just won't see the suggestions/skills list.)
+
+---
+
+## Part 2 — Build & run the app
+
+```sh
+brew install xcodegen          # one-time
+git clone <this repo> && cd Hermes
+xcodegen generate              # creates Hermes.xcodeproj from project.yml
+open Hermes.xcodeproj
+```
+
+In Xcode: select the **Hermes** target → **Signing & Capabilities** → set your **Team** and a unique **Bundle Identifier** (e.g. `com.yourname.hermes`) → pick your iPhone → **Run** (⌘R). Trust the developer profile on the phone if prompted (Settings → General → VPN & Device Management).
+
+### Adaptive layouts and iPhone Duo
+
+The app supports portrait and both landscape orientations on iPhone, plus all
+orientations on iPad. Duo unfolded (the hinge open, upright or on its side) uses the system's
+vertical bar as a navigation rail: a **sidebar toggle** at the top, then **Settings** and the
+tab's menu, whose first item is **Model Settings**. The toggle opens
+and closes Gateway Mac's left sidebar with Pip, Home's sections, the tabs (with **+**), the open
+chat's **Skills** and the connection; the chat header keeps the title and state on the left and
+Stop and delivery on the right. The sidebar stays open or closed as you left it through folding,
+unfolding, rotating and typing. Home's sections (Chat, Tasks, Artifacts, Builds) stay at the
+bottom of the rail either way, never in a bottom bar. With the sidebar closed, the toggle shows the working or needs-input count the Tabs button would. Folded Duo (in
+either orientation, and while the keyboard is up) keeps chat full-width with
+sessions in the drawer: where the system supplies a
+vertical bar, Home's sections use the bottom of Apple's native adaptive toolbar with Tabs and
+the hamburger menu at the top; in a project tab the back pill uses the bottom and a separate
+Settings gear and the hamburger menu stay at the top, instead of duplicating controls
+above the conversation. The title, connection/usage row,
+and composer remain with the chat. In other display configurations the familiar
+header returns; regular-width iPad windows retain their session sidebar.
+
+All iPhones use one navigation stack and the session drawer, including landscape;
+iPad keeps its adaptive split navigation. This stable device-idiom choice avoids
+replacing navigation containers as Duo folds. Toolbar placement follows
+window-local system traits, not device names or main-screen dimensions.
+One navigation detail owns the conversation throughout those changes: folding
+does not select another tab, clear an attachment/text draft, or stop voice or a
+running reply. Interactive content stays within the system safe area, including
+asymmetric insets. Voice mode moves its
+microphone beside the reply in wide, short windows without restarting the
+conversation; its close button retains a 44-point target.
+
+The deployment target stays **iOS 26**. The project uses the selected Xcode's
+SDK, so installing another Xcode alone does not change command-line builds:
+check `xcodebuild -version` and `xcodebuild -showsdks` in the build environment.
+Build with Xcode 27.1 for Duo support. `project.yml` enables
+`AGENTGATEWAY_DUO_SDK` for the iOS 27.1 SDK; the new APIs also have runtime
+availability guards. Xcode 27.0 and iOS 26 use the Tabs-left/menu-right header
+without Duo-only toolbar APIs. Select the beta per command with `DEVELOPER_DIR`, without changing the
+shared Mac's default Xcode or release jobs.
+
+Apple's [Duo preparation guide](https://developer.apple.com/videos/play/tech-talks/111461/)
+recommends native split navigation and size-class/safe-area-based layouts.
+The Duo simulator, reserved-region APIs, and arrangement containers described
+in [adaptive layouts on Duo](https://developer.apple.com/videos/play/tech-talks/111463/)
+require **Xcode/iOS 27.1**. The transcript remains one continuous scroll rather
+than splitting replies at the fold. This first pass adopts native navigation,
+not a separate tabletop composer or queue pane. Before a Duo-specific release,
+run it with that toolchain across
+open/closed, rotated, partially folded, and Split View configurations, including
+an active reply, an unsent image/text draft, the keyboard, and large text.
+
+### Configure
+
+On first launch, open **Settings (⚙️)** and enter:
+
+| Field | Value |
+|---|---|
+| **Gateway URL** | Your private or tunneled `https://` gateway URL |
+| **API key** | the `API_SERVER_KEY` from Part 1 |
+
+Tap **Test authenticated connection**. The app verifies the key against
+`/v1/models` and confirms that `copilot-coding` is advertised. A public
+`/health` response alone is not considered a successful test.
+
+## Execution lanes
+
+- **Copilot** is the default and uses the `copilot-coding` gateway route.
+- **Private Local** uses the future `local-private` route and is unavailable
+  until the gateway advertises it.
+- **Cantrip Remote** controls a selected live Cantrip session using the same
+  chat and voice UI.
+- Each destination has independent conversation history. Hermes lanes also use
+  distinct long-term-memory session keys.
+- Every assistant reply is labeled with its active destination.
+- Switching lanes never carries the other lane's run or conversation history.
+
+## Durable tasks
+
+Every message creates a server-owned `/v1/runs` task. Cantrip Agent persists the
+run ID before observing its event stream. Closing, suspending, or force-quitting
+the app only disconnects the viewer; it does not call the gateway's stop
+endpoint. When iOS leaves the foreground, the app drops its potentially stale
+event connection while the task keeps running on the Mac.
+
+When the app becomes active again it starts a fresh poll for the saved run ID
+and replaces any partial text with the gateway's authoritative final output. If
+iOS loses the initial `202` response, the app safely retries with the same
+`Idempotency-Key`, and the gateway returns the original run instead of executing
+the request twice. Results remain recoverable for 24 hours. Only tapping
+**Stop** or using voice barge-in explicitly interrupts a run.
+
+Voice Mode preserves its hands-free reply intent across that suspension. Return
+to the app and the recovered response is still spoken before listening resumes;
+only closing Voice Mode tears down its microphone and TTS state.
+
+Tool approvals are also recoverable: a run waiting for approval stores the
+redacted command and available choices in its pollable status.
+
+## Local speech recognition
+
+**Parakeet EOU 120M** is the default speech-input engine. It downloads its
+Core ML assets from FluidAudio's Hugging Face repository on first use, then
+transcribes microphone audio entirely on the device. Settings shows download
+and compilation progress.
+
+Choose **Apple Speech** in Settings for the no-download fallback. The fallback
+sets `requiresOnDeviceRecognition`, so microphone audio is never intentionally
+sent to Apple's servers. Parakeet and Qwen release their loaded models before
+the other engine starts, limiting peak memory on iPhone.
+
+### Dictation final pass
+
+EOU 120M only shows live partials. While you talk, `DictationSession` cuts the
+audio at pauses and transcribes each finished phrase with **Parakeet TDT 0.6B
+v2** (punctuated, cased English), so only the last phrase remains when you
+release. Each phrase then goes through:
+
+1. **CTC vocabulary boosting** (`VocabularyBoostingSession`, CTC 110M) with up to
+   200 names, judged one replacement at a time so a term never replaces
+   ordinary words that do not sound like it.
+2. **Deterministic cleanup** (`DictationText.finalize`): fillers and stutters,
+   self-corrections of times, numbers, weekdays and months ("at 2, actually 3"),
+   FluidAudio inverse text normalization behind a guard ("another one" and list
+   ordinals stay words), clock times and money formats, name casing, and spoken
+   "first, second, third" lists.
+3. **Apple Intelligence edits** (when available, four words or more): the
+   on-device model returns find-and-replace edits with the tab title, the last
+   messages and only the names that sound like the dictation. Guardrails reject
+   edits that add words, repeat or drop content, swap in an unrelated name, or
+   change more than a third of the text. The composer swaps in the result only
+   if you have not edited it, with **Undo**; voice mode waits up to 1.2 s.
+
+Names come from your Mac (`/api/v1/voice/vocabulary`), the iPhone's Contacts
+(asked once after your first dictation; ranked by how often the Mac saw you
+talk to each person), and fixes you make before sending: a corrected name is
+boosted next time and an unusual misspelling fixed twice is replaced
+automatically. Everything stays on your devices. The models (about 560 MB)
+download once on Wi-Fi or from **Settings → Dictation**, load from disk in about
+half a second, and are released while the neural voice speaks. **Settings →
+Dictation** shows the words, the last dictation's stage timings and its live,
+model and final text, and a **Test dictation speed** run that synthesizes sample
+sentences on the device.
+
+> Get the key back any time: `grep '^API_SERVER_KEY=' ~/.hermes/.env | cut -d= -f2-` (or copy it to your clipboard with `… | pbcopy` on macOS and paste via Universal Clipboard).
+
+---
+
+## Voice quality
+
+The default iOS voices sound robotic. For near-Siri quality, download a **Premium** voice once: **iOS Settings → Accessibility → Spoken Content → Voices → English → (pick one)**. The app auto-uses the best installed voice, or choose it in **Settings → Reply voice**. *(Apple reserves the actual Siri voice from third-party apps; Premium is the closest usable option.)*
+
+## Action Button / Shortcuts / Siri
+
+Once installed, **"Talk to Hermes"** appears in the Shortcuts app and is assignable to the **Action Button** (Settings → Action Button → Shortcut). It also responds to *"Hey Siri, Talk to Hermes."* One trigger opens voice mode and starts listening.
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| **Test connection fails / 401** | Wrong key or URL. Re-copy `API_SERVER_KEY`; confirm the URL has no trailing slash. |
+| **Task never updates** | Reopen the app and confirm `GET /v1/runs/{id}` is reachable. The run continues on the Mac even when its SSE viewer disconnects. |
+| **Skills list empty** | You haven't added the `/v1/commands` endpoint (Part 1, step 7), or the gateway is unreachable. |
+| **Can't reach it on the phone** | Confirm the HTTPS proxy/private-network endpoint reaches the gateway and that `/v1/models` accepts the API key. |
+| **Copilot route missing** | Add `gateway.api_server.extra.model_routes.copilot-coding` to `~/.hermes/config.yaml`, then restart the gateway. |
+| **Parakeet cannot start** | Open Settings → Speech Recognition and retry model preparation, or select the fully on-device Apple Speech fallback. |
+
+---
+
+## "Set it up for me" — prompt for your LLM / agent
+
+Paste this into Claude Code, your Hermes agent, or any tool-using LLM **running on the machine where Hermes lives**:
+
+```
+You are setting up the "Cantrip Agent" iOS app's backend on this machine, which
+runs a Hermes agent at ~/.hermes. Do the following and report each result:
+
+1. Generate a strong API key: `openssl rand -hex 32`. Save it; I'll need it for
+   the app. Do NOT print it more than once.
+2. Back up ~/.hermes/.env, then append (only if these keys aren't already set):
+       API_SERVER_KEY=<the key>
+       API_SERVER_HOST=0.0.0.0
+       API_SERVER_PORT=8642
+3. Back up ~/.hermes/config.yaml, keep the global default on copilot-shim, and
+   add gateway.api_server.extra.model_routes.copilot-coding pointing to
+   model copilot-shim at http://127.0.0.1:11437/v1.
+4. Restart the Hermes gateway so the api_server picks up the new config (use the
+   launchd service `ai.hermes.gateway` if present, else `hermes gateway run --replace`).
+   Wait until port 8642 is LISTENING.
+5. Verify: `curl -s http://127.0.0.1:8642/health` returns ok, an authenticated
+   POST to /v1/runs returns a run_id, replaying the same Idempotency-Key returns
+   that same run_id, and a request WITHOUT the key returns HTTP 401. Confirm
+   `/v1/models` advertises `copilot-coding` and all Hermes channels reconnected.
+6. (Optional, for the app's "/" suggestions + Skills list) Add a `GET /v1/commands`
+   route + handler to gateway/platforms/api_server.py that returns
+   telegram_menu_commands() as {command, description, kind} (kind="command" for
+   names in telegram_bot_commands(), else "skill"). py_compile it, restart, verify.
+7. Expose only the gateway through a private network or authenticated HTTPS
+   reverse proxy. Do not expose the model server or Copilot shim.
+
+Then tell me the HTTPS gateway URL to enter in the app, and remind me the API
+key is in ~/.hermes/.env as API_SERVER_KEY.
+Treat the key like a password — it grants full agent (tool/shell) access.
+```
+
+---
+
+## Security
+
+- Every `/v1/*` endpoint requires the Bearer key (constant-time compared); only `/health` is open.
+- The key grants **full agent access** (it can run tools/shell) — treat it like a password. It lives in `~/.hermes/.env` on the server and the iOS **Keychain** on the phone, never in this repo.
+- Non-loopback plain HTTP is rejected by the app because it exposes both prompts
+  and the bearer key. Loopback HTTP remains available for simulator development.
+- Named execution routes prevent a missing private model from silently falling
+  back to the Copilot default.
+- Durable run creation requires authentication and an app-generated
+  `Idempotency-Key`; replay never starts a second side-effecting task.

@@ -1,0 +1,1734 @@
+import Combine
+import QuickLook
+import SwiftUI
+
+enum CantripHomeChatAvailability: Equatable {
+    case ready
+    case opening
+    case unavailable(String)
+
+    static func resolve(
+        isConfigured: Bool,
+        isHomeSelected: Bool,
+        isHomeSession: Bool,
+        error: String?
+    ) -> Self {
+        if isHomeSelected, isHomeSession { return .ready }
+        if let error, !error.isEmpty { return .unavailable(error) }
+        if isConfigured { return .opening }
+        return .unavailable(
+            "Turn on Cantrip Home in the Mac app's settings, then keep Cantrip running."
+        )
+    }
+}
+
+enum CantripHomeSection: String, CaseIterable, Identifiable {
+    case chat
+    case tasks
+    case artifacts
+    #if os(iOS)
+    /// The Mac's over-the-air install page; installing is iPhone-only, so Gateway Mac has no tab.
+    case builds
+    #endif
+
+    var id: Self { self }
+    var title: String { rawValue.capitalized }
+    var systemImage: String {
+        switch self {
+        case .chat: "bubble.left.and.bubble.right"
+        case .tasks: "checklist"
+        case .artifacts: "square.grid.2x2"
+        #if os(iOS)
+        case .builds: "arrow.down.app"
+        #endif
+        }
+    }
+}
+
+enum CantripHomeLayout {
+    static let compactBarHeight: CGFloat = 54
+    static let composerGap: CGFloat = 8
+    static let compactContentBottomClearance = compactBarHeight + composerGap
+}
+
+enum CantripHomeBadgeTone: Equatable {
+    case accent
+    case rejected
+    case offer
+    case applied
+    case inProgress
+
+    init(value: String) {
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if normalized.contains("reject") || normalized.contains("declin") {
+            self = .rejected
+        } else if normalized.contains("offer") {
+            self = .offer
+        } else if normalized == "applied" || normalized == "application received" {
+            self = .applied
+        } else if [
+            "interview", "screen", "conversation", "scheduled", "assessment",
+            "onsite", "on-site", "final round", "in progress", "in-progress",
+            "recruiter", "technical", "hiring manager", "take-home", "phone"
+        ].contains(where: normalized.contains) {
+            self = .inProgress
+        } else {
+            self = .accent
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .accent: .accentColor
+        case .rejected: .red
+        case .offer: .green
+        case .applied: .yellow
+        case .inProgress: .blue
+        }
+    }
+}
+
+struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: View, BuildsContent: View>: View {
+    @Environment(\.chatDisplayTraits) private var displayTraits
+    @Binding var selection: CantripHomeSection
+    let runningTasks: Int
+    /// The shared header sits outside the TabView, whose children do not inherit its inset.
+    var chatTopClearance: CGFloat = 0
+    private let chat: ChatContent
+    private let tasks: TasksContent
+    private let artifacts: ArtifactsContent
+    private let builds: BuildsContent
+
+    init(
+        selection: Binding<CantripHomeSection>,
+        runningTasks: Int,
+        chatTopClearance: CGFloat = 0,
+        @ViewBuilder chat: () -> ChatContent,
+        @ViewBuilder tasks: () -> TasksContent,
+        @ViewBuilder artifacts: () -> ArtifactsContent,
+        @ViewBuilder builds: () -> BuildsContent
+    ) {
+        _selection = selection
+        self.runningTasks = runningTasks
+        self.chatTopClearance = chatTopClearance
+        self.chat = chat()
+        self.tasks = tasks()
+        self.artifacts = artifacts()
+        self.builds = builds()
+    }
+
+    var body: some View {
+        TabView(selection: $selection) {
+            Tab(
+                CantripHomeSection.chat.title,
+                systemImage: CantripHomeSection.chat.systemImage,
+                value: CantripHomeSection.chat
+            ) {
+                tabContent(chat)
+                    .safeAreaPadding(.top, chatTopClearance)
+            }
+            Tab(
+                CantripHomeSection.tasks.title,
+                systemImage: CantripHomeSection.tasks.systemImage,
+                value: CantripHomeSection.tasks
+            ) {
+                tabContent(tasks)
+            }
+            .badge(runningTasks)
+            Tab(
+                CantripHomeSection.artifacts.title,
+                systemImage: CantripHomeSection.artifacts.systemImage,
+                value: CantripHomeSection.artifacts
+            ) {
+                tabContent(artifacts)
+            }
+            #if os(iOS)
+            Tab(
+                CantripHomeSection.builds.title,
+                systemImage: CantripHomeSection.builds.systemImage,
+                value: CantripHomeSection.builds
+            ) {
+                tabContent(builds)
+            }
+            #endif
+        }
+        .tabViewStyle(.tabBarOnly)
+        .tabBarMinimizeBehavior(.never)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !sectionsInRail {
+                CantripHomeCompactTabBar(
+                    selection: $selection,
+                    runningTasks: runningTasks
+                )
+                .padding(.horizontal, 12)
+                .padding(.vertical, 3)
+            }
+        }
+        .accessibilityIdentifier("home.tabView")
+    }
+
+    /// On an iPhone Duo, in every pose and with the sidebar open or closed, Home's sections are at the
+    /// bottom of the right-side rail: the system's vertical bar, or the app's own rail when unfolded
+    /// upright. Other iPhones keep the bottom bar.
+    private var sectionsInRail: Bool { displayTraits.hasVerticalBar || displayTraits.usesAppRail }
+
+    private func tabContent<Content: View>(_ content: Content) -> some View {
+        content
+            .safeAreaPadding(.bottom, sectionsInRail ? 0 : CantripHomeLayout.compactContentBottomClearance)
+            .toolbar(displayTraits.hasVerticalBar ? .visible : .hidden, for: .tabBar)
+    }
+}
+
+struct CantripHomeCompactTabBar: View {
+    @Binding var selection: CantripHomeSection
+    let runningTasks: Int
+
+    var body: some View {
+        // Side-by-side labels when every title fits; otherwise icons over titles (four tabs at
+        // large text sizes) so none truncates.
+        ViewThatFits(in: .horizontal) {
+            buttons(stacked: false)
+            buttons(stacked: true)
+        }
+        .padding(2)
+        .frame(height: 48)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Cantrip Home")
+        .accessibilityIdentifier("home.compactTabBar")
+    }
+
+    private func buttons(stacked: Bool) -> some View {
+        CantripHomeEqualWidthRow(spacing: 2) {
+            ForEach(CantripHomeSection.allCases) { section in
+                Button {
+                    selection = section
+                } label: {
+                    Label(section.title, systemImage: section.systemImage)
+                        .labelStyle(CantripHomeTabLabelStyle(stacked: stacked, selected: selection == section))
+                        .font(.caption.weight(selection == section ? .semibold : .regular))
+                        .lineLimit(1)
+                        .foregroundStyle(selection == section ? Color.accentColor : .secondary)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(
+                            selection == section ? Color.accentColor.opacity(0.16) : .clear,
+                            in: Capsule()
+                        )
+                        .overlay(alignment: .topTrailing) {
+                            if section == .tasks, runningTasks > 0 {
+                                Text("\(min(runningTasks, 99))")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .frame(minWidth: 16, minHeight: 16)
+                                    .background(.red, in: Capsule())
+                                    .offset(x: 3, y: -3)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selection == section ? .isSelected : [])
+                .accessibilityValue(
+                    section == .tasks && runningTasks > 0
+                        ? "\(runningTasks) running"
+                        : ""
+                )
+            }
+        }
+    }
+}
+
+/// Equal-width slots whose ideal width gives every slot the widest child's ideal width, so
+/// `ViewThatFits` only picks a row when no title would truncate in its share.
+struct CantripHomeEqualWidthRow: Layout {
+    var spacing: CGFloat = 0
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let ideals = subviews.map { $0.sizeThatFits(.unspecified) }
+        let gaps = spacing * CGFloat(max(subviews.count - 1, 0))
+        let ideal = (ideals.map(\.width).max() ?? 0) * CGFloat(subviews.count) + gaps
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? ideal
+        let height = proposal.height.flatMap { $0.isFinite ? $0 : nil } ?? (ideals.map(\.height).max() ?? 0)
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let slot = max(0, (bounds.width - spacing * CGFloat(subviews.count - 1)) / CGFloat(subviews.count))
+        for (index, subview) in subviews.enumerated() {
+            subview.place(
+                at: CGPoint(x: bounds.minX + CGFloat(index) * (slot + spacing), y: bounds.midY),
+                anchor: .leading,
+                proposal: ProposedViewSize(width: slot, height: bounds.height)
+            )
+        }
+    }
+}
+
+/// The compact bar's tab label: icon beside title, or a smaller title under the icon.
+struct CantripHomeTabLabelStyle: LabelStyle {
+    let stacked: Bool
+    var selected = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        if stacked {
+            VStack(spacing: 1) {
+                configuration.icon
+                    .imageScale(.medium)
+                configuration.title
+                    .font(.caption2.weight(selected ? .semibold : .regular))
+                    .minimumScaleFactor(0.85)
+            }
+        } else {
+            Label(configuration)
+        }
+    }
+}
+
+enum CantripHomeTaskReorder {
+    struct Move: Equatable {
+        let id: UUID
+        let targetID: UUID
+        let after: Bool
+    }
+
+    static func move(ids: [UUID], fromOffsets offsets: IndexSet, toOffset destination: Int) -> Move? {
+        guard offsets.count == 1, let source = offsets.first, ids.indices.contains(source),
+              (0...ids.count).contains(destination),
+              destination != source, destination != source + 1 else { return nil }
+        let target = source < destination ? destination - 1 : destination
+        return Move(id: ids[source], targetID: ids[target], after: source < target)
+    }
+}
+
+struct CantripHomeTasksView: View {
+    let remote: CantripRemoteModel
+    let openChat: (String?) -> Void
+    /// Opens Home's Background list on a waiting run (by its hidden session ID).
+    var openRun: ((String) -> Void)? = nil
+    /// Task ID → the hidden session of its live run that waits on the user.
+    @State private var waitingRuns: [UUID: String] = [:]
+    @State private var tasks: [CantripHomeTask]
+    @State private var homeDataError: String?
+    @State private var isLoadingHomeData: Bool
+    @State private var homeAvailable: Bool
+    @State private var detailError: String?
+    @State private var editing: CantripHomeTask?
+    @State private var deleting: CantripHomeTask?
+    @State private var supportsReordering: Bool
+    @State private var isMutating: Bool
+
+    init(remote: CantripRemoteModel, openChat: @escaping (String?) -> Void,
+         openRun: ((String) -> Void)? = nil) {
+        self.remote = remote
+        self.openChat = openChat
+        self.openRun = openRun
+        _waitingRuns = State(initialValue: Self.waitingRuns(remote.homeBackground))
+        _tasks = State(initialValue: remote.homeTasks)
+        _supportsReordering = State(initialValue: remote.homeTasksSupportReordering)
+        _isMutating = State(initialValue: remote.isMutating)
+        _homeDataError = State(initialValue: remote.homeDataError)
+        _isLoadingHomeData = State(initialValue: remote.isLoadingHomeData)
+        _homeAvailable = State(initialValue: remote.selectedSession?.isCantripHome == true)
+        _detailError = State(initialValue: remote.detailError)
+    }
+
+    var body: some View {
+        Group {
+            if !homeAvailable, detailError == nil, remote.isConfigured {
+                ProgressView("Opening Cantrip Home…")
+            } else if !homeAvailable {
+                ContentUnavailableView(
+                    "Cantrip Home unavailable",
+                    systemImage: "house.slash",
+                    description: Text(detailError
+                        ?? "Enable Cantrip Home in the Mac app's settings.")
+                )
+            } else if tasks.isEmpty, !isLoadingHomeData {
+                ContentUnavailableView {
+                    Label("No tasks yet", systemImage: "checklist")
+                } description: {
+                    Text("Ask Cantrip Home to create a tracker or monitor something on a schedule.")
+                } actions: {
+                    Button("Create in Chat") { openChat("Create a task for ") }
+                        .buttonStyle(.borderedProminent)
+                }
+            } else {
+                List {
+                    if let error = homeDataError {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    ForEach(tasks) { task in
+                        taskListRow(task)
+                            .accessibilityActions {
+                                if canReorderTasks,
+                                   let index = tasks.firstIndex(where: { $0.id == task.id }) {
+                                    if index > 0 {
+                                        Button("Move up") { moveTask(task.id, offset: -1) }
+                                    }
+                                    if index < tasks.count - 1 {
+                                        Button("Move down") { moveTask(task.id, offset: 1) }
+                                    }
+                                }
+                            }
+                    }
+                    .onMove(perform: canReorderTasks ? moveTasks : nil)
+                }
+                .listStyle(.plain)
+            }
+        }
+        .navigationTitle("Tasks")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    openChat("Create a task to ")
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("Create task in Chat")
+            }
+        }
+        .refreshable { await remote.refreshHomeData() }
+        .task { await remote.refreshHomeData() }
+        .onReceive(remote.$homeTasks.removeDuplicates()) { tasks = $0 }
+        .onReceive(remote.$homeBackground.map(Self.waitingRuns).removeDuplicates()) { waitingRuns = $0 }
+        .onReceive(remote.$homeTasksSupportReordering.removeDuplicates()) {
+            supportsReordering = $0
+        }
+        .onReceive(remote.$isMutating.removeDuplicates()) { isMutating = $0 }
+        .onReceive(remote.$homeDataError.removeDuplicates()) { homeDataError = $0 }
+        .onReceive(remote.$isLoadingHomeData.removeDuplicates()) { isLoadingHomeData = $0 }
+        .onReceive(
+            remote.$selectedSession
+                .map { $0?.isCantripHome == true }
+                .removeDuplicates()
+        ) { homeAvailable = $0 }
+        .onReceive(remote.$detailError.removeDuplicates()) { detailError = $0 }
+        .sheet(item: $editing) { task in
+            CantripHomeTaskEditView(remote: remote, task: task, openChat: openChat)
+                #if os(macOS)
+                // A Mac sheet sizes to its content; a run's cards would push it past the window.
+                .frame(minWidth: 480, idealWidth: 580, minHeight: 420, idealHeight: 680, maxHeight: 760)
+                #endif
+        }
+        .confirmationDialog(
+            "Delete \(deleting?.title ?? "task")?",
+            isPresented: Binding(
+                get: { deleting != nil },
+                set: { if !$0 { deleting = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let deleting {
+                Button("Delete task", role: .destructive) {
+                    let task = deleting
+                    self.deleting = nil
+                    Task { _ = await remote.deleteHomeTask(task) }
+                }
+            }
+            Button("Cancel", role: .cancel) { deleting = nil }
+        }
+    }
+
+    static func waitingRuns(_ snapshot: CantripHomeBackgroundSnapshot?) -> [UUID: String] {
+        var waiting: [UUID: String] = [:]
+        for run in snapshot?.runs ?? [] where run.needsInput {
+            if let task = run.taskID, let session = run.sessionID { waiting[task] = session }
+        }
+        return waiting
+    }
+
+    private var canReorderTasks: Bool {
+        supportsReordering && !isMutating && tasks.count > 1
+    }
+
+    private func moveTasks(from offsets: IndexSet, to destination: Int) {
+        guard let move = CantripHomeTaskReorder.move(
+            ids: tasks.map(\.id), fromOffsets: offsets, toOffset: destination
+        ) else { return }
+        tasks.move(fromOffsets: offsets, toOffset: destination)
+        Task {
+            if !(await remote.moveHomeTask(move.id, relativeTo: move.targetID, after: move.after)) {
+                tasks = remote.homeTasks
+            }
+        }
+    }
+
+    private func moveTask(_ id: UUID, offset: Int) {
+        Task {
+            if !(await remote.moveHomeTask(id, offset: offset)) { tasks = remote.homeTasks }
+        }
+    }
+
+    @ViewBuilder
+    private func taskListRow(_ task: CantripHomeTask) -> some View {
+        if task.workspace != nil {
+            NavigationLink {
+                CantripHomeTaskWorkspaceView(
+                    remote: remote, taskID: task.id, openChat: openChat
+                )
+            } label: {
+                taskRow(task)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    deleting = task
+                }
+            }
+        } else {
+            taskRow(task)
+                .contentShape(Rectangle())
+                .onTapGesture { editing = task }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        deleting = task
+                    }
+                }
+        }
+    }
+
+    private func taskRow(_ task: CantripHomeTask) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                taskStatus(task)
+                    .frame(width: 22, height: 22)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(task.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    if let workspace = task.workspace {
+                        Text("\(workspace.records.count) \(recordCountLabel(workspace))")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(task.schedule.summary)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let model = task.modelSummary {
+                        Label(model, systemImage: "cpu")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Model \(model)")
+                    }
+                }
+                Spacer(minLength: 8)
+                if task.isScheduled {
+                    Toggle("", isOn: Binding(
+                        get: { task.enabled },
+                        set: { enabled in
+                            Task { _ = await remote.updateHomeTask(task, enabled: enabled) }
+                        }
+                    ))
+                    .labelsHidden()
+                    .disabled(remote.isMutating || task.state == "running")
+                    .accessibilityLabel(
+                        task.enabled ? "Pause \(task.title)" : "Resume \(task.title)"
+                    )
+                }
+            }
+            Text(task.prompt)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .padding(.leading, 32)
+            HStack(spacing: 6) {
+                if !task.isScheduled {
+                    Label("Updated \(task.updatedAt.formatted(.relative(presentation: .named)))",
+                          systemImage: "rectangle.stack")
+                } else if let next = task.nextRunAt, task.enabled {
+                    Label(next.formatted(.relative(presentation: .named)), systemImage: "clock")
+                } else {
+                    Label("Paused", systemImage: "pause")
+                }
+                if let run = task.runs.first {
+                    Text("·")
+                    Text(run.status.capitalized)
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .padding(.leading, 32)
+            if let run = task.runs.first, !run.summary.isEmpty {
+                CantripHomeRunSummaryText(summary: run.summary, lineLimit: 3)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 32)
+            }
+            if let session = waitingRuns[task.id], let openRun {
+                CantripHomeRunNeedsInput(title: task.title) { openRun(session) }
+                    .padding(.leading, 32)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func recordCountLabel(_ workspace: CantripHomeTaskWorkspace) -> String {
+        workspace.records.count == 1
+            ? workspace.recordLabel
+            : workspace.recordLabelPlural ?? "\(workspace.recordLabel)s"
+    }
+
+    @ViewBuilder
+    private func taskStatus(_ task: CantripHomeTask) -> some View {
+        switch task.state {
+        case "running" where waitingRuns[task.id] != nil:
+            Image(systemName: "questionmark.bubble.fill")
+                .foregroundStyle(CantripHomeBackgroundStyle.activeTint)
+                .accessibilityLabel("Needs your input")
+        case "running":
+            ProgressView().controlSize(.small)
+        case "failed":
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        case "succeeded":
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case "paused":
+            Image(systemName: "pause.circle.fill").foregroundStyle(.secondary)
+        case "ready":
+            Image(systemName: task.workspace?.icon ?? "rectangle.stack.fill")
+                .foregroundStyle(.tint)
+        default:
+            Image(systemName: "clock.fill").foregroundStyle(.blue)
+        }
+    }
+}
+
+private struct CantripHomeTaskEditView: View {
+    @ObservedObject var remote: CantripRemoteModel
+    let task: CantripHomeTask
+    let openChat: (String?) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var title: String
+    @State private var prompt: String
+    @State private var saving = false
+
+    init(remote: CantripRemoteModel, task: CantripHomeTask,
+         openChat: @escaping (String?) -> Void) {
+        self.remote = remote
+        self.task = task
+        self.openChat = openChat
+        _title = State(initialValue: task.title)
+        _prompt = State(initialValue: task.prompt)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Task") {
+                    TextField("Title", text: $title)
+                    TextField("Instructions", text: $prompt, axis: .vertical)
+                        .lineLimit(4...12)
+                }
+                if task.isScheduled {
+                    Section("Schedule") {
+                        LabeledContent("Runs", value: task.schedule.summary)
+                        LabeledContent("Time zone", value: task.schedule.timeZone)
+                        LabeledContent("Model", value: task.modelSummary ?? "Home's model")
+                        Text("To change the schedule or model, ask Cantrip Home in Chat.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Change schedule in Chat") {
+                            dismiss()
+                            openChat("Change the schedule for \(task.title) to ")
+                        }
+                    }
+                }
+                if let workspace = task.workspace {
+                    Section("Workspace") {
+                        LabeledContent(
+                            workspace.recordLabel,
+                            value: "\(workspace.records.count)"
+                        )
+                        LabeledContent("Fields", value: "\(workspace.fields.count)")
+                        Button("Change workspace in Chat") {
+                            dismiss()
+                            openChat("Change the workspace for \(task.title) to ")
+                        }
+                    }
+                }
+                if let run = task.runs.first {
+                    Section("Latest run") {
+                        LabeledContent("Status", value: run.status.capitalized)
+                        if let model = run.model {
+                            LabeledContent("Model", value: model)
+                        }
+                        CantripHomeRunSummaryText(summary: run.summary)
+                        if let cards = run.cards, !cards.isEmpty {
+                            CantripHomeCardsRow(cards: cards, remote: remote)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Edit Task")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(saving ? "Saving…" : "Save") {
+                        saving = true
+                        Task {
+                            let saved = await remote.updateHomeTask(
+                                task, title: title, prompt: prompt
+                            )
+                            saving = false
+                            if saved { dismiss() }
+                        }
+                    }
+                    .disabled(saving || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+private struct CantripHomeRecordEditorTarget: Identifiable {
+    let id = UUID()
+    let record: CantripHomeTaskRecord?
+}
+
+struct CantripHomeTaskWorkspaceView: View {
+    let remote: CantripRemoteModel
+    let taskID: UUID
+    let openChat: (String?) -> Void
+    @State private var tasks: [CantripHomeTask]
+    @State private var search = ""
+    @State private var editorTarget: CantripHomeRecordEditorTarget?
+    @State private var deleting: CantripHomeTaskRecord?
+    @State private var showingSettings = false
+    /// Sections the user collapsed (true) or expanded (false), remembered on this device.
+    @State private var collapsed: [String: Bool]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(
+        remote: CantripRemoteModel, taskID: UUID,
+        openChat: @escaping (String?) -> Void
+    ) {
+        self.remote = remote
+        self.taskID = taskID
+        self.openChat = openChat
+        _tasks = State(initialValue: remote.homeTasks)
+        _collapsed = State(initialValue: CantripHomeWorkspaceGroupState.load(taskID: taskID))
+    }
+
+    private var task: CantripHomeTask? {
+        tasks.first { $0.id == taskID }
+    }
+
+    private var isSearching: Bool {
+        !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var records: [CantripHomeTaskRecord] {
+        guard let records = task?.workspace?.records else { return [] }
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return records }
+        return records.filter { record in
+            record.values.values.contains {
+                $0.localizedCaseInsensitiveContains(query)
+            }
+        }
+    }
+
+    var body: some View {
+        Group {
+            if let task, let workspace = task.workspace {
+                if workspace.records.isEmpty {
+                    ContentUnavailableView {
+                        Label(
+                            "No \(pluralLabel(workspace)) yet",
+                            systemImage: workspace.icon
+                        )
+                    } description: {
+                        Text("Add one here or tell Cantrip Home about it in Chat.")
+                    } actions: {
+                        Button("Add \(workspace.recordLabel)") {
+                            editorTarget = .init(record: nil)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                } else {
+                    List {
+                        if let error = remote.homeDataError {
+                            Label(error, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                        if !isSearching {
+                            // Cards built from the records (bills due this week), then the latest
+                            // run's cards, above the list.
+                            if let cards = task.workspaceCards, !cards.isEmpty {
+                                CantripHomeCardsRow(cards: cards, remote: remote)
+                            }
+                            if let run = task.runs.first, let cards = run.cards, !cards.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Latest run · \(run.finishedAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    CantripHomeRunSummaryText(summary: run.summary, lineLimit: 3)
+                                        .font(.callout)
+                                }
+                                .listRowSeparator(.hidden)
+                                CantripHomeCardsRow(cards: cards, remote: remote)
+                            }
+                        }
+                        if let sections = CantripHomeWorkspaceGrouping.sections(
+                            for: workspace, records: records, searching: isSearching
+                        ) {
+                            ForEach(sections) { section in
+                                let expanded = isSearching || !isCollapsed(section)
+                                Section {
+                                    if expanded {
+                                        ForEach(section.records) { record in
+                                            recordLink(record, workspace: workspace)
+                                        }
+                                    }
+                                } header: {
+                                    CantripHomeWorkspaceSectionHeader(
+                                        title: section.title, count: section.records.count,
+                                        noun: section.records.count == 1
+                                            ? workspace.recordLabel : pluralLabel(workspace),
+                                        expanded: expanded, searching: isSearching
+                                    ) {
+                                        toggle(section)
+                                    }
+                                }
+                            }
+                        } else {
+                            ForEach(records) { record in
+                                recordLink(record, workspace: workspace)
+                            }
+                        }
+                    }
+                    .listStyle(.plain)
+                    .searchable(text: $search, prompt: "Search \(pluralLabel(workspace))")
+                }
+            } else {
+                ContentUnavailableView(
+                    "Task unavailable",
+                    systemImage: "rectangle.stack.badge.exclamationmark",
+                    description: Text("Refresh Tasks and try again.")
+                )
+            }
+        }
+        .navigationTitle(task?.title ?? "Task")
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    showingSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("Task settings")
+                Button {
+                    editorTarget = .init(record: nil)
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("Add \(task?.workspace?.recordLabel ?? "record")")
+            }
+        }
+        .sheet(item: $editorTarget) { target in
+            if let task, let workspace = task.workspace {
+                CantripHomeTaskRecordEditor(
+                    remote: remote, taskID: task.id, workspace: workspace,
+                    record: target.record
+                )
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            if let task {
+                CantripHomeTaskEditView(
+                    remote: remote, task: task, openChat: openChat
+                )
+                #if os(macOS)
+                .frame(minWidth: 480, idealWidth: 580, minHeight: 420, idealHeight: 680, maxHeight: 760)
+                #endif
+            }
+        }
+        .confirmationDialog(
+            "Delete \(task?.workspace?.recordLabel.lowercased() ?? "record")?",
+            isPresented: Binding(
+                get: { deleting != nil },
+                set: { if !$0 { deleting = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let deleting {
+                Button("Delete", role: .destructive) {
+                    let record = deleting
+                    self.deleting = nil
+                    Task {
+                        _ = await remote.deleteHomeTaskRecord(
+                            taskID: taskID, recordID: record.id
+                        )
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { deleting = nil }
+        }
+        .onReceive(remote.$homeTasks.removeDuplicates()) { tasks = $0 }
+    }
+
+    private func pluralLabel(_ workspace: CantripHomeTaskWorkspace) -> String {
+        workspace.recordLabelPlural ?? "\(workspace.recordLabel)s"
+    }
+
+    private func isCollapsed(_ section: CantripHomeWorkspaceSection) -> Bool {
+        collapsed[section.id] ?? section.startsCollapsed
+    }
+
+    private func toggle(_ section: CantripHomeWorkspaceSection) {
+        withAnimation(reduceMotion ? nil : .snappy) {
+            collapsed[section.id] = !isCollapsed(section)
+        }
+        CantripHomeWorkspaceGroupState.save(collapsed, taskID: taskID)
+    }
+
+    private func recordLink(
+        _ record: CantripHomeTaskRecord, workspace: CantripHomeTaskWorkspace
+    ) -> some View {
+        NavigationLink {
+            CantripHomeTaskRecordDetailView(
+                remote: remote, taskID: taskID, recordID: record.id
+            )
+        } label: {
+            recordRow(record, workspace: workspace)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                deleting = record
+            }
+        }
+    }
+
+    private func recordRow(
+        _ record: CantripHomeTaskRecord, workspace: CantripHomeTaskWorkspace
+    ) -> some View {
+        let presentation = workspace.list
+        let title = record.values[presentation.titleField] ?? workspace.recordLabel
+        let subtitles = presentation.subtitleFields.compactMap { key -> String? in
+            guard let value = record.values[key],
+                  let field = workspace.fields.first(where: { $0.key == key }) else { return nil }
+            return "\(field.label): \(CantripHomeTaskValueFormatter.display(value, for: field))"
+        }
+        return HStack(alignment: .top, spacing: 12) {
+            Image(systemName: workspace.icon)
+                .font(.title3)
+                .foregroundStyle(.tint)
+                .frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 8)
+                    if let key = presentation.badgeField,
+                       let badge = record.values[key], !badge.isEmpty {
+                        let tone = CantripHomeBadgeTone(value: badge)
+                        Text(badge)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(tone.color)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(tone.color.opacity(0.12), in: Capsule())
+                    }
+                }
+                if !subtitles.isEmpty {
+                    Text(subtitles.joined(separator: " · "))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                if let key = presentation.dateField,
+                   let value = record.values[key],
+                   let field = workspace.fields.first(where: { $0.key == key }) {
+                    Label(
+                        CantripHomeTaskValueFormatter.display(value, for: field),
+                        systemImage: "calendar"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 5)
+    }
+}
+
+private struct CantripHomeTaskRecordDetailView: View {
+    @ObservedObject var remote: CantripRemoteModel
+    let taskID: UUID
+    let recordID: UUID
+    @Environment(\.dismiss) private var dismiss
+    @State private var editorTarget: CantripHomeRecordEditorTarget?
+    @State private var confirmingDelete = false
+    /// The record's weather and map cards, refreshed while the detail stays open.
+    @State private var recordCards: [CantripCard] = []
+
+    private var task: CantripHomeTask? {
+        remote.homeTasks.first { $0.id == taskID }
+    }
+
+    /// Asks the Mac for the record's cards, then again every `refreshAfter` seconds while it's shown.
+    private func followRecordCards() async {
+        while !Task.isCancelled, workspace?.hasRecordCards == true {
+            let answer = await remote.homeRecordCards(taskID: taskID, recordID: recordID)
+            if let answer, answer.cards != recordCards { recordCards = answer.cards }
+            try? await Task.sleep(for: .seconds(answer?.refreshAfter ?? 60))
+        }
+    }
+
+    private var workspace: CantripHomeTaskWorkspace? { task?.workspace }
+
+    private var record: CantripHomeTaskRecord? {
+        workspace?.records.first { $0.id == recordID }
+    }
+
+    private var title: String {
+        guard let workspace, let record else { return "Record" }
+        return record.values[workspace.list.titleField] ?? workspace.recordLabel
+    }
+
+    var body: some View {
+        Group {
+            if let workspace, let record {
+                List {
+                    if workspace.hasRecordCards, !recordCards.isEmpty {
+                        CantripHomeCardsRow(cards: recordCards, remote: remote)
+                    }
+                    ForEach(sections(workspace)) { section in
+                        Section(section.title ?? "") {
+                            ForEach(section.fields, id: \.self) { key in
+                                if let field = workspace.fields.first(where: { $0.key == key }) {
+                                    recordValue(field, record: record)
+                                }
+                            }
+                        }
+                    }
+                    Section {
+                        LabeledContent(
+                            "Updated",
+                            value: record.updatedAt.formatted(
+                                date: .abbreviated, time: .shortened
+                            )
+                        )
+                    }
+                }
+            } else {
+                ContentUnavailableView(
+                    "Record unavailable",
+                    systemImage: "doc.questionmark",
+                    description: Text("It may have been removed.")
+                )
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: record?.values) { await followRecordCards() }
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button("Edit") {
+                    if let record { editorTarget = .init(record: record) }
+                }
+                Button(role: .destructive) {
+                    confirmingDelete = true
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .accessibilityLabel("Delete record")
+            }
+        }
+        .sheet(item: $editorTarget) { target in
+            if let workspace {
+                CantripHomeTaskRecordEditor(
+                    remote: remote, taskID: taskID, workspace: workspace,
+                    record: target.record
+                )
+            }
+        }
+        .confirmationDialog(
+            "Delete \(workspace?.recordLabel.lowercased() ?? "record")?",
+            isPresented: $confirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                Task {
+                    if await remote.deleteHomeTaskRecord(
+                        taskID: taskID, recordID: recordID
+                    ) {
+                        dismiss()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func sections(
+        _ workspace: CantripHomeTaskWorkspace
+    ) -> [CantripHomeTaskDetailSection] {
+        workspace.detailSections.isEmpty
+            ? [.init(title: nil, fields: workspace.fields.map(\.key))]
+            : workspace.detailSections
+    }
+
+    @ViewBuilder
+    private func recordValue(
+        _ field: CantripHomeTaskField, record: CantripHomeTaskRecord
+    ) -> some View {
+        let value = record.values[field.key]
+        if field.kind == .longText {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(field.label)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(value ?? "—")
+                    .foregroundStyle(value == nil ? .secondary : .primary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .padding(.vertical, 2)
+        } else {
+            LabeledContent {
+                if field.kind == .url, let value, let url = URL(string: value) {
+                    Link(value, destination: url)
+                        .multilineTextAlignment(.trailing)
+                } else {
+                    Text(value.map {
+                        CantripHomeTaskValueFormatter.display($0, for: field)
+                    } ?? "—")
+                        .foregroundStyle(value == nil ? .secondary : .primary)
+                        .multilineTextAlignment(.trailing)
+                }
+            } label: {
+                Text(field.label)
+            }
+        }
+    }
+}
+
+private struct CantripHomeTaskRecordEditor: View {
+    @ObservedObject var remote: CantripRemoteModel
+    let taskID: UUID
+    let workspace: CantripHomeTaskWorkspace
+    let record: CantripHomeTaskRecord?
+    @Environment(\.dismiss) private var dismiss
+    @State private var values: [String: String]
+    @State private var saving = false
+
+    init(
+        remote: CantripRemoteModel, taskID: UUID, workspace: CantripHomeTaskWorkspace,
+        record: CantripHomeTaskRecord?
+    ) {
+        self.remote = remote
+        self.taskID = taskID
+        self.workspace = workspace
+        self.record = record
+        var initial = record?.values ?? [:]
+        for field in workspace.fields where initial[field.key] == nil {
+            switch field.kind {
+            case .boolean:
+                initial[field.key] = "false"
+            case .date where field.required:
+                initial[field.key] = CantripHomeTaskValueFormatter.dateValue(Date())
+            case .dateTime where field.required:
+                initial[field.key] = CantripHomeTaskValueFormatter.dateTimeValue(Date())
+            default:
+                break
+            }
+        }
+        _values = State(initialValue: initial)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let error = remote.homeDataError {
+                    Section {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Section(workspace.recordLabel) {
+                    ForEach(workspace.fields) { field in
+                        fieldEditor(field)
+                    }
+                }
+            }
+            .navigationTitle(record == nil ? "Add \(workspace.recordLabel)" : "Edit \(workspace.recordLabel)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(saving ? "Saving…" : "Save") {
+                        saving = true
+                        Task {
+                            let saved = await remote.saveHomeTaskRecord(
+                                taskID: taskID, recordID: record?.id, values: values
+                            )
+                            saving = false
+                            if saved { dismiss() }
+                        }
+                    }
+                    .disabled(saving || !canSave)
+                }
+            }
+        }
+    }
+
+    private var canSave: Bool {
+        workspace.fields.allSatisfy { field in
+            !field.required
+                || !(values[field.key] ?? "").trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).isEmpty
+        }
+    }
+
+    @ViewBuilder
+    private func fieldEditor(_ field: CantripHomeTaskField) -> some View {
+        switch field.kind {
+        case .text:
+            TextField(field.label, text: valueBinding(field.key))
+        case .longText:
+            TextField(field.label, text: valueBinding(field.key), axis: .vertical)
+                .lineLimit(3...10)
+        case .number:
+            TextField(field.label, text: valueBinding(field.key))
+                .keyboardType(.decimalPad)
+        case .boolean:
+            Toggle(field.label, isOn: Binding(
+                get: { values[field.key] == "true" },
+                set: { values[field.key] = $0 ? "true" : "false" }
+            ))
+        case .date:
+            DatePicker(
+                field.label,
+                selection: dateBinding(field.key, includesTime: false),
+                displayedComponents: .date
+            )
+        case .dateTime:
+            DatePicker(
+                field.label,
+                selection: dateBinding(field.key, includesTime: true),
+                displayedComponents: [.date, .hourAndMinute]
+            )
+        case .choice:
+            Picker(field.label, selection: valueBinding(field.key)) {
+                Text("Select").tag("")
+                ForEach(field.options ?? [], id: \.self) { option in
+                    Text(option).tag(option)
+                }
+            }
+        case .url:
+            TextField(field.label, text: valueBinding(field.key))
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+        }
+    }
+
+    private func valueBinding(_ key: String) -> Binding<String> {
+        Binding(
+            get: { values[key] ?? "" },
+            set: { values[key] = $0 }
+        )
+    }
+
+    private func dateBinding(_ key: String, includesTime: Bool) -> Binding<Date> {
+        Binding(
+            get: {
+                guard let value = values[key] else { return Date() }
+                return includesTime
+                    ? CantripHomeTaskValueFormatter.parseDateTime(value) ?? Date()
+                    : CantripHomeTaskValueFormatter.parseDate(value) ?? Date()
+            },
+            set: {
+                values[key] = includesTime
+                    ? CantripHomeTaskValueFormatter.dateTimeValue($0)
+                    : CantripHomeTaskValueFormatter.dateValue($0)
+            }
+        )
+    }
+}
+
+private enum CantripHomeTaskValueFormatter {
+    static func display(_ value: String, for field: CantripHomeTaskField) -> String {
+        switch field.kind {
+        case .boolean:
+            return value == "true" ? "Yes" : "No"
+        case .date:
+            return parseDate(value)?.formatted(date: .abbreviated, time: .omitted) ?? value
+        case .dateTime:
+            return parseDateTime(value)?.formatted(date: .abbreviated, time: .shortened) ?? value
+        default:
+            return value
+        }
+    }
+
+    static func parseDate(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: value)
+    }
+
+    static func parseDateTime(_ value: String) -> Date? {
+        ISO8601DateFormatter().date(from: value)
+    }
+
+    static func dateValue(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    static func dateTimeValue(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+}
+
+struct CantripHomeArtifactsView: View {
+    let remote: CantripRemoteModel
+    let openChat: (String?) -> Void
+    @State private var artifacts: [CantripHomeArtifact]
+    @State private var homeDataError: String?
+    @State private var isLoadingHomeData: Bool
+    @State private var homeAvailable: Bool
+    @State private var detailError: String?
+    @State private var previewURL: URL?
+    @State private var loadingID: UUID?
+    @State private var previewError: String?
+    @State private var saveError: String?
+    @State private var supportsDownloads: Bool
+    @State private var deleting: CantripHomeArtifact?
+    @State private var viewerSources = CantripViewerSources()
+
+    // Top-aligned so a two-line title doesn't push its neighbor's thumbnail down; a single
+    // column (narrow phones, large text) uses the full width.
+    private let columns = [
+        GridItem(.adaptive(minimum: 150, maximum: 320), spacing: 12, alignment: .top)
+    ]
+
+    init(remote: CantripRemoteModel, openChat: @escaping (String?) -> Void) {
+        self.remote = remote
+        self.openChat = openChat
+        _artifacts = State(initialValue: remote.homeArtifacts)
+        _homeDataError = State(initialValue: remote.homeDataError)
+        _isLoadingHomeData = State(initialValue: remote.isLoadingHomeData)
+        _homeAvailable = State(initialValue: remote.selectedSession?.isCantripHome == true)
+        _detailError = State(initialValue: remote.detailError)
+        _supportsDownloads = State(initialValue: remote.homeArtifactsSupportDownloads)
+    }
+
+    var body: some View {
+        Group {
+            if !homeAvailable, detailError == nil, remote.isConfigured {
+                ProgressView("Opening Cantrip Home…")
+            } else if !homeAvailable {
+                ContentUnavailableView(
+                    "Cantrip Home unavailable",
+                    systemImage: "house.slash",
+                    description: Text(detailError
+                        ?? "Enable Cantrip Home in the Mac app's settings.")
+                )
+            } else if artifacts.isEmpty, !isLoadingHomeData {
+                ContentUnavailableView {
+                    Label("No artifacts yet", systemImage: "square.grid.2x2")
+                } description: {
+                    Text("Documents and media created in Cantrip Home are collected here automatically.")
+                } actions: {
+                    Button("Create in Chat") { openChat("Create a ") }
+                        .buttonStyle(.borderedProminent)
+                }
+            } else {
+                ScrollView {
+                    if let error = homeDataError {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(artifacts) { artifact in
+                            artifactCard(artifact)
+                        }
+                    }
+                    .padding()
+                }
+            }
+        }
+        .navigationTitle("Artifacts")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    openChat("Create a ")
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("Create artifact in Chat")
+            }
+        }
+        .refreshable {
+            remote.artifactThumbnails.resetFailures()
+            await remote.refreshHomeData()
+        }
+        .task { await remote.refreshHomeData() }
+        .onReceive(remote.$homeArtifacts.removeDuplicates()) { artifacts = $0 }
+        .onReceive(remote.$homeArtifactsSupportDownloads.removeDuplicates()) { supportsDownloads = $0 }
+        .onReceive(remote.$homeDataError.removeDuplicates()) { homeDataError = $0 }
+        .onReceive(remote.$isLoadingHomeData.removeDuplicates()) { isLoadingHomeData = $0 }
+        .onReceive(
+            remote.$selectedSession
+                .map { $0?.isCantripHome == true }
+                .removeDuplicates()
+        ) { homeAvailable = $0 }
+        .onReceive(remote.$detailError.removeDuplicates()) { detailError = $0 }
+        .quickLookPreview($previewURL)
+        .alert("Could not open artifact", isPresented: Binding(
+            get: { previewError != nil },
+            set: { if !$0 { previewError = nil } }
+        )) {
+            Button("OK", role: .cancel) { previewError = nil }
+        } message: {
+            Text(previewError ?? "")
+        }
+        .alert("Could not save artifact", isPresented: Binding(
+            get: { saveError != nil },
+            set: { if !$0 { saveError = nil } }
+        )) {
+            Button("OK", role: .cancel) { saveError = nil }
+        } message: {
+            Text(saveError ?? "")
+        }
+        .confirmationDialog(
+            "Delete \(deleting?.title ?? "artifact")?",
+            isPresented: Binding(
+                get: { deleting != nil },
+                set: { if !$0 { deleting = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let deleting {
+                Button("Delete artifact", role: .destructive) {
+                    let artifact = deleting
+                    self.deleting = nil
+                    Task { _ = await remote.deleteHomeArtifact(artifact) }
+                }
+            }
+            Button("Cancel", role: .cancel) { deleting = nil }
+        } message: {
+            Text("This permanently deletes the file from your Mac.")
+        }
+    }
+
+    private func artifactCard(_ artifact: CantripHomeArtifact) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Button {
+                open(artifact)
+            } label: {
+                CantripArtifactCardLabel(
+                    artifact: artifact, remote: remote, isOpening: loadingID == artifact.id,
+                    source: viewerSources.source(artifact.id)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(loadingID != nil)
+
+            Menu {
+                artifactActions(artifact)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: 32, height: 32)
+                    .background(.regularMaterial, in: Circle())
+                    .contentShape(Circle())
+            }
+            .padding(16)
+            .disabled(loadingID != nil)
+            .accessibilityLabel("Actions for \(artifact.title)")
+        }
+        .contextMenu {
+            artifactActions(artifact)
+        }
+    }
+
+    /// Save / Share for the original file, the same for its whole folder as a zip, then Delete.
+    @ViewBuilder
+    private func artifactActions(_ artifact: CantripHomeArtifact) -> some View {
+        #if os(macOS)
+        Button("Save As…", systemImage: "arrow.down.circle") {
+            save(artifact, folder: false, action: .saveCopy)
+        }
+        #else
+        Button("Save to Files…", systemImage: "folder") {
+            save(artifact, folder: false, action: .saveCopy)
+        }
+        Button("Share…", systemImage: "square.and.arrow.up") {
+            save(artifact, folder: false, action: .share)
+        }
+        #endif
+        if let folder = artifact.folder, supportsDownloads {
+            Section("\(folder) folder") {
+                #if os(macOS)
+                Button("Save Folder as Zip…", systemImage: "doc.zipper") {
+                    save(artifact, folder: true, action: .saveCopy)
+                }
+                #else
+                Button("Save Folder to Files…", systemImage: "doc.zipper") {
+                    save(artifact, folder: true, action: .saveCopy)
+                }
+                Button("Share Folder…", systemImage: "square.and.arrow.up.on.square") {
+                    save(artifact, folder: true, action: .share)
+                }
+                #endif
+            }
+        }
+        Divider()
+        Button("Delete", systemImage: "trash", role: .destructive) {
+            deleting = artifact
+        }
+    }
+
+    /// Downloads the original file (or the folder's zip) over the paired connection, then hands
+    /// it to Save to Files / the share sheet (iOS) or a Save panel opened in Downloads (Mac).
+    private func save(_ artifact: CantripHomeArtifact, folder: Bool, action: CantripArtifactSaveAction) {
+        guard loadingID == nil else { return }
+        let label = folder ? "the \(artifact.folder ?? "artifact") folder" : artifact.title
+        #if os(macOS)
+        let suggested = folder ? "\(artifact.folder ?? "Artifacts").zip" : artifact.fileName
+        CantripArtifactSavePanel.chooseDestination(suggestedName: suggested) { destination in
+            guard let destination else { return }
+            download(artifact, folder: folder, label: label) { file in
+                try CantripArtifactSavePanel.place(file, at: destination)
+                Self.announce("Saved \(destination.lastPathComponent).")
+            }
+        }
+        #else
+        download(artifact, folder: folder, label: label) { file in
+            let shown = CantripArtifactExporter.present(file, action: action) { saved in
+                // The share sheet reports back before activities such as Save to Files or AirDrop
+                // have read the file, so only the Files exporter (which has copied it) cleans up now;
+                // shared copies go with the next download's purge of hour-old folders.
+                guard action == .saveCopy else { return }
+                CantripArtifactDownloadFolder.discard(file)
+                if saved { Self.announce("Saved \(file.lastPathComponent).") }
+            }
+            if !shown { CantripArtifactDownloadFolder.discard(file) }
+        }
+        #endif
+    }
+
+    private func download(_ artifact: CantripHomeArtifact, folder: Bool, label: String,
+                          then deliver: @escaping @MainActor (URL) throws -> Void) {
+        loadingID = artifact.id
+        Self.announce("Downloading \(label)…")
+        Task {
+            defer { loadingID = nil }
+            do {
+                let file = try await remote.downloadHomeArtifact(artifact, folder: folder)
+                do {
+                    try deliver(file)
+                } catch {
+                    CantripArtifactDownloadFolder.discard(file)
+                    throw error
+                }
+            } catch is CancellationError {
+            } catch {
+                saveError = error.localizedDescription
+            }
+        }
+    }
+
+    private static func announce(_ text: String) {
+        AccessibilityNotification.Announcement(text).post()
+    }
+
+    /// Images open in the zoomable viewer (swipe to dismiss); everything else in Quick Look.
+    private func open(_ artifact: CantripHomeArtifact) {
+        guard loadingID == nil else { return }
+        if CantripArtifactThumbnailStore.isImage(artifact) {
+            let remote = remote
+            CantripImageViewerPresenter.present(
+                title: artifact.title, imageLabel: artifact.title,
+                placeholder: remote.artifactThumbnails.cached(artifact)?.image,
+                sourceFrame: viewerSources.source(artifact.id).frame,
+                loadID: CantripArtifactThumbnailStore.key(artifact),
+                load: { try await remote.homeArtifactImage(artifact) }
+            )
+            return
+        }
+        loadingID = artifact.id
+        Task {
+            defer { loadingID = nil }
+            do { previewURL = try await remote.homeArtifactFile(artifact) }
+            catch { previewError = error.localizedDescription }
+        }
+    }
+}
+
+/// An artifact card's tappable content: thumbnail, title, and type, duration and size.
+struct CantripArtifactCardLabel: View {
+    let artifact: CantripHomeArtifact
+    let remote: CantripRemoteModel
+    let isOpening: Bool
+    let source: CantripViewerSource
+    @State private var duration: Double?
+
+    init(artifact: CantripHomeArtifact, remote: CantripRemoteModel, isOpening: Bool, source: CantripViewerSource) {
+        self.artifact = artifact
+        self.remote = remote
+        self.isOpening = isOpening
+        self.source = source
+        _duration = State(initialValue: remote.artifactThumbnails.cached(artifact)?.durationSeconds)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            CantripArtifactThumbnailView(artifact: artifact, remote: remote) { duration = $0?.durationSeconds }
+                .overlay {
+                    if isOpening {
+                        ProgressView()
+                            .padding(10)
+                            .background(.regularMaterial, in: Circle())
+                    }
+                }
+                .cantripViewerSource(source)
+            Text(artifact.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            HStack {
+                Text(artifact.kind.capitalized)
+                Spacer()
+                Text(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.accessibilityText(artifact, duration: duration))
+        .accessibilityHint(CantripArtifactThumbnailStore.isImage(artifact)
+            ? "Opens the image. Swipe down to close it." : "Opens a preview")
+    }
+
+    static func accessibilityText(_ artifact: CantripHomeArtifact, duration: Double?) -> String {
+        var parts = [artifact.title, artifact.kind.capitalized]
+        if let duration { parts.append(CantripArtifactThumbnailView.spokenDuration(duration)) }
+        parts.append(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// A task run's summary. A run that ends with a "Summary:" section reports it as short lines
+/// ("Upcoming interviews: …"), shown one per row with the label emphasized; one-line
+/// summaries render as before.
+/// Cards in a Home list (Tasks, a workspace, a record): edge to edge, no row chrome.
+struct CantripHomeCardsRow: View {
+    let cards: [CantripCard]
+    @ObservedObject var remote: CantripRemoteModel
+
+    var body: some View {
+        CantripCardStack(cards: cards, remote: remote)
+            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .accessibilityIdentifier("home.cards")
+    }
+}
+
+struct CantripHomeRunSummaryText: View {
+    let summary: String
+    /// How far each line may wrap; nil shows all of it.
+    var lineLimit: Int?
+
+    var body: some View {
+        let lines = Self.lines(summary)
+        if lines.count < 2 {
+            Text(summary)
+                .lineLimit(lineLimit)
+        } else {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    Text(Self.styled(line))
+                        .lineLimit(lineLimit)
+                }
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    static func lines(_ summary: String) -> [String] {
+        summary.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Lines that each start with a short "Label: ", as a "Summary:" section's are; a run's
+    /// full Markdown report isn't.
+    static func isLabelledSummary(_ summary: String) -> Bool {
+        let lines = lines(summary)
+        return (2...12).contains(lines.count) && lines.allSatisfy { label(in: $0) != nil }
+    }
+
+    private static func label(in line: String) -> Range<String.Index>? {
+        guard let first = line.first, !"*_#-+>|`[".contains(first),
+              let colon = line.range(of: ": "),
+              line.distance(from: line.startIndex, to: colon.lowerBound) <= 40 else { return nil }
+        return line.startIndex..<colon.upperBound
+    }
+
+    /// "Interviewing: Coinbase (screen done)" with "Interviewing:" in semibold.
+    static func styled(_ line: String) -> AttributedString {
+        guard let label = label(in: line) else { return AttributedString(line) }
+        var text = AttributedString(line[label])
+        text.inlinePresentationIntent = .stronglyEmphasized
+        return text + AttributedString(line[label.upperBound...])
+    }
+}
+
+/// A task's live run waits on the user: say so and open its request in the Background list.
+struct CantripHomeRunNeedsInput: View {
+    let title: String
+    let respond: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label("Needs your input", systemImage: "questionmark.bubble.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(CantripHomeBackgroundStyle.activeTint)
+            Spacer(minLength: 4)
+            Button(action: respond) {
+                // Black on orange in dark mode, white on deep orange in light mode: both AA.
+                Text("Respond").foregroundStyle(CantripHomeBackgroundStyle.badgeText)
+            }
+                .buttonStyle(.borderedProminent)
+                .tint(CantripHomeBackgroundStyle.activeTint)
+                .controlSize(.small)
+                .frame(minHeight: 44)
+                .accessibilityLabel("Respond to \(title)")
+                .accessibilityHint("Shows the run's request so you can answer it here")
+                .accessibilityIdentifier("home.task.respond")
+        }
+    }
+}

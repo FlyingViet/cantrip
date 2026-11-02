@@ -1,0 +1,4012 @@
+import SwiftUI
+import MarkdownUI
+
+@MainActor
+final class ChatViewModel: ObservableObject {
+    @Published var turns: [ChatTurn] = []
+    @Published var sending = false
+    @Published private(set) var runStatusText: String?
+    @Published private(set) var activeLane: ExecutionLane
+    @Published private(set) var remoteIsStreaming = false
+    @Published var remoteDeliveryMode: CantripDeliveryMode = .auto
+    @Published private(set) var scrollToLatestRequest = 0
+    @Published private(set) var historyPrependRevision = 0
+    @Published private(set) var tabMetadata = ChatTabMetadata()
+    @Published var tabActionError: String?
+
+    var tabTitle: String {
+        if activeLane.usesCantripRemote {
+            return activeLane == .home ? "Cantrip Home"
+                : remote.selectedSession?.title ?? "Cantrip Remote"
+        }
+        return tabMetadata.customTitle
+            ?? turns.first(where: { $0.role == .user }).map { String(CantripTabMentions.plain($0.text).prefix(34)) }
+            ?? activeLane.title
+    }
+
+    var isTabLocked: Bool {
+        activeLane.usesCantripRemote
+            ? activeLane == .home || remote.selectedSession?.isLocked == true
+            : tabMetadata.isLocked
+    }
+
+    func renameTab(_ name: String) {
+        do {
+            try tabMetadata.rename(name)
+            persist()
+        } catch {
+            tabActionError = error.localizedDescription
+        }
+    }
+
+    func setTabLocked(_ locked: Bool) {
+        tabMetadata.isLocked = locked
+        persist()
+    }
+
+    let env: HermesEnv
+    let remote: CantripRemoteModel
+    let voice: VoiceController
+    private var conversationID: String
+    private var gatewayIdentity: String?
+    private var chatStorageID: UUID?
+    private var pendingRun: PendingHermesRun?
+    private var activeRun: ActiveHermesRun?
+    private var observationTask: Task<Void, Never>?
+    private var observationGeneration = 0
+    private var remoteSessionID: String?
+    private var remoteMessageIDs: [String: UUID] = [:]
+    /// Handoffs whose result card is in the transcript; their reply cards are hidden.
+    private var reportedHandoffIDs: Set<String> = []
+    private var remoteSpeechBaseline: Set<String> = []
+    private var remoteSpeechTargetID: String?
+    private var remoteSpeechActive = false
+    private var spokenReplyTurnID: UUID?
+
+    var isWorking: Bool {
+        sending || remoteIsStreaming
+    }
+
+    init(env: HermesEnv, remote: CantripRemoteModel, voice: VoiceController) {
+        self.env = env
+        self.remote = remote
+        self.voice = voice
+        activeLane = env.executionLane
+        conversationID = UUID().uuidString
+        if activeLane.usesCantripRemote {
+            gatewayIdentity = nil
+        } else {
+            chatStorageID = env.chatStorageID
+            let snapshot = ChatStore.load(for: activeLane, serverID: chatStorageID)
+            turns = snapshot.turns
+            gatewayIdentity = env.gatewayIdentity
+            if let storedGateway = snapshot.gatewayIdentity,
+               storedGateway != env.gatewayIdentity {
+                turns = []
+            } else {
+                tabMetadata = snapshot.tabMetadata ?? ChatTabMetadata()
+                conversationID = snapshot.conversationID ?? UUID().uuidString
+                pendingRun = snapshot.pendingRun
+                activeRun = snapshot.activeRun
+            }
+        }
+        sending = pendingRun != nil || activeRun != nil
+        if sending {
+            runStatusText = "Reconnecting to the run on your Mac…"
+        }
+        voice.onFinalTranscript = { [weak self] text in self?.send(text, spoken: true) }
+        voice.polishContext = { [weak self] in self?.dictationContext() ?? DictationPolishContext() }
+        Task { [weak self] in
+            guard let self else { return }
+            if self.activeLane.usesCantripRemote {
+                if self.activeLane == .home { await self.remote.selectHome() }
+                self.syncRemoteTranscript()
+            } else {
+                self.resumeActiveRun()
+            }
+        }
+    }
+
+    /// The tab and its last messages, so dictation cleanup can judge context.
+    func dictationContext() -> DictationPolishContext {
+        let title: String? = switch activeLane {
+        case .home: "Cantrip Home"
+        case .cantrip: remote.selectedSession?.title
+        default: activeLane.title
+        }
+        let recent = turns.suffix(4).map(\.text)
+            .map { CantripTabMentions.plain($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return DictationPolishContext(title: title, recentMessages: Array(recent.suffix(2)))
+    }
+
+    func send(_ raw: String, spoken: Bool = false) {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Paused → drop every send (text, voice, skill, button) so we never fire
+        // an unintentional request at the agent.
+        guard !UserDefaults.standard.bool(forKey: "hermes.paused") else { return }
+        guard !text.isEmpty else { return }
+        if activeLane.usesCantripRemote {
+            let sessionID = remote.selectedSessionID
+            Task {
+                await sendRemote(text, spoken: spoken, sessionID: sessionID)
+            }
+            return
+        }
+        guard !sending else { return }
+        let lane = activeLane
+        guard lane != .local || env.isAvailable(.local) else {
+            appendLocalFailure(
+                "The local-private route is not configured on the gateway.",
+                for: text,
+                lane: lane
+            )
+            return
+        }
+        guard let client = env.client(for: lane) else {
+            appendLocalFailure(
+                env.configurationIssue ?? "Configure the gateway before sending.",
+                for: text,
+                lane: lane
+            )
+            return
+        }
+
+        scrollToLatestRequest += 1
+        turns.append(ChatTurn(role: .user, text: text, executionLane: lane))
+        let assistant = ChatTurn(
+            role: .assistant,
+            streaming: true,
+            executionLane: lane
+        )
+        turns.append(assistant)
+        let pending = PendingHermesRun(
+            idempotencyKey: "ios-\(UUID().uuidString)",
+            assistantTurnID: assistant.id,
+            input: text,
+            history: conversationHistory(),
+            sessionID: conversationID,
+            executionLane: lane,
+            showSteps: UserDefaults.standard.bool(forKey: "hermes.showSteps"),
+            startedAt: Date()
+        )
+        pendingRun = pending
+        sending = true
+        runStatusText = "Sending to your Mac…"
+        persist()
+
+        // Speak the reply aloud sentence-by-sentence as it streams when this turn
+        // was voice-initiated or we're in hands-free voice mode.
+        let speakReply = spoken || voice.handsFree
+        spokenCount = 0
+        speechTableHeader = nil
+        spokenReplyTurnID = speakReply ? assistant.id : nil
+        if speakReply {
+            voice.beginReply()
+        }
+
+        startObservation {
+            await self.dispatchAndObserve(pending, client: client)
+        }
+    }
+
+    @discardableResult
+    func sendRemote(
+        _ text: String,
+        spoken: Bool = false,
+        images: [ChatImageAttachment] = [],
+        video: ChatVideoAttachment? = nil,
+        files: [ChatFileAttachment] = [],
+        sessionID: String? = nil
+    ) async -> Bool {
+        guard activeLane.usesCantripRemote,
+              !UserDefaults.standard.bool(forKey: "hermes.paused"),
+              !sending, !remote.isMutating else { return false }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !images.isEmpty || video != nil || !files.isEmpty else { return false }
+        guard remote.isConfigured else {
+            appendRemoteFailure("Configure Cantrip Remote in Settings.", for: text)
+            return false
+        }
+        guard let targetSessionID = sessionID ?? remote.selectedSessionID else {
+            appendRemoteFailure("Choose or create a Cantrip session first.", for: text)
+            return false
+        }
+        guard targetSessionID == remote.selectedSessionID else { return false }
+
+        let speakReply = spoken || voice.handsFree
+        remoteSpeechBaseline = Set(
+            remote.selectedSession?.transcript.map(\.id) ?? []
+        )
+        remoteSpeechTargetID = nil
+        remoteSpeechActive = speakReply
+        spokenCount = 0
+        speechTableHeader = nil
+        if speakReply { voice.beginReply() }
+
+        scrollToLatestRequest += 1
+        let isQueuedSend = (remoteDeliveryMode == .queue || remoteDeliveryMode == .auto)
+            && remote.selectedSession?.isStreaming == true
+        if !isQueuedSend {
+            turns.append(ChatTurn(
+                role: .user,
+                text: text + (video.map { "\n\nVideo: \($0.name)" } ?? "")
+                    + files.map { "\n\n📎 \($0.name)" }.joined(),
+                executionLane: activeLane,
+                images: images.map(ChatMessageImage.init)
+            ))
+            turns.append(
+                ChatTurn(
+                    role: .assistant,
+                    streaming: true,
+                    executionLane: activeLane
+                )
+            )
+        }
+        sending = true
+        runStatusText = "Sending to Cantrip…"
+
+        let sent = await remote.send(
+            text,
+            mode: remoteDeliveryMode,
+            images: images,
+            video: video,
+            files: files,
+            sessionID: targetSessionID
+        )
+        sending = false
+        if sent {
+            remoteDeliveryMode = .auto
+            syncRemoteTranscript()
+        } else {
+            if isQueuedSend {
+                appendRemoteFailure(
+                    remote.errorMessage ?? "Cantrip did not accept the prompt.",
+                    for: text
+                )
+            } else if let index = turns.lastIndex(where: {
+                $0.role == .assistant && $0.streaming
+            }) {
+                turns[index].streaming = false
+                turns[index].error = remote.errorMessage
+                    ?? "Cantrip did not accept the prompt."
+            }
+            remoteIsStreaming = false
+            runStatusText = nil
+            finishRemoteSpeech()
+        }
+        return sent
+    }
+
+    private func appendRemoteFailure(_ message: String, for input: String) {
+        turns.append(
+            ChatTurn(role: .user, text: input, executionLane: activeLane)
+        )
+        turns.append(
+            ChatTurn(
+                role: .assistant,
+                error: message,
+                executionLane: activeLane
+            )
+        )
+    }
+
+    func remoteMessage(for turnID: UUID) -> CantripRemoteMessage? {
+        remote.selectedSession?.transcript.first { remoteMessageIDs[$0.id] == turnID }
+            .map { CantripHandoffCards.visible($0, reported: reportedHandoffIDs) }
+    }
+
+    var historyPrependAnchor: UUID? {
+        remote.historyPrependAnchor.flatMap { remoteMessageIDs[$0] }
+    }
+
+    func syncRemoteTranscript() {
+        guard activeLane.usesCantripRemote else { return }
+        let session = remote.selectedSession
+        if remoteSessionID != session?.id {
+            let changedExistingSession = remoteSessionID != nil
+            remoteSessionID = session?.id
+            remoteMessageIDs.removeAll()
+            if changedExistingSession, remoteSpeechActive {
+                voice.stopSpeaking()
+                remoteSpeechActive = false
+            }
+        }
+
+        let transcript = session?.transcript ?? []
+        reportedHandoffIDs = CantripHandoffCards.reportedIDs(in: transcript)
+        let lastAssistantID = transcript.last(where: {
+            $0.role != "user" && $0.role != "error" && !$0.isHandoffResult && !$0.isFreshStart
+        })?.id
+        turns = transcript.map { message in
+            let id = remoteMessageIDs[message.id] ?? UUID()
+            remoteMessageIDs[message.id] = id
+            let isError = message.role == "error"
+            return ChatTurn(
+                isLocalPrivate: session?.isLocalPrivate == true || message.isLocalPrivate == true,
+                id: id,
+                role: message.role == "user" ? .user : message.isFreshStart ? .freshStart : .assistant,
+                text: isError ? "" : message.presentedText,
+                tools: message.activities.map { activity in
+                    ToolActivity(
+                        id: activity.id,
+                        name: activity.toolName,
+                        arguments: [activity.title, activity.input].compactMap { $0 }.joined(separator: "\n"),
+                        output: activity.output ?? (activity.state == "running" ? nil : activity.state.capitalized),
+                        done: activity.state != "running"
+                    )
+                },
+                streaming: session?.isStreaming == true
+                    && message.id == lastAssistantID,
+                error: isError ? message.text : nil,
+                executionLane: activeLane,
+                thinking: message.thinking.isEmpty ? nil : message.thinking,
+                author: message.author,
+                images: message.images?.map { $0.inSession(session?.id ?? "") },
+                linkPreviews: message.linkPreviews,
+                placeCard: message.placeCard,
+                weatherCard: message.weatherCard,
+                cards: message.cards,
+                isRepeatedError: isError && message.id == session?.repeatedErrorMessageID ? true : nil,
+                isContinuable: isError && session?.continuableMessageIDs?.contains(message.id) == true ? true : nil
+            )
+        }
+        // Publish prepends with the mapped turns, not a frame before their layout.
+        historyPrependRevision = remote.historyPrependRevision
+
+        remoteIsStreaming = session?.isStreaming ?? false
+        if remoteIsStreaming {
+            runStatusText = session?.status ?? "Cantrip is working…"
+        } else {
+            runStatusText = nil
+        }
+
+        guard remoteSpeechActive else { return }
+        if remoteSpeechTargetID == nil {
+            remoteSpeechTargetID = transcript.last(where: {
+                $0.role != "user"
+                    && $0.role != "error"
+                    && !$0.isHandoffResult
+                    && !$0.isFreshStart
+                    && !remoteSpeechBaseline.contains($0.id)
+            })?.id
+        }
+        if let targetID = remoteSpeechTargetID,
+           let targetUUID = remoteMessageIDs[targetID],
+           let index = turnIndex(targetUUID) {
+            speakReady(at: index)
+        }
+        if !remoteIsStreaming, !remote.isMutating {
+            finishRemoteSpeech()
+        }
+    }
+
+    private func finishRemoteSpeech() {
+        guard remoteSpeechActive else { return }
+        if let targetID = remoteSpeechTargetID,
+           let targetUUID = remoteMessageIDs[targetID],
+           let index = turnIndex(targetUUID) {
+            speakReady(at: index, force: true)
+        }
+        remoteSpeechActive = false
+        remoteSpeechBaseline.removeAll()
+        remoteSpeechTargetID = nil
+        voice.finishReply()
+    }
+
+    private func appendLocalFailure(
+        _ message: String,
+        for input: String,
+        lane: ExecutionLane
+    ) {
+        turns.append(ChatTurn(role: .user, text: input, executionLane: lane))
+        turns.append(
+            ChatTurn(
+                role: .assistant,
+                error: message,
+                executionLane: lane
+            )
+        )
+        ChatStore.save(
+            turns: turns,
+            conversationID: conversationID,
+            gatewayIdentity: gatewayIdentity,
+            pendingRun: pendingRun,
+            activeRun: activeRun,
+            tabMetadata: tabMetadata,
+            for: lane,
+            serverID: chatStorageID
+        )
+    }
+
+    func resumeActiveRun() {
+        guard !activeLane.usesCantripRemote else {
+            syncRemoteTranscript()
+            return
+        }
+        guard observationTask == nil else { return }
+        guard let resumableLane = activeRun?.executionLane
+                ?? pendingRun?.executionLane else {
+            return
+        }
+        guard let client = env.client(for: resumableLane) else {
+            runStatusText = env.configurationIssue
+                ?? "Configure the gateway to reconnect to this run."
+            return
+        }
+        if let pendingRun {
+            startObservation {
+                await self.dispatchAndObserve(pendingRun, client: client)
+            }
+        } else if let activeRun {
+            startObservation {
+                await self.observe(
+                    activeRun,
+                    client: client,
+                    triesEventStream: false
+                )
+            }
+        }
+    }
+
+    func setAppActive(_ active: Bool) {
+        if active {
+            if pendingRun != nil || activeRun != nil {
+                runStatusText = "Reconnecting to the run on your Mac…"
+            }
+            resumeActiveRun()
+        } else {
+            suspendRunObservation()
+        }
+    }
+
+    private func startObservation(
+        _ operation: @escaping @MainActor () async -> Void
+    ) {
+        guard observationTask == nil else { return }
+        observationGeneration += 1
+        let generation = observationGeneration
+        observationTask = Task { [weak self] in
+            await operation()
+            guard let self, self.observationGeneration == generation else {
+                return
+            }
+            self.observationTask = nil
+        }
+    }
+
+    private func suspendRunObservation() {
+        guard !activeLane.usesCantripRemote else { return }
+        cancelObservation()
+        persist()
+    }
+
+    private func cancelObservation() {
+        observationGeneration += 1
+        observationTask?.cancel()
+        observationTask = nil
+    }
+
+    private func dispatchAndObserve(
+        _ pending: PendingHermesRun,
+        client: HermesClient
+    ) async {
+        while !Task.isCancelled, pendingRun?.idempotencyKey == pending.idempotencyKey {
+            do {
+                let run = try await client.startRun(pending)
+                pendingRun = nil
+                activeRun = run
+                runStatusText = "Running on your Mac · safe to close the app"
+                persist()
+                await observe(
+                    run,
+                    client: client,
+                    triesEventStream: true
+                )
+                return
+            } catch is CancellationError {
+                return
+            } catch let error as HermesError {
+                if error.isRetryable {
+                    runStatusText = "Waiting to reconnect · the request will not be duplicated"
+                    try? await Task.sleep(for: .seconds(3))
+                    continue
+                }
+                finishRun(
+                    pending.assistantTurnID,
+                    error: error.localizedDescription
+                )
+                return
+            } catch {
+                runStatusText = "Waiting to reconnect · the request will not be duplicated"
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    private func observe(
+        _ run: ActiveHermesRun,
+        client: HermesClient,
+        triesEventStream: Bool
+    ) async {
+        if triesEventStream {
+            do {
+                var terminalError: String?
+                var completed = false
+                for try await event in client.streamRunEvents(run.runID) {
+                    switch event {
+                    case .completed:
+                        completed = true
+                    case .failed(let message):
+                        terminalError = message
+                    default:
+                        apply(event, to: run.assistantTurnID)
+                        if shouldSpeakReply(for: run.assistantTurnID),
+                           let index = turnIndex(run.assistantTurnID) {
+                            speakReady(at: index)
+                        }
+                    }
+                    if completed || terminalError != nil {
+                        break
+                    }
+                }
+                if completed || terminalError != nil {
+                    finishRun(
+                        run.assistantTurnID,
+                        error: terminalError
+                    )
+                    return
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                // The gateway intentionally drops a disconnected event queue.
+                // Polling remains authoritative and never restarts the run.
+            }
+        }
+        await poll(run, client: client)
+    }
+
+    private func poll(
+        _ run: ActiveHermesRun,
+        client: HermesClient
+    ) async {
+        while !Task.isCancelled, activeRun?.runID == run.runID {
+            if Date().timeIntervalSince(run.startedAt) > 86_400 {
+                finishRun(
+                    run.assistantTurnID,
+                    error: "This run exceeded the 24-hour recovery window."
+                )
+                return
+            }
+            do {
+                let status = try await client.runStatus(run.runID)
+                let hadApproval = turnIndex(run.assistantTurnID).map {
+                    turns[$0].approval != nil
+                } ?? false
+                if let approval = status.approval,
+                   status.status == "waiting_for_approval" {
+                    setApproval(approval, on: run.assistantTurnID)
+                    runStatusText = "Waiting for your approval"
+                    persist()
+                } else {
+                    clearApproval(on: run.assistantTurnID)
+                    runStatusText = Self.statusText(for: status.status)
+                    if hadApproval {
+                        persist()
+                    }
+                }
+                switch status.status {
+                case "completed":
+                    finishRun(
+                        run.assistantTurnID,
+                        output: status.output
+                    )
+                    return
+                case "failed", "cancelled":
+                    finishRun(
+                        run.assistantTurnID,
+                        error: status.error ?? "Run \(status.status)."
+                    )
+                    return
+                default:
+                    break
+                }
+            } catch is CancellationError {
+                return
+            } catch let error as HermesError {
+                if case .http(404) = error {
+                    finishRun(
+                        run.assistantTurnID,
+                        error: "The saved run result expired before it could be recovered."
+                    )
+                    return
+                }
+                runStatusText = "Reconnecting · the run is still on your Mac"
+            } catch {
+                runStatusText = "Reconnecting · the run is still on your Mac"
+            }
+            try? await Task.sleep(for: .seconds(3))
+        }
+    }
+
+    /// Barge-in: stop the in-flight reply + its speech and start listening for a
+    /// new prompt — for talking over a long answer you've already read.
+    func interruptAndListen() {
+        stop()
+        voice.startListening()
+    }
+
+    func enterVoiceMode() {
+        voice.handsFree = true
+        resumeVoiceModeIfIdle()
+    }
+
+    func leaveVoiceMode() {
+        voice.handsFree = false
+        spokenReplyTurnID = nil
+        remoteSpeechActive = false
+        remoteSpeechBaseline.removeAll()
+        remoteSpeechTargetID = nil
+        voice.stopListening(finalize: false)
+        voice.stopSpeaking()
+    }
+
+    func resumeVoiceModeIfIdle() {
+        guard voice.handsFree,
+              !isWorking,
+              !voice.isListening,
+              !voice.isSpeaking,
+              !voice.isPreparingRecognition else {
+            return
+        }
+        voice.startListening()
+    }
+
+    func approveRun(_ choice: String, for turnID: UUID) {
+        guard let run = activeRun,
+              run.assistantTurnID == turnID,
+              let client = env.client(for: run.executionLane) else {
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await client.approveRun(run.runID, choice: choice)
+                self.clearApproval(on: turnID)
+                if let index = self.turnIndex(turnID) {
+                    self.turns[index].error = nil
+                }
+                self.runStatusText = "Running on your Mac · safe to close the app"
+                self.persist()
+            } catch {
+                if let index = self.turnIndex(turnID) {
+                    self.turns[index].error = (error as? LocalizedError)?
+                        .errorDescription ?? error.localizedDescription
+                }
+                self.persist()
+            }
+        }
+    }
+
+    private func persist() {
+        guard !activeLane.usesCantripRemote else { return }
+        ChatStore.save(
+            turns: turns,
+            conversationID: conversationID,
+            gatewayIdentity: gatewayIdentity,
+            pendingRun: pendingRun,
+            activeRun: activeRun,
+            tabMetadata: tabMetadata,
+            for: activeLane,
+            serverID: chatStorageID
+        )
+    }
+
+    private func conversationHistory(
+        maxCharacters: Int = 24_000,
+        maxPairs: Int = 12
+    ) -> [HermesConversationMessage] {
+        var pairs: [(String, String)] = []
+        var pendingUser: String?
+        for turn in turns {
+            switch turn.role {
+            case .user:
+                pendingUser = turn.text
+            case .assistant:
+                guard let user = pendingUser,
+                      turn.error == nil,
+                      !turn.text.isEmpty else {
+                    pendingUser = nil
+                    continue
+                }
+                pairs.append((user, turn.text))
+                pendingUser = nil
+            case .freshStart:
+                // Nothing before a fresh start is sent to the model.
+                pairs.removeAll()
+                pendingUser = nil
+            }
+        }
+
+        guard let anchor = pairs.first else { return [] }
+        var selected: [(String, String)] = []
+        var characters = anchor.0.count + anchor.1.count
+        for pair in pairs.dropFirst().suffix(max(0, maxPairs - 1)).reversed() {
+            let pairCount = pair.0.count + pair.1.count
+            if characters + pairCount > maxCharacters {
+                break
+            }
+            selected.append(pair)
+            characters += pairCount
+        }
+        let boundedPairs = [anchor] + selected.reversed()
+        return boundedPairs.flatMap { pair in
+            [
+                HermesConversationMessage(role: "user", content: pair.0),
+                HermesConversationMessage(role: "assistant", content: pair.1),
+            ]
+        }
+    }
+
+    private func finishRun(
+        _ assistantTurnID: UUID,
+        output: String? = nil,
+        error: String? = nil
+    ) {
+        guard let index = turnIndex(assistantTurnID) else { return }
+        let speakReply = shouldSpeakReply(for: assistantTurnID)
+        if let output, !output.isEmpty {
+            turns[index].text = output
+        }
+        turns[index].streaming = false
+        turns[index].approval = nil
+        turns[index].error = error
+        if turns[index].text.isEmpty, error == nil {
+            turns[index].error = "The run completed without a response."
+        }
+        turns[index].actions = ChatTurn.parseActions(turns[index].text)
+        pendingRun = nil
+        activeRun = nil
+        sending = false
+        runStatusText = nil
+        persist()
+        if speakReply {
+            if turns[index].error == nil {
+                speakReady(at: index, force: true)
+            }
+            voice.finishReply()
+        }
+        if spokenReplyTurnID == assistantTurnID {
+            spokenReplyTurnID = nil
+        }
+    }
+
+    private func shouldSpeakReply(for assistantTurnID: UUID) -> Bool {
+        spokenReplyTurnID == assistantTurnID
+    }
+
+    private func setApproval(_ approval: HermesRunApproval, on turnID: UUID) {
+        guard let index = turnIndex(turnID) else { return }
+        turns[index].approval = approval
+    }
+
+    private func clearApproval(on turnID: UUID) {
+        guard let index = turnIndex(turnID) else { return }
+        turns[index].approval = nil
+    }
+
+    private func turnIndex(_ id: UUID) -> Int? {
+        turns.firstIndex { $0.id == id }
+    }
+
+    private static func statusText(for status: String) -> String {
+        switch status {
+        case "queued": "Queued on your Mac · safe to close the app"
+        case "waiting_for_approval": "Waiting for your approval"
+        case "stopping": "Stopping on your Mac…"
+        default: "Running on your Mac · safe to close the app"
+        }
+    }
+
+    // How many characters of the current reply have already been queued for
+    // speech, so we only speak each new sentence once.
+    private var spokenCount = 0
+
+    /// Enqueue any newly-completed sentences/paragraphs of the streaming reply for
+    /// speech. `force` flushes whatever remains (called once the reply ends).
+    private func speakReady(at idx: Int, force: Bool = false) {
+        guard turns.indices.contains(idx) else { return }
+        let full = Array(turns[idx].text)
+        guard full.count > spokenCount else { return }
+        let tail = Array(full[spokenCount...])
+        let cut = force ? tail.count : (Self.lastSpeakableCut(tail) ?? 0)
+        guard cut > 0 else { return }
+        let chunk = cleanForSpeech(String(tail[0..<cut]))
+        if !chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { voice.enqueue(chunk) }
+        spokenCount += cut
+    }
+
+    /// Offset just past the last sentence (`. ! ?`) or paragraph (newline) break.
+    /// Sentence breaks inside a table row are NOT cuts: a "." inside a cell
+    /// ("Morning clouds. Sunny after.") would otherwise split the row into two
+    /// fragments that each look like (misaligned) table rows to
+    /// tableRowToSpeech — heard as skipped/doubled words. A row only ships
+    /// once its newline arrives.
+    private static func lastSpeakableCut(_ chars: [Character]) -> Int? {
+        var cut: Int? = nil
+        var lineHasPipe = false
+        for i in chars.indices {
+            let c = chars[i]
+            if c == "|" { lineHasPipe = true }
+            if c == "\n" {
+                cut = i + 1                                   // paragraph / "thinking break"
+                lineHasPipe = false
+            } else if c == "." || c == "!" || c == "?" {
+                if !lineHasPipe, i + 1 >= chars.count || chars[i + 1] == " " || chars[i + 1] == "\n" { cut = i + 1 }
+            }
+        }
+        return cut
+    }
+
+    /// The first table row of the reply being spoken — column names used to
+    /// label later cells. Per-reply state because table rows stream in across
+    /// separate speech chunks. nil = not currently inside a table.
+    private var speechTableHeader: [String]? = nil
+
+    /// Rewrite markdown for the EAR (on-screen reply untouched): table rows
+    /// become labeled sentences via `tableRowToSpeech` (the symbols vanish,
+    /// the content reads); horizontal rules are dropped whole (nothing to say,
+    /// and a punctuation-only chunk can crash the neural decode); bullet/
+    /// numbered items keep their text but lose the marker; markdown links keep
+    /// their title; bare URLs vanish; →/~/digit-ranges become words.
+    private func cleanForSpeech(_ s: String) -> String {
+        var out: [String] = []
+        for rawLine in s.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            if line.lazy.filter({ $0 == "|" }).count >= 2 {
+                if let spoken = tableRowToSpeech(line) { out.append(spoken) }
+            } else {
+                if !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    speechTableHeader = nil          // left the table block
+                }
+                out.append(line)
+            }
+        }
+        var t = out.joined(separator: "\n")
+        t = t.replacingOccurrences(of: #"(?m)^\s*[-_*=·•~\s]{2,}$"#, with: "", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"(?m)^\s*(?:[-*+•·‣◦]|\d{1,3}[.)])\s+"#, with: "", options: .regularExpression)
+        for tok in ["**", "__", "*", "`", "#", ">"] { t = t.replacingOccurrences(of: tok, with: "") }
+        t = t.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"https?://\S+"#, with: "", options: .regularExpression)
+        // Symbols → words, so the voice says what the symbols mean instead of
+        // skipping (or worse, vocalizing) them.
+        t = t.replacingOccurrences(of: "→", with: " to ")
+        t = t.replacingOccurrences(of: "~", with: "about ")
+        // En-dash ranges only ("10–20 mph") — a plain hyphen would also catch
+        // ISO dates (2026-06-10 → "2026 to 06 to 10").
+        t = t.replacingOccurrences(of: #"(?<=\d)\s*–\s*(?=\d)"#, with: " to ", options: .regularExpression)
+        return t
+    }
+
+    /// One markdown table row → one spoken sentence. The first content row is
+    /// remembered as the header; later rows pair each cell with its column:
+    /// "| High | ~75°F | ~79°F |" → "High: Santa Clara ~75°F, Mountain View ~79°F."
+    /// Separator rows (|---|---|) say nothing. Falls back to comma-joined
+    /// cells when the shape doesn't line up.
+    private func tableRowToSpeech(_ line: String) -> String? {
+        var parts = line.components(separatedBy: "|")
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("|"), !parts.isEmpty { parts.removeFirst() }
+        if trimmed.hasSuffix("|"), !parts.isEmpty { parts.removeLast() }
+        let cells = parts.map { $0.trimmingCharacters(in: .whitespaces) }
+        guard !cells.isEmpty else { return nil }
+        if cells.allSatisfy({ $0.isEmpty || $0.allSatisfy { "-: ".contains($0) } }) {
+            return nil                                   // |---|---| separator
+        }
+        guard let header = speechTableHeader else {
+            speechTableHeader = cells
+            let named = cells.filter { !$0.isEmpty }
+            return named.isEmpty ? nil : named.joined(separator: ", ") + "."
+        }
+        let label = cells[0]
+        var pieces: [String] = []
+        for i in 1..<cells.count where !cells[i].isEmpty {
+            let h = i < header.count ? header[i] : ""
+            pieces.append(h.isEmpty ? cells[i] : "\(h) \(cells[i])")
+        }
+        if pieces.isEmpty { return label.isEmpty ? nil : label + "." }
+        return (label.isEmpty ? "" : label + ": ") + pieces.joined(separator: ", ") + "."
+    }
+
+    func stop() {
+        if activeLane.usesCantripRemote {
+            guard let sessionID = remote.selectedSessionID else { return }
+            stopRemote(sessionID: sessionID)
+            return
+        }
+        guard sending else { return }
+        spokenReplyTurnID = nil
+        voice.stopSpeaking()
+        cancelObservation()
+        runStatusText = "Stopping on your Mac…"
+        let savedActiveRun = activeRun
+        let savedPendingRun = pendingRun
+        let lane = savedActiveRun?.executionLane
+            ?? savedPendingRun?.executionLane
+            ?? activeLane
+        guard let client = env.client(for: lane) else {
+            runStatusText = "Could not reach the gateway to stop this run."
+            return
+        }
+        startObservation { [self] in
+            do {
+                let run: ActiveHermesRun
+                if let savedActiveRun {
+                    run = savedActiveRun
+                } else if let savedPendingRun {
+                    run = try await client.startRun(savedPendingRun)
+                    pendingRun = nil
+                    activeRun = run
+                    persist()
+                } else {
+                    sending = false
+                    runStatusText = nil
+                    return
+                }
+                try await client.stopRun(run.runID)
+                runStatusText = "Stopping on your Mac…"
+                await poll(run, client: client)
+            } catch {
+                runStatusText = "Stop failed; reconnecting to the run on your Mac…"
+                if let savedActiveRun {
+                    await observe(
+                        savedActiveRun,
+                        client: client,
+                        triesEventStream: false
+                    )
+                } else if let savedPendingRun {
+                    await dispatchAndObserve(savedPendingRun, client: client)
+                }
+            }
+        }
+    }
+
+    func stopRemote(sessionID: String) {
+        guard activeLane.usesCantripRemote,
+              remote.selectedSession?.id == sessionID,
+              remote.selectedSession?.isStreaming == true,
+              !remote.isMutating else { return }
+        remoteSpeechActive = false
+        remoteSpeechBaseline.removeAll()
+        remoteSpeechTargetID = nil
+        voice.stopSpeaking()
+        runStatusText = "Stopping Cantrip…"
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.remote.stop(sessionID: sessionID)
+            self.syncRemoteTranscript()
+        }
+    }
+
+    func newConversation() {
+        guard !isTabLocked else {
+            tabActionError = ChatTabError.locked.localizedDescription
+            return
+        }
+        if activeLane.usesCantripRemote {
+            guard !remote.isMutating else { return }
+            Task { [weak self] in
+                guard let self else { return }
+                _ = await self.remote.newConversation()
+                self.syncRemoteTranscript()
+            }
+            return
+        }
+        guard !sending else { return }
+        turns.removeAll()
+        conversationID = UUID().uuidString
+        pendingRun = nil
+        activeRun = nil
+        tabMetadata = ChatTabMetadata()
+        ChatStore.clear(for: activeLane, serverID: chatStorageID)
+    }
+
+    func switchLane(to lane: ExecutionLane) {
+        guard lane != activeLane, !sending else { return }
+        if activeLane.usesCantripRemote {
+            remoteSpeechActive = false
+            voice.stopSpeaking()
+        } else {
+            persist()
+        }
+        activeLane = lane
+        tabMetadata = ChatTabMetadata()
+        remoteIsStreaming = false
+        runStatusText = nil
+        if lane.usesCantripRemote {
+            pendingRun = nil
+            activeRun = nil
+            gatewayIdentity = nil
+            conversationID = UUID().uuidString
+            turns = []
+            Task { [weak self] in
+                guard let self else { return }
+                if lane == .home {
+                    await self.remote.selectHome()
+                } else {
+                    await self.remote.selectRegularSession()
+                }
+                guard self.activeLane == lane else { return }
+                self.syncRemoteTranscript()
+            }
+            return
+        }
+        chatStorageID = env.chatStorageID
+        let snapshot = ChatStore.load(for: lane, serverID: chatStorageID)
+        turns = snapshot.turns
+        gatewayIdentity = env.gatewayIdentity
+        if let storedGateway = snapshot.gatewayIdentity,
+           storedGateway != gatewayIdentity {
+            turns = []
+            conversationID = UUID().uuidString
+            pendingRun = nil
+            activeRun = nil
+        } else {
+            tabMetadata = snapshot.tabMetadata ?? ChatTabMetadata()
+            conversationID = snapshot.conversationID ?? UUID().uuidString
+            pendingRun = snapshot.pendingRun
+            activeRun = snapshot.activeRun
+        }
+        sending = pendingRun != nil || activeRun != nil
+        if sending {
+            runStatusText = "Reconnecting to the run on your Mac…"
+            resumeActiveRun()
+        } else {
+            runStatusText = nil
+        }
+    }
+
+    func gatewayDidChange() {
+        guard !activeLane.usesCantripRemote else { return }
+        guard !sending,
+              gatewayIdentity != env.gatewayIdentity || chatStorageID != env.chatStorageID else { return }
+        persist()
+        cancelObservation()
+        leaveVoiceMode()
+        chatStorageID = env.chatStorageID
+        gatewayIdentity = env.gatewayIdentity
+        let snapshot = ChatStore.load(for: activeLane, serverID: chatStorageID)
+        let matchesGateway = snapshot.gatewayIdentity == nil
+            || snapshot.gatewayIdentity == gatewayIdentity
+        turns = matchesGateway ? snapshot.turns : []
+        conversationID = matchesGateway ? snapshot.conversationID ?? UUID().uuidString : UUID().uuidString
+        pendingRun = matchesGateway ? snapshot.pendingRun : nil
+        activeRun = matchesGateway ? snapshot.activeRun : nil
+        tabMetadata = matchesGateway ? snapshot.tabMetadata ?? ChatTabMetadata() : ChatTabMetadata()
+        sending = pendingRun != nil || activeRun != nil
+        runStatusText = sending ? "Reconnecting to the run on your Mac..." : nil
+        if sending { resumeActiveRun() }
+    }
+
+    private func apply(_ ev: HermesStreamEvent, to turnID: UUID) {
+        guard let index = turnIndex(turnID) else { return }
+        switch ev {
+        case .textDelta(let t):
+            turns[index].text += t
+        case .finalText(let t):
+            turns[index].text = t
+        case .toolStarted(let id, let name):
+            turns[index].tools.append(ToolActivity(id: id, name: name))
+        case .toolCompleted(let id):
+            if let i = toolIndex(id, in: index) {
+                turns[index].tools[i].done = true
+            }
+        case .approvalRequested(let approval):
+            turns[index].approval = approval
+            persist()
+        case .approvalResponded:
+            turns[index].approval = nil
+            persist()
+        case .completed:
+            break
+        case .failed(let m):
+            turns[index].error = m
+        }
+    }
+
+    /// Run events currently omit call IDs on completion, so fall back to the
+    /// most recent unfinished tool when no exact ID exists.
+    private func toolIndex(_ id: String, in idx: Int) -> Int? {
+        if let i = turns[idx].tools.firstIndex(where: { $0.id == id }) { return i }
+        return turns[idx].tools.lastIndex(where: { !$0.done })
+    }
+}
+
+struct ChatView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var env: HermesEnv
+    @ObservedObject private var remote: CantripRemoteModel
+    /// Cantrip tabs' and Home's backend "/" commands, cached per session.
+    @ObservedObject private var slashCommands: BackendSlashCommandStore
+    @StateObject private var voice: VoiceController
+    @StateObject private var vm: ChatViewModel
+    @ObservedObject private var router = AppRouter.shared
+    @State private var input = ""
+    @State private var serverTextDrafts: [String: String] = [:]
+    @State private var imageDrafts: [String: [ChatImageAttachment]] = [:]
+    @State private var videoDrafts: [String: ChatVideoAttachment] = [:]
+    @State private var fileDrafts: [String: [ChatFileAttachment]] = [:]
+    /// Tabs picked from the "@" suggestions, per draft (`remoteDraftKey`).
+    @State private var mentionDrafts: [String: [CantripTabMention]] = [:]
+    /// The composer's caret, for "@" suggestions.
+    @State private var composerSelection: TextSelection?
+    /// The text as the field last reported it (typed), to tell the app's own edits apart.
+    @State private var fieldText = ""
+    /// Escape hid the "@" suggestions for the "@" at this UTF-16 offset.
+    @State private var mentionDismissedAt: Int?
+    @State private var mentionHighlight: CantripMentionHighlight?
+    @State private var imageImportID: UUID?
+    @State private var composerPaste: ComposerPasteRequest?
+    @State private var submittingRemote = false
+    @State private var imageSendError: String?
+    @State private var composerRevision = UUID()
+    @State private var chatAvailableHeight: CGFloat = 600
+    /// Reported by `ChatDisplayObserver`; drives the iPhone Duo sidebar layout.
+    @State private var displayTraits = ChatDisplayTraits()
+    @State private var chatHeaderHeight: CGFloat = 0
+    @State private var showSettings = false
+    /// The unfolded iPhone Duo's sidebar, opened and closed from its rail. Saved, so folding,
+    /// unfolding, rotating and the keyboard never change it.
+    @AppStorage("cantrip.duoSidebar.open") private var duoSidebarOpen = true
+    @State private var showVoiceMode = false
+    @State private var dictationInsertion: DictationInsertion?
+    @State private var handledDictationID: UUID?
+    @State private var showSkills = false
+    @State private var showQueue = false
+    @State private var showBackgroundTasks = false
+    @State private var showHomeBackground = false
+    @State private var showGitHubBuilds = false
+    @State private var showCantripMemory = false
+    @State private var showMascotCustomization = false
+    @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
+    @State private var showCantripMaintenance = false
+    @State private var showRemoteTabs = false
+    /// The Duo sidebar slides over the chat (narrow window) rather than sitting beside it. Over the
+    /// chat it has its own open state, closed at first and never saved, so a window that just got
+    /// narrow (split screen) isn't covered by a sidebar left open full width.
+    @State private var duoSidebarOverlays = false
+    @State private var duoOverlaySidebarOpen = false
+    @State private var opensDrawerAfterReturningHome = false
+    @StateObject private var backTransition = CantripTabBackTransition()
+    @State private var homeSnapshotTask: Task<Void, Never>?
+    /// The launch splash covers Home at first; no pictures until it has gone.
+    @State private var homeSnapshotsAllowedFrom = Date.distantFuture
+    @State private var showCopilotUsage = false
+    @State private var homeSection = CantripHomeSection.chat
+    @State private var renamingRemoteSession: CantripRemoteSession?
+    @State private var showRenameLocalTab = false
+    @State private var tabName = ""
+    @FocusState private var composerFocused: Bool
+    /// Escape (hardware keyboard) hides the backend "/" list until the text changes.
+    @State private var backendSlashDismissedText: String?
+    /// The row picked with the arrow keys, for the text it was picked on.
+    @State private var backendSlashHighlight: (text: String, index: Int)?
+    @State private var commands: [HermesCommand] = []
+    @StateObject private var menuUsageModel: CopilotUsageModel
+    /// When paused, the app sends nothing — guards against unintentional requests
+    /// (stray taps, ambient voice) that would otherwise burn the agent's budget.
+    @AppStorage("hermes.paused") private var paused = false
+
+    /// Filtered "/" suggestions: shown while the user is typing a command name
+    /// (starts with "/", no space yet).
+    private var suggestions: [HermesCommand] {
+        guard input.hasPrefix("/"), !input.contains(" ") else { return [] }
+        let q = input.lowercased()
+        return Array(commands.filter { $0.command.lowercased().hasPrefix(q) }.prefix(6))
+    }
+
+    init(env: HermesEnv, remote: CantripRemoteModel) {
+        _env = ObservedObject(wrappedValue: env)
+        _remote = ObservedObject(wrappedValue: remote)
+        _slashCommands = ObservedObject(wrappedValue: remote.slashCommands)
+        let v = VoiceController()
+        _voice = StateObject(wrappedValue: v)
+        _menuUsageModel = StateObject(wrappedValue: CopilotUsageModel())
+        _vm = StateObject(
+            wrappedValue: ChatViewModel(env: env, remote: remote, voice: v)
+        )
+    }
+
+    /// The tab on screen (a project tab, or Home's chat), for the app icon's badge.
+    private var visibleTabID: String? {
+        switch vm.activeLane {
+        case .cantrip: remote.selectedSessionID
+        case .home: homeSection == .chat ? CantripHomeIdentity.sessionID : nil
+        default: nil
+        }
+    }
+
+    var body: some View {
+        ChatNavigationView(
+            isTabListPresented: $showRemoteTabs,
+            hasTabs: vm.activeLane == .home || usesDuoTabPicker,
+            canSelectTabs: remoteTabsEnabled,
+            isReorderingTabs: remote.isReorderingTabs,
+            showsPersistentSidebar: showsDuoSidebar,
+            sidebarOverlays: $duoSidebarOverlays,
+            dismissPersistentSidebar: { withAnimation(.snappy) { isDuoSidebarOpen = false } }
+        ) { isModal, dismiss in
+            CantripHomeTabDrawer(
+                model: remote,
+                isModal: isModal,
+                backgroundActiveCount: homeBackgroundCount,
+                backgroundInputCount: homeBackgroundInputCount,
+                onDismiss: dismiss,
+                onSelectHome: {
+                    dismiss()
+                    if vm.activeLane == .cantrip { returnHome() }
+                },
+                onOpenBackground: {
+                    dismiss()
+                    composerFocused = false
+                    showHomeBackground = true
+                },
+                // The drawer has already asked to close, but it is still on screen: keep the picture of
+                // Home taken as it opened.
+                onSelect: { openTab($0, picturesHome: false) },
+                onCreate: createRemoteSession,
+                onRename: { renamingRemoteSession = $0 },
+                onClose: closeRemoteSession,
+                onOpenSettings: {
+                    dismiss()
+                    composerFocused = false
+                    showSettings = true
+                }
+            )
+        } content: {
+            Group {
+                if vm.activeLane == .home {
+                    CantripHomeTabs(
+                        selection: $homeSection,
+                        runningTasks: remote.homeTasks.filter { $0.state == "running" }.count,
+                        chatTopClearance: chatHeaderHeight
+                    ) {
+                        conversationContent
+                    } tasks: {
+                        CantripHomeTasksView(remote: remote, openChat: openHomeChat, openRun: openHomeRun)
+                    } artifacts: {
+                        CantripHomeArtifactsView(remote: remote, openChat: openHomeChat)
+                    } builds: {
+                        #if os(iOS)
+                        CantripHomeBuildsView(remote: remote)
+                        #endif
+                    }
+                } else {
+                    conversationContent
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                chatAvailableHeight = $0
+            }
+            .onChange(of: visibleTabID, initial: true) { _, id in remote.setVisibleTab(id) }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if vm.activeLane != .home || homeSection == .chat {
+                    chatHeader
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                            chatHeaderHeight = $0
+                        }
+                }
+            }
+            // Full screen: as a sheet it was a small card on an unfolded Duo and iPad.
+            .fullScreenCover(
+                isPresented: $showSettings,
+                onDismiss: {
+                    if vm.activeLane == .home {
+                        Task {
+                            await remote.selectHome()
+                            vm.syncRemoteTranscript()
+                        }
+                    } else {
+                        vm.gatewayDidChange()
+                    }
+                    reloadCommands()
+                }
+            ) {
+                SettingsView(env: env, remote: remote, voice: voice,
+                             canChangeGateway: !vm.sending, displayTraits: displayTraits)
+            }
+            .sheet(isPresented: $showSkills) {
+                SkillsView(client: env.client) { skill in
+                    showSkills = false
+                    vm.send(skill.command)        // run it → returns to chat showing the interaction
+                }
+            }
+            .sheet(isPresented: $showQueue) {
+                if let sessionID = remote.selectedSessionID {
+                    CantripQueueView(remote: remote, sessionID: sessionID)
+                }
+            }
+            .sheet(isPresented: $showBackgroundTasks) {
+                if let sessionID = remote.selectedSessionID {
+                    CantripBackgroundTasksView(remote: remote, sessionID: sessionID)
+                        .presentationDetents([.medium, .large])
+                }
+            }
+            .sheet(isPresented: $showHomeBackground) {
+                CantripHomeBackgroundView(
+                    remote: remote,
+                    openLog: {
+                        showHomeBackground = false
+                        remote.prepareToOpenHomeBackgroundLog()
+                        env.select(.cantrip)
+                    },
+                    openSession: { id in
+                        showHomeBackground = false
+                        remote.prepareToOpenHomeRun(sessionID: id)
+                        env.select(.cantrip)
+                    },
+                    openTab: { id in
+                        showHomeBackground = false
+                        openTab(id)
+                    }
+                )
+                .presentationDetents([.medium, .large])
+            }
+            .sheet(isPresented: $showGitHubBuilds) {
+                GitHubBuildsView(remote: remote)
+            }
+            .sheet(isPresented: $showCantripMemory) {
+                CantripMemoryView(remote: remote)
+            }
+            .sheet(isPresented: $showMascotCustomization) {
+                CantripMascotCustomizationView()
+            }
+            .sheet(item: $renamingRemoteSession) { session in
+                CantripTabRenameSheet(model: remote, session: session)
+            }
+            .cantripSectionPrompt(model: remote)
+            .sheet(item: $remote.modelSettingsSession) { session in
+                CantripSessionSettingsView(model: remote, session: session, identity: remote.usageIdentity)
+            }
+            .sheet(item: $remote.inputRequestsSession) { session in
+                CantripInputRequestsView(model: remote, session: session)
+            }
+            .sheet(isPresented: $remote.showingMacAccess) {
+                NavigationStack { CantripMacAccessView(remote: remote) }
+            }
+            .sheet(isPresented: $remote.showingMCPServers) {
+                CantripMCPServersView(remote: remote, tabID: remote.mcpServersTab)
+            }
+            .sheet(isPresented: $remote.showingSkills) {
+                CantripSkillsView(remote: remote)
+            }
+            .sheet(isPresented: $remote.showingBackends) {
+                CantripBackendsView(remote: remote)
+            }
+            .sheet(isPresented: $showCantripMaintenance) {
+                CantripMaintenanceSheet(remote: remote)
+            }
+            .sheet(isPresented: $showCopilotUsage) {
+                CopilotUsageView(model: menuUsageModel, remote: remote)
+            }
+            .alert("Rename Tab", isPresented: $showRenameLocalTab) {
+                TextField("Tab name", text: $tabName)
+                Button("Cancel", role: .cancel) {}
+                Button("Save") { vm.renameTab(tabName) }
+            } message: {
+                Text("Up to 80 characters. Leave blank to use the automatic name.")
+            }
+            .alert("Tab could not be changed", isPresented: Binding(
+                get: { vm.tabActionError != nil },
+                set: { if !$0 { vm.tabActionError = nil } }
+            )) {
+                Button("OK") { vm.tabActionError = nil }
+            } message: {
+                Text(vm.tabActionError ?? "")
+            }
+            .fullScreenCover(
+                isPresented: $showVoiceMode,
+                onDismiss: vm.leaveVoiceMode
+            ) {
+                VoiceModeView(
+                    voice: voice,
+                    vm: vm,
+                    onClose: { showVoiceMode = false }
+                )
+            }
+            .modifier(CantripThreadPresenter(remote: remote))
+            .alert("Message not confirmed", isPresented: Binding(
+                get: { imageSendError != nil },
+                set: { if !$0 { imageSendError = nil } }
+            )) {
+                Button("OK") { imageSendError = nil }
+            } message: {
+                Text(imageSendError ?? "")
+            }
+        } persistentSidebar: {
+            duoSidebar
+        } persistentRail: {
+            duoAppRail
+        }
+        // Inside a tab, the same swipe right (from anywhere) that opens the drawer in Home drags the tab
+        // away to Home (on the iPhone Duo it opens the tab picker instead).
+        .cantripTabBackSwipe(
+            backTransition,
+            isEnabled: vm.activeLane == .cantrip && !vm.sending && !importingImages && !submittingRemote
+                && !showsDuoSidebar && !usesDuoTabPicker,
+            isHomeReady: isHomeLoadedAfterReturn,
+            pop: returnHome
+        )
+        // Maps and sideways scrollers keep their own sideways drags.
+        .collectsCantripSwipeExemptions()
+        .onChange(of: duoSidebarOverlays) { _, _ in duoOverlaySidebarOpen = false }
+        .onChange(of: showRemoteTabs) { _, showing in
+            if showing {
+                if vm.activeLane == .home {
+                    captureHomeSnapshot(keyboardShown: composerFocused, drawerShown: false)
+                }
+                composerFocused = false
+            } else {
+                // Not while the drawer slides away.
+                scheduleHomeSnapshot(after: .milliseconds(500))
+            }
+        }
+        .onChange(of: composerFocused) { wasFocused, focused in
+            // Picture Home before the keyboard reshapes it, and again once it has gone.
+            if focused, !wasFocused, vm.activeLane == .home {
+                captureHomeSnapshot(keyboardShown: false, drawerShown: showRemoteTabs)
+            } else if !focused {
+                scheduleHomeSnapshot(after: .milliseconds(600))
+            }
+        }
+        .onChange(of: homeSection) { _, _ in scheduleHomeSnapshot() }
+        .onChange(of: vm.activeLane) { _, lane in
+            // Back on Home: picture it again once the reloaded conversation has settled.
+            if lane == .home { scheduleHomeSnapshot(after: .seconds(2)) }
+        }
+        .onChange(of: remote.tabDrawerRequest) { _, _ in
+            if vm.activeLane == .home || usesDuoTabPicker {
+                DispatchQueue.main.async { showRemoteTabs = true }
+            } else {
+                opensDrawerAfterReturningHome = true
+            }
+        }
+        .onChange(of: vm.activeLane) { _, lane in
+            guard lane == .home, opensDrawerAfterReturningHome else { return }
+            opensDrawerAfterReturningHome = false
+            // After the navigation view has reset its drawer for the lane change.
+            DispatchQueue.main.async { showRemoteTabs = true }
+        }
+        .onChange(of: showVoiceMode) { _, showing in
+            if showing { composerFocused = false }
+        }
+        .onChange(of: voice.dictation) { _, outcome in
+            insertDictation(outcome)
+        }
+        .onChange(of: input) { _, text in
+            if text.isEmpty { dictationInsertion = nil }
+        }
+        .onChange(of: showSettings) { _, showing in
+            if showing {
+                composerFocused = false
+                vm.leaveVoiceMode()
+            }
+        }
+        .onChange(of: env.selectedServerID) { old, new in
+            guard !vm.activeLane.usesCantripRemote else { return }
+            vm.gatewayDidChange()
+            commands = []
+            reloadCommands()
+        }
+        .onChange(of: remote.selectedServerID) { old, new in
+            guard vm.activeLane.usesCantripRemote else { return }
+            vm.leaveVoiceMode()
+            vm.remoteDeliveryMode = .auto
+            showRemoteTabs = false
+            showQueue = false
+            showBackgroundTasks = false
+            showHomeBackground = false
+            if vm.activeLane == .home {
+                Task {
+                    await remote.selectHome()
+                    vm.syncRemoteTranscript()
+                }
+            } else {
+                vm.syncRemoteTranscript()
+            }
+        }
+        .onAppear {
+            homeSnapshotsAllowedFrom = Date().addingTimeInterval(2.5)
+            voice.requestAuth()
+            vm.setAppActive(scenePhase == .active)
+            if router.startVoiceMode { showVoiceMode = true; router.startVoiceMode = false }   // cold launch from the Action Button
+        }
+        .onChange(of: router.startVoiceMode) { _, start in
+            if start { showVoiceMode = true; router.startVoiceMode = false }                    // foreground launch from the intent
+        }
+        .onChange(of: input) { _, v in
+            if v.hasPrefix("/"), commands.isEmpty { reloadCommands() }   // retry if the first load failed (e.g. key set late)
+        }
+        .onChange(of: paused) { _, isPaused in
+            if isPaused {                              // halt anything that could fire a request
+                remote.cancelVideoUpload()
+                voice.stopListening(finalize: false)
+                voice.stopSpeaking()
+                showVoiceMode = false
+            }
+        }
+        .onChange(of: env.executionLane) { _, lane in
+            showHomeBackground = false
+            if lane != .home, backTransition.isBusy {
+                // A notification or link opened a tab while Home was sliding in or still covered.
+                backTransition.reset()
+            } else if lane == .home, backTransition.isSliding {
+                // Something else (e.g. the Tabs widget) went Home before the swipe finished.
+                backTransition.reset()
+            }
+            vm.switchLane(to: lane)
+            reloadCommands()
+        }
+        .onChange(of: vm.sending) { _, sending in
+            // A lane change (e.g. ‹ Home or Open tab) made while a send was in flight waits for it.
+            guard !sending, env.executionLane != vm.activeLane else { return }
+            vm.switchLane(to: env.executionLane)
+            reloadCommands()
+        }
+        .onChange(of: remote.transcriptRevision) { _, _ in
+            vm.syncRemoteTranscript()
+            scheduleHomeSnapshot()
+        }
+        .onChange(of: remote.selectedSessionID) { _, _ in
+            // Another tab opened while this one was being swiped away: stay with the new tab.
+            if vm.activeLane == .cantrip, backTransition.isBusy { backTransition.reset() }
+            showBackgroundTasks = false
+            vm.syncRemoteTranscript()
+        }
+        .onChange(of: transcriptIdentity) { previous, current in
+            // A private draft must never follow selection into a cloud-backed tab.
+            serverTextDrafts[previous] = input
+            input = serverTextDrafts[current] ?? ""
+            composerRevision = UUID()
+            voice.stopListening(finalize: false)
+            voice.stopSpeaking()
+            showVoiceMode = false
+        }
+        .onChange(of: remote.notificationNavigationID) { _, _ in
+            backTransition.reset()
+            showSettings = false
+            showRemoteTabs = false
+            showQueue = false
+            showBackgroundTasks = false
+            showHomeBackground = false
+            showGitHubBuilds = false
+            showCantripMemory = false
+            showVoiceMode = false
+            composerFocused = false
+            vm.leaveVoiceMode()
+            vm.syncRemoteTranscript()
+            // A background run's request opens Home's Background list on that run, after the
+            // other sheets have closed.
+            if remote.homeBackgroundFocus != nil, vm.activeLane == .home {
+                DispatchQueue.main.async { showHomeBackground = true }
+            }
+        }
+        .onChange(of: remote.homeBackgroundFocus) { _, focus in
+            if focus != nil, vm.activeLane == .home { showHomeBackground = true }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active, vm.activeLane == .home {
+                // A notification or widget may open a tab before Home is seen again.
+                captureHomeSnapshot(keyboardShown: composerFocused, drawerShown: showRemoteTabs)
+            }
+            vm.setAppActive(phase == .active)
+            if phase == .active, showVoiceMode {
+                vm.resumeVoiceModeIfIdle()
+            }
+        }
+        .task {
+            await env.refreshGateway()
+            reloadCommands()
+        }
+        .modifier(ChatDisplayObserver { displayTraits = $0 })
+    }
+
+    private var conversationContent: some View {
+        VStack(spacing: 0) {
+            if vm.activeLane.usesCantripRemote {
+                remoteNotices
+                    .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
+            }
+            transcriptList
+                .id(transcriptIdentity)
+            if vm.activeLane.usesCantripRemote {
+                CantripPinnedSubagents(
+                    remote: remote,
+                    sessionID: remote.selectedSessionID,
+                    subagents: CantripPinnedSubagents.liveForeground(
+                        in: remote.selectedSession?.transcript ?? []
+                    ),
+                    maxHeight: max(120, chatAvailableHeight * 0.35)
+                )
+            }
+            inputBar
+        }
+    }
+
+    private var chatHeader: some View {
+        ChatHeader(
+            style: showsDuoSidebar ? .sidebar
+                : vm.activeLane == .home ? .mascot
+                : vm.activeLane == .cantrip ? .tab : .standard,
+            sidebarToggle: duoSidebarToggle,
+            // The open sidebar lists Home and the tabs; closed, the toggle takes the Tabs button's place
+            // (in a tab too: on the Duo a tab has no "‹ Home", the tab picker leads back).
+            hidesLeadingInRail: showsDuoSidebar
+                || (displayTraits.isUnfoldedDuo && vm.activeLane.usesCantripRemote),
+            actionsInRail: showsDuoAppRail
+        ) {
+            if vm.activeLane == .cantrip {
+                CantripTabHeaderTitle(
+                    session: remote.selectedSession,
+                    connectionState: remote.connectionState,
+                    alignment: showsDuoSidebar ? .leading : .center
+                )
+            } else if vm.activeLane == .home, showsDuoSidebar {
+                // Pip is in the sidebar; the header names the section like Gateway Mac's toolbar.
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(homeSection.title).font(.headline).lineLimit(1)
+                    Text(remote.isConnected ? remote.endpointHost : remote.connectionLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("chat.header.title")
+            } else if vm.activeLane == .home {
+                ExecutionLanePicker(
+                    env: env,
+                    remote: remote,
+                    centeredTitle: "Cantrip Home",
+                    mascotMood: .resolve(
+                        isConnected: remote.isConnected,
+                        isWorking: remote.selectedSession?.isStreaming == true,
+                        activity: .current(
+                            status: remote.selectedSession?.status,
+                            transcript: remote.selectedSession?.transcript ?? []
+                        ),
+                        isListening: voice.isListening,
+                        isSpeaking: voice.isSpeaking,
+                        needsInput: (remote.selectedSession?.pendingInputCount ?? 0) > 0,
+                        hasProblem: remote.errorMessage != nil
+                            || remote.selectedSession?.transcript.last?.role == "error"
+                    )
+                )
+                .disabled(vm.sending || importingImages || submittingRemote)
+            } else {
+                ChatHeaderTitle(title: vm.tabTitle, isLocked: vm.isTabLocked,
+                                isWorking: vm.isWorking)
+            }
+        } connection: {
+            if vm.activeLane.usesCantripRemote {
+                ChatConnectionIndicator(host: remote.endpointHost, isConnected: remote.isConnected,
+                                        statusOverride: remote.connectionLabel) {
+                    composerFocused = false
+                }
+            }
+        } lane: {
+            if vm.activeLane.usesCantripRemote, remote.selectedSession?.isLocalPrivate == true {
+                ChatHeaderIcon(systemName: "lock.shield.fill")
+                    .accessibilityLabel("Private Local. Self-hosted models; history is saved and available remotely.")
+            } else {
+                ExecutionLanePicker(env: env, remote: remote)
+                    .disabled(vm.sending || importingImages || submittingRemote)
+            }
+        } usage: {
+            if remote.selectedSession?.isLocalPrivate != true {
+                CopilotUsageButton(remote: remote, compact: vm.activeLane == .home) {
+                    composerFocused = false
+                }
+            }
+        } delivery: {
+            if showsDuoSidebar, vm.activeLane == .cantrip {
+                // Gateway Mac's toolbar order: Stop, delivery, then the tab's menu.
+                CantripStopButton(
+                    session: remote.selectedSession,
+                    isConnected: remote.isConnected,
+                    isMutating: remote.isMutating,
+                    isStopping: remote.stoppingSessionID != nil
+                        && remote.stoppingSessionID == remote.selectedSessionID,
+                    iconOnly: true,
+                    onStop: vm.stopRemote
+                )
+                .disabled(vm.sending || importingImages || submittingRemote)
+            }
+            if vm.activeLane.usesCantripRemote, remote.selectedSession != nil {
+                CantripDeliveryPicker(deliveryMode: $vm.remoteDeliveryMode, compact: true)
+                    .disabled(remote.isMutating || vm.sending || importingImages || submittingRemote)
+            }
+        } settings: {
+            ChatSettingsButton { showSettings = true }
+                .disabled(vm.sending || importingImages || submittingRemote)
+        } leading: {
+            if vm.activeLane == .cantrip, !usesDuoTabPicker {
+                CantripHomeBackPill { returnHomeAnimated() }
+                    .disabled(importingImages || submittingRemote)
+            } else if vm.activeLane.usesCantripRemote {
+                // The Pip title is already the lane menu, so this slot opens the tab drawer, which
+                // also holds background jobs.
+                CantripHomeTabsButton(
+                    workingCount: CantripHomeTabCounts.working(in: remote.sessions),
+                    inputCount: CantripHomeTabCounts.needingInput(in: remote.sessions) + homeBackgroundInputCount,
+                    isEnabled: remoteTabsEnabled
+                ) {
+                    composerFocused = false
+                    // A toggle: the system's vertical bar stays above the open drawer.
+                    showRemoteTabs.toggle()
+                }
+            }
+        } trailing: {
+            chatMenu
+        }
+    }
+
+    /// Everything `chatMenu` renders. The menu only rebuilds when this changes.
+    private struct ChatMenuState: Equatable {
+        let activeLane: ExecutionLane
+        let selectableLanes: [ExecutionLane]
+        let localAvailable: Bool
+        let isCantrip: Bool
+        let isHome: Bool
+        let selectedSessionID: String?
+        let isLocalPrivate: Bool
+        /// Nil from Macs before Start Fresh; false where it doesn't apply (Cantrip Home).
+        let supportsStartFresh: Bool?
+        let isSessionBusy: Bool
+        let canResume: Bool
+        let isRemoteMutating: Bool
+        let remoteTabsEnabled: Bool
+        let paused: Bool
+        let settingsDisabled: Bool
+        let isTabLocked: Bool
+        let newConversationDisabled: Bool
+        let deliveryMode: CantripDeliveryMode
+        /// The open project tab's actions; nil outside a listed tab.
+        let tab: CantripTabActionState?
+        let canReturnHome: Bool
+    }
+
+    private var chatMenuState: ChatMenuState {
+        ChatMenuState(
+            activeLane: vm.activeLane,
+            selectableLanes: env.selectableLanes,
+            localAvailable: env.isAvailable(.local),
+            isCantrip: vm.activeLane == .cantrip,
+            isHome: vm.activeLane == .home,
+            selectedSessionID: remote.selectedSession?.id,
+            isLocalPrivate: remote.selectedSession?.isLocalPrivate == true,
+            supportsStartFresh: remote.selectedSession.flatMap(CantripStartFresh.support(for:)),
+            isSessionBusy: remote.selectedSession.map(CantripStartFresh.isBusy) ?? false,
+            canResume: remote.selectedSession.map(CantripContinue.showsTabResume) ?? false,
+            isRemoteMutating: remote.isMutating,
+            remoteTabsEnabled: remoteTabsEnabled,
+            paused: paused,
+            settingsDisabled: vm.sending || importingImages || submittingRemote,
+            isTabLocked: vm.isTabLocked,
+            newConversationDisabled: newConversationDisabled,
+            deliveryMode: vm.remoteDeliveryMode,
+            tab: vm.activeLane == .cantrip
+                ? remote.selectedSession.flatMap { session in
+                    remote.sessions.contains { $0.id == session.id }
+                        ? CantripTabActionState(session: session, model: remote) : nil
+                }
+                : nil,
+            canReturnHome: !importingImages && !submittingRemote
+        )
+    }
+
+    private var chatMenu: some View {
+        let state = chatMenuState
+        return StableMenu(state: state) {
+            // Only this tab's actions, in labeled sections; Memory, Builds, Background, Usage Limits
+            // and the Mac's updates and permissions are in Settings and the tab drawer.
+            if let tab = state.tab {
+                CantripTabActions(
+                    model: remote, state: tab,
+                    onRename: {
+                        composerFocused = false
+                        renamingRemoteSession = remote.sessions.first { $0.id == tab.id }
+                    },
+                    onClose: { closeRemoteSession(tab.id) },
+                    onOpenTab: { openTab($0) }
+                )
+            }
+            if state.isCantrip || state.isHome, state.selectedSessionID != nil {
+                Section(state.tab == nil ? "Model & conversation" : "Messages") {
+                    if state.tab == nil {
+                        Button {
+                            composerFocused = false
+                            if let session = remote.selectedSession {
+                                remote.modelSettingsSession = session
+                            }
+                        } label: {
+                            Label(state.isLocalPrivate ? "Private Local Settings" : "Model Settings", systemImage: "slider.horizontal.3")
+                        }
+                        .disabled(state.isRemoteMutating)
+                        if let id = state.selectedSessionID {
+                            CantripStartFreshMenuItem(
+                                model: remote, sessionID: id, support: state.supportsStartFresh,
+                                isDisabled: state.isRemoteMutating || state.isSessionBusy
+                            )
+                        }
+                    }
+                    if !state.isLocalPrivate {
+                        Menu {
+                            ForEach(CantripDeliveryMode.allCases) { mode in
+                                Button {
+                                    vm.remoteDeliveryMode = mode
+                                } label: {
+                                    Label(
+                                        mode.title,
+                                        systemImage: mode == state.deliveryMode
+                                            ? "checkmark.circle.fill"
+                                            : "circle"
+                                    )
+                                }
+                            }
+                        } label: {
+                            Label(
+                                "Delivery: \(state.deliveryMode.title)",
+                                systemImage: "paperplane"
+                            )
+                        }
+                        .disabled(state.isRemoteMutating)
+                    }
+                    if state.canResume {
+                        Button {
+                            Task {
+                                _ = await remote.resume()
+                                vm.syncRemoteTranscript()
+                            }
+                        } label: {
+                            Label("Resume", systemImage: "play")
+                        }
+                        .disabled(state.isRemoteMutating)
+                    }
+                }
+            }
+            // Pause Agent is app-wide (Settings, under the status card); Voice Mode opens from the
+            // composer's microphone (double-tap) or, in local chats, its ∞ button.
+            if !state.isCantrip && !state.isHome {
+                Section("Agent") {
+                    Button { showSkills = true } label: { Label("Skills", systemImage: "wand.and.stars") }
+                        .disabled(state.paused)
+                }
+            }
+            if !state.isCantrip && !state.isHome {
+                Section("Tab") {
+                    Button {
+                        tabName = vm.tabMetadata.customTitle ?? vm.tabTitle
+                        showRenameLocalTab = true
+                    } label: {
+                        Label("Rename Tab", systemImage: "pencil")
+                    }
+                    Button {
+                        vm.setTabLocked(!vm.isTabLocked)
+                    } label: {
+                        Label(state.isTabLocked ? "Unlock Tab" : "Lock Tab",
+                              systemImage: state.isTabLocked ? "lock.open" : "lock")
+                    }
+                    Button(role: .destructive) { vm.newConversation() } label: {
+                        Label("New Conversation", systemImage: "square.and.pencil")
+                    }
+                    .disabled(state.newConversationDisabled)
+                }
+            }
+        } label: {
+            ChatMenuIcon(isPaused: state.paused, systemName: state.isCantrip ? "ellipsis" : "line.3.horizontal")
+        }
+        .equatable()
+        .accessibilityLabel(state.isCantrip ? "Tab menu" : "Chat menu")
+        .accessibilityValue(state.paused ? "Agent paused" : "")
+        .accessibilityIdentifier("chat.menu")
+    }
+
+    /// Load the command/skill menu for "/" suggestions. Only overwrites on a
+    /// non-empty result, so a transient failure (e.g. a 401 before the key is
+    /// entered) doesn't wipe a good list — and it can be retried safely.
+    private func reloadCommands() {
+        guard !vm.activeLane.usesCantripRemote else {
+            commands = []
+            return
+        }
+        let serverID = env.selectedServerID
+        let gateway = env.gatewayIdentity
+        Task {
+            if let c = await env.client?.commands(),
+               !c.isEmpty,
+               serverID == env.selectedServerID,
+               gateway == env.gatewayIdentity,
+               !vm.activeLane.usesCantripRemote {
+                commands = c
+            }
+        }
+    }
+
+    private func remoteDraftKey(_ sessionID: String) -> String {
+        "\(remote.selectedServerID?.uuidString ?? remote.usageIdentity.uuidString)/\(sessionID)"
+    }
+
+    private var newConversationDisabled: Bool {
+        if vm.isTabLocked { return true }
+        if vm.activeLane.usesCantripRemote {
+            return remote.selectedSessionID == nil
+                || remote.isMutating
+                || importingImages || submittingRemote || vm.sending || hasImageDraft
+                || remote.selectedSession?.isStreaming == true
+        }
+        return vm.turns.isEmpty || vm.sending
+    }
+
+    private var destinationReady: Bool {
+        if vm.activeLane.usesCantripRemote {
+            return remote.isConfigured && remote.selectedSessionID != nil
+        }
+        return env.isConfigured
+    }
+
+    /// While a run streams, its status already shows above the composer.
+    private var remoteIdleStatus: String? {
+        guard let session = remote.selectedSession, !session.isStreaming,
+              let status = session.status, !status.isEmpty else { return nil }
+        return status
+    }
+
+    private var hasRemoteNotices: Bool {
+        remoteIdleStatus != nil
+            || remote.selectedSession?.deliveryStatus != nil
+            || remote.errorMessage != nil
+            || remote.detailError != nil
+    }
+
+    @ViewBuilder private var remoteNotices: some View {
+        if hasRemoteNotices {
+            VStack(spacing: 8) {
+                if let status = remoteIdleStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let status = remote.selectedSession?.deliveryStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let error = remote.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                CantripDetailNotice(model: remote)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            // Leaves the top inset clear so floating headers stay translucent above a notice.
+            .background(.thinMaterial, ignoresSafeAreaEdges: .horizontal)
+            Divider()
+        }
+    }
+
+    private var remoteTabsEnabled: Bool {
+        (vm.activeLane == .home || usesDuoTabPicker)
+            && !vm.sending && !importingImages && !submittingRemote && !remote.isMutating
+    }
+
+    /// Opens a project tab full screen inside Cantrip Home (drawer rows, handoff cards, Background).
+    private func openTab(_ id: String, picturesHome: Bool = true) {
+        if picturesHome, vm.activeLane == .home {
+            captureHomeSnapshot(keyboardShown: composerFocused, drawerShown: showRemoteTabs)
+        }
+        composerFocused = false
+        showRemoteTabs = false
+        if vm.activeLane == .cantrip {
+            Task {
+                await remote.selectSession(id)
+                vm.syncRemoteTranscript()
+            }
+        } else {
+            remote.prepareToOpenTab(id)
+            env.select(.cantrip)
+        }
+    }
+
+    private func returnHome() {
+        composerFocused = false
+        env.select(.home)
+    }
+
+    /// ‹ Home and Back to Home: slide the tab away like the swipe does.
+    private func returnHomeAnimated() {
+        guard !backTransition.isBusy else { return }
+        // A send in flight defers the lane change, so there is nothing to slide to yet.
+        guard vm.activeLane == .cantrip, !vm.sending else { return returnHome() }
+        composerFocused = false
+        backTransition.popFromButton(colorScheme: colorScheme, reduceMotion: reduceMotion, pop: returnHome)
+    }
+
+    /// Pictures Home as it is on screen right now, unless the keyboard or tab drawer covers it (the
+    /// snapshot also skips sheets and menus). The latest picture is what a tab's back swipe reveals.
+    private func captureHomeSnapshot(keyboardShown: Bool, drawerShown: Bool) {
+        guard vm.activeLane == .home, !keyboardShown, !drawerShown, !backTransition.isBusy,
+              Date() >= homeSnapshotsAllowedFrom else { return }
+        backTransition.keepHomeSnapshot(CantripScreenSnapshot.capture(colorScheme: colorScheme))
+    }
+
+    /// Refreshes Home's picture once it has been still for a moment (replies stream in bursts).
+    private func scheduleHomeSnapshot(after delay: Duration = .milliseconds(700)) {
+        guard vm.activeLane == .home else { return }
+        homeSnapshotTask?.cancel()
+        let untilSplashGone = min(3, max(0, homeSnapshotsAllowedFrom.timeIntervalSinceNow))
+        homeSnapshotTask = Task { @MainActor in
+            try? await Task.sleep(for: max(delay, .seconds(untilSplashGone)))
+            guard !Task.isCancelled, scenePhase == .active else { return }
+            captureHomeSnapshot(keyboardShown: composerFocused, drawerShown: showRemoteTabs)
+        }
+    }
+
+    /// Home's conversation has reloaded (or failed to) after returning from a tab.
+    private var isHomeLoadedAfterReturn: Bool {
+        vm.activeLane == .home && remote.isHomeSelected
+            && (remote.selectedSession?.isCantripHome == true || remote.detailError != nil)
+    }
+
+    private func createRemoteSession() {
+        composerFocused = false
+        Task {
+            guard let id = await remote.createTab() else { return }
+            // Started from the drawer, which may still be closing.
+            openTab(id, picturesHome: false)
+        }
+    }
+
+    /// Sends the next queued message now; failures show in the remote notices like other chat actions.
+    /// The queued-messages row above the composer, with Send now and (when Stop paused it) Resume.
+    private func queueButton(_ session: CantripRemoteSession) -> some View {
+        let nextID = session.queued?.first?.id
+        return CantripQueueButton(
+            session: session,
+            sendNow: nextID.map { id in { sendQueuedPromptNow(id, sessionID: session.id) } },
+            resume: queueResume(for: session),
+            isSendingNow: remote.sendingQueuedPromptID != nil && remote.sendingQueuedPromptID == nextID,
+            canSendNow: remote.isConnected && !remote.isMutating
+        ) {
+            composerFocused = false
+            showQueue = true
+        }
+    }
+
+    /// Resume for a queue Stop paused; nil otherwise.
+    private func queueResume(for session: CantripRemoteSession) -> (() -> Void)? {
+        guard session.queuePaused == true else { return nil }
+        let id = session.id
+        return { Task { await remote.resumeQueue(sessionID: id) } }
+    }
+
+    private func sendQueuedPromptNow(_ id: String, sessionID: String) {
+        Task {
+            _ = await remote.sendQueuedPromptNow(id, sessionID: sessionID)
+            vm.syncRemoteTranscript()
+        }
+    }
+
+    private func closeRemoteSession(_ id: String) {
+        let draftKey = remoteDraftKey(id)
+        let closesOpenTab = vm.activeLane == .cantrip && remote.selectedSessionID == id
+        Task {
+            if await remote.closeSession(id) {
+                imageDrafts.removeValue(forKey: draftKey)
+                videoDrafts.removeValue(forKey: draftKey)
+                fileDrafts.removeValue(forKey: draftKey)
+                mentionDrafts.removeValue(forKey: draftKey)
+                // A closed tab returns to Home, where the drawer lists the remaining tabs.
+                if closesOpenTab, vm.activeLane == .cantrip { returnHome() }
+            }
+            vm.syncRemoteTranscript()
+        }
+    }
+
+    /// Shows a waiting background run's request in Home's Background list.
+    private func openHomeRun(_ sessionID: String) {
+        composerFocused = false
+        remote.homeBackgroundFocus = sessionID
+        showHomeBackground = true
+    }
+
+    private func openHomeChat(prefill: String?) {
+        homeSection = .chat
+        if let prefill {
+            input = prefill
+            composerRevision = UUID()
+        }
+        DispatchQueue.main.async {
+            composerFocused = true
+        }
+    }
+
+    private var transcriptList: some View {
+        ChatTranscriptScrollView(
+            scrollRequest: vm.scrollToLatestRequest,
+            prependRevision: vm.historyPrependRevision,
+            prependAnchor: vm.historyPrependAnchor,
+            dismissKeyboard: { composerFocused = false },
+            loadOlder: {
+                guard vm.activeLane.usesCantripRemote else { return }
+                remote.requestOlderMessages()
+            }
+        ) {
+            if vm.activeLane.usesCantripRemote {
+                CantripHistoryControls(model: remote)
+                if vm.activeLane == .cantrip, let session = remote.selectedSession,
+                   session.id == remote.selectedSessionID, let child = session.child, let parentID = session.parentID {
+                    CantripChildTabBanner(child: child, onOpenParent: { openTab(parentID) })
+                }
+            }
+            if vm.turns.isEmpty { emptyState }
+            let threadLines = vm.activeLane.usesCantripRemote
+                ? CantripThreadLine.lines(in: remote.selectedSession?.transcript ?? []) : [:]
+            ForEach(vm.turns) { turn in
+                let remoteMessage = vm.activeLane.usesCantripRemote ? vm.remoteMessage(for: turn.id) : nil
+                TurnView(
+                    turn: turn,
+                    remote: remote,
+                    cantripSessionID: vm.activeLane.usesCantripRemote ? remote.selectedSessionID : nil,
+                    remoteMessage: remoteMessage,
+                    onAction: { vm.send($0.command) },
+                    onApproval: { vm.approveRun($0, for: turn.id) },
+                    // Home's handoff cards and a parent tab's child-tab cards open tabs.
+                    onOpenTab: vm.activeLane.usesCantripRemote ? { openTab($0) } : nil,
+                    threadLine: remoteMessage.flatMap { threadLines[$0.id] }
+                )
+                .id(turn.id)
+                if vm.activeLane.usesCantripRemote, let message = remoteMessage,
+                   message.isPreview == true {
+                    CantripMessageDetailsButton(model: remote, message: message,
+                                                sessionID: remote.selectedSessionID ?? "")
+                }
+            }
+            if vm.activeLane.usesCantripRemote {
+                CantripInputTranscript(model: remote)
+            }
+        }
+        // Mentions of open tabs open them, like handoff cards.
+        .cantripMentionLinks(remote: remote, onOpenTab: vm.activeLane.usesCantripRemote ? { openTab($0) } : nil)
+    }
+
+    private var transcriptIdentity: String {
+        if vm.activeLane.usesCantripRemote {
+            return "\(vm.activeLane.rawValue):\(remoteDraftKey(remote.selectedSessionID ?? ""))"
+        }
+        return "\(vm.activeLane.rawValue):\(env.selectedServerID?.uuidString ?? "legacy")"
+    }
+
+    @ViewBuilder private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: emptyStateIcon)
+                .font(.system(size: 56)).foregroundStyle(.tint)
+            if vm.activeLane.usesCantripRemote, !remote.isConfigured {
+                Text("Connect to Cantrip").font(.title3.weight(.semibold))
+                Text("Open Settings and enter Cantrip's Remote URL and pairing token.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("Open Settings") { showSettings = true }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 4)
+            } else if vm.activeLane == .home {
+                switch homeChatAvailability {
+                case .ready:
+                    Text("Hi, I'm \(CantripMascotName.display(mascotName))").font(.title3.weight(.semibold))
+                    Text("Ask anything, create a task, or make an artifact.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                case .opening:
+                    Text("Opening Cantrip Home…").font(.title3.weight(.semibold))
+                    ProgressView().controlSize(.small)
+                case .unavailable(let message):
+                    Text("Cantrip Home unavailable").font(.title3.weight(.semibold))
+                    Text(message)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Open Settings") { showSettings = true }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.top, 4)
+                }
+            } else if vm.activeLane == .cantrip {
+                if let session = remote.selectedSession {
+                    Text(session.title).font(.title3.weight(.semibold))
+                    Text("Type or use voice to start this tab. Cantrip runs it on your Mac.")
+                        .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                } else {
+                    Text("No tab open").font(.title3.weight(.semibold))
+                    Text("Go back to Home and open a tab from the drawer, or start a new one.")
+                        .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Button("Back to Home") { returnHomeAnimated() }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.top, 4)
+                }
+            } else if env.isConfigured {
+                Text("Talk to Hermes").font(.title3.weight(.semibold))
+                Text("Type, or hold the mic to dictate and release to finish. Tap it to dictate hands-off; double-tap for continuous, hands-free voice.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            } else {
+                Text("Connect your gateway").font(.title3.weight(.semibold))
+                Text("Open Settings and enter your Hermes gateway URL + API key to start.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("Open Settings") { showSettings = true }.buttonStyle(.borderedProminent).padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: .infinity).padding(.top, 80).padding(.horizontal, 30)
+    }
+
+    private var emptyStateIcon: String {
+        if vm.activeLane == .home {
+            switch homeChatAvailability {
+            case .ready: return "house.fill"
+            case .opening: return "house"
+            case .unavailable: return "house.slash"
+            }
+        }
+        if vm.activeLane.usesCantripRemote {
+            return remote.isConfigured
+                ? "rectangle.stack.badge.plus"
+                : "antenna.radiowaves.left.and.right.slash"
+        }
+        return env.isConfigured ? "waveform.circle.fill" : "gearshape.circle.fill"
+    }
+
+    private var homeChatAvailability: CantripHomeChatAvailability {
+        .resolve(
+            isConfigured: remote.isConfigured,
+            isHomeSelected: remote.isHomeSelected,
+            isHomeSession: remote.selectedSession?.isCantripHome == true,
+            error: remote.detailError
+        )
+    }
+
+    private var inputBar: some View {
+        VStack(spacing: 8) {
+            // Home keeps background work behind its top-left Background button.
+            if vm.activeLane == .cantrip, !activeBackgroundTasks.isEmpty {
+                CantripBackgroundTaskButton(subagents: activeBackgroundTasks) {
+                    composerFocused = false
+                    showBackgroundTasks = true
+                }
+            }
+            if vm.activeLane.usesCantripRemote,
+               let session = remote.selectedSession,
+               session.id == remote.selectedSessionID,
+               session.queuedCount > 0 {
+                queueButton(session)
+            }
+            if paused {
+                pausedBar
+            } else {
+                if !suggestions.isEmpty { suggestionList }
+                voiceStatus
+                if vm.activeLane.usesCantripRemote, let sessionID = remote.selectedSessionID {
+                    ImageAttachmentPreviews(
+                        attachments: imageDraft(for: sessionID),
+                        remote: remote,
+                        disabled: imagePickerDisabled,
+                        isImporting: importingImages
+                    )
+                    if let video = videoDraft(for: sessionID).wrappedValue {
+                        VideoAttachmentPreview(video: video, disabled: imagePickerDisabled || importingImages) {
+                            videoDraft(for: sessionID).wrappedValue = nil
+                        }
+                    }
+                    FileAttachmentPreviews(files: fileDraft(for: sessionID),
+                                           disabled: imagePickerDisabled || importingImages)
+                    CantripMentionChips(mentions: mentionDrafts[remoteDraftKey(sessionID)] ?? [],
+                                        disabled: vm.sending || submittingRemote, onRemove: removeMention)
+                    if importingImages {
+                        Button("Cancel attachment preparation") { imageImportID = nil }
+                            .frame(minHeight: 44)
+                    }
+                    if let progress = remote.videoUploadProgress {
+                        VStack(alignment: .leading) {
+                            ProgressView(value: progress.fraction)
+                            Text(progress.label).font(.caption).foregroundStyle(.secondary)
+                            Button("Cancel upload") { remote.cancelVideoUpload() }
+                                .frame(minHeight: 44)
+                        }
+                        .accessibilityElement(children: .contain)
+                    }
+                }
+                // The Duo sidebar's Skills section filters instead of a pop-up over the chat.
+                if !showsDuoSidebar, let presentation = backendSlashPresentation {
+                    BackendSlashSuggestionList(
+                        presentation: presentation,
+                        highlighted: backendSlashHighlightIndex,
+                        maxHeight: max(120, chatAvailableHeight * 0.4),
+                        canOpenModelSettings: canOpenModelSettingsFromSlash,
+                        maxVisibleRows: 2.5,
+                        onChoose: { chooseBackendCommand($0, via: .activate) }
+                    )
+                }
+                // "@" suggestions sit above the composer in every layout, Duo's sidebar one included.
+                if let popup = mentionPopup {
+                    CantripMentionSuggestionList(
+                        popup: popup,
+                        sessions: Dictionary(remote.sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
+                        highlighted: CantripMentionHighlight.index(mentionHighlight, popup: popup),
+                        maxHeight: max(120, chatAvailableHeight * 0.4),
+                        onPick: pickMention
+                    )
+                }
+                messageComposer
+            }
+        }
+        .padding(.horizontal).padding(.vertical, 8)
+        .background(.bar)
+        .onChange(of: input) { _, text in
+            // Text the app put in (a draft, dictation, a command) puts the caret at its end, as
+            // without a selection binding; typing keeps the field's own caret.
+            if text != fieldText {
+                fieldText = text
+                composerSelection = TextSelection(insertionPoint: text.endIndex)
+            }
+            refreshMentions()
+        }
+        .onChange(of: composerSelection) { _, _ in refreshMentions() }
+        .onChange(of: BackendSlashCommands.slashToken(input) != nil) { _, entered in
+            if entered { remote.refreshSlashCommandsIfNeeded() }
+        }
+        .onChange(of: input) { _, text in
+            if text != backendSlashDismissedText { backendSlashDismissedText = nil }
+        }
+        .onChange(of: composerFocused) { _, focused in
+            // Prefetch while the keyboard comes up, so "/" usually shows a cached list at once.
+            if focused, vm.activeLane.usesCantripRemote { remote.refreshSlashCommandsIfNeeded() }
+        }
+        .onChange(of: remote.slashCommandContext) { _, _ in
+            // Another tab, folder or backend while the list is open.
+            if backendSlashToken != nil { remote.refreshSlashCommandsIfNeeded() }
+        }
+        #if DEBUG
+        .task {
+            guard CantripUITestFixtures.settingsTarget != nil || CantripUITestFixtures.opensModelSettings else { return }
+            for _ in 0..<200 where !(destinationReady && remote.isConnected) {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            try? await Task.sleep(for: .seconds(1))
+            if CantripUITestFixtures.settingsTarget != nil {
+                showSettings = true
+            } else if let session = remote.selectedSession {
+                remote.modelSettingsSession = session
+            }
+        }
+        .task {
+            if CantripUITestFixtures.composerText == nil, let name = CantripUITestFixtures.slashCommandToChoose {
+                // The Duo sidebar's Skills rows: choose from the chat's command list.
+                for _ in 0..<200 {
+                    if destinationReady, let context = remote.slashCommandContext,
+                       let response = slashCommands.response(for: context.key),
+                       let index = response.commands.firstIndex(where: { $0.name == name }) {
+                        try? await Task.sleep(for: .seconds(2))
+                        chooseBackendCommand(BackendCommandMatch(command: response.commands[index], score: 1, index: index),
+                                             via: .activate)
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                return
+            }
+            if let text = await CantripUITestFixtures.composerTextWhenReady({ destinationReady && composerAcceptsText }) {
+                input = text
+                composerFocused = true
+                guard let name = CantripUITestFixtures.slashCommandToChoose else { return }
+                for _ in 0..<150 {
+                    if let match = backendSlashPresentation?.matches.first(where: { $0.command.name == name }) {
+                        try? await Task.sleep(for: .seconds(1))
+                        chooseBackendCommand(match, via: .activate)
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            }
+        }
+        #endif
+    }
+
+    /// A tab on the iPhone Duo, folded or not: no way back to Home. The left-edge swipe and the Tabs
+    /// button (folded; unfolded, the sidebar toggle) bring out the tab picker, with Home pinned first.
+    private var usesDuoTabPicker: Bool {
+        vm.activeLane == .cantrip && (displayTraits.hasVerticalBar || displayTraits.isUnfoldedDuo)
+    }
+
+    /// iPhone Duo unfolded, in Cantrip, with its sidebar open: Gateway Mac's sidebar beside the chat.
+    private var showsDuoSidebar: Bool {
+        displayTraits.isUnfoldedDuo && isDuoSidebarOpen && vm.activeLane.usesCantripRemote
+    }
+
+    /// Whichever open state applies: over the chat (narrow) or beside it (saved).
+    private var isDuoSidebarOpen: Bool {
+        get { duoSidebarOverlays ? duoOverlaySidebarOpen : duoSidebarOpen }
+        nonmutating set {
+            if duoSidebarOverlays { duoOverlaySidebarOpen = newValue } else { duoSidebarOpen = newValue }
+        }
+    }
+
+    /// Unfolded upright, where the system's bar runs along the top: the app draws the rail.
+    private var showsDuoAppRail: Bool {
+        displayTraits.usesAppRail && vm.activeLane.usesCantripRemote
+    }
+
+    /// The unfolded iPhone Duo's rail when the app draws it: the same items, in the same order, as
+    /// the system's vertical bar holds on its side.
+    @ViewBuilder private var duoAppRail: some View {
+        if showsDuoAppRail {
+            CantripDuoAppRail {
+                duoSidebarToggle
+                ChatSettingsButton { showSettings = true }
+                    .disabled(vm.sending || importingImages || submittingRemote)
+                chatMenu.frame(width: 44, height: 44)
+            } bottom: {
+                if vm.activeLane == .home {
+                    CantripDuoRailSections(
+                        selection: $homeSection,
+                        runningTasks: remote.homeTasks.filter { $0.state == "running" }.count
+                    )
+                }
+            }
+        }
+    }
+
+    /// The rail's first item on an unfolded iPhone Duo: opens and closes the sidebar.
+    private var duoSidebarToggle: AnyView? {
+        guard vm.activeLane.usesCantripRemote else { return nil }
+        return AnyView(CantripDuoSidebarToggle(
+            isOpen: isDuoSidebarOpen,
+            workingCount: CantripHomeTabCounts.working(in: remote.sessions),
+            inputCount: CantripHomeTabCounts.needingInput(in: remote.sessions) + homeBackgroundInputCount
+        ) {
+            composerFocused = false
+            withAnimation(.snappy) { isDuoSidebarOpen.toggle() }
+        })
+    }
+
+    private var duoSidebar: some View {
+        CantripDuoSidebar(
+            model: remote,
+            slashCommands: slashCommands,
+            isHomeShown: vm.activeLane == .home,
+            homeSection: homeSection,
+            showsSkills: vm.activeLane == .cantrip || homeSection == .chat,
+            slashToken: backendSlashToken,
+            highlighted: backendSlashHighlightIndex,
+            canOpenModelSettings: canOpenModelSettingsFromSlash,
+            backgroundStatus: duoSidebarBackground,
+            isListening: voice.isListening,
+            isSpeaking: voice.isSpeaking,
+            onSelectSection: { section in
+                closeOverlaySidebar()
+                homeSection = section
+                if vm.activeLane != .home { returnHome() }
+            },
+            onSelectTab: { id in
+                closeOverlaySidebar()
+                openTab(id, picturesHome: false)
+            },
+            onCreateTab: createRemoteSession,
+            onRename: { renamingRemoteSession = $0 },
+            onClose: closeRemoteSession,
+            onOpenBackground: {
+                composerFocused = false
+                showHomeBackground = true
+            },
+            onCustomizeMascot: {
+                composerFocused = false
+                showMascotCustomization = true
+            },
+            onChoose: { chooseBackendCommand($0, via: .activate) }
+        )
+        .disabled(vm.sending || importingImages || submittingRemote)
+    }
+
+    /// Over the chat, the sidebar steps aside once something is picked, like the tab drawer.
+    private func closeOverlaySidebar() {
+        if duoSidebarOverlays { withAnimation(.snappy) { duoOverlaySidebarOpen = false } }
+    }
+
+    private var duoSidebarBackground: CantripDuoSidebarBackground? {
+        guard vm.activeLane == .home else { return nil }
+        let active = homeBackgroundCount, input = homeBackgroundInputCount
+        guard remote.selectedSession?.supportsBackgroundRuns == true || active > 0 || input > 0 else { return nil }
+        if input > 0 { return .init(text: input == 1 ? "Needs input" : "\(input) need input", isActive: true) }
+        return .init(text: active > 0 ? "\(active) running" : "None running", isActive: active > 0)
+    }
+
+    /// The typed "/" token while a Cantrip tab's or Home's backend suggestions can show.
+    private var backendSlashToken: String? {
+        guard vm.activeLane.usesCantripRemote, !paused, composerFocused, composerAcceptsText,
+              backendSlashDismissedText != input,
+              // A reply to the agent's question is never a command.
+              !(vm.remoteDeliveryMode == .auto && remote.chatInputRequest != nil),
+              remote.slashCommandContext != nil else { return nil }
+        return BackendSlashCommands.slashToken(input)
+    }
+
+    private var backendSlashPresentation: BackendSlashPresentation? {
+        guard let context = remote.slashCommandContext else { return nil }
+        return BackendSlashCommands.presentation(
+            token: backendSlashToken,
+            response: slashCommands.response(for: context.key),
+            isLoading: slashCommands.isLoading(context.key)
+        )
+    }
+
+    private var canOpenModelSettingsFromSlash: Bool {
+        remote.selectedSession?.supportsModelSettings == true
+    }
+
+    /// The arrow-key row for this text, else the default: a strong, runnable first match. The list
+    /// shows it only with compact rows and a hardware keyboard.
+    private var backendSlashHighlightIndex: Int? {
+        guard let token = backendSlashToken, let presentation = backendSlashPresentation else { return nil }
+        if let highlight = backendSlashHighlight, highlight.text == input { return highlight.index }
+        return BackendSlashCommands.defaultHighlight(token: token, matches: presentation.matches)
+    }
+
+    /// Hardware-keyboard keys while compact rows show (`BackendSlashKeyPresses` checks the style).
+    private func handleBackendSlashKey(_ key: BackendSlashKey) -> Bool {
+        guard let presentation = backendSlashPresentation else { return false }
+        switch BackendSlashCommands.handle(key, matches: presentation.matches, highlighted: backendSlashHighlightIndex) {
+        case .ignore:
+            return false
+        case .highlight(let index):
+            backendSlashHighlight = (input, index)
+        case .choose(let match, let trigger):
+            chooseBackendCommand(match, via: trigger)
+        case .dismiss:
+            backendSlashDismissedText = input
+        }
+        return true
+    }
+
+    /// A chosen suggestion: model settings open, a command without arguments sends now (tap or
+    /// Return), and anything else (or Tab) is inserted with the keyboard still up for its argument.
+    private func chooseBackendCommand(_ match: BackendCommandMatch, via trigger: BackendCommandTrigger) {
+        guard let choice = BackendSlashCommands.choose(
+            match.command, via: trigger, canOpenModelSettings: canOpenModelSettingsFromSlash
+        ) else { return }
+        input = choice.text
+        backendSlashHighlight = nil
+        if choice.opensModelSettings {
+            composerFocused = false
+            remote.modelSettingsSession = remote.selectedSession
+        } else if choice.sendsImmediately {
+            sendText()
+        } else {
+            composerFocused = true
+        }
+    }
+
+    // MARK: Tab mentions
+
+    /// "@" suggestions for the composer's caret, while the open tab (or Home) takes mentions.
+    private var mentionPopup: CantripTabMentions.Popup? {
+        guard vm.activeLane.usesCantripRemote, !paused, composerFocused, composerAcceptsText,
+              backendSlashToken == nil,
+              // A reply to the agent's question goes to the question, not to the model.
+              !(vm.remoteDeliveryMode == .auto && remote.chatInputRequest != nil),
+              let session = remote.selectedSession, session.id == remote.selectedSessionID,
+              CantripTabMentions.supportsMentions(session),
+              let caret = CantripMentionCaret.position(in: input, selection: composerSelection) else { return nil }
+        let candidates = CantripTabMentions.candidates(
+            sessions: remote.sessions, sections: remote.tabSections, composingID: session.id
+        )
+        return CantripTabMentions.popup(text: input, caret: caret, candidates: candidates,
+                                        dismissedAt: mentionDismissedAt,
+                                        picks: mentionDrafts[remoteDraftKey(session.id)] ?? [])
+    }
+
+    private func handleMentionKey(_ key: BackendSlashKey) -> Bool {
+        guard let popup = mentionPopup else { return false }
+        switch CantripTabMentions.handle(key, popup: popup,
+                                         highlighted: CantripMentionHighlight.index(mentionHighlight, popup: popup)) {
+        case .ignore:
+            return false
+        case .highlight(let index):
+            mentionHighlight = CantripMentionHighlight(at: popup.at, query: popup.query, index: index)
+        case .pick(let candidate):
+            pickMention(candidate)
+        case .dismiss:
+            mentionDismissedAt = popup.at
+        }
+        return true
+    }
+
+    /// "@Label " replaces the typed "@query"; the tab is kept with the draft until it's sent.
+    private func pickMention(_ candidate: CantripTabMentions.Candidate) {
+        guard let popup = mentionPopup, let sessionID = remote.selectedSessionID else { return }
+        let caret = CantripMentionCaret.position(in: input, selection: composerSelection) ?? input.endIndex
+        let key = remoteDraftKey(sessionID)
+        let picks = mentionDrafts[key] ?? []
+        // A label stands for one tab: a second tab with the same title gets its own label.
+        let picked = CantripTabMentions.insert(candidate, at: String.Index(utf16Offset: popup.at, in: input),
+                                               caret: caret, in: input,
+                                               label: CantripTabMentions.uniqueLabel(for: candidate, among: picks))
+        mentionDrafts[key] = CantripTabMentions.adding(CantripTabMention(id: candidate.id, label: picked.label),
+                                                       to: picks)
+        input = picked.text
+        fieldText = picked.text
+        composerSelection = TextSelection(insertionPoint: picked.caret)
+        mentionHighlight = nil
+        composerFocused = true
+    }
+
+    /// A chip's remove button: the mention and its "@Label" text go.
+    private func removeMention(_ mention: CantripTabMention) {
+        guard let sessionID = remote.selectedSessionID else { return }
+        let key = remoteDraftKey(sessionID)
+        let picks = mentionDrafts[key] ?? []
+        mentionDrafts[key] = picks.filter { $0 != mention }
+        input = CantripTabMentions.removing(mention, from: input, among: picks)
+        composerSelection = TextSelection(insertionPoint: input.endIndex)
+    }
+
+    /// Deleting a mention's "@Label" text drops its chip; Escape's dismissal lasts while its "@" does.
+    private func refreshMentions() {
+        mentionDismissedAt = CantripTabMentions.keepsDismissal(
+            mentionDismissedAt, text: input, caret: CantripMentionCaret.position(in: input, selection: composerSelection)
+        )
+        guard let sessionID = remote.selectedSessionID else { return }
+        let key = remoteDraftKey(sessionID)
+        guard let mentions = mentionDrafts[key], !mentions.isEmpty else { return }
+        let kept = CantripTabMentions.remaining(mentions, in: input)
+        if kept != mentions { mentionDrafts[key] = kept.isEmpty ? nil : kept }
+    }
+
+    /// Background-run requests waiting on the user, shown on Home's Background button.
+    private var homeBackgroundInputCount: Int {
+        guard vm.activeLane == .home, remote.selectedSession?.isCantripHome == true else { return 0 }
+        return remote.selectedSession?.backgroundInputCount
+            ?? (remote.homeBackground?.runs.filter(\.needsInput).count ?? 0)
+    }
+
+    private var homeBackgroundCount: Int {
+        guard vm.activeLane == .home, remote.selectedSession?.isCantripHome == true else { return 0 }
+        return CantripHomeBackgroundCount.active(
+            transcript: remote.selectedSession?.transcript ?? [],
+            session: remote.selectedSession
+        )
+    }
+
+    private var activeBackgroundTasks: [CantripRemoteSubagent] {
+        guard vm.activeLane.usesCantripRemote,
+              remote.selectedSession?.id == remote.selectedSessionID else { return [] }
+        return CantripPinnedSubagents.liveBackground(
+            in: remote.selectedSession?.transcript ?? []
+        )
+    }
+
+    private var messageComposer: some View {
+        ChatComposer {
+            if vm.activeLane.usesCantripRemote, let sessionID = remote.selectedSessionID {
+                ImageAttachmentPicker(
+                    attachments: imageDraft(for: sessionID),
+                    importID: $imageImportID,
+                    imageSupport: remote.selectedSession?.id == sessionID
+                        ? remote.selectedSession?.supportsImageAttachments : nil,
+                    disabled: imagePickerDisabled,
+                    video: videoDraft(for: sessionID),
+                    videoSupport: remote.selectedSession?.id == sessionID
+                        ? remote.selectedSession?.supportsVideoAttachments : nil,
+                    files: fileDraft(for: sessionID),
+                    fileSupport: remote.selectedSession?.id == sessionID
+                        ? remote.selectedSession?.supportsFileAttachments : nil,
+                    mixedSupport: remote.selectedSession?.id == sessionID
+                        ? remote.selectedSession?.supportsMixedAttachments : nil,
+                    paste: $composerPaste
+                )
+                .id(sessionID)
+            } else if !vm.activeLane.usesCantripRemote {
+                Button { showVoiceMode = true } label: {
+                    Image(systemName: "infinity").font(.system(size: 20))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .disabled(!destinationReady || hasImageDraft || importingImages)
+                .accessibilityLabel("Voice mode")
+            }
+        } message: {
+            TextField(
+                vm.activeLane.usesCantripRemote
+                    ? CantripInputComposer.placeholder(
+                        for: remote.chatInputRequest, mode: vm.remoteDeliveryMode,
+                        recipient: vm.activeLane == .home ? CantripMascotName.display(mascotName)
+                            : remote.selectedSession?.title ?? "Cantrip"
+                    )
+                    : "Message Hermes…",
+                text: Binding(get: { input }, set: { input = $0; fieldText = $0 }),
+                selection: $composerSelection,
+                axis: .vertical
+            )
+            .id(composerRevision)
+            .focused($composerFocused)
+            .textFieldStyle(.plain).lineLimit(1...5)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .disabled(!destinationReady || !composerAcceptsText || vm.sending || submittingRemote)
+            .onSubmit(sendText)
+            .modifier(BackendSlashKeyPresses(isActive: backendSlashPresentation != nil, onKey: handleBackendSlashKey))
+            .modifier(CantripMentionKeyPresses(isActive: mentionPopup != nil, onKey: handleMentionKey))
+            .composerPaste(isEnabled: vm.activeLane.usesCantripRemote && !imagePickerDisabled && !importingImages) {
+                composerPaste = ComposerPasteRequest(providers: $0)
+            }
+            .accessibilityIdentifier("chat.message")
+        } trailing: {
+            remoteStopButton
+            composerAction
+        } accessory: {
+            if vm.activeLane.usesCantripRemote {
+                CantripInputComposer(
+                    model: remote, deliveryMode: vm.remoteDeliveryMode,
+                    maxHeight: min(320, max(72, chatAvailableHeight * 0.45)),
+                    busy: vm.sending || submittingRemote || importingImages
+                )
+            }
+        }
+    }
+
+    private var composerAcceptsText: Bool {
+        !vm.activeLane.usesCantripRemote
+            || CantripInputComposer.acceptsText(for: remote.chatInputRequest, mode: vm.remoteDeliveryMode)
+    }
+
+    private func imageDraft(for sessionID: String) -> Binding<[ChatImageAttachment]> {
+        let key = remoteDraftKey(sessionID)
+        return Binding(get: { imageDrafts[key] ?? [] }, set: { imageDrafts[key] = $0 })
+    }
+
+    private func videoDraft(for sessionID: String) -> Binding<ChatVideoAttachment?> {
+        let key = remoteDraftKey(sessionID)
+        return Binding(get: { videoDrafts[key] }, set: { videoDrafts[key] = $0 })
+    }
+
+    private func fileDraft(for sessionID: String) -> Binding<[ChatFileAttachment]> {
+        let key = remoteDraftKey(sessionID)
+        return Binding(get: { fileDrafts[key] ?? [] }, set: { fileDrafts[key] = $0 })
+    }
+
+    private var imagePickerDisabled: Bool {
+        !destinationReady || !composerAcceptsText || vm.sending || submittingRemote || remote.isMutating || voice.isListening
+    }
+
+    @ViewBuilder private var remoteStopButton: some View {
+        if vm.activeLane.usesCantripRemote {
+            CantripStopButton(
+                session: remote.selectedSession,
+                isConnected: remote.isConnected,
+                isMutating: remote.isMutating,
+                isStopping: remote.stoppingSessionID != nil
+                    && remote.stoppingSessionID == remote.selectedSessionID,
+                iconOnly: true,
+                onStop: vm.stopRemote
+            )
+            .disabled(vm.sending || importingImages || submittingRemote)
+        }
+    }
+
+    /// The mic stays beside Send once the composer has text, so you can keep dictating.
+    private var showsMicrophoneBesideSend: Bool {
+        !(input.isEmpty && !hasImageDraft) && !vm.sending && !submittingRemote && !importingImages
+            && voice.authorized && !hasImageDraft
+    }
+
+    private var microphoneButton: some View {
+        ChatMicrophoneButton(
+            isListening: voice.isListening && voice.listeningMode == .dictation,
+            isEnabled: voice.authorized && destinationReady && composerAcceptsText && !voice.isFinishing,
+            onStart: startDictation,
+            onFinish: { voice.stopListening(finalize: true) },
+            onContinuousVoice: {
+                voice.stopListening(finalize: false)
+                showVoiceMode = true
+            }
+        )
+    }
+
+    private func startDictation() {
+        DictationVocabularyStore.shared.refreshIfNeeded(remote: remote)
+        voice.startDictation()
+    }
+
+    /// Puts a finished dictation in the composer; swaps in the cleanup only if
+    /// you have not edited the text since.
+    private func insertDictation(_ outcome: DictationOutcome?) {
+        guard let outcome else { return }
+        if handledDictationID != outcome.id {
+            handledDictationID = outcome.id
+            let separator = input.isEmpty || input.hasSuffix(" ") || input.hasSuffix("\n") ? "" : " "
+            let prefix = input + separator
+            input = prefix + outcome.text
+            dictationInsertion = DictationInsertion(id: outcome.id, prefix: prefix, inserted: outcome.text)
+            #if os(iOS)
+            DictationVocabularyStore.shared.askForContactsOnce(remote: remote)
+            #endif
+        } else if let polished = outcome.polished, var insertion = dictationInsertion,
+                  insertion.id == outcome.id, insertion.beforeCleanup == nil, !insertion.undone,
+                  input == insertion.prefix + insertion.inserted {
+            insertion.beforeCleanup = insertion.inserted
+            insertion.inserted = polished
+            input = insertion.prefix + polished
+            dictationInsertion = insertion
+        }
+    }
+
+    private var cleanupUndoAvailable: Bool {
+        guard let insertion = dictationInsertion, insertion.beforeCleanup != nil else { return false }
+        return input == insertion.prefix + insertion.inserted
+    }
+
+    private func undoCleanup() {
+        guard var insertion = dictationInsertion, let original = insertion.beforeCleanup else { return }
+        insertion.inserted = original
+        insertion.beforeCleanup = nil
+        insertion.undone = true
+        input = insertion.prefix + original
+        dictationInsertion = insertion
+    }
+
+    private var composerAction: some View {
+        HStack(spacing: 0) {
+            if showsMicrophoneBesideSend { microphoneButton }
+            composerPrimaryAction
+        }
+    }
+
+    private var composerPrimaryAction: some View {
+        Group {
+            if vm.sending, !vm.activeLane.usesCantripRemote {
+                Button { vm.stop() } label: {
+                    Image(systemName: "stop.circle.fill").font(.system(size: 24))
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .accessibilityLabel("Stop current prompt")
+            } else if vm.sending || submittingRemote || importingImages {
+                ProgressView().controlSize(.small)
+            } else if input.isEmpty && !hasImageDraft {
+                microphoneButton
+            } else {
+                Button(action: sendText) {
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 24))
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .disabled(!destinationReady || !composerAcceptsText || remote.isMutating)
+                .accessibilityLabel(vm.activeLane.usesCantripRemote && vm.remoteDeliveryMode == .auto
+                    && remote.chatInputRequest != nil ? "Send reply" : "Send prompt")
+            }
+        }
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+    }
+
+    /// Shown in place of the composer when paused — a clear "you're sending nothing"
+    /// state with a one-tap resume.
+    private var pausedBar: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "pause.circle.fill").font(.title2).foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Agent paused").font(.callout.weight(.semibold))
+                Text("No requests will be sent.").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            remoteStopButton
+            Button("Resume") { paused = false }.buttonStyle(.borderedProminent)
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// "/" autocomplete — the command/skill menu, like Telegram/Discord.
+    private var suggestionList: some View {
+        VStack(spacing: 0) {
+            ForEach(suggestions) { cmd in
+                Button { input = cmd.command + " " } label: {
+                    HStack(spacing: 8) {
+                        Text(cmd.command).font(.callout.monospaced().weight(.semibold)).foregroundStyle(.tint)
+                        Text(cmd.description).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                    .padding(.vertical, 7).padding(.horizontal, 10)
+                }
+                .buttonStyle(.plain)
+                if cmd.id != suggestions.last?.id { Divider() }
+            }
+        }
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// Animated waveform status — "talking back" while listening, replying, or speaking.
+    @ViewBuilder private var voiceStatus: some View {
+        if voice.isPreparingRecognition {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(voice.recognitionStatusText ?? "Preparing speech recognition…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+        } else if voice.isListening {
+            HStack(spacing: 10) {
+                WaveformView(active: true, color: .red)
+                Text(voice.partial.isEmpty
+                     ? (voice.listeningMode == .dictation ? "Dictating… release or tap the mic to finish" : "Listening…")
+                     : voice.partial)
+                    .font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                Spacer(minLength: 0)
+            }
+        } else if let error = voice.recognitionError {
+            Label(error, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.red)
+        } else if cleanupUndoAvailable {
+            HStack(spacing: 8) {
+                Label("Cleaned up", systemImage: "wand.and.sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Undo", action: undoCleanup)
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .accessibilityLabel("Undo dictation cleanup")
+                Spacer(minLength: 0)
+            }
+        } else if voice.isSpeaking {
+            HStack(spacing: 10) {
+                WaveformView(active: true, color: .accentColor)
+                Text("Hermes is speaking").font(.callout).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button { voice.stopSpeaking() } label: { Image(systemName: "stop.circle").font(.title3) }
+            }
+        } else if vm.isWorking && !(vm.activeLane.usesCantripRemote && remote.chatInputRequest != nil) {
+            HStack(spacing: 10) {
+                ThinkingView(size: 22, color: .accentColor)
+                Text(
+                    vm.runStatusText
+                        ?? (vm.activeLane.usesCantripRemote
+                            ? "Cantrip is working…"
+                            : "Hermes is thinking…")
+                )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func sendText() {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !paused, !importingImages, !submittingRemote, !vm.sending,
+              destinationReady, composerAcceptsText, !remote.isMutating,
+              !text.isEmpty || hasImageDraft else { return }
+        composerFocused = false
+        if let insertion = dictationInsertion {
+            DictationVocabularyStore.shared.learn(dictated: insertion.inserted, sent: text)
+            dictationInsertion = nil
+        }
+        if vm.activeLane.usesCantripRemote, let sessionID = remote.selectedSessionID {
+            let draftKey = remoteDraftKey(sessionID)
+            let images = imageDrafts[draftKey] ?? []
+            let video = videoDrafts[draftKey]
+            let files = fileDrafts[draftKey] ?? []
+            let originalInput = input
+            // Picked tabs go out as tokens with their IDs; the draft keeps the plain text.
+            let mentions = CantripTabMentions.remaining(mentionDrafts[draftKey] ?? [], in: text)
+            let wireText = CantripTabMentions.supportsMentions(remote.selectedSession) && !mentions.isEmpty
+                ? CantripTabMentions.encode(text, mentions: mentions) : text
+            submittingRemote = true
+            Task { @MainActor in
+                defer { submittingRemote = false }
+                let sent = await vm.sendRemote(wireText, images: images, video: video, files: files, sessionID: sessionID)
+                if sent {
+                    let sentIDs = Set(images.map(\.id))
+                    imageDrafts[draftKey]?.removeAll { sentIDs.contains($0.id) }
+                    if videoDrafts[draftKey]?.id == video?.id { videoDrafts.removeValue(forKey: draftKey) }
+                    let sentFiles = Set(files.map(\.id))
+                    fileDrafts[draftKey]?.removeAll { sentFiles.contains($0.id) }
+                    if remoteDraftKey(remote.selectedSessionID ?? "") == draftKey, input == originalInput {
+                        input = ""
+                        mentionDrafts.removeValue(forKey: draftKey)
+                        composerSelection = nil
+                        composerRevision = UUID()
+                    }
+                } else {
+                    imageSendError = (remote.errorMessage ?? "Cantrip did not confirm the message.")
+                        + "\n\nYour draft has been kept. If the connection was lost, check the session before sending again to avoid a duplicate."
+                }
+            }
+            return
+        }
+        input = ""
+        composerRevision = UUID()
+        vm.send(text)
+    }
+
+    private var hasImageDraft: Bool {
+        guard vm.activeLane.usesCantripRemote, let sessionID = remote.selectedSessionID else { return false }
+        return !(imageDrafts[remoteDraftKey(sessionID)] ?? []).isEmpty
+            || videoDrafts[remoteDraftKey(sessionID)] != nil
+            || !(fileDrafts[remoteDraftKey(sessionID)] ?? []).isEmpty
+    }
+
+    private var importingImages: Bool { imageImportID != nil }
+}
+
+struct ChatComposer<Leading: View, Message: View, Trailing: View, Accessory: View>: View {
+    @ViewBuilder var leading: () -> Leading
+    @ViewBuilder var message: () -> Message
+    @ViewBuilder var trailing: () -> Trailing
+    @ViewBuilder var accessory: () -> Accessory
+
+    var body: some View {
+        VStack(spacing: 0) {
+            accessory()
+            HStack(alignment: .bottom, spacing: 4) {
+                leading()
+                message()
+                trailing()
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+        }
+        .buttonStyle(.plain)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityIdentifier("chat.composer")
+    }
+}
+
+extension ChatComposer where Accessory == EmptyView {
+    init(
+        @ViewBuilder leading: @escaping () -> Leading,
+        @ViewBuilder message: @escaping () -> Message,
+        @ViewBuilder trailing: @escaping () -> Trailing
+    ) {
+        self.init(leading: leading, message: message, trailing: trailing, accessory: { EmptyView() })
+    }
+}
+
+struct ChatTabsButton: View {
+    let isEnabled: Bool
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            Image(systemName: "rectangle.stack")
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .disabled(!isEnabled)
+        .accessibilityLabel("Tabs")
+        .accessibilityHint("Shows your Cantrip sessions")
+        .accessibilityIdentifier("chat.tabs")
+    }
+}
+
+/// A Menu whose items are rebuilt only when `state` changes. Rebuilding an open
+/// menu scrolls it back to the top, and Cantrip polling re-renders the chat every
+/// few seconds. Use with `.equatable()`, and put everything the items read into `state`.
+struct StableMenu<State: Equatable, Content: View, MenuLabel: View>: View, Equatable {
+    let state: State
+    @ViewBuilder let content: () -> Content
+    @ViewBuilder let label: () -> MenuLabel
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.state == rhs.state }
+
+    var body: some View {
+        Menu(content: content, label: label)
+    }
+}
+
+struct ChatMenuIcon: View {
+    var isPaused = false
+    var systemName = "line.3.horizontal"
+
+    var body: some View {
+        Image(systemName: systemName)
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .overlay(alignment: .bottomTrailing) {
+                if isPaused {
+                    Image(systemName: "pause.circle.fill")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.black, .orange)
+                        .font(.system(size: 14))
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+    }
+}
+
+/// The unfolded iPhone Duo's rail when the system's bar runs along the top (upright), on the bar
+/// material beside the chat. Its actions sit low, within reach of the thumb; Home's sections (when
+/// shown) are the bottom-most group.
+struct CantripDuoAppRail<Top: View, Bottom: View>: View {
+    @ViewBuilder var top: () -> Top
+    @ViewBuilder var bottom: () -> Bottom
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Spacer(minLength: 8)
+            top()
+            bottom()
+                .padding(.top, 8)
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 12)
+        .frame(width: 64)
+        .frame(maxHeight: .infinity)
+        .background(.bar, ignoresSafeAreaEdges: .all)
+        .overlay(alignment: .leading) { Divider().ignoresSafeArea() }
+        .ignoresSafeArea(.keyboard)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Navigation")
+        .accessibilityIdentifier("duo.rail")
+    }
+}
+
+/// Home's sections at the bottom of the app-drawn rail (unfolded upright), as the system's vertical
+/// bar shows them in the other Duo poses.
+struct CantripDuoRailSections: View {
+    @Binding var selection: CantripHomeSection
+    let runningTasks: Int
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ForEach(CantripHomeSection.allCases) { section in
+                let selected = selection == section
+                Button { selection = section } label: {
+                    Image(systemName: section.systemImage)
+                        .font(.title3)
+                        .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                        .frame(width: 48, height: 44)
+                        .background(selected ? Color.accentColor.opacity(0.2) : Color.clear, in: Capsule())
+                        .overlay(alignment: .topTrailing) {
+                            if section == .tasks, runningTasks > 0 {
+                                CantripTabsBadge(workingCount: runningTasks)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel(section.title)
+                .accessibilityValue(section == .tasks && runningTasks > 0 ? "\(runningTasks) running" : "")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityIdentifier("duo.rail.section.\(section.rawValue)")
+            }
+        }
+        .padding(.vertical, 6)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+    }
+}
+
+/// The unfolded iPhone Duo rail's sidebar toggle. Closed, it carries the tabs button's count,
+/// since it takes that button's place.
+struct CantripDuoSidebarToggle: View {
+    let isOpen: Bool
+    var workingCount = 0
+    var inputCount = 0
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            Image(systemName: "sidebar.left")
+                .symbolVariant(isOpen ? .fill : .none)
+                .frame(width: 44, height: 44)
+                .overlay(alignment: .topTrailing) {
+                    if !isOpen { CantripTabsBadge(workingCount: workingCount, inputCount: inputCount) }
+                }
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(isOpen ? "Hide Sidebar" : "Show Sidebar")
+        .accessibilityValue(isOpen ? "" : CantripTabsBadge.accessibilityValue(workingCount: workingCount,
+                                                                             inputCount: inputCount))
+        .accessibilityIdentifier("duo.rail.sidebar")
+    }
+}
+
+struct ChatSettingsButton: View {
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            Image(systemName: "gearshape")
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Settings")
+        .accessibilityIdentifier("chat.settings")
+    }
+}
+
+enum ChatHeaderStyle {
+    /// Title row plus a connection, usage and delivery row on an opaque bar.
+    case standard
+    /// Cantrip Remote: one 48pt bar row with side actions around a centered title.
+    case compact
+    /// Cantrip Home: a large Muse-style mascot between floating glass actions.
+    case mascot
+    /// A project tab inside Home: "‹ Home" pill, centered title and state, glass menu.
+    case tab
+    /// iPhone Duo's sidebar layout: Gateway Mac's toolbar, title and state leading, actions trailing.
+    case sidebar
+}
+
+struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delivery: View,
+                  Settings: View, Leading: View, Trailing: View>: View {
+    @Environment(\.chatDisplayTraits) private var displayTraits
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var tabLeadingWidth: CGFloat = 96
+    @State private var tabHeaderWidth: CGFloat = 393
+    var style = ChatHeaderStyle.standard
+    var sidebarToggle: AnyView? = nil
+    var hidesLeadingInRail = false
+    /// The unfolded iPhone Duo's app-drawn rail (upright) holds the actions instead of the header.
+    var actionsInRail = false
+    @ViewBuilder var title: () -> Title
+    @ViewBuilder var connection: () -> Connection
+    @ViewBuilder var lane: () -> Lane
+    @ViewBuilder var usage: () -> Usage
+    @ViewBuilder var delivery: () -> Delivery
+    @ViewBuilder var settings: () -> Settings
+    @ViewBuilder var leading: () -> Leading
+    @ViewBuilder var trailing: () -> Trailing
+
+    private var actionsElsewhere: Bool { displayTraits.placesActionsInVerticalBar || actionsInRail }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            switch style {
+            case .mascot:
+                ZStack(alignment: .top) {
+                    title().frame(maxWidth: .infinity)
+                    floatingActions
+                }
+            case .tab:
+                tabRow
+            case .sidebar:
+                HStack(spacing: 6) {
+                    title().frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    delivery()
+                    // On the unfolded iPhone Duo these are in the rail.
+                    if !actionsElsewhere {
+                        settings()
+                        trailing().frame(width: 44, height: 44)
+                    }
+                }
+                .frame(minHeight: 48)
+            case .compact:
+                HStack(spacing: 8) {
+                    if !actionsElsewhere {
+                        leading().frame(width: 44, height: 44)
+                    }
+                    title().frame(maxWidth: .infinity, minHeight: 44)
+                    if !actionsElsewhere {
+                        trailing().frame(width: 44, height: 44)
+                    }
+                }
+                .frame(minHeight: 44)
+            case .standard:
+                HStack(spacing: 8) {
+                    if !actionsElsewhere {
+                        leading().frame(width: 44, height: 44)
+                    }
+                    title().frame(maxWidth: .infinity, minHeight: 44)
+                    if !actionsElsewhere {
+                        trailing().frame(width: 44, height: 44)
+                    }
+                }
+                HStack(alignment: .center, spacing: 2) {
+                    connection()
+                    lane()
+                    usage()
+                    delivery()
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .padding(.horizontal, 12)
+        .padding(.top, style == .standard ? 8 : 2)
+        .padding(.bottom, style == .mascot ? 6 : style == .compact || style == .tab ? 2 : 4)
+        .frame(maxWidth: .infinity)
+        .background(style == .mascot ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.bar))
+        .background { if style == .mascot { CantripMascotHeaderFade() } }
+        .accessibilityIdentifier("chat.header")
+        .modifier(ChatNavigationActions(
+            sharesVerticalBarWithTabBar: style == .mascot,
+            sidebarToggle: sidebarToggle, hidesLeadingInRail: hidesLeadingInRail,
+            leading: leading, settings: settings, trailing: trailing
+        ))
+        // Unfolding adds the sidebar toggle and model settings above the bar's items; the system
+        // keeps the existing items' slots but draws them empty. A fresh toolbar per layout fixes it.
+        .id(ChatToolbarLayout(traits: displayTraits))
+    }
+
+    /// The title stays centered on the screen and clear of the wider of the two side controls.
+    private var tabRow: some View {
+        let inset = actionsElsewhere ? 0 : max(tabLeadingWidth, 44) + 8
+        return ZStack {
+            title()
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .padding(.horizontal, inset)
+            if !actionsElsewhere {
+                HStack(spacing: 8) {
+                    leading()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabLeadingWidth = $0 }
+                    Spacer(minLength: 0)
+                    glassAction(trailing())
+                }
+            }
+        }
+        .frame(minHeight: 48)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabHeaderWidth = $0 }
+        .environment(\.cantripCompactBackPill, tabHeaderWidth < 340 || dynamicTypeSize > .xLarge)
+    }
+
+    @ViewBuilder private var floatingActions: some View {
+        if !actionsElsewhere {
+            HStack(alignment: .top, spacing: 8) {
+                glassAction(leading())
+                Spacer(minLength: 0)
+                glassAction(trailing())
+            }
+        }
+    }
+
+    private func glassAction<Content: View>(_ content: Content) -> some View {
+        content
+            .environment(\.chatHeaderGlassAction, true)
+            .frame(width: 44, height: 44)
+            .glassEffect(.regular.interactive(), in: Circle())
+    }
+}
+
+struct ChatConnectionIndicator: View {
+    let host: String
+    let isConnected: Bool
+    var statusOverride: String? = nil
+    var onOpen: () -> Void = {}
+    @State private var showDetails = false
+
+    var status: String { statusOverride ?? (isConnected ? "Connected" : "Disconnected") }
+
+    var body: some View {
+        Button {
+            onOpen()
+            showDetails = true
+        } label: {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 4) {
+                    statusDot
+                    Text(host)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(minWidth: 60, maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 4)
+                HStack(spacing: 4) {
+                    Image(systemName: "desktopcomputer")
+                        .font(.system(size: 12))
+                    statusDot
+                }
+                .frame(width: 44)
+            }
+            .foregroundStyle(.secondary)
+            .frame(minWidth: 44, maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("chat.connection")
+        .accessibilityLabel("Cantrip server")
+        .accessibilityValue("\(status), \(host)")
+        .accessibilityHint("Shows the full server name and connection status")
+        .popover(isPresented: $showDetails) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(host).font(.headline).textSelection(.enabled)
+                Label(status, systemImage: isConnected ? "checkmark.circle" : "exclamationmark.circle")
+                    .foregroundStyle(isConnected ? Color.green : Color.secondary)
+            }
+            .padding()
+            .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var statusDot: some View {
+        Circle()
+            .fill(isConnected ? Color.green : Color.gray)
+            .frame(width: 8, height: 8)
+    }
+}
+
+struct ChatHeaderTitle: View {
+    let title: String
+    let isLocked: Bool
+    let isWorking: Bool
+    var isLocalPrivate = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if isLocked { Image(systemName: isLocalPrivate ? "lock.shield.fill" : "lock.fill") }
+            Text(title).lineLimit(1).truncationMode(.tail)
+            if isWorking {
+                ThinkingView(size: 18).fixedSize().accessibilityHidden(true)
+            }
+        }
+        .font(.headline)
+        .foregroundStyle(.primary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue([isLocalPrivate ? "Self-hosted, saved" : isLocked ? "Locked" : nil, isWorking ? "Working" : nil]
+            .compactMap { $0 }.joined(separator: ", "))
+        .accessibilityIdentifier("chat.header.title")
+    }
+}
+
+struct ChatHeaderIcon: View {
+    @Environment(\.chatHeaderGlassAction) private var inGlass
+    let systemName: String
+
+    var body: some View {
+        if inGlass {
+            Image(systemName: systemName)
+                .font(.system(size: 17, weight: .semibold))
+        } else {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .semibold))
+                .imageScale(.medium)
+                .frame(width: 16, height: 16)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(.tint.opacity(0.12), in: Capsule())
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// Set inside Cantrip Home's glass circles, which already provide the icon's backing.
+    @Entry var chatHeaderGlassAction = false
+}
+
+struct ExecutionLaneBadge: View {
+    let lane: ExecutionLane
+    var iconOnly = false
+
+    private var tint: Color {
+        switch lane {
+        case .copilot: .orange
+        case .local: .green
+        case .cantrip: .cyan
+        case .home: .purple
+        }
+    }
+
+    var body: some View {
+        if iconOnly {
+            ChatHeaderIcon(systemName: lane.systemImage)
+                .foregroundStyle(tint)
+                .tint(tint)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel(lane.title)
+        } else {
+            Label(lane.badgeTitle, systemImage: lane.systemImage)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    tint.opacity(0.12),
+                    in: Capsule()
+                )
+        }
+    }
+}
+
+struct ExecutionLanePicker: View {
+    @ObservedObject var env: HermesEnv
+    @ObservedObject var remote: CantripRemoteModel
+    var centeredTitle: String?
+    var mascotMood: CantripMascotMood?
+
+    init(
+        env: HermesEnv,
+        remote: CantripRemoteModel,
+        centeredTitle: String? = nil,
+        mascotMood: CantripMascotMood? = nil
+    ) {
+        self.env = env
+        self.remote = remote
+        self.centeredTitle = centeredTitle
+        self.mascotMood = mascotMood
+    }
+
+    var body: some View {
+        if env.selectableLanes.count == 1 {
+            currentLabel
+        } else {
+            laneMenu
+        }
+    }
+
+    private var laneMenu: some View {
+        Menu {
+            ForEach(env.selectableLanes) { lane in
+                Button {
+                    env.select(lane)
+                } label: {
+                    Label(
+                        pickerTitle(lane),
+                        systemImage: lane == env.executionLane.pickerLane
+                            ? "checkmark.circle.fill"
+                            : lane.systemImage
+                    )
+                }
+                .disabled(!env.isAvailable(lane))
+            }
+        } label: {
+            currentLabel
+        }
+        .menuIndicator(.hidden)
+        .accessibilityHint("Switches between available backends")
+        .accessibilityIdentifier("execution-lane-picker")
+    }
+
+    @ViewBuilder private var currentLabel: some View {
+        if let centeredTitle, let mascotMood {
+            CantripMascotHeaderTitle(
+                title: centeredTitle,
+                isConnected: remote.isConnected,
+                mood: mascotMood
+            )
+        } else if let centeredTitle {
+            CantripCenteredHeaderTitle(
+                title: centeredTitle,
+                isConnected: remote.isConnected
+            )
+        } else {
+            ExecutionLaneBadge(lane: env.executionLane, iconOnly: true)
+        }
+    }
+
+    private func pickerTitle(_ lane: ExecutionLane) -> String {
+        switch lane {
+        case .local where !env.isAvailable(.local):
+            "\(lane.title) · Not configured"
+        case .home where remote.isConnected:
+            "\(lane.title) · Connected"
+        case .home where !remote.isConfigured:
+            "\(lane.title) · Set up"
+        default:
+            lane.title
+        }
+    }
+}
+
+/// Working status lives only in the status row above the composer, not here.
+struct CantripCenteredHeaderTitle: View {
+    let title: String
+    let isConnected: Bool
+
+    var body: some View {
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .overlay(alignment: .trailing) {
+                Circle()
+                    .fill(isConnected ? Color.green : Color.gray)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 12)
+            }
+            .dynamicTypeSize(...DynamicTypeSize.large)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(isConnected ? "Connected" : "Disconnected")
+        .accessibilityIdentifier("cantrip.header.title")
+    }
+}
+
+/// A pulsing brain for the "thinking" state (the agent is working) — used instead
+/// of the waveform, which is for listening/speaking (audio).
+struct ThinkingView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var size: CGFloat = 28
+    var color: Color = .accentColor
+
+    var body: some View {
+        Image(systemName: "brain")
+            .font(.system(size: size))
+            .foregroundStyle(color)
+            .symbolEffect(.variableColor.iterative.dimInactiveLayers, options: .repeating, isActive: !reduceMotion)
+            .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+    }
+}
+
+/// A row of bars that wave while `active` (voice "talking back"); flat otherwise.
+/// Parameterized so it works both small (input bar) and large (voice mode).
+struct WaveformView: View {
+    var active: Bool
+    var color: Color = .accentColor
+    var barCount = 5
+    var barWidth: CGFloat = 3.5
+    var spacing: CGFloat = 3
+    var minHeight: CGFloat = 6
+    var maxHeight: CGFloat = 24
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !active)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            HStack(spacing: spacing) {
+                ForEach(0..<barCount, id: \.self) { i in
+                    let amp = active ? (sin(t * 7 + Double(i) * 0.9) * 0.5 + 0.5) : 0.18
+                    Capsule().fill(color)
+                        .frame(width: barWidth, height: minHeight + amp * (maxHeight - minHeight))
+                }
+            }
+        }
+    }
+}
+
+/// One transcript message; also used by Cantrip Gateway Mac's Home window.
+struct TurnView: View {
+    let turn: ChatTurn
+    @ObservedObject var remote: CantripRemoteModel
+    var cantripSessionID: String?
+    var remoteMessage: CantripRemoteMessage?
+    var onAction: (ChatAction) -> Void = { _ in }
+    var onApproval: (String) -> Void = { _ in }
+    var onOpenTab: ((String) -> Void)? = nil
+    /// Cantrip Home: this row's place on a quoted reply's thread line.
+    var threadLine: CantripThreadLine? = nil
+
+    /// Parse inline markdown (bold/italic/code/links) while preserving the
+    /// newlines streamed from the agent; falls back to plain text on a partial
+    /// (mid-stream) markdown token.
+    static func markdown(_ s: String) -> AttributedString {
+        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(s)
+    }
+
+    /// Dimmer tint for the decline-ish choice.
+    private func isCancel(_ command: String) -> Bool {
+        ["/cancel", "/deny", "/no", "/nevermind"].contains(command.lowercased())
+    }
+
+    var body: some View {
+        row.modifier(CantripThreadRail(line: threadLine))
+    }
+
+    @ViewBuilder private var row: some View {
+        if let child = remoteMessage?.childResult, let parentID = cantripSessionID {
+            CantripChildTabCard(child: child, parentID: parentID, remote: remote, onOpenTab: onOpenTab)
+        } else if let result = remoteMessage?.handoffResult, remoteMessage?.isHandoffResult == true {
+            VStack(alignment: .leading, spacing: 8) {
+                if let message = remoteMessage, message.thread != nil {
+                    CantripThreadHeader(tag: message.thread, messageID: message.id,
+                                        sessionID: cantripSessionID, remote: remote, continues: threadLine == .start)
+                } else if threadLine == .end {
+                    CantripThreadLaneRow()
+                }
+                CantripHandoffResultCard(result: result, onOpenTab: onOpenTab)
+            }
+        } else if turn.role == .freshStart {
+            CantripFreshStartDivider(text: turn.text)
+        } else if turn.role == .user {
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack {
+                    Spacer(minLength: 40)
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !turn.text.isEmpty { PromptTextView(text: turn.text, mentionStyle: .onAccent) }
+                        ChatImageGallery(images: turn.images ?? [], remote: remote)
+                    }
+                        .padding(.horizontal, 14).padding(.vertical, 9)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18))
+                        .foregroundStyle(.white)
+                        .modifier(messageMenu(previewCornerRadius: 18))
+                }
+                if let message = remoteMessage, let sessionID = cantripSessionID,
+                   let count = threadReplies(of: message.id) {
+                    CantripThreadRepliesButton(count: count, promptID: message.id, prompt: message.presentedText,
+                                               sessionID: sessionID, remote: remote)
+                        .padding(.trailing, 6)
+                }
+                if let usage = remoteMessage?.promptUsage {
+                    CantripPromptUsageLine(usage: usage)
+                        .padding(.trailing, 6)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                if let message = remoteMessage, message.thread != nil {
+                    CantripThreadHeader(lane: turn.executionLane, tag: message.thread, messageID: message.id,
+                                        sessionID: cantripSessionID, remote: remote, continues: threadLine == .start)
+                } else if threadLine == .end {
+                    CantripThreadLaneRow(lane: turn.executionLane)
+                } else if let lane = turn.executionLane {
+                    ExecutionLaneBadge(lane: lane)
+                }
+                if let author = turn.author, !author.isEmpty {
+                    Text(author)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                if !cantripReasoning.isEmpty {
+                    CantripReasoningSteps(steps: cantripReasoning, streaming: turn.streaming)
+                } else if turn.executionLane?.usesCantripRemote != true, hasIntermediateSteps {
+                    IntermediateStepsView(
+                        thinking: turn.thinking,
+                        tools: turn.tools,
+                        streaming: turn.streaming,
+                        fullToolOutput: turn.executionLane?.usesCantripRemote == true
+                    )
+                }
+                if !cantripApps.isEmpty {
+                    CantripMCPAppStack(remote: remote, sessionID: cantripSessionID, apps: cantripApps)
+                }
+                if remoteMessage?.activities.contains(where: { $0.browser == true }) == true {
+                    CantripBrowserPreviewCard(remote: remote, live: turn.streaming)
+                }
+                // Each finished subagent's card sits where the reply had got to when it ended.
+                let placed = CantripReplyBlocks.placed(cantripSubagents)
+                let parts = CantripReplyBlocks.split(turn.text, before: placed.map(\.block))
+                ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
+                    if index > 0 {
+                        CantripSubagentStack(remote: remote, sessionID: cantripSessionID,
+                                             subagents: placed[index - 1].subagents)
+                    }
+                    if !part.isEmpty {
+                        if turn.isLocalPrivate == true {
+                            Text(verbatim: part).textSelection(.enabled)
+                        } else {
+                            ChatAssistantText(text: part, images: turn.images ?? [], remote: remote)
+                        }
+                    }
+                }
+                let cards = CantripCard.forReply(cards: remoteMessage?.cards ?? turn.cards,
+                                                 weather: remoteMessage?.weatherCard ?? turn.weatherCard,
+                                                 places: remoteMessage?.placeCard ?? turn.placeCard,
+                                                 links: remoteMessage?.linkPreviews ?? turn.linkPreviews)
+                if !cards.isEmpty, turn.isLocalPrivate != true {
+                    CantripCardStack(cards: cards, remote: remote)
+                }
+                if let handoffs = remoteMessage?.delegations, !handoffs.isEmpty {
+                    CantripHandoffStack(handoffs: handoffs, onOpenTab: onOpenTab)
+                }
+                if !turn.actions.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(turn.actions) { a in
+                            Button { onAction(a) } label: { Text(a.label).font(.callout.weight(.medium)) }
+                                .buttonStyle(.borderedProminent)
+                                .tint(isCancel(a.command) ? Color.secondary : Color.accentColor)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+                if let approval = turn.approval {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            approval.description ?? "This action needs approval.",
+                            systemImage: "exclamationmark.shield"
+                        )
+                        .font(.caption)
+                        if let command = approval.command, !command.isEmpty {
+                            Text(command)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(6)
+                        }
+                        HStack(spacing: 8) {
+                            ForEach(approval.choices, id: \.self) { choice in
+                                Button(approvalTitle(choice)) {
+                                    onApproval(choice)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(
+                                    choice == "deny"
+                                        ? Color.secondary
+                                        : Color.accentColor
+                                )
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .background(
+                        Color.orange.opacity(0.1),
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
+                }
+                if turn.streaming && turn.text.isEmpty && !showsWork && cantripApps.isEmpty && cantripSubagents.isEmpty {
+                    ThinkingView(size: 22, color: .gray)
+                }
+                if let err = turn.error {
+                    Label(err, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.red)
+                    if turn.isContinuable == true, let session = remote.selectedSession,
+                       session.id == cantripSessionID, let messageID = remoteMessage?.id {
+                        CantripContinueButton(model: remote, session: session, messageID: messageID)
+                    }
+                    if turn.isRepeatedError == true, let session = remote.selectedSession,
+                       session.id == cantripSessionID {
+                        CantripRepeatedErrorActions(model: remote, session: session)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Errors only: replies keep native text selection (Look Up, Translate, partial copy).
+            .modifier(messageMenu())
+        }
+    }
+
+    private var hasIntermediateSteps: Bool {
+        !(turn.thinking?.isEmpty ?? true) || !turn.tools.isEmpty
+    }
+
+    /// "N Replies" under a Home prompt whose thread other messages split up. The count comes with
+    /// the conversation, so prompts in older pages stay current too.
+    private func threadReplies(of messageID: String) -> Int? {
+        guard let session = remote.selectedSession, session.id == cantripSessionID,
+              let count = session.threadReplies?[messageID], count > 0 else { return nil }
+        return count
+    }
+
+    /// Cantrip replies show reasoning steps; tool calls stay on the Mac.
+    private var cantripReasoning: [CantripRemoteReasoningStep] {
+        guard turn.role == .assistant, turn.executionLane?.usesCantripRemote == true else { return [] }
+        return CantripReasoningFormat.steps(for: remoteMessage, thinking: turn.thinking)
+    }
+
+    private var showsWork: Bool {
+        turn.executionLane?.usesCantripRemote == true ? !cantripReasoning.isEmpty : !turn.tools.isEmpty
+    }
+
+    private var cantripApps: [CantripRemoteMCPAppSummary] {
+        guard turn.role == .assistant else { return [] }
+        return remoteMessage?.apps ?? []
+    }
+
+    /// Finished subagents; running ones are pinned above the composer.
+    private var cantripSubagents: [CantripRemoteSubagent] {
+        guard turn.role == .assistant else { return [] }
+        return (remoteMessage?.subagents ?? []).filter { !$0.status.isLive }
+    }
+
+    private func approvalTitle(_ choice: String) -> String {
+        switch choice {
+        case "once": "Allow Once"
+        case "session": "Allow Session"
+        case "always": "Always Allow"
+        case "deny": "Deny"
+        default: choice.capitalized
+        }
+    }
+}
+
+/// Keeps all reasoning and tool activity for one response behind one summary.
+private struct IntermediateStepsView: View {
+    let thinking: String?
+    let tools: [ToolActivity]
+    let streaming: Bool
+    let fullToolOutput: Bool
+    @State private var expanded = false
+
+    private var hasThinking: Bool {
+        !(thinking?.isEmpty ?? true)
+    }
+
+    private var stepCount: Int {
+        tools.count + (hasThinking ? 1 : 0)
+    }
+
+    private var isActive: Bool {
+        streaming || tools.contains { !$0.done }
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let thinking, !thinking.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Reasoning", systemImage: "brain")
+                            .font(.caption.weight(.semibold))
+                        Text(thinking)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        Color(.tertiarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
+                }
+                ForEach(tools) { ToolRow(tool: $0, fullOutput: fullToolOutput) }
+            }
+            .padding(.top, 6)
+        } label: {
+            HStack(spacing: 7) {
+                if isActive {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                Text("Intermediate steps")
+                    .fontWeight(.semibold)
+                Spacer(minLength: 8)
+                Text("\(stepCount) \(stepCount == 1 ? "step" : "steps")")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+        }
+    }
+}
+
+/// Collapsible tool/skill activity row — the "see Hermes working" surface.
+private struct ToolRow: View {
+    let tool: ToolActivity
+    let fullOutput: Bool
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button { withAnimation { expanded.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: tool.done ? "checkmark.circle.fill" : "circle.dotted")
+                        .foregroundStyle(tool.done ? .green : .secondary)
+                        .symbolEffect(.pulse, isActive: !tool.done)
+                    Text(tool.label).font(.caption.weight(.semibold).monospaced())
+                    Spacer()
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(.plain)
+            if expanded {
+                if !tool.arguments.isEmpty {
+                    Text(tool.arguments).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                }
+                if let out = tool.output, !out.isEmpty {
+                    Text(out).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                        .lineLimit(fullOutput ? nil : 12)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// Where the last dictation went in the composer, so cleanup can be swapped
+/// in (or undone) and your edits before sending can be learned.
+struct DictationInsertion: Equatable {
+    let id: UUID
+    let prefix: String
+    var inserted: String
+    var beforeCleanup: String?
+    var undone = false
+}
