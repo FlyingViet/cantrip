@@ -275,7 +275,7 @@ struct MacHomeSidebar: View {
             )
             .frame(height: 28)
             if !remote.isConfigured {
-                SettingsLink {
+                MacSettingsLink {
                     Label("Connect to Cantrip…", systemImage: "antenna.radiowaves.left.and.right")
                 }
                 .buttonStyle(.link)

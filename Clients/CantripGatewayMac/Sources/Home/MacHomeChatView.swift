@@ -175,7 +175,7 @@ struct MacHomeChatView: View {
                 Text("Connect to Cantrip").font(.title3.weight(.semibold))
                 Text("Open Settings and enter the pairing token from Cantrip on your Mac. A Tailscale URL is optional.")
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                SettingsLink { Text("Open Settings…") }
+                MacSettingsLink { Text("Open Settings…") }
                     .buttonStyle(.borderedProminent)
                     .padding(.top, 4)
             } else {
@@ -191,7 +191,7 @@ struct MacHomeChatView: View {
                     Text("Cantrip Home unavailable").font(.title3.weight(.semibold))
                     Text(message)
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    SettingsLink { Text("Open Settings…") }
+                    MacSettingsLink { Text("Open Settings…") }
                         .buttonStyle(.borderedProminent)
                         .padding(.top, 4)
                 }
