@@ -67,6 +67,9 @@ enum RemoteHistory {
         if let weatherCard = message.weatherCard {
             result["weatherCard"] = weatherCard.snapshot
         }
+        // Every card as generic blocks (`cards`); the keys above stay for clients from before them.
+        let cards = message.cardDocuments(linkPreviews: AppSettings.shared.linkPreviewsEnabled)
+        if !cards.isEmpty { result["cards"] = cards.map(\.snapshot) }
         return result
     }
 

@@ -226,7 +226,7 @@ extension SessionTabTests {
         precondition(allowed["mode"] as? String == "append"
                      && allowed["guidance"] as? String
                         == CopilotBackend.previewGuidance + "\n\n" + ReplyVisibility.guidance
-                            + "\n\n" + WeatherCardResolver.agentGuidance(command: TabInsight.command)
+                            + "\n\n" + CardComposer.richCardGuidance(command: TabInsight.command)
                             + "\n\n" + SimulatorPool.agentGuidance(command: TabInsight.command)
                             + "\n\n" + CopilotBackend.subagentGuidance,
                      "Preview, reply-visibility and subagent guidance belong in the appended system message")
@@ -247,7 +247,7 @@ extension SessionTabTests {
                      "Disabling subagents removes their tools")
         precondition(disabled["guidance"] as? String
                         == CopilotBackend.previewGuidance + "\n\n" + ReplyVisibility.guidance
-                            + "\n\n" + WeatherCardResolver.agentGuidance(command: TabInsight.command)
+                            + "\n\n" + CardComposer.richCardGuidance(command: TabInsight.command)
                             + "\n\n" + SimulatorPool.agentGuidance(command: TabInsight.command),
                      "Disabled subagents get no delegation guidance, but keep reply visibility")
         precondition((disabled["prompt"] as? String)?.contains("Allowed subagents fixture") == true,

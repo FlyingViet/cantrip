@@ -1798,6 +1798,10 @@ strings are never unfurled. Paired clients load cached preview images through
 `GET /api/v1/link-previews/image?id=<imageID>` (`{"data": "<base64>"}`, or raw
 image bytes with `raw=1`).
 
+Every card on a reply is also sent as generic blocks in `cards` (main card first, then link
+cards), which current clients draw instead of the per-type keys below; see [Cards](cards.md).
+Those keys stay for older clients.
+
 When a reply ends with a fenced `places` or `cantrip-places` JSON block naming
 real-world places, Cantrip strips the block from the visible text, resolves the
 places through Apple MapKit and OpenStreetMap (`Nominatim` / `opening_hours`),

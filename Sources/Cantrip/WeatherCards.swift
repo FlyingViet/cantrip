@@ -644,7 +644,7 @@ actor WeatherCardResolver {
 
     private static func fetchOpenMeteo(_ coordinate: Coordinate, unit: String) async throws -> WeatherForecast {
         let urls = forecastURLs(coordinate, unit: unit)
-        func load(_ url: URL) async throws -> Data {
+        @Sendable func load(_ url: URL) async throws -> Data {
             let (data, response) = try await session.data(from: url)
             guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 512 * 1024 else {
                 throw URLError(.badServerResponse)
