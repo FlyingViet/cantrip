@@ -9,7 +9,7 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards test-agent-policy test-skills test-secrets test-environments cert artwork icon app run clean
+.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-settings-manifest test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards test-agent-policy test-skills test-secrets test-environments cert artwork icon app run clean
 
 all: app
 
@@ -55,6 +55,12 @@ test-session-tabs:
 	@BIN="/tmp/cantrip-session-tab-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc -parse-as-library $(filter-out Sources/Cantrip/main.swift,$(wildcard Sources/Cantrip/*.swift Sources/Cantrip/Backends/*.swift)) Tests/SessionTabTests/*.swift -o "$$BIN" && "$$BIN"
+
+# The settings manifest alone (it's also part of test-session-tabs).
+test-settings-manifest:
+	@BIN="/tmp/cantrip-settings-manifest-tests-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc -parse-as-library $(filter-out Sources/Cantrip/main.swift,$(wildcard Sources/Cantrip/*.swift Sources/Cantrip/Backends/*.swift)) Tests/SessionTabTests/*.swift -o "$$BIN" && CANTRIP_TAB_TEST_ONLY=settings "$$BIN"
 
 test-message-routing:
 	@BIN="/tmp/cantrip-message-routing-tests-$$$$"; \

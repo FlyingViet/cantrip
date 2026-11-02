@@ -923,6 +923,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/backends"
                 || request.path == "/api/v1/skills"
                 || request.path == "/api/v1/secrets"
+                || request.path == "/api/v1/settings"
                 || request.path == "/api/v1/link-previews/image"
                 || request.path.hasPrefix("/api/v1/link-previews/image/")
                 || request.path == "/api/v1/map-tile" else {
@@ -951,6 +952,10 @@ final class RemoteControlServer {
         }
         if request.path == "/api/v1/secrets" {
             handleSecrets(request, on: connection)
+            return
+        }
+        if request.path == "/api/v1/settings" {
+            handleSettings(request, json: json, on: connection)
             return
         }
         if request.path == "/api/v1/maintenance" {
@@ -1301,7 +1306,8 @@ final class RemoteControlServer {
             }
             let sessions = manager.sessions.filter { !$0.isPrivate }
                 .map { snapshot($0, includeMessages: false, on: connection) }
-            sendJSON(["status": "ready", "sessions": sessions, "supportsUsageFallback": true, "supportsModelTiers": true], on: connection)
+            sendJSON(["status": "ready", "sessions": sessions, "supportsUsageFallback": true, "supportsModelTiers": true,
+                      "supportsSettings": true, "settingsRevision": SettingsManifest.revision()], on: connection)
             return
         }
         let recentExchanges: Int?
@@ -1327,7 +1333,8 @@ final class RemoteControlServer {
                     .map { snapshot($0, includeMessages: false, on: connection) }
                 var listing: [String: Any] = ["sessions": sessions, "uiRevision": Self.webAppRevision,
                                               "sections": manager.tabSections.map(\.json), "supportsTabSections": true,
-                                              "supportsUsageFallback": true, "supportsModelTiers": true]
+                                              "supportsUsageFallback": true, "supportsModelTiers": true,
+                                              "supportsSettings": true, "settingsRevision": SettingsManifest.revision()]
                 if AppSettings.shared.cantripHomeEnabled {
                     // Web clients pin it as their first tab; tab-list clients ignore it.
                     listing["home"] = snapshot(manager.homeSession, includeMessages: false, on: connection)
@@ -2649,6 +2656,36 @@ final class RemoteControlServer {
                 requestLog("remote-request: id=\(connection.trace.id) outcome=journal_error")
                 sendError(500, "The action may have applied, but run history could not be saved. Check the session before retrying.", on: connection)
             }
+        }
+    }
+
+    /// `GET/POST /api/v1/settings` (`SettingsManifest`). Cantrip's own windows on this Mac send
+    /// `LocalClientKey`, which adds the app's settings and the ones paired devices only see.
+    @MainActor
+    private func handleSettings(_ request: HTTPRequest, json: [String: Any]?, on connection: RemoteRequestConnection) {
+        let local = LocalClientKey.matches(request.headers[LocalClientKey.header])
+        switch request.method {
+        case "GET":
+            sendJSON(SettingsManifest.manifest(local: local), on: connection)
+        case "POST":
+            guard request.body.count <= SettingsManifest.maximumBody, let json else {
+                sendError(400, "Send a JSON object.", on: connection)
+                return
+            }
+            Task { @MainActor in
+                do {
+                    sendJSON(try await SettingsManifest.handle(json, local: local), on: connection)
+                } catch let error as SettingsManifestError {
+                    var body: [String: Any] = ["error": error.message]
+                    if !error.fields.isEmpty { body["fields"] = error.fields }
+                    if error.status == 409 { body["settings"] = SettingsManifest.manifest(local: local) }
+                    sendJSON(body, status: error.status, on: connection)
+                } catch {
+                    sendError(500, "Could not change settings on the Mac.", on: connection)
+                }
+            }
+        default:
+            sendError(405, "method not allowed", on: connection)
         }
     }
 
