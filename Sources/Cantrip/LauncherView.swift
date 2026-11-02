@@ -3548,10 +3548,10 @@ struct MessageRow: View {
             // Tool steps render in the progress sidebar, not inline; MCP App
             // views (e.g. galleries) are part of the reply.
             let placed = placedSubagents
-            let visibleLinks = (!localOnly && AppSettings.shared.linkPreviewsEnabled) ? message.visibleLinkPreviews : []
-            let visiblePlaceCard = localOnly ? nil : message.placeCard
+            let showsLinks = !localOnly && AppSettings.shared.linkPreviewsEnabled
+            let cards = localOnly ? [] : message.cardDocuments(linkPreviews: showsLinks)
             if message.text.isEmpty && message.thinking.isEmpty && message.author == nil
-                && visibleApps.isEmpty && placed.isEmpty && visibleLinks.isEmpty && visiblePlaceCard == nil {
+                && visibleApps.isEmpty && placed.isEmpty && cards.isEmpty {
                 EmptyView()
             } else {
                 let parts = ReplyBlocks.split(message.text, before: placed.map(\.block))
@@ -3587,12 +3587,8 @@ struct MessageRow: View {
                             }
                         }
                     }
-                    if let placeCard = visiblePlaceCard {
-                        PlaceCardView(card: placeCard)
-                            .padding(.top, 2)
-                    }
-                    if !visibleLinks.isEmpty {
-                        LinkPreviewCardStack(cards: visibleLinks)
+                    if !cards.isEmpty {
+                        CardDocumentStack(cards: cards, links: showsLinks ? message.visibleLinkPreviews : [])
                             .padding(.top, 2)
                     }
                 }

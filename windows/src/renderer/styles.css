@@ -453,6 +453,12 @@ select option {
   font-size: 15px;
 }
 
+.toolbar-icon {
+  width: 15px;
+  height: 15px;
+  vertical-align: middle;
+}
+
 .screen-context {
   width: 34px;
   padding: 0;
@@ -864,6 +870,18 @@ select option {
 
 .secondary-button:hover {
   background: #373739;
+}
+
+.settings-note {
+  margin: 6px 0 0;
+  color: #a5a5aa;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.settings-check input:disabled + *,
+.settings-check:has(input:disabled) {
+  opacity: 0.55;
 }
 
 .settings-error {

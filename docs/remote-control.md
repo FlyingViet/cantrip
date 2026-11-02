@@ -1216,8 +1216,13 @@ Windows app needs Cantrip v1.0-161 or later on the Mac.
 When Cantrip Home is on, **Artifacts** sits next to **Tasks** in the browser
 Remote, Mac Remote and the Windows app. It lists the documents and media Home
 saved on the Mac, with thumbnails for images and videos. Images open in the
-viewer; other files download. **Delete** asks first and removes the file from
-the Mac. **Create in Chat** opens Home with "Create a " in the message box.
+viewer; other files download. Each card's **Download** button saves the
+original file, and artifacts in a folder add **Download folder** for the whole
+folder as a zip (see [Saving artifacts on a client](cantrip-home.md#saving-artifacts-on-a-client)).
+The browser fetches the file with the pairing token and hands it to its normal
+download; the Mac Remote asks where to save it, starting in Downloads.
+**Delete** asks first and removes the file from the Mac. **Create in Chat**
+opens Home with "Create a " in the message box.
 
 ## Rename and protect remote tabs
 
@@ -1822,6 +1827,10 @@ strings are never unfurled. Paired clients load cached preview images through
 `GET /api/v1/link-previews/image?id=<imageID>` (`{"data": "<base64>"}`, or raw
 image bytes with `raw=1`).
 
+Every card on a reply is also sent as generic blocks in `cards` (main card first, then link
+cards), which current clients draw instead of the per-type keys below; see [Cards](cards.md).
+Those keys stay for older clients.
+
 When a reply ends with a fenced `places` or `cantrip-places` JSON block naming
 real-world places, Cantrip strips the block from the visible text, resolves the
 places through Apple MapKit and OpenStreetMap (`Nominatim` / `opening_hours`),
@@ -1842,6 +1851,74 @@ names a place. Other links, such as a form or an article, keep their cards, and
 the three-card limit counts only those. The Mac applies this when it builds the
 snapshot, so replies saved before the rule show the same cards on every client.
 
+### Weather cards
+
+When a reply ends with a fenced `weather` or `cantrip-weather` JSON block
+(`{"place": "Portland, OR"}`, or `{}` for where the user is), Cantrip strips
+the block and attaches a `weatherCard` built from [Open-Meteo](https://open-meteo.com/)
+data, never from numbers the model wrote. The place is geocoded on the Mac; with
+no place, the card uses the location the paired device sent with the message,
+then the Mac's own location (**Share my location as context**), and its
+`placeNote` says whose location it is ("Your iPhone's location", "The Mac's
+location"). Open-Meteo only receives coordinates rounded to about 1 km, with no
+cookies; a forecast is reused for 10 minutes and a geocoded place for a day.
+Temperatures follow the Mac's temperature unit setting (°F for US regions).
+
+`weatherCard` has `place`, optional `placeNote`, `status` (`ok` or
+`unavailable`), `unit` (`F` or `C`), `attribution` and `attributionURL`. With
+`status: "unavailable"` it has only a `message` (no place found, or Open-Meteo
+unreachable) and clients show **Forecast unavailable** with it. With `ok` it
+also has `timeZone`, `updatedAt`, `current` (`temperature`, optional `feelsLike`,
+`condition`, `symbol`, `code`, `isDay`, optional `precipitationChance`), `today`
+(`high`, `low`, optional `precipitationChance`), `hourly` (now plus the next 12
+hours: `time`, `label`, `temperature`, `condition`, `symbol`, optional
+`precipitationChance`) and `daily` (10 days: `date`, `label`, `high`, `low`,
+`condition`, `symbol`, optional `precipitationChance`). Labels ("Now", "3 PM",
+"Today", "Mon") are in the place's time zone; `symbol` is an SF Symbol name the
+web and Windows clients map to their own icons.
+
+A reply with a `weatherCard` gets no `linkPreviews` for weather sites (a host
+or path with "weather" or "forecast", or a known forecast site), since the card
+already shows the forecast. Models are taught the block in every tab's system
+message and in Cantrip Home's protocol, and `cantrip weather [PLACE] [--json]`
+prints the same forecast from the same cache, so numbers a reply quotes match
+its card.
+
+## Use the device's location
+
+Ask "what's the weather today?" or "coffee near me" from a paired device and the
+answer can be for where that device is, not where the Mac is. Each client has a
+**Share location** setting, off by default: Cantrip Agent (iPhone and iPhone
+Duo) and Cantrip Gateway for Mac in Settings, Cantrip Gateway for Windows in
+Settings, and the browser Remote with the location button beside **Send** (filled
+while sharing is on; the browser needs the Mac's secure Tailscale address).
+Clients ask for location only while the app is in use, never in the background. The Mac app's own Remote tab
+shows the browser setting, but its embedded web view may not get a location from
+macOS; its messages then go without one. Cantrip for Windows, which runs backends
+on the PC itself, has its own **Settings → Location** (see `windows/README.md`).
+
+While it's on, each message you send carries the device's location, rounded to
+about 1 km unless you also turn on **Precise location**, its time zone, and a
+place name such as "Mountain View, CA" (the Mac names the place with Apple's
+geocoder when a browser or Windows PC sends only coordinates). A fix is reused
+for up to 15 minutes. The Mac adds a short note to that message's prompt for the
+model, on every backend: use this location for anything that depends on where
+you are, name the place in the reply, and set a places card's "near" to it.
+
+While it's off, or with a device or Mac version that doesn't send one, the note
+says the device shares no location: the model uses the Mac's own location (from
+**Share my location as context** in the Mac's settings) and says that it did.
+
+The location travels only over the paired connection, with that one message. It
+isn't shown in the chat, saved with the conversation or its run journal, written
+to Cantrip's log, memory notes or Home tasks, and the model is asked not to save
+it either. A backend's own transcript of the conversation keeps the prompt it was
+sent, as it does for any message. `POST /api/v1/sessions/{id}/messages` takes it as
+`"location": {"latitude", "longitude", "label"?, "accuracy"?, "precise"?,
+"timeZone"?, "age"?, "device"?}` (session snapshots report
+`supportsClientLocation`); a malformed object is refused with `400`, and a fix
+older than 15 minutes is ignored.
+
 ## Understand what is available remotely
 
 | Situation | Behavior |
@@ -1850,7 +1927,8 @@ snapshot, so replies saved before the rule show the same cards on every client.
 | Host asleep, logged out, powered off, or waiting at pre-login/FileVault | Remote is unavailable |
 | Private session | Not exposed to Remote clients |
 | Local screenshot, selection, or file staged in Cantrip | Not automatically consumed by a Remote prompt |
-| Host calendar/location | Not automatically added to a Remote prompt |
+| Host calendar | Not automatically added to a Remote prompt |
+| Host location | Named only as the fallback for location-dependent questions from a device that doesn't share its own (see below) |
 | Existing session messages or enabled memory | Can still provide context; Remote is not a clean-room conversation |
 
 Remote access is not a separate low-privilege account. An action-enabled host

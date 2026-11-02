@@ -11,7 +11,9 @@ import type {
   ScreenCapture,
   ShortcutStatus,
   UpdateState,
+  WeatherCardRequest,
 } from "../shared/types";
+import type { CardDocument } from "../shared/cards";
 import type { PluginSummary } from "../shared/pluginTypes";
 
 const api: CantripApi = {
@@ -78,10 +80,13 @@ const api: CantripApi = {
     ipcRenderer.invoke("updates:download") as Promise<UpdateState>,
   installUpdate: () =>
     ipcRenderer.invoke("updates:install") as Promise<{ ok: boolean; error?: string }>,
+  weatherCard: (request: WeatherCardRequest) =>
+    ipcRenderer.invoke("weather:card", request) as Promise<CardDocument>,
   setWindowOpacity: (opacity: number) =>
     ipcRenderer.send("settings:opacity", opacity),
   setExpanded: (expanded: boolean) => ipcRenderer.send("window:set-expanded", expanded),
   hide: () => ipcRenderer.send("launcher:hide"),
+  openHome: () => ipcRenderer.send("home:open"),
   onRunChunk: (callback: (event: RunChunkEvent) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: RunChunkEvent) =>
       callback(payload);

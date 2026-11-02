@@ -208,6 +208,9 @@ struct SessionTabTests {
         try await testMCPAppTranscripts()
         try await testMCPAppRemote()
         try await testRichCardsRemote()
+        try await testWeatherCardsRemote()
+        try await testCardDocuments()
+        try await testHomeCards()
         try testCantripHomeSchedules()
         try await testCantripHome()
         try await testCantripHomeArtifactThumbnails()
@@ -229,6 +232,7 @@ struct SessionTabTests {
         try await testParallelRequestRouting()
         try await testQueueGrouping()
         try await testPromptUsage()
+        try await testRemoteClientLocation()
         try await testHostProtection(manager: manager)
         print("Session tab persistence, protection, privacy, and web controls passed")
     }

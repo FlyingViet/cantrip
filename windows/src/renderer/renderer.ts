@@ -28,6 +28,10 @@ import type {
   UpdateState,
 } from "../shared/types";
 import type { PluginSummary } from "../shared/pluginTypes";
+import { PRECISE_KEY, SHARE_KEY } from "../shared/location";
+import { forgetFix, promptLocation, readFlag, readPosition } from "./location";
+import { extractWeatherBlock, visibleWeatherText } from "../shared/weather";
+import { renderCard, renderCardLoading } from "./cards";
 
 function requiredElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -54,6 +58,7 @@ const attachmentsElement = requiredElement<HTMLElement>("attachments");
 const screenContextButton = requiredElement<HTMLButtonElement>("screen-context");
 const settingsToggle = requiredElement<HTMLButtonElement>("settings-toggle");
 const pluginsToggle = requiredElement<HTMLButtonElement>("plugins-toggle");
+const homeToggle = requiredElement<HTMLButtonElement>("home-toggle");
 const settingsPanel = requiredElement<HTMLElement>("settings-panel");
 const settingsClose = requiredElement<HTMLButtonElement>("settings-close");
 const settingsBackend = requiredElement<HTMLSelectElement>("settings-backend");
@@ -66,6 +71,10 @@ const settingsContextHelp = requiredElement<HTMLElement>("settings-context-help"
 const settingsResetBackend = requiredElement<HTMLButtonElement>("settings-reset-backend");
 const settingsAllowActions = requiredElement<HTMLInputElement>("settings-allow-actions");
 const settingsLaunchAtLogin = requiredElement<HTMLInputElement>("settings-launch-at-login");
+const settingsLocationShare = requiredElement<HTMLInputElement>("settings-location-share");
+const settingsLocationPrecise = requiredElement<HTMLInputElement>("settings-location-precise");
+const settingsLocationStatus = requiredElement<HTMLElement>("settings-location-status");
+const cardSlot = requiredElement<HTMLElement>("reply-card");
 const settingsOpacity = requiredElement<HTMLInputElement>("settings-opacity");
 const settingsOpacityValue = requiredElement<HTMLOutputElement>("settings-opacity-value");
 const settingsError = requiredElement<HTMLElement>("settings-error");
@@ -699,7 +708,8 @@ function setBusy(busy: boolean): void {
 function renderOutput(markdown: boolean): void {
   output.classList.toggle("plain-output", !markdown);
   if (markdown) {
-    const rendered = marked.parse(outputText, {
+    // A reply's `weather` block becomes the card under it, never text (not even while it streams).
+    const rendered = marked.parse(visibleWeatherText(outputText, currentRunId !== null), {
       async: false,
       breaks: true,
       gfm: true,
@@ -707,13 +717,43 @@ function renderOutput(markdown: boolean): void {
     output.innerHTML = DOMPurify.sanitize(rendered, {
       USE_PROFILES: { html: true },
     });
+    // The reply's card scrolls with the reply it belongs to.
+    if (cardSlot.childElementCount) output.append(cardSlot);
   } else {
     output.textContent = outputText;
   }
   output.scrollTop = output.scrollHeight;
 }
 
+let cardRequest = 0;
+
+function clearCard(): void {
+  cardRequest += 1;
+  cardSlot.replaceChildren();
+  cardSlot.classList.add("hidden");
+}
+
+/**
+ * The finished reply's weather block, as an Open-Meteo card for its place (or this PC, with Location
+ * on): a generic card document the main process builds, drawn block by block.
+ */
+async function showWeather(): Promise<void> {
+  const block = extractWeatherBlock(outputText);
+  if (!block.found || block.place === undefined) return;
+  const ticket = ++cardRequest;
+  renderCardLoading(cardSlot, "Getting the forecast from Open-Meteo…");
+  output.append(cardSlot);
+  const location = block.place ? undefined : await promptLocation();
+  const card = await window.cantrip.weatherCard({ place: block.place, location });
+  if (ticket !== cardRequest) return;
+  renderCard(cardSlot, card, (url) => void window.cantrip.openExternal(url));
+  if (cardSlot.classList.contains("hidden")) return;
+  output.append(cardSlot);
+  cardSlot.scrollIntoView({ block: "nearest" });
+}
+
 function showMessage(title: string, message: string, isError = false): void {
+  clearCard();
   window.cantrip.setExpanded(true);
   transcript.classList.remove("hidden");
   runLabel.textContent = title;
@@ -866,6 +906,7 @@ async function submit(forceAi: boolean): Promise<void> {
       "context",
     ) as ContextTier,
     attachments: screenCaptures.map(({ name, dataUrl }) => ({ name, dataUrl })),
+    location: mode === "ai" ? await promptLocation() : undefined,
   };
 
   currentRunId = runId;
@@ -874,6 +915,7 @@ async function submit(forceAi: boolean): Promise<void> {
   transcript.classList.remove("hidden");
   output.classList.remove("error");
   outputText = "";
+  clearCard();
   renderOutput(mode === "ai");
   runLabel.textContent =
     mode === "shell" ? "PowerShell" : backendSelect.selectedOptions[0]?.textContent ?? "AI";
@@ -956,6 +998,7 @@ retryShortcutButton.addEventListener("click", async () => {
 settingsToggle.addEventListener("click", () => {
   toggleSettings(settingsPanel.classList.contains("hidden"));
 });
+homeToggle.addEventListener("click", () => window.cantrip.openHome());
 pluginsToggle.addEventListener("click", () => {
   toggleSettings(true);
   settingsPluginsSection.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -995,6 +1038,39 @@ settingsLaunchAtLogin.addEventListener("change", async () => {
     settingsError.textContent = result.error ?? "Could not update launch at login.";
     settingsError.classList.remove("hidden");
   }
+});
+function showLocationStatus(text: string | null): void {
+  settingsLocationStatus.textContent = text ?? "";
+  settingsLocationStatus.classList.toggle("hidden", !text);
+}
+
+async function checkLocation(): Promise<void> {
+  const precise = settingsLocationPrecise.checked;
+  showLocationStatus("Finding this PC's location…");
+  const reading = await readPosition(precise);
+  if (!settingsLocationShare.checked) return;
+  showLocationStatus("fix" in reading
+    ? `Found${precise ? "" : "; it's sent rounded to about 1 km"}. The reply names the place it used.`
+    : reading.error);
+}
+
+function renderLocationSettings(): void {
+  settingsLocationShare.checked = readFlag(SHARE_KEY);
+  settingsLocationPrecise.checked = readFlag(PRECISE_KEY);
+  settingsLocationPrecise.disabled = !settingsLocationShare.checked;
+}
+
+settingsLocationShare.addEventListener("change", () => {
+  localStorage.setItem(SHARE_KEY, String(settingsLocationShare.checked));
+  forgetFix();
+  renderLocationSettings();
+  if (settingsLocationShare.checked) void checkLocation();
+  else showLocationStatus("Off. Prompts don't include this PC's location.");
+});
+settingsLocationPrecise.addEventListener("change", () => {
+  localStorage.setItem(PRECISE_KEY, String(settingsLocationPrecise.checked));
+  forgetFix();
+  if (settingsLocationShare.checked) void checkLocation();
 });
 settingsOpacity.addEventListener("input", () => {
   const value = Number(settingsOpacity.value);
@@ -1072,6 +1148,10 @@ window.cantrip.onRunExit((event) => {
     }
   } else {
     runState.textContent = "Done";
+    if (currentRunMode === "ai") {
+      renderOutput(true);
+      void showWeather();
+    }
   }
 });
 window.cantrip.onShortcutStatus(applyShortcutStatus);
@@ -1109,6 +1189,7 @@ async function initialize(): Promise<void> {
   renderBackendHealth();
 
   setAllowActions(localStorage.getItem("allowActions") === "true");
+  renderLocationSettings();
   const savedOpacity = Number(localStorage.getItem("panelOpacity") ?? "100");
   const opacity = Number.isFinite(savedOpacity)
     ? Math.min(100, Math.max(85, savedOpacity))

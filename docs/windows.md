@@ -55,6 +55,7 @@ If another launcher owns **Alt+Space**, Cantrip reports the conflict and uses
 | Change backend/model/effort | Open the **gear** |
 | Let the agent make changes | Review and enable **Allow agent actions** in Settings |
 | Update an installed release | **Settings > Updates** |
+| See Cantrip Home from your Mac | Click the **house** button, or **Cantrip Home** in the tray menu |
 
 Direct `!` commands are explicit execution requests, not safe-mode previews.
 Agent action mode grants autonomous CLI permissions; enable it only for work
@@ -79,6 +80,26 @@ plugins folder, rescan, review declarations, approve, and enable a plugin.
 Windows dashboards open in a separate sandboxed window, not a Mac-style side
 pane. Follow the [Windows plugin guide](../windows/PLUGINS.md).
 
+## View Cantrip Home from your Mac
+
+Cantrip Home runs on your Mac. The **Cantrip Home** window shows it on this PC,
+read-only: Home's latest conversation, **Background** runs with their cards
+(a run's forecast, a calendar list) and the **Full Log**, and **Tasks** with each
+task's latest run, its workspace (for example bills due in the next 7 days) and
+a record's forecast and venue.
+
+1. On the Mac, run `cantrip pair` and copy the `cantripagent://pair` link it
+   prints. A link made for Cantrip Gateway works too.
+2. Open the window with the **house** button in the launcher, or **Cantrip
+   Home** in the tray menu.
+3. Paste the link and select **Pair**.
+
+The pairing token is stored encrypted for your Windows account and is sent only
+to your Mac, over its encrypted home-network connection or its Tailscale HTTPS
+address; nothing goes through a public link. **Unpair** deletes it. To message
+Home, change tasks, stop runs or download artifacts, use Cantrip Gateway for
+Windows or Cantrip on your iPhone or Mac.
+
 ## What is and is not available
 
 | Available now | Not yet available on Windows |
@@ -90,6 +111,7 @@ pane. Follow the [Windows plugin guide](../windows/PLUGINS.md).
 | Screen context with previews | Clipboard/drop file attachments |
 | Approved plugins and some MCP integration | Mac Remote control/image-upload hosting |
 | Settings, launch at login, in-app updates | Memory vault, voice, council, tutorial overlays, slash skills, CLI bridge |
+| Cantrip Home from your Mac (read-only) | Messaging Home, task edits, artifacts (use Cantrip Gateway) |
 
 For implementation status, see the [parity checklist](../windows/PARITY.md).
 For a failure in the core workflow, see

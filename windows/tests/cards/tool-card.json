@@ -1,0 +1,46 @@
+{
+  "blocks" : [
+    {
+      "subtitle" : "UPS Ground",
+      "title" : "Package 1Z999",
+      "type" : "header"
+    },
+    {
+      "label" : "Arrives",
+      "symbol" : "shippingbox.fill",
+      "type" : "stat",
+      "value" : "Nov 4"
+    },
+    {
+      "rows" : [
+        {
+          "key" : "Status",
+          "value" : "In transit"
+        },
+        {
+          "key" : "Weight",
+          "value" : "2.5 lb"
+        }
+      ],
+      "type" : "keyValue"
+    },
+    {
+      "badges" : [
+        {
+          "text" : "On time",
+          "tone" : "positive"
+        }
+      ],
+      "type" : "badges"
+    }
+  ],
+  "fallbackText" : "Package 1Z999 — UPS Ground\nArrives Nov 4\nStatus: In transit\nWeight: 2.5 lb\nOn time",
+  "id" : "model-card",
+  "source" : {
+    "kind" : "tool",
+    "name" : "track",
+    "updatedAt" : "2026-11-01T22:15:00Z"
+  },
+  "type" : "custom",
+  "version" : 1
+}

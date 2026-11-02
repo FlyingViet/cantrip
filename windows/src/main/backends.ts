@@ -13,6 +13,8 @@ import type {
   RunRequest,
 } from "../shared/types";
 import type { PluginMcpSnapshot } from "../shared/pluginTypes";
+import { checkLocation, locationNote } from "../shared/location";
+import { asksAboutWeather, WEATHER_GUIDANCE } from "../shared/weather";
 
 const execFileAsync = promisify(execFile);
 export const ansiPattern =
@@ -65,6 +67,20 @@ export async function commandSpec(command: string): Promise<CommandSpec | null> 
   const localNode = path.join(path.dirname(shim), "node.exe");
   const node = existsSync(localNode) ? localNode : (await where("node")).find((file) => file.endsWith(".exe"));
   return node ? { executable: node, prefixArgs: [script], path: shim } : null;
+}
+
+/** A prompt about the weather learns the `weather` block (read before the location note, which mentions weather). */
+export function withWeatherGuidance(request: RunRequest): RunRequest {
+  if (request.mode !== "ai" || !asksAboutWeather(request.prompt)) return request;
+  return { ...request, prompt: `${request.prompt}\n\n${WEATHER_GUIDANCE}` };
+}
+
+/** Settings › Location: an AI prompt gets a note saying where this PC is (shell commands never do). */
+export function withLocationNote(request: RunRequest, now: Date = new Date()): RunRequest {
+  const { location } = checkLocation(request.location);
+  const { location: _sent, ...rest } = request;
+  if (request.mode !== "ai" || !location) return rest;
+  return { ...rest, prompt: `${locationNote(location, now)}\n\n${request.prompt}` };
 }
 
 export function backendArgs(
@@ -211,6 +227,7 @@ export class RunManager {
   ): Promise<{ ok: boolean; error?: string }> {
     const validationError = this.validate(request);
     if (validationError) return { ok: false, error: validationError };
+    request = withLocationNote(withWeatherGuidance(request));
     if (this.processes.has(request.runId)) {
       return { ok: false, error: "That run is already active." };
     }
@@ -350,6 +367,8 @@ export class RunManager {
     if (!Array.isArray(request.attachments) || request.attachments.length > 6) {
       return "Too many screen attachments.";
     }
+    const location = checkLocation(request.location);
+    if (location.error) return location.error;
     for (const attachment of request.attachments) {
       if (
         typeof attachment.name !== "string" ||

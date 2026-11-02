@@ -1,0 +1,540 @@
+/* Cards (cards.ts): Cantrip's generic card blocks under a reply, e.g. the Open-Meteo forecast. */
+.card-slot {
+  padding-top: 12px;
+}
+
+.card-panel {
+  overflow: hidden;
+  color: #f3f4f6;
+  background: linear-gradient(180deg, #21304a 0%, #1c1d20 62%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+}
+
+.card-loading,
+.card-fallback {
+  padding: 12px 14px;
+  color: #c9d0da;
+  font-size: 11.5px;
+}
+
+.card-fallback {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.card-link {
+  cursor: pointer;
+}
+
+.card-link:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.card-link:focus-visible {
+  outline: 2px solid #8ccaff;
+  outline-offset: 2px;
+}
+
+.card-block + .card-block {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Badges and notices read as part of the header above them. */
+.card-header + .card-flow {
+  margin-top: -6px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.card-header-text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.card-title {
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.card-subtitle,
+.card-line-muted,
+.card-notice-text {
+  color: #c9d0da;
+  font-size: 11px;
+}
+
+.card-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.card-line {
+  margin-top: 2px;
+  color: #e5e7eb;
+  font-size: 12.5px;
+}
+
+.card-icon {
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+}
+
+.card-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.card-icon.sun {
+  color: #ffcc40;
+}
+
+.card-icon.moon {
+  color: #e8e3c4;
+}
+
+.card-icon.wet {
+  color: #8ccaff;
+}
+
+.card-icon.cloud,
+.card-icon.plain {
+  color: #d5dae2;
+}
+
+.card-glyph {
+  align-items: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.card-icon.card-header-icon {
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+}
+
+.card-icon.card-subtitle-icon {
+  width: 10px;
+  height: 10px;
+  color: inherit;
+}
+
+.card-header-stat {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.card-icon.card-header-stat-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.card-header-stat-value,
+.card-stat-value {
+  color: #fff;
+  font-size: 34px;
+  font-weight: 300;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-stat {
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px 12px;
+}
+
+.card-stat-label,
+.card-stat-detail {
+  color: #c9d0da;
+  font-size: 11px;
+}
+
+.card-stat-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-icon.card-stat-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.card-keyvalue {
+  padding: 4px 0;
+}
+
+.card-kv-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+}
+
+.card-kv-row:last-child {
+  border-bottom: 0;
+}
+
+.card-kv-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #c9d0da;
+}
+
+.card-icon.card-kv-icon {
+  width: 13px;
+  height: 13px;
+  align-self: center;
+}
+
+.card-kv-value {
+  color: #fff;
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.card-strip {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 8px 10px;
+}
+
+.card-strip-item {
+  display: grid;
+  flex: none;
+  justify-items: center;
+  gap: 3px;
+  width: 48px;
+  color: #d1d5db;
+  font-size: 11px;
+}
+
+.card-strip-value {
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-note {
+  min-height: 12px;
+  color: #8ccaff;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.card-chart {
+  padding: 2px 0;
+}
+
+.card-chart-row {
+  display: grid;
+  grid-template-columns: 44px 22px 32px 32px minmax(30px, 1fr) 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+}
+
+.card-chart-row:last-child {
+  border-bottom: 0;
+}
+
+.card-chart-label {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-chart-low,
+.card-chart-high {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-chart-low {
+  color: #c9d0da;
+}
+
+.card-chart-high {
+  color: #fff;
+  font-weight: 600;
+}
+
+.card-bar {
+  position: relative;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+
+.card-bar > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, #5ac8fa, #ffcc40);
+  border-radius: 999px;
+}
+
+.card-list {
+  padding: 2px 0;
+}
+
+.card-list-title {
+  padding: 8px 14px 2px;
+  color: #c9d0da;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.card-list-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.card-list-row:last-child {
+  border-bottom: 0;
+}
+
+.card-icon.card-list-icon {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+
+.card-list-main {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+}
+
+.card-list-item-title {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.card-list-subtitle {
+  color: #e5e7eb;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.card-list-detail,
+.card-list-note {
+  color: #c9d0da;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.card-list-trailing {
+  flex: none;
+  max-width: 40%;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.card-badges-block {
+  padding: 10px 14px 12px;
+}
+
+.card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  color: #d5dae2;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+}
+
+.card-icon.card-badge-icon {
+  width: 10px;
+  height: 10px;
+  color: inherit;
+}
+
+.card-badge.tone-positive {
+  color: #6ee7a0;
+  background: rgba(52, 199, 89, 0.18);
+}
+
+.card-badge.tone-negative {
+  color: #ff9a92;
+  background: rgba(255, 69, 58, 0.18);
+}
+
+.card-badge.tone-warning {
+  color: #ffd166;
+  background: rgba(255, 204, 64, 0.16);
+}
+
+.card-badge.tone-accent {
+  color: #8ccaff;
+  background: rgba(90, 200, 250, 0.16);
+}
+
+.card-list-note.tone-positive {
+  color: #6ee7a0;
+}
+
+.card-list-note.tone-negative {
+  color: #ff9a92;
+}
+
+.card-list-note.tone-warning,
+.card-notice.tone-warning .card-notice-icon {
+  color: #ffd166;
+}
+
+.card-list-note.tone-accent {
+  color: #8ccaff;
+}
+
+.card-notice.tone-negative .card-notice-icon {
+  color: #ff9a92;
+}
+
+.card-notice.tone-positive .card-notice-icon {
+  color: #6ee7a0;
+}
+
+.card-notice.tone-accent .card-notice-icon {
+  color: #8ccaff;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.card-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  color: #fff;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.card-action:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.card-action:focus-visible {
+  outline: 2px solid #8ccaff;
+  outline-offset: 2px;
+}
+
+.card-icon.card-action-icon {
+  width: 12px;
+  height: 12px;
+  color: inherit;
+}
+
+.card-notice {
+  display: grid;
+  gap: 2px;
+  padding: 12px 14px;
+}
+
+.card-notice-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.card-icon.card-notice-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.card-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: #b9c0ca;
+  font-size: 10.5px;
+}
+
+.card-attribution {
+  margin-left: auto;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+}
+
+button.card-attribution {
+  text-decoration: underline;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.card-attribution:focus-visible {
+  outline: 2px solid #8ccaff;
+  outline-offset: 2px;
+}

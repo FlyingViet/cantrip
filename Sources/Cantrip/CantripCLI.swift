@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "weather", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 
@@ -25,6 +25,7 @@ enum CantripCLI {
             case "instructions": return try instructions(Array(arguments.dropFirst()))
             case "secret", "secrets": return SecretCLI.main(Array(arguments.dropFirst()))
             case "env": return EnvironmentCLI.main(Array(arguments.dropFirst()))
+            case "weather": try weather(Array(arguments.dropFirst()))
             default: print(usage)
             }
             return 0
@@ -96,6 +97,8 @@ enum CantripCLI {
                                   Answer a sign-in page waiting for your OK
       cantrip mcp enable|disable NAME [--backend B | --tab ID]
       cantrip mcp signout NAME | restore
+      cantrip weather [PLACE] [--json]
+                                  The forecast a reply's weather card shows (Open-Meteo; default: the Mac's location)
       cantrip skills [list | add PATH | edit NAME | enable NAME | disable NAME | sync | check]
                                   Cantrip's skills library, linked for every backend (`cantrip skills help`)
       cantrip instructions [list [DIR] | edit FOLDER | check]
@@ -630,6 +633,19 @@ enum CantripCLI {
     }
 
     // MARK: - api
+
+    /// `cantrip weather [PLACE]`: the same forecast, from the same 10-minute cache, as the weather
+    /// card of a reply naming that place, so a model's numbers match its card.
+    static func weather(_ arguments: [String]) throws {
+        let json = arguments.contains("--json")
+        let place = arguments.filter { $0 != "--json" }.joined(separator: " ")
+        var payload: [String: Any] = ["command": "weather"]
+        if !place.trimmingCharacters(in: .whitespaces).isEmpty { payload["place"] = place }
+        let reply = try request(payload, timeout: 20)
+        if let error = reply["error"] as? String { throw Failure(message: error) }
+        if json { return printJSON(reply["card"] as? [String: Any] ?? [:]) }
+        print(reply["text"] as? String ?? "")
+    }
 
     static func api(_ arguments: [String]) throws {
         if arguments.first == "key" {

@@ -140,6 +140,29 @@ remote's Tasks panel:
 Records keep their saved order within each section, values no group lists fall
 under Other, and each client remembers which sections the user collapsed.
 
+### Workspace cards
+
+A workspace can show up to four cards that Cantrip builds from its own records,
+so every value on them is a record's (`workspace.cards`, set by asking Home):
+
+- A **list** card sits above the record list, for example bills due in the
+  next 7 days or this week's interviews:
+  `{"kind":"list","title":"Due in the next 7 days","dateField":"due","withinDays":7,"includeOverdue":true,"filter":{"status":["Unpaid"]},"trailingField":"amount","limit":8}`.
+  Rows are sorted by the date field, overdue first, with Overdue, Today and
+  Tomorrow badges; an empty list says so.
+- A record's detail can show one **weather** card for the place a text field
+  names, limited to the event's days when it has dates
+  (`{"kind":"weather","placeField":"city","dateField":"start","endDateField":"end"}`;
+  before the 10-day forecast reaches the event it says when it opens), and one
+  **map** card for a venue (`{"kind":"map","placeField":"venue","nearField":"city"}`).
+  Clients ask for them with `GET /api/v1/home/tasks/<task>/records/<record>/cards`
+  while the detail is open and again every `refreshAfter` seconds; the Mac
+  caches forecasts for 10 minutes and maps for 12 hours.
+
+The tasks snapshot carries each workspace's list cards in `workspaceCards`
+(by task ID). Home edits only the cards by sending `id` and the complete
+`cards` (`[]` removes them); a `task-edits/` file can carry `"cards":[…]` too.
+
 ## Background runs
 
 Each due run and local ingestion incident runs in its own hidden, single-use
@@ -156,10 +179,24 @@ resolved is skipped. Hidden runs follow the same handoff rules for change work
 they discover. Concurrent jobs refresh Apple Mail through
 `Scripts/mail-refresh`, which shares one refresh between them.
 
-Results appear in the Background list (with per-run Stop), task run summaries,
+Results appear in the Background list (with per-run Stop; the browser Remote's Background panel lists runs and opens the background log), task run summaries,
 workspaces and completion notifications (which open the run's report in Home's
 background log); finished sessions are removed and their transcripts kept in
-that log. A run whose reply ends with a section that begins on its own line
+that log.
+
+A run can end its reply with up to four card blocks — `weather`, `places` or a
+`card` that cites a tool it called (see [Cards](cards.md)). Cantrip strips them,
+resolves them on the Mac as the run finishes (no extra model tokens) and keeps
+the cards with the run's result, so they show in the Background list, the
+task's runs, its workspace and the run's report on every client, and survive a
+relaunch. A `card` block's numbers, times and links must be in the cited
+tool's output, or it stays plain text. Resolving has a 12-second deadline and
+never fails or holds up a run: a card that can't resolve in time is left out.
+Runs get no link previews or automatic tool cards. A forecast on a recent
+result (the last day) stays live: when a client reads one older than 15
+minutes, the Mac rebuilds it in the background (at most every 10 minutes per
+place) and the card's Updated time moves. Notifications and older clients keep
+the plain-text summary. A run whose reply ends with a section that begins on its own line
 with `Summary:` uses that section (from the last such label, up to 1,200
 characters, line breaks kept) as its summary, and its first two lines as the
 notification; other runs keep the start of the reply.
@@ -270,6 +307,34 @@ artifact folder, every folder opened without following symlinks, 20 MB and
 64-megapixel limits, and videos decoded from a private copy with a 15-second
 limit. Thumbnails are cached in `~/.cache/Cantrip/home/thumbnails/` until the
 file changes or is deleted.
+
+### Saving artifacts on a client
+
+Every client can save the original file, not just preview it: **Save to Files…**
+and **Share…** on iPhone (and the Duo, folded or open), **Save As…** on Cantrip
+Gateway for Mac and Windows (a Save dialog opened in Downloads), and **Download**
+in the browser and Mac Remote. An artifact in a folder (for example
+`ddia-knowledge-graph/` with its graph, data and playbook) also offers the whole
+folder as one zip.
+
+Files travel only over the paired connection (Tailscale HTTPS or the TLS-PSK
+local network) with the pairing token; there are no public or shareable links.
+The Mac serves:
+
+- `GET /api/v1/home/artifacts/{id}/file`: the original bytes as an attachment,
+  streamed from disk (never read whole into memory), with `Content-Length` and
+  the original file name in `Content-Disposition`.
+- `GET /api/v1/home/artifacts/{id}/folder`: an uncompressed zip of every
+  registered artifact in that artifact's top-level folder (subfolders included),
+  named after the folder. Unregistered files in the folder are left out; at most
+  1,000 artifacts and 2 GB. 404 for an artifact at the top level.
+
+Only registered artifact IDs are accepted, never paths. Each file is opened
+without following a final symlink and checked again by its open descriptor's
+real path, so a file swapped for a link after registration can't send anything
+from outside `~/.cache/Cantrip/home/artifacts/`. The artifact list reports
+`supportsDownloads: true`; clients fall back to the older single-file read on
+Macs without it.
 
 ## Builds
 
