@@ -119,9 +119,9 @@ control** on.
 ## Install
 
 1. Download **CantripGateway-Setup-<version>-x64.exe** from the
-   [latest release](https://github.com/FlyingViet/CantripGatewayMac/releases/latest)
+   newest [Gateway Mac release](https://github.com/FlyingViet/cantrip/releases?q=gateway-mac-v&expanded=true)
    (a preview build), or a newer build from the latest
-   [Windows app workflow run](https://github.com/FlyingViet/CantripGatewayMac/actions/workflows/windows.yml)
+   [Gateway Windows app workflow run](https://github.com/FlyingViet/cantrip/actions/workflows/gateway-windows.yml)
    (Artifacts section).
 2. Run it. The installer isn't code-signed yet, so Windows SmartScreen may say
    "Windows protected your PC": choose **More info**, then **Run anyway**.
@@ -194,7 +194,7 @@ npm run dist:win   # Windows x64 installer in release/ (run on Windows)
 ```
 
 GitHub Actions builds the installer on Windows for every change under `windows/`
-([workflow](../.github/workflows/windows.yml)). It also runs `scripts/psk-smoke.cjs`, which
+([workflow](../../../.github/workflows/gateway-windows.yml)). It also runs `scripts/psk-smoke.cjs`, which
 checks that Electron's TLS library completes a real TLS-PSK request.
 
 | Path | What |

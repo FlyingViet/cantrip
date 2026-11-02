@@ -396,8 +396,9 @@ either matches or the gap goes in section 9.
 - **Paired clients**: the host's Remote API carries backends, models, usage
   (`/api/v1/copilot/usage`) and fallback (`/api/v1/usage-fallback`). Keep new fields additive
   and optional so older clients still decode them. Then update Cantrip Gateway Mac
-  (`External/CantripGatewayMac`, and pin the submodule), Cantrip Agent for iPhone/iPad
-  (FlyingViet/CantripIOS), Gateway Windows and the browser/Mac Remote. A host feature isn't
+  (`Clients/CantripGatewayMac`), Cantrip Agent for iPhone/iPad (`Clients/CantripIOS`),
+  Gateway Windows (`Clients/CantripGatewayMac/windows`) and the browser/Mac Remote, in the same
+  commit when the change spans them. A host feature isn't
   done until each client shows it or deliberately leaves it out.
 - **Plugin manifest**: keep the schema compatible across platforms.
 
