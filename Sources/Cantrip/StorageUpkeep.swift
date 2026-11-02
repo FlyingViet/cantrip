@@ -73,7 +73,7 @@ enum StorageUpkeep {
                 memoryVault: checkedVault,
                 repositoryParents: [home.appendingPathComponent("Coding"), home.appendingPathComponent("Projects"), home],
                 // Child tabs and agents keep worktrees in ~/.cache/Cantrip/worktrees, including ones
-                // of a submodule's own repository (CantripGatewayMac/.git/modules/Hermes).
+                // of a submodule's own repository (<repo>/.git/modules/<name>).
                 worktreeSearchRoots: [cache, cache.appendingPathComponent("worktrees")] + temporary,
                 agentRoots: [sessions, cache, URL(fileURLWithPath: "/private/var/folders")] + temporary,
                 stateDirectory: cache,

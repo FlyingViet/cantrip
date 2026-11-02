@@ -12,7 +12,7 @@ enum InterfaceMode: String, CaseIterable, Identifiable {
 }
 
 /// Cantrip Gateway's Home window inside Cantrip.app: `Contents/PlugIns/CantripHomeWindow.bundle`,
-/// built from the CantripGatewayMac submodule by `make app` when Xcode is installed. It connects
+/// built from Clients/CantripGatewayMac by `make app` when Xcode is installed. It connects
 /// to this host's own server on loopback, so everything Gateway does works on this Mac's tabs.
 @MainActor
 enum HomeWindow {
