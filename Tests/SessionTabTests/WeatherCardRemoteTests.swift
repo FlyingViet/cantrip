@@ -31,6 +31,8 @@ extension SessionTabTests {
         let fixture = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("RichCardTests/open-meteo-seattle.json"))
         let fetchedAt = Date()
+        // Let earlier tests' deferred stub resets land first, or one could clear the stubs below mid-test.
+        try await Task.sleep(for: .milliseconds(200))
         await WeatherCardResolver.shared.setSources(.init(
             geocode: { place in place.lowercased().hasPrefix("seattle")
                 ? .init(coordinate: .init(latitude: 47.6062, longitude: -122.3321)) : nil },
@@ -39,12 +41,6 @@ extension SessionTabTests {
         await LinkPreviewStore.shared.setCustomFetcher { url in
             let html = "<html><head><meta property=\"og:title\" content=\"Page for \(url.host ?? "")\"></head></html>"
             return (Data(html.utf8), url, "text/html")
-        }
-        defer {
-            Task {
-                await WeatherCardResolver.shared.setSources(nil)
-                await LinkPreviewStore.shared.setCustomFetcher(nil)
-            }
         }
 
         let backend = WeatherBackendFixture()
@@ -151,6 +147,8 @@ extension SessionTabTests {
         precondition(CantripHomeProtocol.visibleText("Sunny.\n```weath", streaming: true) == "Sunny.")
         precondition(CantripHomeProtocol.visibleText("Sunny.\n```weather\n{}\n```", streaming: false) == "Sunny.")
         precondition(CantripHomeProtocol.visibleText("Code:\n```swift\nlet x = 1", streaming: true).contains("let x"))
+        await WeatherCardResolver.shared.setSources(nil)
+        await LinkPreviewStore.shared.setCustomFetcher(nil)
         print("Weather cards: device forecasts, Mac fallback, unavailable states, link filtering and Home streaming passed")
     }
 }
