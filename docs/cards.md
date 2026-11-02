@@ -98,3 +98,17 @@ they don't know; a card with nothing they can draw shows its `fallbackText`.
 
 Panel cards share the map card's geometry: up to 680 pt wide (760 px on the web), 16 pt corners,
 a 1 pt border at 14% opacity, always dark, with white text at AA contrast.
+
+## Clients
+
+Each client has one view per block and nothing per card type:
+
+| Client | Renderer | Notes |
+|---|---|---|
+| Mac launcher | `Sources/Cantrip/CardViews.swift` | MapKit map; link cards reuse the link preview card |
+| Browser Remote | `appendCards` in `RemoteControlServer.swift` | OpenStreetMap tiles through the Mac; Lucide icons |
+| Cantrip Agent (iPhone, Duo) and Cantrip Gateway for Mac | `CantripCards.swift` in the iOS app | Older Macs' `weatherCard`, `placeCard` and `linkPreviews` are drawn as the same blocks |
+| Cantrip Gateway for Windows | `windows/src/gateway/ui/transcript/Cards.tsx` in the Gateway repo | `tel:` actions show the number as text |
+| Cantrip for Windows | `windows/src/renderer/cards.ts` | No Mac: weather only, built in its main process; `map` and `image` blocks are skipped |
+
+Actions open only `https`, `http` and `tel` URLs (public hosts only), on every client.
