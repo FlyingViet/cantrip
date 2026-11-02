@@ -191,6 +191,7 @@ struct SessionTabTests {
         try await testJournalDelivery()
         try await testCopilotSteering()
         try await testCopilotRuntimeRecovery()
+        try await testCopilotDiscoveryCache()
         try testCopilotRuntimeActivity()
         try await testRunContinuity()
         try await testModelTiers()

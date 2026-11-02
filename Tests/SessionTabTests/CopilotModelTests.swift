@@ -67,7 +67,8 @@ extension SessionTabTests {
             return String(cString: resolved)
         }
         let cliPath = real(cli), prebuiltPath = real(prebuilt)
-        func resolve() throws -> [String: String] {
+        struct Resolved: Decodable { let sdk: String; let runtime: String; let version: String; let cached: Bool }
+        func resolve() throws -> Resolved {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = ["node", "--input-type=module", "-e", CopilotRuntime.discoveryScript
@@ -82,14 +83,16 @@ extension SessionTabTests {
             let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             precondition(process.terminationStatus == 0, "discovery failed")
-            return try JSONDecoder().decode([String: String].self, from: data)
+            return try JSONDecoder().decode(Resolved.self, from: data)
         }
         let installed = try resolve()
-        precondition(installed["runtime"] == cliPath && installed.count == 2,
+        precondition(installed.runtime == cliPath && installed.version == "9.9.9" && !installed.cached,
                      "Copilot runs from the signed CLI binary, not the per-version runtime: \(installed)")
+        let again = try resolve()
+        precondition(again.cached && again.runtime == cliPath, "an unchanged install reuses its discovery: \(again)")
         try fm.removeItem(at: cli)
         let fallback = try resolve()
-        precondition(fallback["runtime"] == prebuiltPath,
+        precondition(fallback.runtime == prebuiltPath && !fallback.cached,
                      "Without a signed CLI binary, the matching prebuilt runtime is used: \(fallback)")
     }
 

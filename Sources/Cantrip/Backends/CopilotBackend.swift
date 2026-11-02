@@ -80,6 +80,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         /// Text, reasoning, tool activity, approvals or steering reached this turn. Replaying it
         /// could repeat work, so a lost runtime then ends the turn instead of retrying.
         var visibleOutput = false
+        /// When a start that hasn't replied counts as stalled. Moves once the CLI probe finishes.
+        var startupDeadline: Date?
     }
     private var attempt: Attempt?
     /// The Copilot session this tab last ran, and the one to resume in the next new runtime.
@@ -298,15 +300,22 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             askpass?.beginTurn()
             onEvent?(.status(number == 1 ? "Connecting to Copilot" : "Restarting Copilot"))
             try write(command)
-            let limit = newRuntime ? newRuntimeStartupLimit : reusedStartupLimit
-            queue.asyncAfter(deadline: .now() + limit) { [weak self] in
-                guard let self, self.runID == id, self.attempt?.number == number,
-                      !self.ready, self.inputRequests.isEmpty else { return }
-                self.runtimeLost("no reply to the prompt within \(Int(limit)) s",
-                                 otherwise: Self.startupFailure)
-            }
+            armStartupTimer(id, number: number, limit: newRuntime ? newRuntimeStartupLimit : reusedStartupLimit)
         } catch {
             fail("Could not start Copilot: \(error.localizedDescription)")
+        }
+    }
+
+    /// Replaces this attempt's startup deadline; an earlier timer finds its deadline gone and does nothing.
+    private func armStartupTimer(_ id: String, number: Int, limit: TimeInterval) {
+        let deadline = Date().addingTimeInterval(limit)
+        attempt?.startupDeadline = deadline
+        queue.asyncAfter(deadline: .now() + limit) { [weak self] in
+            guard let self, self.runID == id, self.attempt?.number == number,
+                  self.attempt?.startupDeadline == deadline,
+                  !self.ready, self.inputRequests.isEmpty else { return }
+            self.runtimeLost("no reply to the prompt within \(Int(limit)) s",
+                             otherwise: Self.startupFailure)
         }
     }
 
@@ -779,12 +788,27 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                         message: message) else { continue }
                     attempt?.usageLimited = true
                     onEvent?(.usageLimit(report))
+                case "runtimeResolved":
+                    let seconds = object["seconds"] as? Double ?? 0
+                    if object["cached"] as? Bool != true {
+                        Log.write(String(format: "copilot: probed CLI %@ in %.1f s",
+                                         object["version"] as? String ?? "?", seconds))
+                    }
+                    if let pending = attempt, pending.newRuntime, !ready {
+                        armStartupTimer(current, number: pending.number, limit: newRuntimeStartupLimit)
+                    }
                 case "failure":
                     let message = object["message"] as? String ?? "Copilot session failed."
                     // An idle runtime that rejects a prompt before accepting it is broken; a new one may not be.
                     // A usage limit isn't: a new runtime would hit the same limit.
                     if let current = attempt, !current.newRuntime, !current.accepted, !current.usageLimited {
                         runtimeLost("reused runtime rejected the prompt: \(message.prefix(200))", otherwise: message)
+                        return
+                    }
+                    // `copilot --version` never answered (a loaded Mac): one new runtime tries again,
+                    // then the bridge's own explanation ends the turn.
+                    if object["code"] as? String == CopilotRuntime.probeTimeoutCode, attempt?.accepted == false {
+                        runtimeLost("Copilot CLI didn't answer --version", otherwise: message)
                         return
                     }
                     fail(message)
