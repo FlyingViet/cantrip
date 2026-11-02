@@ -256,7 +256,11 @@ enum CopilotSessionBridge {
       client.connection?.onClose?.(() => lost('connection closed'));
     }
     async function open(config, resumeSessionID) {
+      const resolving = Date.now();
       const paths = resolveCopilotRuntime(config.command);
+      // Probing the CLI can take most of the startup allowance on a loaded Mac: the rest starts now.
+      emit({ kind: 'runtimeResolved', runID, cached: paths.cached === true,
+        seconds: Math.round((Date.now() - resolving) / 100) / 10, version: paths.version ?? null });
       const sdk = await import(paths.sdk);
       if (!sdk.RuntimeConnection?.forStdio || !sdk.CopilotClient) {
         throw new Error('Update Copilot CLI to a version with native session steering.');
@@ -607,7 +611,8 @@ enum CopilotSessionBridge {
         const command = JSON.parse(line);
         try { await deliver(command); }
         catch (error) {
-          emit({ kind: 'failure', runID: command.runID, message: errorText(error) });
+          emit({ kind: 'failure', runID: command.runID, message: errorText(error),
+            code: typeof error?.code === 'string' ? error.code : undefined });
           await stop();
         }
       }).catch(async error => {
