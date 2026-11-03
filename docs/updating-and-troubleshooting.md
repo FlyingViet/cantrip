@@ -20,8 +20,11 @@ means your checkout is newer/different than the running app.
 Pulling source or running `make build` alone does not replace and relaunch the
 app bundle.
 
-To see which build you are on, open the **gear** and scroll to **Version**.
-It lists **This build** (running), **Next launch** (a staged build waiting
+To see which build you are on, open Settings › **About & Updates** › **Update &
+rebuild Cantrip**, which shows the running and installed builds and runs
+check, update, rebuild and restart. On macOS before 26, open the **gear** and
+scroll to **Version**, which
+lists **This build** (running), **Next launch** (a staged build waiting
 for a reopen), and **Latest on GitHub**, each as version (build number),
 commit, and date. The status line says whether you are up to date. Use the
 refresh button to check GitHub now, **Update and Restart** to pull, rebuild,

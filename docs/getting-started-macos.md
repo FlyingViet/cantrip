@@ -54,15 +54,19 @@ it.
 ## 4. Choose your backend and review sharing
 
 1. Press **Option+Space** to open Cantrip.
-2. Click the **gear** to open Settings.
-3. Choose your installed **Backend**. Leave **Model** at its default initially,
-   or enter the model ID required by your local server.
+2. Click the **gear** (or press **Command+,**) to open Settings. It opens in a
+   window of its own with the same pages as Cantrip Agent on iPhone; on macOS
+   before 26 it opens as a column in the panel.
+3. In **Models**, choose your installed **Backend**. Leave each backend's
+   **Model** at its default initially (or enter your local server's model under
+   **Local model**).
 4. Keep **Act on my behalf** off for your first question. For Claude, leave
-   **Permissions** at **Safe**; for Copilot, also leave **Allow all tools** off.
-5. Review **Memory vault**, **Search my documents' contents as context**,
-   **Share my calendar as context**, and **Share my location as context**.
-   These are enabled by default; turn off anything you do not want included.
-   Calendar and location also require macOS permission.
+   **Models › Claude Code › Permissions** at **Safe**; for Copilot, also leave
+   **Models › Copilot › Allow all tools** off.
+5. Review **Memory** (**Memory vault**, **Search my documents as context**,
+   **Share my calendar as context**) and **Location › Share this Mac's
+   location**. These are enabled by default; turn off anything you do not want
+   included. Calendar and location also require macOS permission.
 
 You can decline optional permissions and still use text chat. See
 [permissions and privacy](privacy-and-memory.md) before sharing sensitive data.
@@ -83,7 +87,7 @@ you see a sign-in or missing-command error, use
 
 ## 6. Make it available after login
 
-Open Settings and enable **Launch at login**. This starts Cantrip after you
+Open Settings › **About & Updates** and enable **Open at login**. This starts Cantrip after you
 sign in to macOS, not at the FileVault or pre-login screen.
 
 To open it manually later:

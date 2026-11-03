@@ -769,11 +769,14 @@ need Tailscale. Save a Tailscale URL for preferred access both at home and away.
 ## 1. Enable the host Mac
 
 1. On the Mac that will do the work, open Cantrip with **Option+Space**.
-2. Open the **gear** and enable **Remote control daemon**.
-3. Leave **Port** at `8765` unless you have a reason to change it. This is
+2. Open the **gear** (Settings › **Macs**) and enable **Remote control**.
+3. Leave **HTTP port** at `8765` unless you have a reason to change it. This is
    the loopback port used for the optional Tailscale proxy, not a LAN web URL.
-4. Click **Copy pairing token** and transfer it privately to your client.
-5. Keep the host awake and signed in. Enable **Launch at login** if desired.
+4. Click **Show Pairing Code** and scan it with the iPhone camera, or copy its
+   link and open it privately on your client (`cantrip pair` in Terminal shows
+   the same).
+5. Keep the host awake and signed in. Enable **About & Updates › Open at
+   login** if desired.
 
 **Expected result:** no Remote error is shown in Settings. Native clients
 can discover the host and authenticate using the token.
