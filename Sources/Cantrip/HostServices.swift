@@ -120,9 +120,13 @@ final class HostServices {
         // A headless host exists to serve remote clients, so its server runs whatever the app's
         // Remote control toggle says (and that setting isn't changed).
         let headless = HostMode.isHeadless
-        // The Home window (Window interface) is a client of this server on loopback, so the
-        // server also runs for it, without the LAN listener, while Remote control is off.
-        let servesHomeWindow = { !headless && AppSettings.shared.interfaceMode == .window && HomeWindow.isAvailable }
+        // The Home window (Window interface) and Cantrip's Settings window are clients of this
+        // server on loopback, so it also runs for them, without the LAN listener, while Remote
+        // control is off.
+        let servesHomeWindow = {
+            !headless && HomeWindow.isAvailable
+                && (AppSettings.shared.interfaceMode == .window || AppSettings.shared.localSettingsWindowOpen)
+        }
         AppSettings.shared.$remoteControlEnabled
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
@@ -141,7 +145,7 @@ final class HostServices {
                 AppSettings.shared.$remoteLANPort,
                 AppSettings.shared.$remoteControlCredentialRevision
             ),
-            AppSettings.shared.$interfaceMode
+            Publishers.CombineLatest(AppSettings.shared.$interfaceMode, AppSettings.shared.$localSettingsWindowOpen)
         )
         .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
         .sink { values, _ in

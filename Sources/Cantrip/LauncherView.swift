@@ -19,6 +19,11 @@ struct LauncherView: View {
     var onDismiss: () -> Void
     var onSizeChange: (CGSize) -> Void = { _ in }
     var onKeepVisibleChange: (Bool) -> Void = { _ in }
+    /// Opens Cantrip's Settings window; false where there's none (macOS before 26), and the
+    /// panel shows its own Settings column instead.
+    var onOpenSettings: () -> Bool = { false }
+    /// Posted to show the panel's Settings column where there's no Settings window.
+    static let showSettingsNotification = Notification.Name("CantripShowPanelSettings")
     @State private var pinned = false
     @State private var showSteps = false
     @State private var progressPaneSection = ProgressPaneSection.steps
@@ -355,6 +360,9 @@ struct LauncherView: View {
         }
         // Voice mode loop: reply spoken → resume listening → dictation
         // ends → auto-submit.
+        .onReceive(NotificationCenter.default.publisher(for: Self.showSettingsNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.15)) { showSettings = true }
+        }
         .onReceive(NotificationCenter.default.publisher(for: SpeechSynth.didFinish)) { _ in
             if settings.voiceMode, !session.isStreaming, !session.isLocalPrivate { speech.start() }
         }
@@ -464,7 +472,7 @@ struct LauncherView: View {
             HStack(spacing: 10) {
                 Button(action: {
                     if session.isLocalPrivate { modelSettingsSession = session }
-                    else { withAnimation(.easeOut(duration: 0.15)) { showSettings.toggle() } }
+                    else { toggleSettings() }
                 }) {
                     Image(systemName: backendIcon)
                         .font(.system(size: 18))
@@ -728,7 +736,7 @@ struct LauncherView: View {
                   : "Attach a screenshot of your screen to queries")
             .hoverHint("Screen context — let queries see your displays", $toolbarHint)
 
-            Button(action: { withAnimation(.easeOut(duration: 0.15)) { showSettings.toggle() } }) {
+            Button(action: toggleSettings) {
                 Image(systemName: showSettings ? "gearshape.fill" : "gearshape")
                     .font(.system(size: 14))
                     .foregroundStyle(showSettings ? Color.accentColor : Color.secondary)
@@ -1188,6 +1196,12 @@ struct LauncherView: View {
             .padding(.vertical, 1)
             .background(.quaternary.opacity(0.6),
                         in: RoundedRectangle(cornerRadius: 3))
+    }
+
+    /// Settings open in their own window; the column is only for Macs without one.
+    private func toggleSettings() {
+        if !showSettings, onOpenSettings() { return }
+        withAnimation(.easeOut(duration: 0.15)) { showSettings.toggle() }
     }
 
     private func selectRemote() {

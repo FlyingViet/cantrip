@@ -44,9 +44,31 @@ enum HomeWindow {
         let handler: @convention(block) () -> Void = { onClose() }
         _ = (plugin as AnyObject).perform(setOnClose, with: unsafeBitCast(handler, to: AnyObject.self))
         _ = (plugin as AnyObject).perform(NSSelectorFromString("showWithURL:token:"),
-                                          with: "http://127.0.0.1:\(port)" as NSString, with: token as NSString)
+                                          with: url(port) as NSString, with: token as NSString)
         return true
     }
+
+    /// Cantrip's Settings window (the shared Settings pages, this Mac's included), on its own:
+    /// the panel's gear, ⌘, and the menu bar open it. False if the plug-in can't load.
+    @discardableResult
+    static func openSettings(port: Int, token: String, onClose: @escaping () -> Void) -> Bool {
+        guard let plugin = load() else { return false }
+        let handler: @convention(block) () -> Void = { onClose() }
+        _ = (plugin as AnyObject).perform(NSSelectorFromString("setOnSettingsClose:"),
+                                          with: unsafeBitCast(handler, to: AnyObject.self))
+        _ = (plugin as AnyObject).perform(NSSelectorFromString("showSettingsWithURL:token:"),
+                                          with: url(port) as NSString, with: token as NSString)
+        return true
+    }
+
+    /// This Mac's server moved to another port or has a new token: the open windows reconnect.
+    static func refresh(port: Int, token: String) {
+        guard let plugin = pluginClass else { return }
+        _ = (plugin as AnyObject).perform(NSSelectorFromString("refreshWithURL:token:"),
+                                          with: url(port) as NSString, with: token as NSString)
+    }
+
+    private static func url(_ port: Int) -> String { "http://127.0.0.1:\(port)" }
 
     static func close() {
         guard let plugin = pluginClass else { return }
@@ -74,6 +96,8 @@ enum HomeWindow {
             return nil
         }
         pluginClass = principal
+        // Marks the windows' requests as this Mac's own app (`SettingsManifest`, `LocalClientKey`).
+        _ = (principal as AnyObject).perform(NSSelectorFromString("setLocalKey:"), with: LocalClientKey.value as NSString)
         Log.write("home-window: loaded \(url.lastPathComponent)")
         return principal
     }
