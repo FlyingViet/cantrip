@@ -97,8 +97,9 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   (`/api/v1/settings`), as Cantrip Agent does: Remote control, ports and **Replace Pairing Token**
   at the top of Connection, the OpenAI-compatible API and CLI paths on Tools & sign-ins, and pages
   for Models, Home & tabs, Memory and About & Updates. Changes save as you make them (typed ones on
-  Enter or leaving the box), sections such as each backend's model open in place, and Settings
-  reloads when another device changes something. A change that could cut this PC off (a port, the
+  Enter or leaving the box), sections such as each backend's model open as their own page with a
+  back arrow at the top left (Alt+Left, Esc, Backspace outside a box and the mouse's back button
+  also go back), and Settings reloads when another device changes something. A change that could cut this PC off (a port, the
   pairing token) shows **Keep** and **Undo** with a countdown; the Mac undoes it by itself if it
   isn't kept. Replacing the pairing token saves the new one for this Mac and keeps the change with
   it; the window never sees it. Paths, Remote control and View Mac show read-only (they change at
