@@ -123,13 +123,13 @@ test-package-tracking:
 test-release-updater:
 	@BIN="/tmp/cantrip-release-updater-tests-$$$$"; H="$$(mktemp -d)"; \
 	trap 'rm -f "$$BIN"; rm -rf "$$H"' EXIT; \
-	swiftc Sources/Cantrip/ReleaseUpdater.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/ReleaseUpdaterTests/main.swift -o "$$BIN" && \
+	swiftc Sources/Cantrip/ReleaseUpdater.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripInstall.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/ReleaseUpdaterTests/main.swift -o "$$BIN" && \
 	CFFIXED_USER_HOME="$$H" "$$BIN"
 
 test-recovery:
 	@BIN="/tmp/cantrip-recovery-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripInstall.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-consolidation:
