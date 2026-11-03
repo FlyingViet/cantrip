@@ -16,7 +16,7 @@ Edit `Scripts/generate-artwork.swift`, not the generated assets:
 | `Resources/AppIcon.png` / `AppIcon.icns` | Mac icon with rounded tile and transparent desktop padding |
 | `windows/assets/Cantrip.ico` | Windows app/installer icon at 16, 24, 32, 48, 64, 128, and 256px |
 
-To sync the companion in a sibling checkout, run
-`cp Resources/CantripIcon.png ../Hermes/Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png`.
+To update Cantrip Agent's icon, run
+`cp Resources/CantripIcon.png Clients/CantripIOS/Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png`.
 Normal app builds use the checked-in PNG/ICO assets; `make app` regenerates
 the ignored ICNS as needed without requiring artwork regeneration.
