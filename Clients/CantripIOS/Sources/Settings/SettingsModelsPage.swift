@@ -44,6 +44,7 @@ struct SettingsModelsPage: View {
                             usage.useSource(remote.usageIdentity)
                             await usage.refresh { try await remote.copilotUsage() }
                         }
+                        .settingsBack(to: SettingsPage.models.title)
                 } label: {
                     Label("Usage Limits", systemImage: "gauge.with.dots.needle.33percent")
                 }
@@ -71,6 +72,7 @@ struct SettingsModelsPage: View {
                 ForEach(backend.cells) { cell in
                     NavigationLink {
                         SettingsTierEditor(remote: remote, tiers: $tiers, backendID: backend.id, tier: cell.tier)
+                            .settingsBack(to: SettingsPage.models.title)
                     } label: {
                         SettingsTierRow(cell: cell, runs: backend.runs(cell))
                     }
@@ -290,6 +292,7 @@ struct SettingsRunOnSection: View {
             }
             NavigationLink {
                 BackendSettingsView(env: env)
+                    .settingsBack(to: SettingsPage.models.title)
             } label: {
                 LabeledContent {
                     Text("\(env.selectableLanes.count) shown")

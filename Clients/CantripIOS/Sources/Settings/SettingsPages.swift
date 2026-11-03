@@ -53,6 +53,7 @@ struct SettingsVoicePage: View {
         Section {
             NavigationLink {
                 QwenVoiceSettingsView()
+                    .settingsBack(to: SettingsPage.voice.title)
             } label: {
                 LabeledContent {
                     Text(voiceEngine == "qwen" ? "Qwen3 (Neural)" : "System")
@@ -62,6 +63,7 @@ struct SettingsVoicePage: View {
             }
             NavigationLink {
                 VoiceListView(env: env, voice: voice)
+                    .settingsBack(to: SettingsPage.voice.title)
             } label: {
                 LabeledContent {
                     Text(currentVoiceName)
@@ -162,6 +164,7 @@ struct SettingsAppearancePage: View {
             Section {
                 NavigationLink {
                     CantripMascotCustomizationView(embedded: true)
+                        .settingsBack(to: SettingsPage.appearance.title)
                 } label: {
                     LabeledContent {
                         Text(CantripMascotName.display(mascotName))
@@ -339,18 +342,21 @@ struct SettingsAboutPage: View {
                 NavigationLink {
                     CantripMaintenanceView(remote: remote)
                         .navigationTitle("Update Cantrip")
+                        .settingsBack(to: SettingsPage.about.title)
                 } label: {
                     Label("Update & rebuild Cantrip", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .accessibilityIdentifier("settings.maintenance")
                 NavigationLink {
                     CantripMacAccessView(remote: remote)
+                        .settingsBack(to: SettingsPage.about.title)
                 } label: {
                     Label("Mac permissions & View Mac", systemImage: "display")
                 }
                 .accessibilityIdentifier("settings.macAccess")
                 NavigationLink {
                     CantripSkillsView(remote: remote, embedded: true)
+                        .settingsBack(to: SettingsPage.about.title)
                 } label: {
                     Label(CantripSkills.title, systemImage: "books.vertical")
                 }

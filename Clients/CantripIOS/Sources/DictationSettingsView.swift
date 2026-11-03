@@ -72,6 +72,7 @@ struct DictationSettingsSection: View {
             #endif
             NavigationLink {
                 DictationDetailsView(remote: remote)
+                    .settingsBack(to: SettingsPage.voice.title)
             } label: {
                 LabeledContent {
                     Text("\(vocabulary.terms.count) words").foregroundStyle(.secondary)
@@ -144,7 +145,7 @@ struct DictationDetailsView: View {
                 }
                 .disabled(vocabulary.refreshing)
                 if !vocabulary.terms.isEmpty {
-                    NavigationLink("Show words") { DictationWordListView() }
+                    NavigationLink("Show words") { DictationWordListView().settingsBack(to: "Dictation") }
                 }
             } header: {
                 Text("Names")

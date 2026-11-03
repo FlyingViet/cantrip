@@ -290,6 +290,7 @@ private struct CantripMemoryBrowser: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: CantripMemoryEntry.self) { entry in
                 CantripMemoryReader(remote: remote, entry: entry)
+                    .settingsBack(to: embedded ? SettingsPage.memory.title : "Cantrip Memory")
             }
             .searchable(text: $query, prompt: "Find a memory file")
             .toolbar {
