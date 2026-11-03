@@ -1,41 +1,47 @@
-# Hermes — iOS client (Cantrip Agent, formerly AgentGateway)
+# Cantrip Agent — iOS client
 
-This folder is `Clients/CantripIOS` in [FlyingViet/cantrip](https://github.com/FlyingViet/cantrip). It was
-the FlyingViet/CantripIOS repository (renamed from `Hermes` on 2026-10-25), now an archive. The
-Xcode project, scheme and Swift module are still named Hermes.
+Cantrip Agent (formerly AgentGateway) is the native iPhone, iPad and Apple Watch client for
+[Cantrip](../../README.md), the agent harness on your Mac. This folder is `Clients/CantripIOS`
+in the [FlyingViet/cantrip](https://github.com/FlyingViet/cantrip) monorepo. The Xcode
+project, app scheme and target, test targets and Swift module keep the app's original
+internal name, `Hermes`.
 
 <img src="Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png" width="128" alt="Cantrip: a pearl-violet C casting a golden spark" />
 
 The app icon shares Cantrip's **C and golden spark** mark. Its opaque 1024px
-source comes from `Resources/CantripIcon.png` in the Cantrip repository;
-regenerate it there with `make artwork`, then copy it to
+source is [`Resources/CantripIcon.png`](../../Resources/CantripIcon.png) at the
+repository root; regenerate it there with `make artwork`, then copy it to
 `Sources/Assets.xcassets/AppIcon.appiconset/Icon-1024.png`. Do not add rounded
 corners or transparent padding to the iOS asset; the system applies the mask.
 
-A native SwiftUI app for talking to your own [**Hermes Agent**](https://github.com/) — by **voice** and **chat** — instead of being stuck in Telegram or Discord.
+- 🏠 **Cantrip Home** — your always-on Cantrip assistant, with **Chat**, **Tasks**,
+  **Artifacts**, **Builds** and background runs
+- 📡 **Every project tab** on your Mac in Home's drawer, with the same chat, dictation,
+  hands-free voice and spoken replies; queues, sections and child tabs included
+- 💬 **Work stays on the Mac** — closing or suspending the app never stops a run; reopen it
+  to catch up on status and replies
+- 🎙️ **Voice** — on-device Parakeet dictation plus a full-screen, hands-free
+  *listen → think → speak* voice mode
+- ⚡ **`/` commands and skills** from the tab's backend, and **`@` mentions** that point a
+  message at exactly one tab
+- 🔘 **Action Button / Shortcuts / Siri** jump straight into voice mode
+- ⌚ **Apple Watch** — speak to Cantrip Home from your wrist
+- 📱 **iPhone Duo and iPad** — a navigation rail and sidebar where the screen has room
+- 🔔 **Alerts, widget and Live Activity** for finished tabs and questions
+- 🔑 **Your Mac, your pairing token** — nothing hardcoded; end-to-end encrypted on the local
+  network (TLS-PSK) and over Tailscale (HTTPS)
 
-- 💬 **Durable streaming chat** — tasks continue on the Mac if iOS suspends or
-  closes; reopen the app to recover the current status and final response
-- 🎙️ **Voice mode** — local Parakeet EOU transcription plus a full-screen,
-  hands-free *listen → think → speak* loop
-- ⚡ **`/` autocomplete** + a **Skills browser** (tap a skill to run it)
-- 🔘 **Action Button / Shortcuts / Siri** — "Talk to Hermes" jumps straight into voice mode
-- 💾 **Persistent history** — reopen to your prior conversation
-- 🔑 **Your gateway, your key** — points at *your* Hermes server, nothing hardcoded
-- 📡 **Cantrip tabs** — every project tab on your Mac lives in Cantrip Home's drawer and
-  uses the same chat, dictation, hands-free voice, and TTS interface
-- 🔗 **`@` mention a tab** — suggestions as you type; the message points at exactly that tab
-
-> The app is a thin, secure client. All the intelligence (skills, memory, tools) lives in **your** Hermes gateway. You bring the gateway + an API key; the app does the rest.
+> The app is a thin, secure client. The agents, tools, memory and skills live in Cantrip on
+> **your** Mac; you pair the app with it and the app does the rest. To build it yourself,
+> see [Build and run](#build-and-run).
 
 ---
 
 ## Connect to Cantrip
 
-Cantrip Agent is a client for [Cantrip](https://github.com/FlyingViet/cantrip), the agent
-harness on your Mac. Cantrip runs the agents (Claude Code, Copilot, Codex or a local
-model) and owns every tab, queue, run journal and Home task, so work continues while the
-phone sleeps. The app pairs with it, sends prompts and shows the live sessions.
+Cantrip on your Mac runs the agents (Claude Code, Copilot, Codex or a local model) and owns
+every tab, queue, run journal and Home task, so work continues while the phone sleeps. The
+app pairs with it, sends prompts and shows the live sessions.
 [Cantrip Gateway Mac](../CantripGatewayMac/) compiles this
 folder's code to do the same in a Mac window.
 
@@ -49,7 +55,7 @@ folder's code to do the same in a Mac window.
 
 ### 1. Enable Remote control on the Mac
 
-1. Install Cantrip ([quick start](https://github.com/FlyingViet/cantrip#quick-start)) and
+1. Install Cantrip ([quick start](../../README.md#quick-start)) and
    set up one AI backend.
 2. Press **Option+Space**, open the **gear** and check **Remote control daemon**.
 3. Check **Cantrip Home** to use the app's Chat, Tasks and Artifacts screens. Cantrip must
@@ -81,11 +87,11 @@ Optional, on the Mac:
 
 - **Push alerts** for finished tabs and questions need an APNs key in
   `~/.config/Cantrip/apns.json`; see
-  [push setup](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md#cantrip-agent-completion-notifications).
+  [push setup](../../docs/remote-control.md#cantrip-agent-completion-notifications).
 - **View Mac** needs **Allow paired clients to view and control this Mac** checked in
   Cantrip, plus Screen Recording (and Accessibility for control).
 - The **Builds** tab lists over-the-air installs published to `~/Sites/ota`; see
-  [Cantrip Home](https://github.com/FlyingViet/cantrip/blob/main/docs/cantrip-home.md#builds).
+  [Cantrip Home](../../docs/cantrip-home.md#builds).
 
 ### Host API
 
@@ -152,26 +158,7 @@ every page it holds, including older pages it loaded. A message with role `fresh
 model reply. When an app feature needs a newer host, update and relaunch Cantrip on
 the Mac. Sends are never replayed automatically after a connection failure. The full
 reference is Cantrip's
-[remote-control guide](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md).
-
-## How it works (Hermes gateway)
-
-```
-  iPhone (Cantrip Agent) ──HTTPS + bearer key──►  private network / tunnel
-                                                        │
-                                                        ▼
-                                       Hermes gateway api_server  (:8642)
-                                         POST /v1/runs       (durable task)
-                                         GET  /v1/runs/:id   (recovery)
-                                         GET  /events        (live SSE)
-                                         GET  /v1/commands    (optional)
-                                                        │
-                                                        ▼
-                                            Your Hermes agent
-                                       (skills · memory · tools · model)
-```
-
-The app speaks the gateway's **OpenAI-compatible API server** (`gateway/platforms/api_server.py`), which is the *full agent* — not the raw inference shim.
+[remote-control guide](../../docs/remote-control.md).
 
 ## Cantrip tabs (inside Cantrip Home)
 
@@ -199,18 +186,13 @@ the side bar when folded (the sidebar button when unfolded), brings out the tab 
 can switch straight to another tab or pick Cantrip Home, pinned at the top. Tab ages and outcomes need
 Cantrip host e8e5c0b or later; older hosts show names and live status only.
 
-With a Hermes gateway saved, **Settings › Models › Run on › Backends** chooses which execution
-backends appear in the picker; tap **Edit** to drag them into your preferred order. Cantrip Home
-always stays visible because it holds your tabs. A saved Cantrip Remote lane selection opens Home.
-
 The composer mic is **push-to-talk dictation**: recording starts on touch-down,
 and releasing a hold finishes at once (no end-of-speech wait). A quick **tap**
 starts hands-off dictation; tap again to finish. The text lands in the composer
 for editing instead of being sent, and the mic stays beside Send so you can keep
 dictating. **Double-tap** the mic to open full-screen **continuous voice mode**
 and talk hands-free through the *listen → think → speak* loop. Close voice mode
-to end the loop. This works in Cantrip Home and its tabs, Copilot, and Private
-Local (local chats also have an **∞** button beside the composer), and VoiceOver
+to end the loop. This works in Cantrip Home and every tab, and VoiceOver
 offers a **Continuous voice mode** action on the mic.
 
 With Reduce Motion enabled the drawer's spinners stay still; VoiceOver announces each tab's
@@ -248,8 +230,8 @@ without changing tabs. The drawer shows the selected tab, activity, locks, and
 queued counts, with a **New Tab** button at the bottom. Opening it dismisses the
 keyboard without clearing your draft. Stop and the circled **+** attachment icon
 retain 44-point tap targets. New Tab and tab actions live in the
-drawer rather than duplicate top-bar buttons. Resume (when available) and New
-conversation remain in the shared chat's hamburger menu.
+drawer rather than duplicate top-bar buttons. Resume (when available) remains
+in the tab's hamburger menu.
 
 The hamburger menu holds only this tab's actions, in labeled sections: **Model &
 conversation** (Model Settings, Start Fresh, Tools for This Tab, Delivery, Resume),
@@ -268,7 +250,7 @@ same pages as Gateway Mac:
 
 | Page | What's there |
 |---|---|
-| Macs | Each paired Mac with an **Active** badge and when this device last reached it. A Mac's page has **Use This Mac**, **Re-enter Pairing Token**, its addresses under **Advanced**, and **Remove Mac…**. **Pair a Mac** walks through pairing. Hermes gateways show here only while one is saved. |
+| Macs | Each paired Mac with an **Active** badge and when this device last reached it. A Mac's page has **Use This Mac**, **Re-enter Pairing Token**, its addresses under **Advanced**, and **Remove Mac…**. **Pair a Mac** walks through pairing. |
 | Models | What new tabs run (read-only; change it on the Mac), **Model tiers** (each backend's models for Fast, Standard and Deep, with Copilot's prices), the **Usage-limit backups** and **Usage Limits**. |
 | Tools & sign-ins | **GitHub on your Mac**: **Sign In…** runs GitHub's device sign-in for the Mac's GitHub CLI in Cantrip Home, whose chat shows the code to enter at github.com (it was **Sign in to GitHub on Mac** in a tab's menu). Then the Mac's shared MCP servers, in the same words as Cantrip's own Settings: each row shows its state (including "Credentials in Mac keychain" and when a sign-in's token ends), which backends use it, and **Connect** (**Retry** after a failed sign-in, with the Mac's reason); a row opens its sign-in and per-backend switches. Gateway Mac shows the switches in each row, as Cantrip does. Clients see state and send actions; credentials stay on the Mac. |
 | Memory | The Mac's memory files, read-only. |
@@ -321,17 +303,10 @@ write is not replayed automatically.
 Names and locks
 are saved on the host Mac and sync with local
 Cantrip, other Macs' Remote views, and browser clients. A lock icon marks
-protected tabs; unlock before closing a session or using New Conversation.
+protected tabs; unlock before closing a session.
 Sending, stopping/resuming work, and queue removal remain available.
 These controls require the host's `supportsTabMetadata` capability; update
 and reopen Cantrip first.
-
-For the Hermes **Copilot** and **Private Local** conversations, use the
-top-left menu's **Rename Tab** and **Lock Tab** actions. Each lane keeps its
-own name and lock across app restarts and lane switches; a lock blocks the
-destructive New Conversation action. Names are up to 80 characters, and
-leaving a name blank restores its automatic label. Locks are accidental-close
-protection, not encryption or a password.
 
 When prompts are waiting, a **Queued messages** card above the composer shows
 the count and next prompt. Tap it to read the full queue in execution order;
@@ -380,46 +355,37 @@ conversation to dismiss it interactively. Chat stays at the latest message
 while following a reply, but scrolling up lets you read earlier messages
 without being pulled back down. Tap **Latest** to resume following.
 
-Long prompts use compact plain-text previews in all chat lanes and the Cantrip
+Long prompts use compact plain-text previews in Home, every tab and the
 queue. Tap **Read full prompt** to read bounded pages or **Copy all** for the
 original text. This limits layout work, not the text sent to the agent.
 Replies continue streaming normally; prompts remain one complete message.
 For host-side responsiveness improvements, also update and reopen Cantrip on
 the Mac (memory preparation and transcript encoding now run off the UI thread).
 
-### Saved servers
+### Saved Macs
 
-Macs are paired from **Settings › Macs › Pair a Mac**. With a Hermes gateway saved, the
-same page also lists Hermes gateways, where **Add Hermes Gateway** gives each one an optional
-name, its URL and its own API key; tap **Add Server** to save it. The form clears only after a
-successful save, ready for another server; adding does not replace or switch
-your current connection. Tap a server in the saved list to select and connect.
-The selected server is marked with a checkmark and restored when the app reopens.
+Pair Macs from **Settings › Macs › Pair a Mac**; you can save several. This device
+works with one Mac at a time: the Mac in use is marked **Active**, each row shows when
+this device last reached it, and the choice is restored when the app reopens. Tap a Mac
+for its page: **Use This Mac** switches to it, **Re-enter Pairing Token** replaces its
+token, **Advanced** shows how this device reaches it (to change that, remove the Mac and
+pair it again), and **Remove Mac…** forgets the pairing and its token on this device.
+The first Mac you pair becomes the active one; pairing another saves it without switching
+(open it in **Macs** to switch). A failed pairing keeps the form and shows the error.
 
-You can save multiple servers of either type, with one Hermes gateway and one
-Cantrip Remote server selected at a time. Credentials are stored separately in
-Keychain. Existing configurations are automatically kept as saved servers.
-Hermes servers keep separate Copilot/Private Local histories, tab metadata,
-durable run state, and memory keys. Cantrip sessions remain on their owning Mac;
-switching clears the previous host's displayed sessions and cached images before
-loading the new host. Switching does not stop work on a Mac.
+Sessions stay on the Mac that owns them. Switching clears the previous Mac's displayed
+sessions and cached images before loading the new one, and neither switching nor removing
+a Mac stops work or deletes anything on it; removing the Mac in use disconnects it.
 
-Swipe or touch and hold a saved server to **Remove Server**, then confirm.
-Removing the active configuration disconnects it; it does not delete chats or
-cancel work on that server. A failed save keeps the form and shows the error.
+Pairing tokens are saved in Keychain for this device only, so they never leave it in a
+backup or device-to-device transfer. A new or restored iPhone keeps the saved Macs but
+not their tokens, and those rows show **Pairing token missing**. Open the Mac's page, tap
+**Re-enter Pairing Token**, enter the token and tap **Save and Connect**; the Mac keeps
+its place, selection and history. Pairing the same address again, or opening a pairing
+link for it, also restores the token on the saved entry instead of failing. Use **Re-enter
+Pairing Token** after regenerating the token on the Mac or fixing a typo.
 
-Tokens and API keys are saved in Keychain for this device only, so they never
-leave it in a backup or device-to-device transfer. A new or restored iPhone
-keeps the saved server list but not the tokens, and those rows show **Pairing
-token missing**. Tap the row (or swipe or touch and hold, then **Re-enter
-Pairing Token**), enter the token, and tap **Save and Connect**; the server keeps
-its place, selection, and history. Adding the same URL again, or opening a
-pairing link for it, also restores the token on the saved entry instead of
-failing. Use **Re-enter Pairing Token** on any saved server after rotating its
-token or fixing a typo.
-
-For Cantrip, enter the pairing token from the corresponding Mac. Without
-a saved URL, Cantrip Agent discovers Cantrip on the same local network with Bonjour and connects
+Without a saved URL, Cantrip Agent discovers Cantrip on the same local network with Bonjour and connects
 directly using forward-secret TLS with the pairing token as a pre-shared key.
 Save Cantrip's Tailscale Serve HTTPS URL to prefer Tailscale both at home and
 away. The URL is stored in app preferences and the token is stored in Keychain.
@@ -530,8 +496,7 @@ Update and reopen the Mac host before using Auto. Cantrip Agent checks
 `supportsAutoDelivery` before sending; older hosts show an update notice
 without sending or discarding the draft. Manual modes remain compatible.
 The router uses Copilot Mini, Claude Haiku, or the configured local model;
-the local lane never falls back to a cloud provider. This changes Cantrip
-Remote only, not the Hermes gateway's own execution lanes.
+the local lane never falls back to a cloud provider.
 
 In a Cantrip session, tap the circled **+** on the left inside the composer
 (**Attach images or video** in VoiceOver) to choose photos/screenshots from
@@ -551,8 +516,8 @@ The Mac stores the uploaded files under
 `~/.cache/Cantrip/remote-attachments/` so queued and recovered runs can open
 them, using the same image-file tools as local Cantrip attachments. This does
 not capture or consume any context staged by the person at the Mac. Image
-attachments currently apply to **Cantrip Remote**, not the Hermes gateway's
-Copilot/Private Local lanes or shell/slash commands.
+attachments don't apply to the text-only Private Local tab or to shell/slash
+commands.
 
 Sent and queued images appear as **tappable thumbnails instead of Mac file
 paths**. Tap to open a full-screen, aspect-fit viewer; pinch or double-tap to
@@ -786,8 +751,8 @@ version (build), publish time, size, profile type and note, with a prominent
 list. Install first checks that the page answers (it is tailnet-only), then hands
 the build's `itms-services` link to iOS, which shows its install prompt; if Tailscale
 is off, the build is gone, or iOS can't open the link, an alert says what to do.
-Installing Cantrip Agent itself asks first, and entries sharing a bundle ID (Brane
-Controller and Crooner) say that one replaces the other. The tab is read-only and
+Installing Cantrip Agent itself asks first, and entries sharing a bundle ID say that
+one replaces the other. The tab is read-only and
 iPhone-only (Gateway Mac has no installer); icons are cached by build in Caches.
 
 The full-screen image viewer (Artifacts and chat images) works like Photos: at
@@ -857,12 +822,12 @@ image attachments. The browser/Mac Remote composer remains text-only.
 
 ### Usage limits (Claude Code and Copilot)
 
-The **usage gauge next to the Local/Remote antenna lane picker** shares its
-icon size and row beneath the chat title. It shows **AI credits used / total**
+The **usage gauge** sits in the row beneath the chat title. It shows **AI credits used / total**
 in compact form (for example, `35.5K / 1M`). Used credits are total minus remaining;
 additional usage is reported separately. Tap it for the full credit amounts, a secondary percentage
 progress bar, the reset date/time, additional-usage status, account, and
-last-checked time. It works from every chat lane without switching sessions.
+last-checked time. It works from Home and every tab (except Private Local) without
+switching sessions.
 
 The sheet (**Usage Limits**) also shows Claude Code's 5-hour session and weekly
 limits with reset times, and on a Mac running Claude Code the header gauge
@@ -943,8 +908,7 @@ The updated Mac provides a permanent **Private Local** tab. It keeps conversatio
 history and run recovery on the Mac while routing inference **only to your
 self-hosted Ollama server**. "Local" is the self-hosted label, not a requirement
 that inference runs on the Cantrip Mac. The server can be on another computer
-or NAS. It never uses the legacy Hermes Private Local lane or falls
-back to Copilot/cloud models; Hermes does not need to be enabled.
+or NAS. It never falls back to Copilot or other cloud models.
 
 Open this tab's **Chat menu > Private Local Settings**, or its tab actions, to
 set your self-hosted server's HTTPS base URL, installed model, context tokens and
@@ -1204,7 +1168,7 @@ Select a saved Mac, then enable **Settings › Notifications › Cantrip alerts 
 input-needed alerts**. Successful completion of a tab's entire queue sends its
 name and a brief final-answer excerpt. Tap the notification to reopen the
 correct saved Mac and conversation. Private, stopped and failed runs do not
-generate success notifications. This does not apply to the Hermes gateway.
+generate success notifications.
 
 The app icon's badge counts tabs with an alert you haven't looked at yet,
 finished or asking. Opening a tab (here, in Cantrip Gateway Mac or in the Mac's
@@ -1222,8 +1186,8 @@ removed when resolved; previously delivered Apple banners may remain.
 Alerts use **Apple push from the Mac**, not background polling. They require
 the updated host with an APNs signing key configured at
 `~/.config/Cantrip/apns.json` (see the Cantrip remote-control guide), the Apple
-Push Notifications capability/provisioning for `com.itzhoang.hermbot`, and a new
-signed Cantrip Agent build. Debug uses sandbox APNs; Release/TestFlight uses
+Push Notifications capability/provisioning for the app's bundle ID
+(`PRODUCT_BUNDLE_IDENTIFIER` in `project.yml`), and a new signed Cantrip Agent build. Debug uses sandbox APNs; Release/TestFlight uses
 production. An App Store Connect upload key is not an APNs key.
 
 The setting is per saved Mac, persists while the phone is locked or another
@@ -1292,7 +1256,7 @@ signed by the watch. Needs an updated Mac host (`/api/v1/voice`,
 
 ### GitHub build queue
 
-Open **hamburger menu > GitHub Builds** from any chat lane to see builds
+Open **hamburger menu > GitHub Builds** from Home or any tab to see builds
 across the Mac's configured app runners. **Building now** shows active jobs,
 followed by one numbered **Build queue** across all apps, including workflows
 whose runner is not yet known. Each entry includes the app, workflow run/attempt,
@@ -1320,142 +1284,53 @@ This feature requires an updated, reopened **Cantrip Mac host** as well as
 Cantrip Agent. It uses the existing Remote pairing and the Mac's `gh auth login`;
 no GitHub token is entered into or sent to the phone. The host's
 `~/.config/Cantrip/github-builds.json` lists app/repository/runner mappings.
-See [host setup and permissions](https://github.com/FlyingViet/cantrip/blob/main/docs/remote-control.md#see-github-builds-in-agentgateway).
+See [host setup and permissions](../../docs/remote-control.md#see-github-builds-in-cantrip-agent).
 An older host displays an update notice.
 
 ---
 
-## Prerequisites
+## Build and run
 
-- A running **Hermes agent** (`~/.hermes`) on a machine you control (Mac, Linux box, etc.).
-- **Xcode 26+** on a Mac to build the app, an **iOS 26+** device, and an **Apple ID** to run it on your device (a free account works for personal use).
-- An HTTPS path to the gateway, using a private network such as Tailscale/WireGuard
-  or an authenticated HTTPS tunnel.
+### Prerequisites
 
----
+- A Mac running [Cantrip](../../README.md#quick-start) with **Remote control** on (see
+  [Connect to Cantrip](#connect-to-cantrip)). The app talks only to Cantrip; it has no
+  server of its own.
+- **Xcode 26+** (Xcode 27.1 for iPhone Duo support) and XcodeGen (`brew install xcodegen`).
+- An **iOS 26+** iPhone or iPad, and an Apple developer account to sign the app. Push
+  alerts and background widget and Live Activity updates also need the Push Notifications
+  capability (see [Cantrip completion and input alerts](#cantrip-completion-and-input-alerts)).
 
-## Part 1 — Set up the gateway (server)
-
-### 1. Generate an API key
-
-```sh
-openssl rand -hex 32          # copy the output — this is your API_SERVER_KEY
-```
-
-### 2. Enable the API server
-
-The api_server turns on automatically once a key is set. Add these to **`~/.hermes/.env`** (the key gate is `gateway/config.py` — `API_SERVER_KEY` set *or* `API_SERVER_ENABLED=true`):
+### Build
 
 ```sh
-API_SERVER_KEY=<paste the key from step 1>
-API_SERVER_HOST=0.0.0.0      # 0.0.0.0 so your phone can reach it; 127.0.0.1 = localhost-only
-API_SERVER_PORT=8642
-```
-
-> 🔒 The adapter **refuses to bind to a non-localhost address without a key** — so `0.0.0.0` is safe: every `/v1/*` request requires the Bearer key (constant-time checked). Only `/health` is open.
-
-### 3. Configure the Copilot execution lane
-
-The app requests named model routes so a future private-local conversation can
-never silently fall back to Copilot. Keep Copilot as the default for now:
-
-```yaml
-# ~/.hermes/config.yaml
-model:
-  default: copilot-shim
-  provider: ollama
-
-gateway:
-  api_server:
-    extra:
-      model_routes:
-        copilot-coding:
-          model: copilot-shim
-          provider: ollama
-          base_url: http://127.0.0.1:11437/v1
-```
-
-The **Private Local** lane remains disabled in the app until the gateway
-advertises a separate `local-private` route.
-
-### 4. Restart the gateway
-
-However you run Hermes — e.g. if it's a launchd service:
-
-```sh
-launchctl kickstart -k "gui/$(id -u)/ai.hermes.gateway"
-```
-
-…or just `hermes gateway run --replace`. Channels (Telegram/Discord/etc.) reconnect in a few seconds.
-
-### 5. Verify locally
-
-```sh
-KEY=<your key>
-curl -s http://127.0.0.1:8642/health
-curl -s -X POST http://127.0.0.1:8642/v1/runs \
-  -H "Authorization: Bearer $KEY" \
-  -H "Idempotency-Key: setup-check-1" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"copilot-coding","input":"say hi"}'
-```
-
-You should get `{"status":"ok",…}` and then a JSON reply. A request **without** the key must return **401**.
-
-### 6. Expose only the gateway over HTTPS
-
-Prefer a private Tailscale/WireGuard network. An authenticated Cloudflare
-Tunnel or another HTTPS reverse proxy also works:
-
-```sh
-cloudflared tunnel route dns <tunnel-name> agent.yourdomain.com
-# map agent.yourdomain.com → http://localhost:8642 in your tunnel config, then run the tunnel
-```
-
-The bearer key still gates every request. If the endpoint is publicly
-addressable, put an identity-aware access layer in front of it as defense in
-depth. Never expose the local-model or Copilot-shim ports directly.
-
-### 7. (Optional) Enable `/` suggestions + the Skills browser
-
-The app's command autocomplete and **Skills** list need a small extra endpoint. Add `GET /v1/commands` to `gateway/platforms/api_server.py` — register the route alongside the others and add this handler:
-
-```python
-async def _handle_commands(self, request):
-    auth_err = self._check_auth(request)
-    if auth_err:
-        return auth_err
-    from hermes_cli.commands import telegram_menu_commands, telegram_bot_commands
-    menu, hidden = telegram_menu_commands(max_commands=200)
-    core = {n.lstrip("/").lower() for n, _ in telegram_bot_commands()}
-    cmds = [{
-        "command": "/" + n.lstrip("/"),
-        "description": d,
-        "kind": "command" if n.lstrip("/").lower() in core else "skill",
-    } for n, d in menu]
-    return web.json_response({"object": "hermes.api_server.commands",
-                              "commands": cmds, "hidden_count": hidden})
-```
-
-```python
-# in the route-registration block:
-self._app.router.add_get("/v1/commands", self._handle_commands)
-```
-
-Restart the gateway. (Without this, chat + voice still work — you just won't see the suggestions/skills list.)
-
----
-
-## Part 2 — Build & run the app
-
-```sh
-brew install xcodegen          # one-time
-git clone https://github.com/FlyingViet/cantrip.git && cd cantrip/Clients/CantripIOS
-xcodegen generate              # creates Hermes.xcodeproj from project.yml
+git clone https://github.com/FlyingViet/cantrip.git
+cd cantrip/Clients/CantripIOS
+xcodegen generate              # creates Hermes.xcodeproj from project.yml (git-ignored)
 open Hermes.xcodeproj
 ```
 
-In Xcode: select the **Hermes** target → **Signing & Capabilities** → set your **Team** and a unique **Bundle Identifier** (e.g. `com.yourname.hermes`) → pick your iPhone → **Run** (⌘R). Trust the developer profile on the phone if prompted (Settings → General → VPN & Device Management).
+Before building to a device, set your own signing team (`DEVELOPMENT_TEAM`) and bundle IDs
+(`PRODUCT_BUNDLE_IDENTIFIER` for the app and the targets under it: the widgets, the watch
+app and the tests) in `project.yml`, then run `xcodegen generate` again. The project is
+generated, so settings changed in Xcode are lost on the next generate. Pick your iPhone and
+**Run** (⌘R), trusting the developer profile on the phone if asked (Settings → General → VPN
+& Device Management). Then pair the app with your Mac as in
+[Connect to Cantrip](#connect-to-cantrip).
+
+The iOS app embeds the Apple Watch app. Build or test the watch app alone with the
+`CantripWatch` scheme on a watchOS simulator.
+
+### Test
+
+```sh
+xcodebuild test -scheme Hermes -destination 'platform=iOS Simulator,name=<iPhone simulator>'
+```
+
+The `HermesUITests` scheme runs real-touch UI checks against DEBUG-only fixture screens, and
+`CantripWatch` runs the watch tests. [Cantrip Gateway Mac](../CantripGatewayMac/) compiles
+`Sources/` and `Shared/` for macOS, so after changing shared code also run `make test` in
+`Clients/CantripGatewayMac`. A change that spans this app and the Mac host is one commit.
 
 ### Adaptive layouts and iPhone Duo
 
@@ -1508,52 +1383,14 @@ run it with that toolchain across
 open/closed, rotated, partially folded, and Split View configurations, including
 an active reply, an unsent image/text draft, the keyboard, and large text.
 
-### Configure
+### Release
 
-On first launch, open **Settings (⚙️)** and enter:
-
-| Field | Value |
-|---|---|
-| **Gateway URL** | Your private or tunneled `https://` gateway URL |
-| **API key** | the `API_SERVER_KEY` from Part 1 |
-
-Tap **Test authenticated connection**. The app verifies the key against
-`/v1/models` and confirms that `copilot-coding` is advertised. A public
-`/health` response alone is not considered a successful test.
-
-## Execution lanes
-
-- **Copilot** is the default and uses the `copilot-coding` gateway route.
-- **Private Local** uses the future `local-private` route and is unavailable
-  until the gateway advertises it.
-- **Cantrip Remote** controls a selected live Cantrip session using the same
-  chat and voice UI.
-- Each destination has independent conversation history. Hermes lanes also use
-  distinct long-term-memory session keys.
-- Every assistant reply is labeled with its active destination.
-- Switching lanes never carries the other lane's run or conversation history.
-
-## Durable tasks
-
-Every message creates a server-owned `/v1/runs` task. Cantrip Agent persists the
-run ID before observing its event stream. Closing, suspending, or force-quitting
-the app only disconnects the viewer; it does not call the gateway's stop
-endpoint. When iOS leaves the foreground, the app drops its potentially stale
-event connection while the task keeps running on the Mac.
-
-When the app becomes active again it starts a fresh poll for the saved run ID
-and replaces any partial text with the gateway's authoritative final output. If
-iOS loses the initial `202` response, the app safely retries with the same
-`Idempotency-Key`, and the gateway returns the original run instead of executing
-the request twice. Results remain recoverable for 24 hours. Only tapping
-**Stop** or using voice barge-in explicitly interrupts a run.
-
-Voice Mode preserves its hands-free reply intent across that suspension. Return
-to the app and the recovered response is still spoken before listening resumes;
-only closing Voice Mode tears down its microphone and TTS state.
-
-Tool approvals are also recoverable: a run waiting for approval stores the
-redacted command and available choices in its pollable status.
+TestFlight builds come from the
+[`ios-testflight.yml`](../../.github/workflows/ios-testflight.yml) GitHub Actions workflow,
+which numbers each build itself (App Store Connect never accepts the same build number
+twice). Its triggers and the signing and App Store Connect secrets it needs are in that
+file. To install a build without TestFlight, publish it to the Mac's over-the-air page and
+install it from Home's [Builds](#cantrip-home) tab.
 
 ## Local speech recognition
 
@@ -1600,8 +1437,6 @@ Dictation** shows the words, the last dictation's stage timings and its live,
 model and final text, and a **Test dictation speed** run that synthesizes sample
 sentences on the device.
 
-> Get the key back any time: `grep '^API_SERVER_KEY=' ~/.hermes/.env | cut -d= -f2-` (or copy it to your clipboard with `… | pbcopy` on macOS and paste via Universal Clipboard).
-
 ---
 
 ## Voice quality
@@ -1610,7 +1445,11 @@ The default iOS voices sound robotic. For near-Siri quality, download a **Premiu
 
 ## Action Button / Shortcuts / Siri
 
-Once installed, **"Talk to Hermes"** appears in the Shortcuts app and is assignable to the **Action Button** (Settings → Action Button → Shortcut). It also responds to *"Hey Siri, Talk to Hermes."* One trigger opens voice mode and starts listening.
+Once installed, Cantrip Agent adds a voice shortcut to the Shortcuts app that you can
+assign to the **Action Button** (Settings → Action Button → Shortcut). Siri also runs it:
+*"Hey Siri, talk to Cantrip Agent"* (or *"Ask Cantrip Agent"*). One trigger opens the app in
+voice mode and starts listening. On Apple Watch, **Ask Cantrip** does the same from Siri and
+Shortcuts (see [Cantrip on Apple Watch](#cantrip-on-apple-watch)).
 
 ---
 
@@ -1618,60 +1457,29 @@ Once installed, **"Talk to Hermes"** appears in the Shortcuts app and is assigna
 
 | Symptom | Fix |
 |---|---|
-| **Test connection fails / 401** | Wrong key or URL. Re-copy `API_SERVER_KEY`; confirm the URL has no trailing slash. |
-| **Task never updates** | Reopen the app and confirm `GET /v1/runs/{id}` is reachable. The run continues on the Mac even when its SSE viewer disconnects. |
-| **Skills list empty** | You haven't added the `/v1/commands` endpoint (Part 1, step 7), or the gateway is unreachable. |
-| **Can't reach it on the phone** | Confirm the HTTPS proxy/private-network endpoint reaches the gateway and that `/v1/models` accepts the API key. |
-| **Copilot route missing** | Add `gateway.api_server.extra.model_routes.copilot-coding` to `~/.hermes/config.yaml`, then restart the gateway. |
-| **Parakeet cannot start** | Open Settings → Speech Recognition and retry model preparation, or select the fully on-device Apple Speech fallback. |
-
----
-
-## "Set it up for me" — prompt for your LLM / agent
-
-Paste this into Claude Code, your Hermes agent, or any tool-using LLM **running on the machine where Hermes lives**:
-
-```
-You are setting up the "Cantrip Agent" iOS app's backend on this machine, which
-runs a Hermes agent at ~/.hermes. Do the following and report each result:
-
-1. Generate a strong API key: `openssl rand -hex 32`. Save it; I'll need it for
-   the app. Do NOT print it more than once.
-2. Back up ~/.hermes/.env, then append (only if these keys aren't already set):
-       API_SERVER_KEY=<the key>
-       API_SERVER_HOST=0.0.0.0
-       API_SERVER_PORT=8642
-3. Back up ~/.hermes/config.yaml, keep the global default on copilot-shim, and
-   add gateway.api_server.extra.model_routes.copilot-coding pointing to
-   model copilot-shim at http://127.0.0.1:11437/v1.
-4. Restart the Hermes gateway so the api_server picks up the new config (use the
-   launchd service `ai.hermes.gateway` if present, else `hermes gateway run --replace`).
-   Wait until port 8642 is LISTENING.
-5. Verify: `curl -s http://127.0.0.1:8642/health` returns ok, an authenticated
-   POST to /v1/runs returns a run_id, replaying the same Idempotency-Key returns
-   that same run_id, and a request WITHOUT the key returns HTTP 401. Confirm
-   `/v1/models` advertises `copilot-coding` and all Hermes channels reconnected.
-6. (Optional, for the app's "/" suggestions + Skills list) Add a `GET /v1/commands`
-   route + handler to gateway/platforms/api_server.py that returns
-   telegram_menu_commands() as {command, description, kind} (kind="command" for
-   names in telegram_bot_commands(), else "skill"). py_compile it, restart, verify.
-7. Expose only the gateway through a private network or authenticated HTTPS
-   reverse proxy. Do not expose the model server or Copilot shim.
-
-Then tell me the HTTPS gateway URL to enter in the app, and remind me the API
-key is in ~/.hermes/.env as API_SERVER_KEY.
-Treat the key like a password — it grants full agent (tool/shell) access.
-```
+| **Can't find the Mac on the local network** | Allow Local Network access for Cantrip Agent (iOS Settings → Privacy & Security → Local Network), keep the phone on the Mac's network, and check that **Remote control** is on in Cantrip on the Mac. |
+| **Doesn't connect away from home** | Save the Mac's Tailscale URL when pairing (after `tailscale serve --bg http://127.0.0.1:8765` on the Mac), and keep Tailscale connected on the phone. Without Tailscale, use a direct address. |
+| **Pairing token missing, or the Mac rejects the token** | Open the Mac in **Settings › Macs**, tap **Re-enter Pairing Token** and paste the current token from Cantrip's Settings › Remote control. Regenerating the token on the Mac disconnects every paired device. |
+| **A feature says to update the Mac** | Update and reopen Cantrip on the Mac; new app features need a host that reports them. |
+| **No alerts** | Use **Settings › Notifications › Check notification setup**; the Mac needs an APNs key in `~/.config/Cantrip/apns.json` and Cantrip must stay running. |
+| **Widget doesn't update away from the app** | The widget refreshes over the saved Tailscale URL; a local-network-only pairing updates it only while the app is open. |
+| **Parakeet cannot start** | Open Settings → Voice and retry model preparation, or select the fully on-device Apple Speech fallback. |
 
 ---
 
 ## Security
 
-- Every `/v1/*` endpoint requires the Bearer key (constant-time compared); only `/health` is open.
-- The key grants **full agent access** (it can run tools/shell) — treat it like a password. It lives in `~/.hermes/.env` on the server and the iOS **Keychain** on the phone, never in this repo.
-- Non-loopback plain HTTP is rejected by the app because it exposes both prompts
-  and the bearer key. Loopback HTTP remains available for simulator development.
-- Named execution routes prevent a missing private model from silently falling
-  back to the Copilot default.
-- Durable run creation requires authentication and an app-generated
-  `Idempotency-Key`; replay never starts a second side-effecting task.
+- The pairing token gives **full control of that Mac's agents** (they can run tools and
+  shell commands); treat it like a password. It lives in this device's **Keychain**, for
+  this device only, and never in this repository. **Regenerate** on the Mac disconnects
+  every paired device.
+- On the local network and direct-address routes, requests run inside TLS 1.2 with a
+  pre-shared key derived from the pairing token, so they're end-to-end encrypted without
+  certificates. Over Tailscale, Serve proxies HTTPS to Cantrip's loopback port. Plain HTTP
+  is accepted only on loopback, for simulator development.
+- Sends and other changes are never replayed automatically after a connection failure, so
+  a lost acknowledgement can't run a prompt twice.
+- Face ID or Touch ID is required before approvals, password/passphrase input and starting
+  a View Mac session. Secure input goes to the waiting program, never to the model, the
+  transcript or a notification.
+- Location is off by default; when on, it goes only to the paired Mac with that message.
