@@ -18,7 +18,7 @@ can resolve or check the data, so a wrong block shows nothing:
 |---|---|---|
 | `places` block | Names real places | MapKit and OpenStreetMap |
 | `weather` block | Names a place | Open-Meteo |
-| Link previews | Public links in the reply (up to three) | The page's Open Graph data, cached on the Mac |
+| Link previews | Public links in the reply (up to three) | The page's Open Graph data and the site's icon, cached on the Mac |
 | Tool results Cantrip knows | Automatic, e.g. a Kiwi.com `search-flight` result | The tool's result |
 | `"cantrip/card"` in a tool's JSON result | Any tool (or MCP server) can return a ready card | The tool |
 | `card` block | The model writes labels and copies values from a tool it cites | Checked against that tool's output |
@@ -73,7 +73,7 @@ HTML views (`ui://` resources), which Cantrip already shows for Copilot.
 
 | Block | Fields | Drawn as |
 |---|---|---|
-| `header` | `title`, `subtitle`, `subtitleSymbol`, `symbol`, `lines`, `stat` | Title (15 pt semibold), subtitle with its icon, then `lines` (first 13 pt, others 12 pt muted); a leading icon for `symbol`; `stat` on the trailing side (icon and 40 pt light value) |
+| `header` | `title`, `subtitle`, `subtitleSymbol`, `subtitleImageID`, `symbol`, `lines`, `stat` | Title (15 pt semibold), subtitle with its icon, then `lines` (first 13 pt, others 12 pt muted); a leading icon for `symbol`; `stat` on the trailing side (icon and 40 pt light value). Link cards draw `subtitleImageID`, the site's icon from `GET /api/v1/link-previews/image?id=`, at 14–16 pt before the domain |
 | `stat` | `value`, `label`, `symbol`, `detail`, `accessibilityLabel` | A big value (34 pt light) with its icon, label above and detail below |
 | `keyValue` | `rows: [{key, value, symbol}]` | Rows: muted key on the leading side, value on the trailing side |
 | `strip` | `items: [{label, symbol, value, note, accessibilityLabel}]` | A horizontally scrolling strip of 52 pt columns: label, icon, note (blue), value |

@@ -85,6 +85,8 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
         var title: String?
         var subtitle: String?
         var subtitleSymbol: String?
+        /// A link card's site icon beside the subtitle (a Mac-cached image ID).
+        var subtitleImageID: String?
         var symbol: String?
         var lines: [String]?
         var stat: Stat?
@@ -112,7 +114,7 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
         init(type: String) { self.type = type }
 
         private enum Keys: String, CodingKey {
-            case type, title, subtitle, subtitleSymbol, symbol, lines, stat, value, label, detail, text, tone, kind, rows, items
+            case type, title, subtitle, subtitleSymbol, subtitleImageID, symbol, lines, stat, value, label, detail, text, tone, kind, rows, items
             case badges, min, max, pins, latitude, longitude, latitudeDelta, longitudeDelta, mapLinked, attribution, imageID
             case accessibilityLabel
         }
@@ -132,6 +134,7 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
             title = text(.title)
             subtitle = text(.subtitle)
             subtitleSymbol = text(.subtitleSymbol)
+            subtitleImageID = text(.subtitleImageID)
             symbol = text(.symbol)
             lines = list(.lines, max: 4)
             stat = (try? c.decodeIfPresent(Stat.self, forKey: .stat)) ?? nil
@@ -212,7 +215,9 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
         guard isLink, let raw = action?.url, let url = URL(string: raw), CantripLinkPreview.isSafeWebURL(url) else { return nil }
         let domain = header?.subtitle ?? url.host ?? raw
         let imageID = blocks.first { $0.type == "image" }?.imageID.flatMap { CantripLinkPreview.validImageID($0) ? $0 : nil }
-        return CantripLinkPreview(id: id, url: raw, title: header?.title ?? domain, domain: domain, imageID: imageID)
+        let iconID = header?.subtitleImageID.flatMap { CantripLinkPreview.validImageID($0) ? $0 : nil }
+        return CantripLinkPreview(id: id, url: raw, title: header?.title ?? domain, domain: domain, imageID: imageID,
+                                  iconID: iconID)
     }
 
     /// The cards to draw for a reply: `cards` from a current Mac, else ones built from the separate
@@ -339,6 +344,7 @@ extension CantripCard {
         var header = Block(type: "header")
         header.title = link.title
         header.subtitle = link.domain
+        header.subtitleImageID = link.iconID
         blocks.append(header)
         self.init(id: link.id, type: "link", style: "link", accessibilityLabel: "\(link.title), \(link.domain)",
                   action: Action(kind: "open", label: "Open", url: link.url), blocks: blocks)

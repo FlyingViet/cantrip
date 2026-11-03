@@ -117,6 +117,9 @@ struct CardDocument: Codable, Equatable, Sendable, Identifiable {
         var title: String?
         var subtitle: String?
         var subtitleSymbol: String?
+        /// A small image before the subtitle, from the Mac's link preview cache: a link card's
+        /// site icon (`GET /api/v1/link-previews/image?id=`).
+        var subtitleImageID: String?
         var symbol: String?
         var lines: [String]?
         var stat: Stat?
@@ -400,7 +403,8 @@ extension PlacePin {
 }
 
 extension LinkPreviewCard {
-    /// A compact tappable card: the page's image (cached on the Mac) and title.
+    /// A compact tappable card: the page's image (cached on the Mac), title, and the domain with
+    /// the site's icon.
     var document: CardDocument {
         var blocks: [CardDocument.Block] = []
         if let imageID, !imageID.isEmpty {
@@ -412,6 +416,7 @@ extension LinkPreviewCard {
         var header = CardDocument.Block(type: "header")
         header.title = title
         header.subtitle = domain
+        header.subtitleImageID = iconID.flatMap { $0.isEmpty ? nil : $0 }
         header.symbol = imageID == nil ? "link" : nil
         blocks.append(header)
         return CardDocument(id: id, type: "link", style: "link", accessibilityLabel: "\(title), \(domain)",
@@ -786,6 +791,7 @@ enum CardValidation {
             block.badges = block.badges.map { Array($0.prefix(8)) }
             block.pins = block.pins.map { Array($0.prefix(20)).filter { abs($0.latitude) <= 90 && abs($0.longitude) <= 180 } }
             block.imageID = nil
+            block.subtitleImageID = nil
             block.items = block.items.map { items in
                 Array(items.prefix(24)).map { item in
                     var item = item

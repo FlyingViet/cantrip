@@ -4,7 +4,7 @@ import type { RemoteCardBlock, RemoteCardDocument } from "../src/gateway/api/typ
 import { symbolIcon } from "../src/gateway/ui/icons";
 import {
   actionSymbol, cardFallback, cardFooter, cardGlyph, cardLabel, cardParts, cardText, cardTone, chartBar, chartColumns, chartScale,
-  itemLabel, mapAttribution, mapRegion, safeActionUrl, statLabel, telNumber,
+  isImageID, itemLabel, mapAttribution, mapRegion, safeActionUrl, statLabel, telNumber,
 } from "../src/gateway/ui/transcript/cardLogic";
 import { fitZoom, initialZoomForDelta, tileSpan, weatherRanges } from "../src/gateway/ui/transcript/richCardLogic";
 
@@ -155,6 +155,21 @@ describe("what a card draws", () => {
     const link = card([{ type: "image", imageID: "c".repeat(64) }, { type: "header", title: "Mac Studio" }, { type: "list", items: [{ title: "A" }] },
       fixture("places").blocks[0]], { style: "link" });
     expect(cardParts(link).map((part) => part.kind === "block" && part.block.type)).toEqual(["image", "header"]);
+  });
+
+  it("keeps the Mac's cached images and site icons on link cards", () => {
+    // The Mac's link preview cache IDs are 24 hex characters.
+    expect(isImageID("0a1b2c3d4e5f60718293a4b5")).toBe(true);
+    expect(isImageID("c".repeat(64))).toBe(true);
+    for (const bad of ["../etc", "c".repeat(15), "c".repeat(65), "0a1b2c3d4e5f6071829g", 42]) expect(isImageID(bad)).toBe(false);
+    const link = card([
+      { type: "image", imageID: "0a1b2c3d4e5f60718293a4b5" },
+      { type: "header", title: "Instagram", subtitle: "instagram.com", subtitleImageID: "5b4a3928170f6e5d4c3b2a10" },
+    ], { style: "link", action: { kind: "open", label: "Open", url: "https://www.instagram.com/" } });
+    const parts = cardParts(link);
+    expect(parts.map((part) => part.kind === "block" && part.block.type)).toEqual(["image", "header"]);
+    const header = parts[1].kind === "block" ? parts[1].block : undefined;
+    expect(header?.subtitleImageID).toBe("5b4a3928170f6e5d4c3b2a10");
   });
 
   it("names the card, its rows and stats for screen readers", () => {
