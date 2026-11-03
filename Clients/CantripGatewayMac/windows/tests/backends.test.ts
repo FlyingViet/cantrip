@@ -16,6 +16,7 @@ import { BackendRow } from "../src/gateway/ui/sheets/BackendStatusList";
 import {
   BACKENDS_UNSUPPORTED, backendCheckLine, backendLines, backendOffersSignIn, backendSignInLine, backendSignInPending, backendStatus,
   backendsErrorText, backendsPollDelay, backendTime, INVALID_RESPONSE, normalizeBackends,
+  githubPresentation, githubSignInWaiting,
 } from "../src/gateway/ui/sheets/sheetLogic";
 
 // MARK: A small VNode walker (no DOM): components are called with their props, like a shallow render.
@@ -323,5 +324,51 @@ describe("Settings' backends bridge", () => {
     expect(backendsBridgeRequest({ method: "POST", body: { action: "check", id: "" } })).toHaveProperty("error");
     expect(backendsBridgeRequest({ method: "POST", body: { action: "check", id: "claude", path: "/api/v1/sessions" } })).toHaveProperty("error");
     expect(backendsBridgeRequest({ method: "POST", body: { action: "signIn", id: "codex", token: "x" } })).toHaveProperty("error");
+  });
+});
+
+// MARK: GitHub on your Mac (GET /api/v1/backends `github`)
+
+describe("githubPresentation", () => {
+  it("names the signed-in account with a quieter Sign In Again", () => {
+    const shown = githubPresentation({ state: "signedIn", login: "octo-qa", scopes: ["repo"] }, true);
+    expect(shown.detail).toBe("Signed in as octo-qa");
+    expect(shown.button).toBe("Sign In Again…");
+    expect(shown.prominent).toBe(false);
+    expect(shown.warning).toBe(false);
+    expect(githubPresentation({ state: "signedIn", login: "octo-qa", accounts: [
+      { login: "octo-qa", active: true }, { login: "work-qa", active: false }, { login: "x-qa", active: false },
+    ] }, true).detail).toBe("Signed in as octo-qa (2 more accounts)");
+  });
+
+  it("offers Sign In when signed out or expired, and not without gh", () => {
+    const out = githubPresentation({ state: "signedOut" }, true);
+    expect(out.button).toBe("Sign In…");
+    expect(out.warning && out.prominent).toBe(true);
+    expect(githubPresentation({ state: "needsSignIn", login: "octo-qa" }, true).detail).toContain("octo-qa's GitHub sign-in");
+    expect(githubPresentation({ state: "notInstalled" }, true).buttonEnabled).toBe(false);
+  });
+
+  it("never reads an older Mac or an unknown answer as signed out", () => {
+    for (const shown of [githubPresentation(undefined, true), githubPresentation({ state: "unknown" }, true),
+      githubPresentation({ state: "somethingNew" }, true), githubPresentation(undefined, false)]) {
+      expect(shown.warning).toBe(false);
+      expect(shown.prominent).toBe(false);
+      expect(shown.detail.toLowerCase()).not.toContain("not signed in");
+    }
+    expect(githubPresentation(undefined, true).detail).toContain("Update Cantrip on your Mac");
+  });
+
+  it("waits for the Mac's next check after a sign-in starts here", () => {
+    const started = Date.parse("2026-11-02T23:50:00Z");
+    expect(githubSignInWaiting(null, "2026-11-02T23:00:00Z")).toBe(false);
+    expect(githubSignInWaiting(started, "2026-11-02T23:49:00Z")).toBe(true);
+    expect(githubSignInWaiting(started, undefined)).toBe(true);
+    expect(githubSignInWaiting(started, "2026-11-02T23:51:30Z")).toBe(false);
+  });
+
+  it("polls faster while the Mac checks gh", () => {
+    expect(backendsPollDelay({ backends: [], github: { state: "unknown", checking: true } })).toBe(1500);
+    expect(backendsPollDelay({ backends: [], github: { state: "signedIn", login: "octo-qa" } })).toBe(8000);
   });
 });

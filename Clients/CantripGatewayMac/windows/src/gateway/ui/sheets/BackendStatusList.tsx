@@ -21,7 +21,7 @@ export interface BackendsTransport {
   openLink(url: string): void;
 }
 
-export function BackendStatusList(props: { transport: BackendsTransport }): JSX.Element {
+export function BackendStatusList(props: { transport: BackendsTransport; onSnapshot?: (snapshot: BackendsSnapshot) => void }): JSX.Element {
   const { transport } = props;
   const [snapshot, setSnapshot] = useState<BackendsSnapshot | null>(null);
   const [error, setError] = useState("");
@@ -36,6 +36,8 @@ export function BackendStatusList(props: { transport: BackendsTransport }): JSX.
     latest.current = value;
     setSnapshot(value);
     setError("");
+    // The same poll answers Settings' GitHub row (the Mac's gh sign-in rides along as `github`).
+    props.onSnapshot?.(value);
   }
 
   function fail(failure: unknown): void {

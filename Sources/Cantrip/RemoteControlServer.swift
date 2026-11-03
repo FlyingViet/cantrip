@@ -303,7 +303,10 @@ final class RemoteControlServer {
         let monitor = BackendStatusMonitor.shared
         switch request.method {
         case "GET":
-            sendJSON(monitor.remotePayload(), on: connection)
+            var payload = monitor.remotePayload()
+            // The Mac's GitHub CLI sign-in (login, active, scopes; never a token).
+            payload["github"] = GitHubAuthMonitor.shared.remotePayload()
+            sendJSON(payload, on: connection)
         case "POST":
             guard request.body.count <= 1024,
                   let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
@@ -311,15 +314,17 @@ final class RemoteControlServer {
                 sendError(400, "Send an action: check (optionally with an id), signIn or cancelSignIn (with an id).", on: connection)
                 return
             }
+            let checksGitHub = action == "check" && (body["id"] == nil || body["id"] as? String == "github")
             let backend = (body["id"] as? String).flatMap(MonitoredBackend.init(rawValue:))
-            if body["id"] != nil, backend == nil {
-                sendError(400, "Unknown backend. Use copilot, claude, antigravity or codex.", on: connection)
+            if body["id"] != nil, backend == nil, !(checksGitHub && action == "check") {
+                sendError(400, "Unknown backend. Use copilot, claude, antigravity, codex or (to check) github.", on: connection)
                 return
             }
             var payload: [String: Any]
             switch action {
             case "check":
-                monitor.check(backend.map { [$0] })
+                if checksGitHub { GitHubAuthMonitor.shared.check() }
+                if body["id"] as? String != "github" { monitor.check(backend.map { [$0] }) }
                 payload = monitor.remotePayload()
             case "signIn", "cancelSignIn":
                 guard let backend else {
@@ -334,6 +339,7 @@ final class RemoteControlServer {
                 sendError(400, "Unknown backends action \(action).", on: connection)
                 return
             }
+            payload["github"] = GitHubAuthMonitor.shared.remotePayload()
             sendJSON(payload, on: connection)
         default:
             sendError(405, "method not allowed", on: connection)

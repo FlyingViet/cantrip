@@ -322,7 +322,14 @@ timeout, an unexpected answer) never takes a backend out of routing.
 (`name`, `usedPercent`, `resetsAt`), `limitedUntil`, `lastSuccessAt`,
 `lastAuthError`, `checkedAt`, `checking`, `unavailable`, `problem` and `signIn`
 (`mode`, `command`, `hint`, and while a device sign-in waits its `url` and
-`code`). `POST` takes `{"action": "check"}` (optionally with an `id`),
+`code`). It also returns `github`, the Mac's GitHub CLI sign-in on github.com
+from `gh auth status --json hosts`: `state` (`signedIn`, `needsSignIn`,
+`signedOut`, `notInstalled` or `unknown`), `host`, the active account's `login`
+and `scopes`, every account (`login`, `active`, `valid`, `scopes`), `checkedAt`
+and `checking`. Never a token or where it's kept. The Mac checks it on launch,
+every 30 minutes, after `/login github` ends and on `check`.
+`POST` takes `{"action": "check"}` (optionally with an `id`, or `"github"` for
+just the GitHub sign-in),
 `{"action": "signIn", "id"}` or `{"action": "cancelSignIn", "id"}`. Copilot CLI
 and Codex sign in with their device flow, whose link and code every client
 shows; Claude Code and Antigravity sign in only on the Mac, so Sign In opens

@@ -13,6 +13,70 @@ struct CantripBackendsSnapshot: Decodable, Equatable {
     var checkInterval: Int?
     /// What a Sign In or Cancel did ("Finish signing in in Terminal on the Mac.").
     var message: String?
+    /// The Mac's GitHub CLI sign-in; absent from Macs before it was reported.
+    var github: CantripGitHubAuth?
+}
+
+/// The Mac's GitHub CLI (`gh`) sign-in on github.com (`GitHubAuthMonitor` on the Mac): who's signed
+/// in, whether that's the active account and its scopes. Never a token.
+struct CantripGitHubAuth: Decodable, Equatable {
+    struct Account: Decodable, Equatable {
+        var login: String
+        var active: Bool
+        var valid: Bool?
+        var scopes: [String]?
+    }
+
+    /// signedIn, needsSignIn, signedOut, notInstalled or unknown (anything newer reads as unknown).
+    var state: String
+    var host: String?
+    var login: String?
+    var scopes: [String]?
+    var accounts: [Account]?
+    var checkedAt: String?
+    var checking: Bool?
+}
+
+/// What Settings' "GitHub on your Mac" row says for the Mac's gh sign-in.
+struct CantripGitHubPresentation: Equatable {
+    var detail: String
+    var warning = false
+    var button: String
+    /// Signed in: Sign In Again is the quieter of the two.
+    var prominent = true
+    var buttonEnabled = true
+
+    static let neutral = "GitHub CLI (gh), shared by every backend"
+
+    /// `loaded` is false until the Mac's backends have answered once.
+    static func make(_ github: CantripGitHubAuth?, loaded: Bool) -> CantripGitHubPresentation {
+        guard loaded else { return .init(detail: "Checking GitHub on your Mac…", button: "Sign In…", prominent: false) }
+        // An older Mac doesn't say; that isn't the same as signed out.
+        guard let github else {
+            return .init(detail: "\(neutral). Update Cantrip on your Mac to see who's signed in.", button: "Sign In…",
+                         prominent: false)
+        }
+        let others = (github.accounts?.count ?? 0) - 1
+        switch github.state {
+        case "signedIn" where github.login != nil:
+            let more = others > 0 ? " (\(others) more account\(others == 1 ? "" : "s"))" : ""
+            return .init(detail: "Signed in as \(github.login!)\(more)", button: "Sign In Again…", prominent: false)
+        case "needsSignIn":
+            let who = github.login.map { "\($0)'s" } ?? "The"
+            return .init(detail: "\(who) GitHub sign-in on your Mac has expired. Sign in again.", warning: true,
+                         button: "Sign In…")
+        case "signedOut":
+            return .init(detail: "Not signed in. Pushes, pull requests and GitHub Builds need it.", warning: true,
+                         button: "Sign In…")
+        case "notInstalled":
+            return .init(detail: "The GitHub CLI (gh) isn't installed on your Mac. Install it there (brew install gh), then sign in.",
+                         warning: true, button: "Sign In…", buttonEnabled: false)
+        default:
+            if github.checking == true { return .init(detail: "Checking GitHub on your Mac…", button: "Sign In…", prominent: false) }
+            return .init(detail: "Couldn't check GitHub on your Mac just now. \(neutral).", button: "Sign In…",
+                         prominent: false)
+        }
+    }
 }
 
 struct CantripBackendStatus: Decodable, Equatable, Identifiable {
@@ -164,7 +228,9 @@ final class CantripBackendsStore: ObservableObject {
 
     func status(_ id: String) -> CantripBackendStatus? { snapshot?.backends.first { $0.id == id } }
 
-    var isBusy: Bool { snapshot?.backends.contains { $0.isChecking || $0.isSigningIn } ?? false }
+    var isBusy: Bool {
+        (snapshot?.backends.contains { $0.isChecking || $0.isSigningIn } ?? false) || snapshot?.github?.checking == true
+    }
 
     func load() async {
         do {
@@ -212,6 +278,18 @@ struct CantripBackendsSection: View {
     init(remote: CantripRemoteModel, snapshot: CantripBackendsSnapshot? = nil) {
         _store = StateObject(wrappedValue: CantripBackendsStore(remote: remote, snapshot: snapshot))
     }
+
+    var body: some View {
+        CantripBackendsList(store: store)
+    }
+
+    static let explanation = CantripBackendsList.explanation
+}
+
+/// The Backends section on a store kept by its page (Settings' Tools & sign-ins shares it with
+/// the GitHub row), polling while it shows.
+struct CantripBackendsList: View {
+    @ObservedObject var store: CantripBackendsStore
 
     var body: some View {
         Section {

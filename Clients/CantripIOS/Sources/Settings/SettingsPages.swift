@@ -235,12 +235,21 @@ struct SettingsToolsPage: View {
     var macTools: AnyView? = nil
     /// Opens Cantrip Home's chat, where GitHub's sign-in code shows.
     var onOpenHome: () -> Void = {}
+    /// The Mac's backends and its GitHub sign-in, from one poll of GET /api/v1/backends.
+    @StateObject private var backends: CantripBackendsStore
+
+    init(remote: CantripRemoteModel, macTools: AnyView? = nil, onOpenHome: @escaping () -> Void = {}) {
+        self.remote = remote
+        self.macTools = macTools
+        self.onOpenHome = onOpenHome
+        _backends = StateObject(wrappedValue: CantripBackendsStore(remote: remote))
+    }
 
     var body: some View {
         CantripMCPServersView(remote: remote, tabID: nil, embedded: true, extra: macTools,
                               leading: AnyView(Group {
-                                  CantripBackendsSection(remote: remote)
-                                  SettingsGitHubSection(remote: remote, onOpenHome: onOpenHome)
+                                  CantripBackendsList(store: backends)
+                                  SettingsGitHubSection(remote: remote, backends: backends, onOpenHome: onOpenHome)
                                   SettingsRulesAndSecretsSection(remote: remote)
                                   SettingsManifestSections(page: "tools")
                               }))
@@ -256,13 +265,16 @@ struct SettingsToolsPage: View {
 }
 
 /// GitHub on the Mac (the `gh` CLI every backend uses for pushes, pull requests and GitHub Builds):
-/// Sign In runs GitHub's device sign-in in Cantrip Home, whose chat shows the code to enter at
-/// github.com. It's the Mac's sign-in, so it's here rather than in a tab's menu.
+/// who's signed in there (`CantripGitHubAuth`, from the backends poll), and Sign In, which runs
+/// GitHub's device sign-in in Cantrip Home, whose chat shows the code to enter at github.com. It's
+/// the Mac's sign-in, so it's here rather than in a tab's menu.
 struct SettingsGitHubSection: View {
     @ObservedObject var remote: CantripRemoteModel
+    @ObservedObject var backends: CantripBackendsStore
     let onOpenHome: () -> Void
     @State private var working = false
-    @State private var started = false
+    /// When Sign In started here; its chat shows the code until the Mac reports the result.
+    @State private var startedAt: Date?
     @State private var error: String?
 
     /// Why Sign In can't run now; nil when it can.
@@ -272,22 +284,39 @@ struct SettingsGitHubSection: View {
         return nil
     }
 
+    /// A sign-in started here is still going: the Mac hasn't checked gh since it began.
+    static func isWaiting(startedAt: Date?, checkedAt: String?) -> Bool {
+        guard let startedAt else { return false }
+        guard let checkedAt, let checked = ISO8601DateFormatter().date(from: checkedAt) else { return true }
+        return checked < startedAt
+    }
+
     var body: some View {
         let unavailable = Self.unavailableReason(isConfigured: remote.isConfigured, home: remote.homeSummary)
+        let github = backends.snapshot?.github
+        let shown = CantripGitHubPresentation.make(github, loaded: backends.snapshot != nil)
+        let waiting = Self.isWaiting(startedAt: startedAt, checkedAt: github?.checkedAt)
+        // The Mac's answer comes first; why Sign In can't run from here only matters when it's needed.
+        let known = backends.snapshot != nil && remote.isConfigured
+        let detail = waiting ? "Started in Cantrip Home: its chat shows GitHub's code." : known ? shown.detail : (unavailable ?? shown.detail)
+        let blocked = known && !waiting && github?.state != "signedIn" ? unavailable : nil
         Section {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("GitHub on your Mac")
-                    Text(unavailable ?? (started ? "Started in Cantrip Home: its chat shows GitHub's code."
-                                         : "GitHub CLI (gh), shared by every backend"))
+                    Text(detail)
                         .font(.caption)
-                        .foregroundStyle(unavailable == nil ? Color.secondary : Color.orange)
+                        .foregroundStyle((!known && unavailable != nil) || (!waiting && shown.warning) ? Color.orange : Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let blocked {
+                        Text(blocked).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("settings.github.status")
                 Spacer(minLength: 8)
-                Button(started ? "Open Home" : "Sign In…") { started ? onOpenHome() : signIn() }
-                    .disabled(unavailable != nil || working || remote.isMutating)
+                signInButton(title: waiting ? "Open Home" : shown.button, prominent: waiting || shown.prominent)
+                    .disabled(unavailable != nil || working || remote.isMutating || (!waiting && !shown.buttonEnabled))
                     .fixedSize()
                     .accessibilityIdentifier("settings.github.signIn")
             }
@@ -310,13 +339,20 @@ struct SettingsGitHubSection: View {
 
     static let explanation = "Signs the Mac's GitHub CLI in to github.com with GitHub's device sign-in, for pushes, pull requests and GitHub Builds in every backend. It runs in Cantrip Home, whose chat shows a code to enter at github.com/login/device; no password goes through Cantrip."
 
+    @ViewBuilder private func signInButton(title: String, prominent: Bool) -> some View {
+        let waiting = Self.isWaiting(startedAt: startedAt, checkedAt: backends.snapshot?.github?.checkedAt)
+        let button = Button(title) { waiting ? onOpenHome() : signIn() }
+        // Signed in, signing in again is the quieter choice.
+        if prominent { button } else { button.buttonStyle(.borderless).font(.footnote) }
+    }
+
     private func signIn() {
         guard let home = remote.homeSummary else { return }
         working = true
         Task {
             defer { working = false }
             if await remote.send("/login github", mode: .queue, sessionID: home.id) {
-                started = true
+                startedAt = Date()
                 error = nil
                 onOpenHome()
             } else {

@@ -114,8 +114,9 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   one again (**Check all** checks every one), and **Sign in** starts that CLI's sign-in: Copilot and
   Codex show a link and a code here (**Open link**, **Copy code**, **Cancel**), while Claude Code and
   Antigravity can only finish in Terminal on the Mac, which the row explains. Older Macs say to
-  update Cantrip. **GitHub on your Mac › Sign In…** runs GitHub's device sign-in in Cantrip
-  Home, whose chat shows the code (it used to be in a tab's actions). Then Settings lists the MCP servers Cantrip on the Mac shares with every
+  update Cantrip. **GitHub on your Mac** says who the Mac's GitHub CLI is signed in as (**Sign In
+  Again…**), or offers **Sign In…**, which runs GitHub's device sign-in in Cantrip Home, whose chat
+  shows the code (it used to be in a tab's actions). Then Settings lists the MCP servers Cantrip on the Mac shares with every
   backend, as the Mac's Settings does: each server's state ("Credentials in Mac keychain", when
   a sign-in's token ends), **Connect** (**Retry** after a failed sign-in, with the Mac's reason), **Approve** for
   a sign-in waiting on you, and switches for the server and each backend, saved on the Mac at

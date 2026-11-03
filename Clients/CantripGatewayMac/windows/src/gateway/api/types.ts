@@ -2342,6 +2342,20 @@ export interface BackendsSnapshot {
   revision?: number;
   /** What a signIn or cancelSignIn did. */
   message?: string;
+  /** The Mac's GitHub CLI sign-in; absent from Macs before it was reported. */
+  github?: GitHubAuth;
+}
+
+/** The Mac's GitHub CLI (gh) sign-in on github.com (`GitHubAuthMonitor`): who's signed in, whether that's
+ * the active account and its scopes. Never a token. */
+export interface GitHubAuth {
+  state: "signedIn" | "needsSignIn" | "signedOut" | "notInstalled" | "unknown" | string;
+  host?: string;
+  login?: string;
+  scopes?: string[];
+  accounts?: { login: string; active: boolean; valid?: boolean; scopes?: string[] }[];
+  checkedAt?: string;
+  checking?: boolean;
 }
 
 /** POST /api/v1/backends bodies. */

@@ -46,6 +46,7 @@ final class HostServices {
         Self.running = self
         UsageTracker.shared.startAutoRefresh()
         BackendStatusMonitor.shared.start(postsMacNotifications: postsMacNotifications)
+        GitHubAuthMonitor.shared.start()
         // Each CLI's own rules join the agent policy once; its deny rules go back into each CLI.
         DispatchQueue.global(qos: .utility).async { AgentPolicySetup.run() }
         SecretsHub.shared.start()

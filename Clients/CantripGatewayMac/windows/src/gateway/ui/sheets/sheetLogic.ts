@@ -4,7 +4,7 @@
 // (GitHubBuildsView.swift), maintenance (CantripMaintenanceView.swift), Skills & Rules (CantripSkills.swift),
 // backend status (BackendStatus.swift) and View Mac's AES-GCM framing (CantripMacAccess.swift). No DOM or API client imports, so it runs under Node.
 import type {
-  BackendHealth, BackendState, BackendsSnapshot, CopilotQuotaBucket, CopilotUsageSnapshot, MCPServer, SkillEntry, SkillsDrift, SkillsRule, SkillsSnapshot, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
+  BackendHealth, BackendState, BackendsSnapshot, GitHubAuth, CopilotQuotaBucket, CopilotUsageSnapshot, MCPServer, SkillEntry, SkillsDrift, SkillsRule, SkillsSnapshot, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
   ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackChoice, UsageFallbackEntryChange, UsageFallbackRequest,
@@ -1285,9 +1285,55 @@ export function backendSignInLine(backend: Pick<BackendHealth, "state" | "signed
 }
 
 /** Every 1.5 s while a check or a device sign-in runs, otherwise every 8 s. */
-export function backendsPollDelay(snapshot: Pick<BackendsSnapshot, "backends"> | null | undefined): number {
-  const busy = snapshot?.backends.some((backend) => backend.checking === true || backendSignInPending(backend)) ?? false;
+export function backendsPollDelay(snapshot: Pick<BackendsSnapshot, "backends" | "github"> | null | undefined): number {
+  const busy = (snapshot?.backends.some((backend) => backend.checking === true || backendSignInPending(backend)) ?? false)
+    || snapshot?.github?.checking === true;
   return busy ? 1500 : 8000;
+}
+
+/** What Settings' "GitHub on your Mac" row says (GitHubPresentation in Swift). */
+export interface GitHubPresentation {
+  detail: string;
+  warning: boolean;
+  button: string;
+  /** Signed in, Sign In Again is the quieter choice. */
+  prominent: boolean;
+  buttonEnabled: boolean;
+}
+
+const GITHUB_NEUTRAL = "GitHub CLI (gh), shared by every backend";
+
+/** `loaded` is false until the Mac's backends have answered once. Older Macs and unknown answers never read as signed out. */
+export function githubPresentation(github: GitHubAuth | undefined, loaded: boolean): GitHubPresentation {
+  const show = (detail: string, button: string, more: Partial<GitHubPresentation> = {}): GitHubPresentation =>
+    ({ detail, button, warning: false, prominent: true, buttonEnabled: true, ...more });
+  if (!loaded) return show("Checking GitHub on your Mac…", "Sign In…", { prominent: false });
+  if (!github) return show(`${GITHUB_NEUTRAL}. Update Cantrip on your Mac to see who's signed in.`, "Sign In…", { prominent: false });
+  const others = (github.accounts?.length ?? 0) - 1;
+  switch (github.state) {
+    case "signedIn":
+      if (github.login) {
+        const more = others > 0 ? ` (${others} more account${others === 1 ? "" : "s"})` : "";
+        return show(`Signed in as ${github.login}${more}`, "Sign In Again…", { prominent: false });
+      }
+      break;
+    case "needsSignIn":
+      return show(`${github.login ? `${github.login}'s` : "The"} GitHub sign-in on your Mac has expired. Sign in again.`, "Sign In…", { warning: true });
+    case "signedOut":
+      return show("Not signed in. Pushes, pull requests and GitHub Builds need it.", "Sign In…", { warning: true });
+    case "notInstalled":
+      return show("The GitHub CLI (gh) isn't installed on your Mac. Install it there (brew install gh), then sign in.", "Sign In…",
+        { warning: true, buttonEnabled: false });
+  }
+  if (github.checking) return show("Checking GitHub on your Mac…", "Sign In…", { prominent: false });
+  return show(`Couldn't check GitHub on your Mac just now. ${GITHUB_NEUTRAL}.`, "Sign In…", { prominent: false });
+}
+
+/** A sign-in started here is still going: the Mac hasn't checked gh since it began. */
+export function githubSignInWaiting(startedAt: number | null, checkedAt: string | undefined): boolean {
+  if (startedAt === null) return false;
+  const checked = checkedAt ? Date.parse(checkedAt) : Number.NaN;
+  return Number.isNaN(checked) || checked < startedAt;
 }
 
 /** "8:41 PM" today, "Fri 6:31 PM" within a week either way, else "Oct 30, 2026, 8:41 PM"; null when unreadable. */

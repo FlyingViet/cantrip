@@ -151,3 +151,68 @@ final class CantripBackendsTests: XCTestCase {
         }
     }
 }
+
+/// Settings' "GitHub on your Mac" row reads the Mac's gh sign-in from GET /api/v1/backends.
+final class CantripGitHubAuthTests: XCTestCase {
+    private func snapshot(github: Any?) throws -> CantripBackendsSnapshot {
+        var json: [String: Any] = ["backends": [Any](), "checkInterval": 1800]
+        if let github { json["github"] = github }
+        return try JSONDecoder().decode(CantripBackendsSnapshot.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    func testDecodesTheMacsSignInAndOlderMacsLeaveItOut() throws {
+        let github = try XCTUnwrap(snapshot(github: [
+            "state": "signedIn", "host": "github.com", "login": "octo-qa", "scopes": ["repo", "workflow"],
+            "accounts": [["login": "octo-qa", "active": true, "valid": true, "scopes": ["repo", "workflow"]],
+                         ["login": "work-qa", "active": false, "valid": true, "scopes": ["repo"]]],
+            "checkedAt": "2026-11-02T23:50:00Z", "checking": false,
+        ]).github)
+        XCTAssertEqual(github.login, "octo-qa")
+        XCTAssertEqual(github.accounts?.count, 2)
+        XCTAssertNil(try snapshot(github: nil).github, "a Mac from before it reports nothing")
+    }
+
+    func testSignedInShowsWhoWithAQuieterSignInAgain() {
+        let shown = CantripGitHubPresentation.make(.init(state: "signedIn", login: "octo-qa"), loaded: true)
+        XCTAssertEqual(shown.detail, "Signed in as octo-qa")
+        XCTAssertEqual(shown.button, "Sign In Again…")
+        XCTAssertFalse(shown.prominent)
+        XCTAssertFalse(shown.warning)
+        let two = CantripGitHubPresentation.make(.init(state: "signedIn", login: "octo-qa", accounts: [
+            .init(login: "octo-qa", active: true), .init(login: "work-qa", active: false),
+        ]), loaded: true)
+        XCTAssertEqual(two.detail, "Signed in as octo-qa (1 more account)")
+    }
+
+    func testSignedOutAndExpiredOfferSignIn() {
+        let out = CantripGitHubPresentation.make(.init(state: "signedOut"), loaded: true)
+        XCTAssertEqual(out.button, "Sign In…")
+        XCTAssertTrue(out.prominent && out.warning)
+        XCTAssertTrue(out.detail.hasPrefix("Not signed in"))
+        let expired = CantripGitHubPresentation.make(.init(state: "needsSignIn", login: "octo-qa"), loaded: true)
+        XCTAssertEqual(expired.button, "Sign In…")
+        XCTAssertTrue(expired.detail.contains("octo-qa's GitHub sign-in"))
+        let missing = CantripGitHubPresentation.make(.init(state: "notInstalled"), loaded: true)
+        XCTAssertFalse(missing.buttonEnabled, "no gh, no sign-in")
+    }
+
+    func testOlderMacsAndUnknownAnswersNeverSaySignedOut() {
+        for shown in [CantripGitHubPresentation.make(nil, loaded: true),
+                      CantripGitHubPresentation.make(.init(state: "unknown"), loaded: true),
+                      CantripGitHubPresentation.make(.init(state: "somethingNew"), loaded: true),
+                      CantripGitHubPresentation.make(nil, loaded: false)] {
+            XCTAssertFalse(shown.warning, shown.detail)
+            XCTAssertFalse(shown.prominent, shown.detail)
+            XCTAssertFalse(shown.detail.localizedCaseInsensitiveContains("not signed in"), shown.detail)
+        }
+        XCTAssertTrue(CantripGitHubPresentation.make(nil, loaded: true).detail.contains("Update Cantrip on your Mac"))
+    }
+
+    func testASignInStartedHereWaitsForTheMacsNextCheck() {
+        let started = ISO8601DateFormatter().date(from: "2026-11-02T23:50:00Z")!
+        XCTAssertFalse(SettingsGitHubSection.isWaiting(startedAt: nil, checkedAt: "2026-11-02T23:00:00Z"))
+        XCTAssertTrue(SettingsGitHubSection.isWaiting(startedAt: started, checkedAt: "2026-11-02T23:49:00Z"))
+        XCTAssertTrue(SettingsGitHubSection.isWaiting(startedAt: started, checkedAt: nil))
+        XCTAssertFalse(SettingsGitHubSection.isWaiting(startedAt: started, checkedAt: "2026-11-02T23:51:30Z"))
+    }
+}
