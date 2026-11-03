@@ -154,6 +154,7 @@ targets:
       - path: ../CantripIOS/Tests/CantripStartFreshTests.swift
       - path: ../CantripIOS/Tests/ChatTabTests.swift
       - path: ../CantripIOS/Tests/CantripHomeWorkspaceGroupTests.swift
+      - path: ../CantripIOS/Tests/CantripHomeScheduleDecodingTests.swift
       - path: ../CantripIOS/Tests/DictationTextTests.swift
       - path: ../CantripIOS/Tests/DictationPipelineTests.swift
       - path: ../CantripIOS/Tests/BackendSlashCommandsTests.swift

@@ -41,11 +41,67 @@ struct CantripHomeScheduleTime: Codable, Hashable, Comparable {
     }
 }
 
+/// The day a `monthly` schedule runs. JSON: a day number, or "last" (-1 also decodes as last).
+/// A day a month doesn't have (29–31) runs on that month's last day, so no month is skipped.
+enum CantripHomeMonthDay: Codable, Hashable {
+    case day(Int)
+    case last
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let number = try? container.decode(Int.self) {
+            self = number == -1 ? .last : .day(number)
+            return
+        }
+        let text = (try? container.decode(String.self))?
+            .trimmingCharacters(in: .whitespaces).lowercased()
+        if text == "last" {
+            self = .last
+        } else if let text, let number = Int(text) {
+            self = .day(number)
+        } else {
+            throw CantripHomeError(400, #"monthDay must be a day from 1 to 31 or "last"."#)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .day(let day): try container.encode(day)
+        case .last: try container.encode("last")
+        }
+    }
+
+    var isValid: Bool {
+        guard case .day(let day) = self else { return true }
+        return (1...31).contains(day)
+    }
+
+    /// The day of a month with `length` days that this runs on.
+    func day(inMonthOf length: Int) -> Int {
+        switch self {
+        case .day(let day): return min(day, length)
+        case .last: return length
+        }
+    }
+
+    /// "last" or the day number, as Home's protocol lists saved schedules.
+    var protocolValue: String {
+        switch self {
+        case .day(let day): return String(day)
+        case .last: return "last"
+        }
+    }
+}
+
 struct CantripHomeSchedule: Codable, Equatable {
+    /// Clients and tasks.json only ever see `once`, `interval` and `weekdays`: a `monthly`
+    /// schedule is written as `weekdays` plus `monthDay` (see `encode(to:)`).
     enum Kind: String, Codable, CaseIterable {
         case once
         case interval
         case weekdays
+        case monthly
     }
 
     static let maximumDailyTimes = 24
@@ -59,8 +115,10 @@ struct CantripHomeSchedule: Codable, Equatable {
     /// The earliest run time; kept for older clients and tasks saved before `times`.
     var hour: Int?
     var minute: Int?
-    /// Every daily run time for `weekdays` schedules, earliest first.
+    /// Every daily run time for `weekdays` and `monthly` schedules, earliest first.
     var times: [CantripHomeScheduleTime]? = nil
+    /// The day of the month a `monthly` schedule runs; nil for every other kind.
+    var monthDay: CantripHomeMonthDay? = nil
 
     var runTimes: [CantripHomeScheduleTime] {
         if let times, !times.isEmpty { return times }
@@ -71,7 +129,8 @@ struct CantripHomeSchedule: Codable, Equatable {
     init(
         kind: Kind, summary: String, timeZone: String, startAt: Date? = nil,
         intervalMinutes: Int? = nil, weekdays: [Int]? = nil, hour: Int? = nil,
-        minute: Int? = nil, times: [CantripHomeScheduleTime]? = nil
+        minute: Int? = nil, times: [CantripHomeScheduleTime]? = nil,
+        monthDay: CantripHomeMonthDay? = nil
     ) {
         self.kind = kind
         self.summary = summary
@@ -82,16 +141,24 @@ struct CantripHomeSchedule: Codable, Equatable {
         self.hour = hour
         self.minute = minute
         self.times = times
+        self.monthDay = monthDay
     }
 
     private enum CodingKeys: String, CodingKey {
-        case kind, summary, timeZone, startAt, intervalMinutes, weekdays, hour, minute, times
+        case kind, summary, timeZone, startAt, intervalMinutes, weekdays, hour, minute, times, monthDay
     }
 
     /// tasks.json stores `startAt` as a reference-date number; Home's model writes ISO-8601.
+    /// A `monthDay` makes a `weekdays` schedule monthly: that's how `encode(to:)` writes one.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         kind = try container.decode(Kind.self, forKey: .kind)
+        monthDay = try container.decodeIfPresent(CantripHomeMonthDay.self, forKey: .monthDay)
+        if kind == .weekdays, monthDay != nil {
+            kind = .monthly
+        } else if kind != .monthly {
+            monthDay = nil
+        }
         summary = try container.decode(String.self, forKey: .summary)
         timeZone = try container.decode(String.self, forKey: .timeZone)
         if let text = try? container.decodeIfPresent(String.self, forKey: .startAt) {
@@ -109,12 +176,30 @@ struct CantripHomeSchedule: Codable, Equatable {
         times = try container.decodeIfPresent([CantripHomeScheduleTime].self, forKey: .times)
     }
 
+    /// Writes `monthly` as `weekdays` plus `monthDay`: clients from before monthly schedules
+    /// reject kinds they don't know (and only show the summary), and an older Cantrip reading
+    /// tasks.json keeps the task without running it on the wrong days.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind == .monthly ? .weekdays : kind, forKey: .kind)
+        try container.encode(summary, forKey: .summary)
+        try container.encode(timeZone, forKey: .timeZone)
+        try container.encodeIfPresent(startAt, forKey: .startAt)
+        try container.encodeIfPresent(intervalMinutes, forKey: .intervalMinutes)
+        try container.encodeIfPresent(weekdays, forKey: .weekdays)
+        try container.encodeIfPresent(hour, forKey: .hour)
+        try container.encodeIfPresent(minute, forKey: .minute)
+        try container.encodeIfPresent(times, forKey: .times)
+        try container.encodeIfPresent(kind == .monthly ? monthDay : nil, forKey: .monthDay)
+    }
+
     func validated(now: Date = Date()) throws -> Self {
         guard summary.trimmingCharacters(in: .whitespacesAndNewlines).count <= 160,
               TimeZone(identifier: timeZone) != nil else {
             throw CantripHomeError(400, "The task schedule or time zone is invalid.")
         }
         var normalized = self
+        if kind != .monthly { normalized.monthDay = nil }
         switch kind {
         case .once:
             guard let startAt, startAt > now.addingTimeInterval(-60) else {
@@ -143,6 +228,23 @@ struct CantripHomeSchedule: Codable, Equatable {
             normalized.summary = Self.summary(
                 weekdays: weekdays, times: times, timeZone: timeZone
             )
+        case .monthly:
+            let times = Array(Set(runTimes)).sorted()
+            guard let monthDay, monthDay.isValid,
+                  let first = times.first, times.count <= Self.maximumDailyTimes,
+                  times.allSatisfy(\.isValid) else {
+                throw CantripHomeError(
+                    400,
+                    #"A monthly task needs a monthDay from 1 to 31 or "last" and 1–\#(Self.maximumDailyTimes) local times."#
+                )
+            }
+            normalized.weekdays = nil
+            normalized.times = times
+            normalized.hour = first.hour
+            normalized.minute = first.minute
+            normalized.summary = Self.summary(
+                monthDay: monthDay, times: times, timeZone: timeZone
+            )
         }
         return normalized
     }
@@ -168,6 +270,27 @@ struct CantripHomeSchedule: Codable, Equatable {
                 dayText = "Every " + Self.list(days.sorted().map { names[$0 - 1] })
             }
         }
+        return summary(dayText, times: times, timeZone: timeZone, localZone: localZone)
+    }
+
+    /// "Last day of every month at 9:30 PM", "1st of every month at 9:00 AM",
+    /// "31st (or last day) of every month at 8:00 AM".
+    static func summary(
+        monthDay: CantripHomeMonthDay, times: [CantripHomeScheduleTime], timeZone: String,
+        localZone: TimeZone = .current
+    ) -> String {
+        let dayText: String
+        switch monthDay {
+        case .last: dayText = "Last day of every month"
+        case .day(let day) where day >= 29: dayText = "\(ordinal(day)) (or last day) of every month"
+        case .day(let day): dayText = "\(ordinal(day)) of every month"
+        }
+        return summary(dayText, times: times, timeZone: timeZone, localZone: localZone)
+    }
+
+    private static func summary(
+        _ dayText: String, times: [CantripHomeScheduleTime], timeZone: String, localZone: TimeZone
+    ) -> String {
         let sorted = times.sorted()
         var text = sorted.count <= 4
             ? "\(dayText) at \(Self.list(sorted.map(\.label)))"
@@ -177,6 +300,35 @@ struct CantripHomeSchedule: Codable, Equatable {
             text += " \(name)"
         }
         return text
+    }
+
+    /// "1st", "2nd", "3rd", "11th", "22nd".
+    static func ordinal(_ number: Int) -> String {
+        let suffix: String
+        switch (number % 10, number % 100) {
+        case (_, 11...13): suffix = "th"
+        case (1, _): suffix = "st"
+        case (2, _): suffix = "nd"
+        case (3, _): suffix = "rd"
+        default: suffix = "th"
+        }
+        return "\(number)\(suffix)"
+    }
+
+    /// " (times 08:30,22:00; weekdays 2,3,4,5,6; America/Los_Angeles)" or
+    /// " (times 21:30; monthDay last; America/Los_Angeles)", so Home can send every time back.
+    var protocolDetail: String {
+        let times = runTimes.map { String(format: "%02d:%02d", $0.hour, $0.minute) }
+            .joined(separator: ",")
+        switch kind {
+        case .weekdays:
+            let days = (weekdays ?? []).map(String.init).joined(separator: ",")
+            return " (times \(times); weekdays \(days); \(timeZone))"
+        case .monthly:
+            return " (times \(times); monthDay \(monthDay?.protocolValue ?? "?"); \(timeZone))"
+        case .once, .interval:
+            return ""
+        }
     }
 
     private static func list(_ items: [String]) -> String {
@@ -206,20 +358,53 @@ struct CantripHomeSchedule: Codable, Equatable {
                 guard let day = calendar.date(byAdding: .day, value: offset, to: date) else { continue }
                 let weekday = calendar.component(.weekday, from: day)
                 guard weekdays.contains(weekday) else { continue }
-                // Wall-clock slots in the task's zone: a time skipped by DST runs when clocks
-                // resume, and a repeated hour runs only at its first occurrence.
-                let candidates = times.compactMap { time -> Date? in
-                    var components = calendar.dateComponents([.year, .month, .day], from: day)
-                    components.hour = time.hour
-                    components.minute = time.minute
-                    components.second = 0
-                    return calendar.date(from: components)
-                }
-                if let soonest = candidates.filter({ $0 > date }).min() {
+                let slots = Self.slots(
+                    on: calendar.dateComponents([.year, .month, .day], from: day),
+                    times: times, calendar: calendar
+                )
+                if let soonest = slots.filter({ $0 > date }).min() {
                     return soonest
                 }
             }
             return nil
+        case .monthly:
+            let times = runTimes
+            guard let monthDay, !times.isEmpty,
+                  let zone = TimeZone(identifier: timeZone) else { return nil }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = zone
+            let current = calendar.dateComponents([.year, .month], from: date)
+            guard let year = current.year, let month = current.month else { return nil }
+            // This month's day if a slot on it is still ahead, else next month's.
+            for offset in 0...2 {
+                let index = month - 1 + offset
+                var day = DateComponents(year: year + index / 12, month: index % 12 + 1)
+                guard let middle = calendar.date(from: DateComponents(
+                    year: day.year, month: day.month, day: 15, hour: 12
+                )), let length = calendar.range(of: .day, in: .month, for: middle)?.count else {
+                    continue
+                }
+                day.day = monthDay.day(inMonthOf: length)
+                let slots = Self.slots(on: day, times: times, calendar: calendar)
+                if let soonest = slots.filter({ $0 > date }).min() {
+                    return soonest
+                }
+            }
+            return nil
+        }
+    }
+
+    /// Wall-clock slots on one day in the task's zone: a time skipped by DST runs when clocks
+    /// resume, and a repeated hour runs only at its first occurrence.
+    private static func slots(
+        on day: DateComponents, times: [CantripHomeScheduleTime], calendar: Calendar
+    ) -> [Date] {
+        times.compactMap { time in
+            var components = DateComponents(year: day.year, month: day.month, day: day.day)
+            components.hour = time.hour
+            components.minute = time.minute
+            components.second = 0
+            return calendar.date(from: components)
         }
     }
 }
@@ -2094,13 +2279,7 @@ extension ChatSession {
         let modelList = CantripHomeTaskModels.protocolModels(AppSettings.shared)
         let savedTasks = compact ? "" : CantripHomeStore.shared.tasks.prefix(20).map {
             var mode = $0.isScheduled ? $0.schedule.summary : "no schedule"
-            if $0.isScheduled, $0.schedule.kind == .weekdays {
-                let times = $0.schedule.runTimes
-                    .map { String(format: "%02d:%02d", $0.hour, $0.minute) }
-                    .joined(separator: ",")
-                let days = ($0.schedule.weekdays ?? []).map(String.init).joined(separator: ",")
-                mode += " (times \(times); weekdays \(days); \($0.schedule.timeZone))"
-            }
+            if $0.isScheduled { mode += $0.schedule.protocolDetail }
             let workspace = $0.workspace.map { "; " + $0.promptSchema } ?? ""
             let lastRun = $0.runs.first.map {
                 "; last run \($0.status) "
@@ -2177,9 +2356,10 @@ extension ChatSession {
         {"id":"existing task UUID or null","title":"short title",
         "prompt":"standalone brief for an unattended run: goal, where to look, what to record
         or report, limits","schedule":null or {
-        "kind":"once|interval|weekdays","summary":"natural schedule label",
+        "kind":"once|interval|weekdays|monthly","summary":"natural schedule label",
         "timeZone":"IANA zone","startAt":"ISO-8601 or null","intervalMinutes":null,
-        "weekdays":[1-7] or null,"times":[{"hour":0-23,"minute":0-59}] or null},
+        "weekdays":[1-7] or null,"monthDay":1-31 or "last" or null,
+        "times":[{"hour":0-23,"minute":0-59}] or null},
         "workspace":null or {"recordLabel":"singular item name",
         "recordLabelPlural":"plural item name","icon":"SF Symbol",
         "fields":[{"key":"stableKey","label":"Display label",
@@ -2201,9 +2381,13 @@ extension ChatSession {
         the task by itself (its result stays in Background), so once suits one-off reminders and
         follow-ups and needs no cleanup. A failed or stopped run, or a task with a workspace, is kept.
         A weekdays schedule runs at every local time in `times` (up to \(CantripHomeSchedule.maximumDailyTimes)) on each
-        listed weekday. When the same work should happen several times a day, use one task with
-        several times; never create a second task for another time. Cantrip writes the summary
-        for weekdays schedules. To change an existing task, use its UUID in `id`; omit `title`
+        listed weekday. A monthly schedule runs at every local time in `times` on day `monthDay`
+        of each month; "last" is the month's last day (use it for month-end work). A day a month
+        doesn't have (29–31) runs on that month's last day instead. When the same work should
+        happen several times a day, use one task with several times;
+        never create a second task for another time, and never make a daily task that checks
+        the date to run monthly. Cantrip writes the summary for weekdays and monthly schedules.
+        To change an existing task, use its UUID in `id`; omit `title`
         or `prompt` to keep the saved ones. A schedule you send replaces the old one, so list
         every run time the task should keep (for example add 22:00 to an existing 08:30).
         Background tasks run in parallel. When a task summarizes or depends on other tasks'

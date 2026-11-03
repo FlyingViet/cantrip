@@ -103,12 +103,7 @@ enum CantripHomeTaskContext {
     /// One compact line per task: schedule, workspace size, dependencies, model and last run.
     static func indexLine(_ task: CantripHomeTask) -> String {
         var mode = task.isScheduled ? task.schedule.summary : "no schedule"
-        if task.isScheduled, task.schedule.kind == .weekdays {
-            let times = task.schedule.runTimes
-                .map { String(format: "%02d:%02d", $0.hour, $0.minute) }.joined(separator: ",")
-            let days = (task.schedule.weekdays ?? []).map(String.init).joined(separator: ",")
-            mode += " (times \(times); weekdays \(days); \(task.schedule.timeZone))"
-        }
+        if task.isScheduled { mode += task.schedule.protocolDetail }
         let workspace = task.workspace.map {
             "; \($0.records.count) " + ($0.records.count == 1 ? $0.recordLabel : $0.recordLabelPlural ?? $0.recordLabel)
         } ?? ""

@@ -214,6 +214,14 @@ describe("task rows", () => {
     expect(taskSubtitle(task({ workspace: { ...tracker, records: tracker.records.slice(0, 1) } }))).toBe("1 interview application");
     expect(taskSubtitle(task({ workspace: { ...tracker, recordLabel: "trip", recordLabelPlural: undefined } }))).toBe("2 trips");
     expect(taskSubtitle(task())).toBe("Weekdays at 9:00 AM");
+    // Monthly schedules arrive as weekdays plus monthDay; the row shows the Mac's summary.
+    const monthEnd = task({
+      schedule: {
+        kind: "weekdays", monthDay: "last", summary: "Last day of every month at 9:30 PM",
+        timeZone: "America/Los_Angeles", hour: 21, minute: 30, times: [{ hour: 21, minute: 30 }],
+      },
+    });
+    expect(taskSubtitle(monthEnd)).toBe("Last day of every month at 9:30 PM");
   });
 
   it("adds the task's own model to its subtitle", () => {
