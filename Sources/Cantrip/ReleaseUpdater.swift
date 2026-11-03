@@ -8,15 +8,11 @@ import Security
 /// signature and notarization, then puts the app where `PendingUpdate` installs it on the next launch.
 enum ReleaseUpdater {
     static let repository = "FlyingViet/cantrip"
-    /// Release builds are signed by this Developer ID team, and staging accepts no other.
-    static let teamIdentifier = "9M3XNFG4J7"
-    /// Developer ID Application, issued by Apple's Developer ID CA, for this team and bundle; stapled
-    /// or online notarization ticket.
+    /// Release builds are signed by this Developer ID team, and staging accepts no other; the next
+    /// launch checks the same requirement before installing (PendingUpdate).
+    static var teamIdentifier: String { PendingUpdate.releaseTeamIdentifier }
     static func requirement(bundleIdentifier: String) -> String {
-        "anchor apple generic and identifier \"\(bundleIdentifier)\""
-            + " and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
-            + " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
-            + " and certificate leaf[subject.OU] = \"\(teamIdentifier)\" and notarized"
+        PendingUpdate.releaseRequirement(bundleIdentifier: bundleIdentifier)
     }
 
     struct Release: Equatable {

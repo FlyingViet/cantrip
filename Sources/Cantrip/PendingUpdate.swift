@@ -59,9 +59,12 @@ enum PendingUpdate {
         let app = Bundle.main.bundleURL
         guard app.pathExtension == "app" else { return }
         let bundleIdentifier = Bundle.main.bundleIdentifier
+        // A release install takes only Cantrip's notarized Developer ID build, as its updater staged it:
+        // /Applications is writable by any admin process, and this swap bypasses Gatekeeper.
+        let requirement = CantripInstall.isRelease(app) ? releaseRequirement(bundleIdentifier: bundleIdentifier ?? "") : nil
         let outcome = install(
             app: app,
-            validate: { signatureProblem(in: $0, bundleIdentifier: bundleIdentifier) },
+            validate: { signatureProblem(in: $0, bundleIdentifier: bundleIdentifier, requirement: requirement) },
             otherInstanceRunning: { CrashRecovery.hasRunningInstance(from: app.path) }
         )
         switch outcome {
@@ -134,7 +137,21 @@ enum PendingUpdate {
         return .installed
     }
 
-    static func signatureProblem(in bundle: URL, bundleIdentifier: String?) -> String? {
+    /// Release builds' Developer ID team.
+    static let releaseTeamIdentifier = "9M3XNFG4J7"
+
+    /// Cantrip's release build: Developer ID Application from Apple's Developer ID CA, this team and
+    /// bundle, notarized (stapled or online).
+    static func releaseRequirement(bundleIdentifier: String) -> String {
+        "anchor apple generic and identifier \"\(bundleIdentifier)\""
+            + " and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
+            + " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
+            + " and certificate leaf[subject.OU] = \"\(releaseTeamIdentifier)\" and notarized"
+    }
+
+    /// Why `bundle` can't be installed: missing metadata, another app, or an invalid signature, or
+    /// one that doesn't meet `requirement` when given.
+    static func signatureProblem(in bundle: URL, bundleIdentifier: String?, requirement text: String? = nil) -> String? {
         guard let info = NSDictionary(contentsOf: bundle.appendingPathComponent("Contents/Info.plist")),
               let identifier = info["CFBundleIdentifier"] as? String else {
             return "missing app metadata"
@@ -146,9 +163,16 @@ enum PendingUpdate {
         guard SecStaticCodeCreateWithPath(bundle as CFURL, [], &code) == errSecSuccess, let code else {
             return "unreadable code signature"
         }
+        var requirement: SecRequirement?
+        if let text {
+            guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess else {
+                return "invalid signing requirement"
+            }
+        }
         let flags = SecCSFlags(rawValue: UInt32(kSecCSCheckAllArchitectures)
             | UInt32(kSecCSStrictValidate) | UInt32(kSecCSCheckNestedCode))
-        let status = SecStaticCodeCheckValidity(code, flags, nil)
+        let status = SecStaticCodeCheckValidity(code, flags, requirement)
+        if status == errSecCSReqFailed { return "not Cantrip's notarized Developer ID build" }
         guard status == errSecSuccess else { return "invalid code signature (\(status))" }
         return nil
     }

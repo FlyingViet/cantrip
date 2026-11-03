@@ -87,5 +87,28 @@ func pendingUpdateFailures() throws -> [String] {
            "an unsigned bundle should fail signature validation")
     expect(PendingUpdate.signatureProblem(in: plain, bundleIdentifier: "com.example.other")?
         .contains("does not match") == true, "another app's bundle identifier should be rejected")
+
+    // An ad-hoc build passes for a source install, never for a release install.
+    let adHoc = root.appendingPathComponent("AdHoc.app")
+    try makeBundle(adHoc, build: "adhoc", date: "2026-09-26T21:00:00Z")
+    let adHocInfo: NSDictionary = ["CFBundleIdentifier": "com.brian.agentspotlight", "CFBundleExecutable": "Cantrip",
+                                   "CFBundlePackageType": "APPL", "CantripBuildIdentity": "adhoc"]
+    try adHocInfo.write(to: adHoc.appendingPathComponent("Contents/Info.plist"))
+    try? fileManager.removeItem(at: adHoc.appendingPathComponent("Contents/MacOS/Cantrip"))
+    try fileManager.copyItem(atPath: "/usr/bin/true", toPath: adHoc.appendingPathComponent("Contents/MacOS/Cantrip").path)
+    let sign = Process()
+    sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+    sign.arguments = ["--force", "--sign", "-", "--identifier", "com.brian.agentspotlight", adHoc.path]
+    sign.standardOutput = FileHandle.nullDevice
+    sign.standardError = FileHandle.nullDevice
+    try sign.run()
+    sign.waitUntilExit()
+    let identifier = (NSDictionary(contentsOf: adHoc.appendingPathComponent("Contents/Info.plist"))?["CFBundleIdentifier"] as? String)
+    expect(sign.terminationStatus == 0, "ad-hoc signing the fixture")
+    expect(PendingUpdate.signatureProblem(in: adHoc, bundleIdentifier: identifier) == nil,
+           "a validly signed source build installs")
+    expect(PendingUpdate.signatureProblem(in: adHoc, bundleIdentifier: identifier,
+                                          requirement: PendingUpdate.releaseRequirement(bundleIdentifier: identifier ?? ""))
+           == "not Cantrip's notarized Developer ID build", "a release install refuses anything but Cantrip's notarized build")
     return failures
 }

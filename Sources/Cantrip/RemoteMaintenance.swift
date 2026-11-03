@@ -244,7 +244,11 @@ final class RemoteMaintenance {
             guard let expected = installedBuild else {
                 throw RemoteMaintenanceError(status: 409, message: "Build Cantrip on the Mac before restarting.")
             }
-            try await command("/usr/bin/codesign", ["--verify", "--deep", "--strict", installedBundle.path])
+            var verify = ["--verify", "--deep", "--strict"]
+            if isRelease {
+                verify.append("-R=" + PendingUpdate.releaseRequirement(bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.brian.agentspotlight"))
+            }
+            try await command("/usr/bin/codesign", verify + [installedBundle.path])
             state.expectedBuild = expected
             try phase("restarting", "Restart requested. Cantrip Agent will reconnect when the Mac is ready.")
             try await Task.sleep(for: .seconds(2))
