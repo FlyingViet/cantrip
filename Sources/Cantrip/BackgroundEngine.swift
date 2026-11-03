@@ -112,7 +112,15 @@ enum BackgroundEngine {
         // Registered earlier and exited since (a clean stop, or the app still held the host lock).
         let result = try? ProcessRunner.run("/bin/launchctl", ["kickstart", "gui/\(getuid())/\(label)"],
                                             errorOutput: .merge, timeout: 15)
-        if result?.succeeded != true { Log.write("engine: kickstart \(label): \(result?.text ?? "failed")") }
+        guard result?.succeeded != true else { return }
+        Log.write("engine: kickstart \(label): \(result?.text ?? "failed")")
+        // macOS still lists the agent as registered, but launchd no longer has it (removed with
+        // `launchctl bootout`, say): registering it again loads and starts it.
+        if result?.text.contains("Could not find service") == true, service.status == .enabled {
+            try? service.unregister()
+            Log.write("engine: launchd had lost \(label); registering it again")
+            try register()
+        }
     }
 
     /// Stops the engine and keeps it from starting at login.
