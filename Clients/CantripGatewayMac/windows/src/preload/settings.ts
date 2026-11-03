@@ -27,4 +27,7 @@ contextBridge.exposeInMainWorld("gatewaySettings", {
   onSettingsRevision: (callback: (info: unknown) => void) => {
     ipcRenderer.on("gateway:settings-revision", (_event, info) => callback(info));
   },
+  onBack: (callback: () => void) => {
+    ipcRenderer.on("gateway:settings-back", () => callback());
+  },
 });

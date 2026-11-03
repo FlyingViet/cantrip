@@ -293,3 +293,43 @@ export function toneClass(tone: string | undefined): string {
 export function fieldDOMID(key: string, suffix = ""): string {
   return `mac-setting-${key.replace(/[^A-Za-z0-9_-]/g, "-")}${suffix ? `-${suffix}` : ""}`;
 }
+
+// MARK: Nested pages
+
+/** The parts of a keydown that decide whether it goes back from a section opened as its own page. */
+export interface BackKey {
+  key: string;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  /** A control already used it (a box's Escape puts back its saved value). */
+  defaultPrevented: boolean;
+  /** Focus is in a box you type in. */
+  editable: boolean;
+}
+
+/**
+ * On a section opened as its own page: Alt+Left goes back; Escape goes back, or first ends the
+ * edit in a box (as clicking away does); Backspace goes back outside boxes. Windows has no swipe.
+ */
+export function settingsBackKey(event: BackKey): "back" | "endEdit" | null {
+  if (event.defaultPrevented || event.metaKey) return null;
+  if (event.key === "ArrowLeft") return event.altKey && !event.ctrlKey && !event.shiftKey ? "back" : null;
+  if (event.altKey || event.ctrlKey) return null;
+  if (event.key === "Escape") return event.editable ? "endEdit" : "back";
+  if (event.key === "Backspace" && !event.shiftKey) return event.editable ? null : "back";
+  return null;
+}
+
+const TYPED_INPUTS = new Set(["", "text", "search", "url", "email", "password", "number", "tel"]);
+
+/** Whether an element takes typing (so Backspace and Escape belong to it). */
+export function isEditableTarget(target: { tagName?: string; type?: string; isContentEditable?: boolean; readOnly?: boolean } | null): boolean {
+  if (!target) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName?.toUpperCase();
+  if (tag === "TEXTAREA") return !target.readOnly;
+  if (tag === "INPUT") return TYPED_INPUTS.has((target.type ?? "").toLowerCase()) && !target.readOnly;
+  return false;
+}

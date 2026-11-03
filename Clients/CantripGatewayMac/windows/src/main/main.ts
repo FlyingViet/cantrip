@@ -325,6 +325,10 @@ function openSettings(link?: string): void {
     return { action: "deny" };
   });
   window.webContents.on("will-navigate", (event) => event.preventDefault());
+  // The mouse's back button: Windows sends it as an app command (the page goes back from a section's page).
+  window.on("app-command", (_event, command) => {
+    if (command === "browser-backward") window.webContents.send("gateway:settings-back");
+  });
   window.webContents.on("before-input-event", (event, input) => {
     if (input.type === "keyDown" && ((IS_WINDOWS ? input.control : input.meta) && input.shift && input.key.toLowerCase() === "i")) {
       window.webContents.toggleDevTools();
