@@ -400,3 +400,51 @@ final class CantripWatchClientTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class TalkToCantripTests: XCTestCase {
+    override func setUp() async throws {
+        _ = WatchListenRequest.shared.take()
+    }
+
+    func testPerformLeavesOneListenRequestForTheApp() async throws {
+        _ = try await TalkToCantripIntent().perform()
+        XCTAssertTrue(WatchListenRequest.shared.pending)
+        XCTAssertTrue(WatchListenRequest.shared.take())
+        XCTAssertFalse(WatchListenRequest.shared.take(), "a request starts one turn")
+        XCTAssertFalse(WatchListenRequest.shared.pending)
+    }
+
+    func testListenRequestStartsATurnOnlyWhenNoneIsUnderWay() {
+        typealias Phase = WatchVoiceModel.Phase
+        for phase in [Phase.ready, .failed("No connection"), .speaking] {
+            XCTAssertTrue(phase.listenRequestStartsTurn, "\(phase)")
+        }
+        // A reply still coming keeps going however long Home takes.
+        for phase in [Phase.listening, .sending, .thinking] {
+            XCTAssertFalse(phase.listenRequestStartsTurn, "\(phase)")
+        }
+    }
+
+    func testOpensTheAppAndHasNoShortAnswerWait() {
+        XCTAssertEqual(TalkToCantripIntent.supportedModes, .foreground)
+        XCTAssertGreaterThanOrEqual(WatchVoiceModel.answerLimit, 600)
+    }
+
+    func testTitleNamesNoAppleProduct() {
+        let title = String(localized: TalkToCantripIntent.title)
+        XCTAssertEqual(title, "Talk to Cantrip")
+        for word in ["Mac", "iPhone", "Watch", "Siri", "Apple"] {
+            XCTAssertFalse(title.contains(word), word)
+        }
+    }
+
+    func testRequestWaitsForTheModelWhileTheAppIsInactive() {
+        let model = WatchVoiceModel()
+        WatchListenRequest.shared.request()
+        model.consumeListenRequest()
+        XCTAssertTrue(WatchListenRequest.shared.pending, "kept until the app is active")
+        XCTAssertEqual(model.phase, .ready)
+        _ = WatchListenRequest.shared.take()
+    }
+}

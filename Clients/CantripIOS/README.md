@@ -1241,8 +1241,18 @@ the watch sends the clip to your Mac, which transcribes it and sends it to Home
 like a typed message (it shows in Home on every client). The watch shows what
 it heard and Home's reply, and speaks the reply (turn off **Speak replies** in
 the watch's settings to only read it). It stops listening after a short pause,
-or tap again to send sooner. **Ask Cantrip** also works from Siri and
-Shortcuts on the watch ("Ask Cantrip").
+or tap again to send sooner.
+
+**Talk to Cantrip** opens the app already listening, then follows Home to the
+spoken reply however long it takes (up to 10 minutes), like tapping the
+microphone. Run it from Siri ("Talk to Cantrip"), the Shortcuts app on the
+watch (under Cantrip), a Shortcuts complication, or the Action button on Apple
+Watch Ultra: **Settings › Action Button › Choose Action › Shortcut**, then pick
+**Talk to Cantrip**. Pressing it again while Home is still answering brings
+that reply back instead of starting over. To keep the app in front through long
+replies after you lower your wrist, set **Settings › General › Return to Clock ›
+Cantrip › Custom** to **After 1 hour**. **Ask Cantrip** is the quick Siri version: it
+answers in Siri when Home replies within about 25 seconds ("Ask Cantrip").
 
 Set up: pair Cantrip Agent on the iPhone with your Mac over Tailscale (an HTTPS
 `*.ts.net` URL), open Cantrip on the watch and tap **Set up with your iPhone**.
@@ -1450,8 +1460,8 @@ The default iOS voices sound robotic. For near-Siri quality, download a **Premiu
 Once installed, Cantrip Agent adds a voice shortcut to the Shortcuts app that you can
 assign to the **Action Button** (Settings → Action Button → Shortcut). Siri also runs it:
 *"Hey Siri, talk to Cantrip Agent"* (or *"Ask Cantrip Agent"*). One trigger opens the app in
-voice mode and starts listening. On Apple Watch, **Ask Cantrip** does the same from Siri and
-Shortcuts (see [Cantrip on Apple Watch](#cantrip-on-apple-watch)).
+voice mode and starts listening. On Apple Watch, **Talk to Cantrip** does the same from Siri,
+Shortcuts and the Ultra's Action button (see [Cantrip on Apple Watch](#cantrip-on-apple-watch)).
 
 ---
 
