@@ -187,5 +187,41 @@ extension SessionTabTests {
         precondition(rotated["token"] as? String != token && rotated["token"] as? String == stored)
         let refusal5 = await refused(["command": "dance"])
         precondition(refusal5?.contains("Unknown command") == true)
+        try await testAppConnection(ask: ask, refused: refused, token: stored)
+    }
+
+    /// Cantrip.app as the background engine's client: only the engine hands out its connection,
+    /// with the Mac notifications it queued for the app to post.
+    @MainActor
+    private static func testAppConnection(ask: ([String: Any]) async throws -> [String: Any],
+                                          refused: ([String: Any]) async -> String?, token: String?) async throws {
+        let notEngine = await refused(["command": "app-connection"])
+        precondition(notEngine?.contains("isn't running its agents in the background") == true, "\(notEngine ?? "answered")")
+        HostMode.isHeadless = true
+        HostMode.isEngine = true
+        defer {
+            HostMode.isHeadless = false
+            HostMode.isEngine = false
+        }
+        let first = try await ask(["command": "app-connection"])
+        precondition(first["token"] as? String == token && first["port"] as? Int == AppSettings.shared.remoteControlPort
+                     && first["localKey"] as? String == LocalClientKey.value && first["pid"] as? Int == Int(getpid())
+                     && first["outbox"] as? String == MacNotices.outboxID && first["busy"] is Int, "\(first)")
+        let status = try await ask(["command": "status"])
+        precondition(status["host"] as? String == "engine")
+
+        MacNotices.post(MacNotice(id: "n1", title: "Cantrip — Done", body: "All set", sessionID: "s1", runFinished: true))
+        MacNotices.remove(["n0"])
+        let start = first["seq"] as? Int ?? -1
+        let sync = try await Task.detached { try BackgroundEngine.sync(after: start, outbox: MacNotices.outboxID) }.value
+        precondition(sync.connection.token == token && sync.connection.localKey == LocalClientKey.value
+                     && sync.seq == start + 2 && sync.notices.map(\.seq) == [start + 1, start + 2], "\(sync.notices)")
+        guard case .post(let notice) = sync.notices[0].entry else { preconditionFailure("\(sync.notices[0])") }
+        precondition(notice == MacNotice(id: "n1", title: "Cantrip — Done", body: "All set", sessionID: "s1", runFinished: true))
+        precondition(sync.notices[1].entry == .remove(["n0"]))
+        let caughtUp = try await Task.detached { try BackgroundEngine.sync(after: sync.seq, outbox: sync.outbox) }.value
+        precondition(caughtUp.notices.isEmpty, "Only what's new since the app's last ask")
+        let restarted = try await Task.detached { try BackgroundEngine.sync(after: 999, outbox: "an-earlier-engine") }.value
+        precondition(restarted.notices.count == 2, "A cursor from an earlier engine starts over with the last few seconds")
     }
 }

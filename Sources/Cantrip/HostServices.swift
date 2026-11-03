@@ -15,13 +15,35 @@ final class HostServices {
     /// The Remote control setting changed (the app mirrors it in its menu).
     var onRemoteControlEnabledChange: ((Bool) -> Void)?
 
-    private var postsMacNotifications: Bool { !HostMode.isHeadless }
+    /// The background engine's notifications go to Cantrip.app, which posts them (`MacNotices`).
+    private var postsMacNotifications: Bool { !HostMode.isHeadless || HostMode.isEngine }
+
+    /// The host running in this process.
+    private(set) static weak var running: HostServices?
 
     init(manager: SessionManager) {
         self.manager = manager
     }
 
+    /// Work a restart would interrupt: tabs streaming, queued or running a shell command, and
+    /// Cantrip Home's background jobs.
+    var busyWork: Int {
+        manager.sessions.filter { $0.isStreaming || !$0.queued.isEmpty || $0.shell.isRunning }.count
+            + CantripHomeStore.shared.runner.jobs.count
+    }
+
+    /// A finished run's notification (shown when it isn't on screen).
+    static func runFinishedNotice(_ finished: ChatSession) -> MacNotice {
+        let preview = finished.messages.last(where: { $0.role == .assistant && !$0.text.isEmpty })?.text
+            ?? finished.messages.last(where: { $0.role == .error })?.text
+            ?? "Response ready"
+        return MacNotice(id: UUID().uuidString, title: "Cantrip — \(finished.notificationTitle)",
+                         body: RemoteCompletion.summaryPreview(preview) ?? String(preview.prefix(160)),
+                         sessionID: finished.id.uuidString, runFinished: true)
+    }
+
     func start(recoveryReport: CrashRecovery.Report?) {
+        Self.running = self
         UsageTracker.shared.startAutoRefresh()
         BackendStatusMonitor.shared.start(postsMacNotifications: postsMacNotifications)
         // Each CLI's own rules join the agent policy once; its deny rules go back into each CLI.
@@ -42,25 +64,22 @@ final class HostServices {
             remoteControlServer?.notifyInput(for: session, request: request)
             guard postsMacNotifications, !session.isPrivate else { return }
             Task { @MainActor in
-                do {
-                    let center = UNUserNotificationCenter.current()
-                    guard try await center.requestAuthorization(options: [.alert, .sound]),
-                          session.pendingInputs.contains(where: { $0.id == request.id }), !session.isPrivate else { return }
-                    let content = UNMutableNotificationContent()
-                    content.title = "Cantrip needs your input"
-                    content.body = "Open Cantrip to review a pending request."
-                    content.sound = .default
-                    content.userInfo = ["sessionID": session.id.uuidString]
-                    try await center.add(UNNotificationRequest(identifier: request.id.uuidString, content: content, trigger: nil))
-                } catch { Log.write("input: Mac attention notification could not be delivered") }
+                // The engine's app asks for permission itself.
+                if !HostMode.isEngine {
+                    guard (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) == true
+                    else { return }
+                }
+                guard session.pendingInputs.contains(where: { $0.id == request.id }), !session.isPrivate else { return }
+                MacNotices.post(MacNotice(id: request.id.uuidString, title: "Cantrip needs your input",
+                                          body: "Open Cantrip to review a pending request.",
+                                          sessionID: session.id.uuidString, sound: true))
             }
         }
         manager.onAnyInputResolved = { [weak self] id in
             guard let self else { return }
             remoteControlServer?.resolveInputNotification(id)
             guard postsMacNotifications else { return }
-            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id.uuidString])
-            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id.uuidString])
+            MacNotices.remove([id.uuidString])
         }
         CantripHomeStore.shared.attach(manager: manager)
         AppSettings.shared.$cantripHomeEnabled
@@ -109,23 +128,20 @@ final class HostServices {
                 summary: RemoteCompletion.preview(summary), completedAt: Date()
             ))
             guard postsMacNotifications else { return }
-            let content = UNMutableNotificationContent()
-            content.title = "Cantrip — \(title)"
-            content.body = summary
-            content.userInfo = ["sessionID": handoff.tabID.uuidString]
-            UNUserNotificationCenter.current().add(UNNotificationRequest(
-                identifier: handoff.id.uuidString, content: content, trigger: nil
-            ))
+            MacNotices.post(MacNotice(id: handoff.id.uuidString, title: "Cantrip — \(title)", body: summary,
+                                      sessionID: handoff.tabID.uuidString))
         }
         // A headless host exists to serve remote clients, so its server runs whatever the app's
-        // Remote control toggle says (and that setting isn't changed).
-        let headless = HostMode.isHeadless
+        // Remote control toggle says (and that setting isn't changed). The background engine is
+        // Cantrip.app's own host: it follows the toggle, and always serves the app on loopback.
+        let headless = HostMode.isHeadless && !HostMode.isEngine
+        let engine = HostMode.isEngine
         // The Home window (Window interface) and Cantrip's Settings window are clients of this
         // server on loopback, so it also runs for them, without the LAN listener, while Remote
         // control is off.
         let servesHomeWindow = {
-            !headless && HomeWindow.isAvailable
-                && (AppSettings.shared.interfaceMode == .window || AppSettings.shared.localSettingsWindowOpen)
+            engine || (!headless && HomeWindow.isAvailable
+                && (AppSettings.shared.interfaceMode == .window || AppSettings.shared.localSettingsWindowOpen))
         }
         AppSettings.shared.$remoteControlEnabled
             .removeDuplicates()

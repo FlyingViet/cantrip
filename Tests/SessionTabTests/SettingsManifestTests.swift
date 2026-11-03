@@ -177,8 +177,62 @@ extension SessionTabTests {
         let configKeys = Set(settings.dotfileValues.keys)
         let manifestKeys = Set(fields(SettingsManifest.manifest(local: true)).filter {
             !["action", "info", "secret"].contains($0.value["type"] as? String) }.keys)
-        let notInConfig = manifestKeys.subtracting(configKeys).subtracting(["remoteDesktopEnabled", "launchAtLogin"])
+        let notInConfig = manifestKeys.subtracting(configKeys).subtracting(["remoteDesktopEnabled", "launchAtLogin", "backgroundEngine"])
         precondition(notInConfig.isEmpty, "Every manifest setting is a `cantrip config` name: \(notInConfig.sorted())")
         try testSettingsManifestWeb()
+        try testBackgroundEngineSetting(fields: fields, pageIDs: pageIDs)
+    }
+
+    /// "Keep agents running when Cantrip quits" is the Mac's own (About › Startup); the engine's
+    /// Settings drop the panel's, since its app has no panel yet.
+    @MainActor
+    private static func testBackgroundEngineSetting(fields: ([String: Any]) -> [String: [String: Any]],
+                                                    pageIDs: ([String: Any]) -> [String]) throws {
+        let saved = (BackgroundEngine.isEnabled, BackgroundEngine.lastError)
+        defer {
+            BackgroundEngine.isEnabled = saved.0
+            BackgroundEngine.lastError = saved.1
+            HostMode.isHeadless = false
+            HostMode.isEngine = false
+        }
+        BackgroundEngine.isEnabled = false
+        BackgroundEngine.lastError = nil
+        precondition(BackgroundEngine.unavailableReason(homeWindow: nil, agentBundled: true, daemonInstalled: false) == nil)
+        precondition(BackgroundEngine.unavailableReason(homeWindow: "The Home window needs macOS 26.", agentBundled: true,
+                                                        daemonInstalled: false)?.contains("macOS 26") == true)
+        precondition(BackgroundEngine.unavailableReason(homeWindow: nil, agentBundled: false, daemonInstalled: false)?
+            .contains("doesn't include the background agent") == true)
+        precondition(BackgroundEngine.unavailableReason(homeWindow: nil, agentBundled: true, daemonInstalled: true)?
+            .contains("cantrip daemon stop") == true)
+
+        // The test binary has no Home window or login agent: the reason shows instead of the toggle.
+        let local = fields(SettingsManifest.manifest(local: true))
+        precondition(local["backgroundEngine"] == nil && local["backgroundEngineStatus"]?["type"] as? String == "info",
+                     "\(local["backgroundEngineStatus"] ?? [:])")
+        precondition(fields(SettingsManifest.manifest(local: false))["backgroundEngineStatus"] == nil, "Paired devices don't see it")
+
+        // Served by the engine: the toggle (turning it off waits for work), and no panel settings.
+        HostMode.isHeadless = true
+        HostMode.isEngine = true
+        BackgroundEngine.isEnabled = true
+        var engine = SettingsManifest.manifest(local: true)
+        var engineFields = fields(engine)
+        precondition(engineFields["backgroundEngine"]?["value"] as? Bool == true && engineFields["backgroundEngineStatus"] == nil)
+        precondition(engineFields["interfaceMode"] == nil && engineFields["panelOpacity"] == nil && engineFields["attachScreen"] == nil
+                     && engineFields["voiceMode"] == nil && engineFields["shareLocation"] != nil && !pageIDs(engine).contains("appearance"),
+                     "\(pageIDs(engine))")
+        precondition(fields(SettingsManifest.manifest(local: false))["backgroundEngine"] == nil, "Paired devices don't see it")
+        let before = SettingsManifest.revision()
+        try SettingsManifest.apply(["backgroundEngine": false], local: true)
+        precondition(!BackgroundEngine.isEnabled && SettingsManifest.revision() != before, "Saved, and the revision moves")
+        engine = SettingsManifest.manifest(local: true)
+        engineFields = fields(engine)
+        precondition((engineFields["backgroundEngineStatus"]?["value"] as? String)?.hasPrefix("Turning off") == true,
+                     "\(engineFields["backgroundEngineStatus"] ?? [:])")
+        BackgroundEngine.lastError = "macOS is holding Cantrip's background agent for approval."
+        precondition(fields(SettingsManifest.manifest(local: true))["backgroundEngineStatus"]?["tone"] as? String == "error")
+        var refused = false
+        do { try SettingsManifest.apply(["backgroundEngine": true], local: false) } catch { refused = true }
+        precondition(refused && !BackgroundEngine.isEnabled, "A paired device can't turn it on")
     }
 }

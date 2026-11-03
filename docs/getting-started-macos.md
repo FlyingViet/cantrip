@@ -106,6 +106,11 @@ you see a sign-in or missing-command error, use
 Open Settings › **About & Updates** and enable **Open at login**. This starts Cantrip after you
 sign in to macOS, not at the FileVault or pre-login screen.
 
+To keep tabs running when you quit or update Cantrip, also turn on **Keep agents running when
+Cantrip quits** (macOS 26). Tabs, Cantrip Home and paired devices then run in a background process
+that starts at login, and the app becomes its window: ⌥Space opens the Home window. See
+[Keep agents running when Cantrip quits](headless.md#keep-agents-running-when-cantrip-quits).
+
 To open it manually later:
 
 ```sh

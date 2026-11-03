@@ -298,6 +298,7 @@ enum SettingsManifest {
             "attachScreen": .bool(s.attachScreen),
             "voiceMode": .bool(s.voiceMode),
             "shareLocation": .bool(s.shareLocation),
+            "backgroundEngine": .bool(BackgroundEngine.isEnabled),
         ]
     }
 
@@ -586,6 +587,7 @@ enum SettingsManifest {
             problem.access = .macApp
             loginFields.append(problem)
         }
+        loginFields += backgroundEngineFields()
 
         // About
         var cliStatus = SettingsField(key: "commandLineToolStatus", kind: .info, label: "cantrip command",
@@ -713,6 +715,17 @@ enum SettingsManifest {
                                          pool("simulatorPoolIdleMinutes", "Shut down after idle", SimulatorPool.Policy.idleRange, unit: "minutes")]),
             ]),
         ]
+        // The background engine's app has no panel yet (`ClientAppDelegate`).
+        if HostMode.isEngine {
+            let panelOnly: Set<String> = ["interfaceMode", "panelOpacity", "attachScreen", "voiceMode"]
+            for index in pages.indices {
+                for section in pages[index].sections.indices {
+                    pages[index].sections[section].fields.removeAll { panelOnly.contains($0.key) }
+                }
+                pages[index].sections.removeAll { $0.fields.isEmpty }
+            }
+            pages.removeAll { $0.sections.isEmpty }
+        }
         // Paired devices don't see this Mac's app settings at all.
         if !local {
             for index in pages.indices {
@@ -724,6 +737,32 @@ enum SettingsManifest {
             pages.removeAll { $0.sections.isEmpty }
         }
         return pages
+    }
+
+    /// About › Startup: "Keep agents running when Cantrip quits" (`BackgroundEngine`), and a line
+    /// while a switch waits for tabs or after one failed.
+    private static func backgroundEngineFields() -> [SettingsField] {
+        var fields: [SettingsField] = []
+        let reason = BackgroundEngine.unavailableReason
+        if reason == nil || BackgroundEngine.isEnabled || HostMode.isEngine {
+            var toggle = SettingsField(key: "backgroundEngine", kind: .toggle, label: "Keep agents running when Cantrip quits",
+                                       help: "Tabs, Cantrip Home and paired devices run in a background process that starts at login, so quitting or updating Cantrip doesn't stop them. Switching waits until nothing is working.",
+                                       value: .bool(BackgroundEngine.isEnabled))
+            toggle.access = .macApp
+            toggle.apply = { value in if case .bool(let on) = value { BackgroundEngine.setEnabled(on) } }
+            fields.append(toggle)
+            if let status = BackgroundEngine.status(busy: HostServices.running?.busyWork ?? 0) {
+                var line = SettingsField(key: "backgroundEngineStatus", kind: .info, label: "Background agents",
+                                         value: .string(status.text), tone: status.tone)
+                line.access = .macApp
+                fields.append(line)
+            }
+        } else if let reason {
+            var line = SettingsField(key: "backgroundEngineStatus", kind: .info, label: "Background agents", value: .string(reason))
+            line.access = .macApp
+            fields.append(line)
+        }
+        return fields
     }
 
     private static func endpointModelFields(_ s: AppSettings, values v: [String: SettingValue],

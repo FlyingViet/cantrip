@@ -1,8 +1,11 @@
 import Foundation
 
 /// How this process runs: the menu bar app, or `--headless` (sessions and Remote only, no windows).
+/// The background engine (`--headless --engine`, `BackgroundEngine`) is headless too, started by
+/// Cantrip.app's login agent; the app is then its client.
 enum HostMode {
     nonisolated(unsafe) static var isHeadless = false
+    nonisolated(unsafe) static var isEngine = false
 }
 
 /// One Cantrip host per user: the menu bar app and `--headless` share sessions, ports and the
@@ -31,7 +34,7 @@ enum HostLock {
             usleep(100_000)
         }
         ftruncate(fd, 0)
-        let mode = HostMode.isHeadless ? "headless" : "app"
+        let mode = HostMode.isEngine ? "engine" : HostMode.isHeadless ? "headless" : "app"
         _ = "\(getpid()) \(mode)\n".withCString { write(fd, $0, strlen($0)) }
         descriptor = fd
         return true
@@ -48,12 +51,16 @@ enum HostLock {
     /// Why this process can't start, for the terminal.
     static var busyMessage: String {
         let holder = holder()
-        let what = holder?.mode == "headless" ? "as a background service" : "as the menu bar app"
+        let what = switch holder?.mode {
+        case "headless": "as a background service"
+        case "engine": "in the background for Cantrip.app"
+        default: "as the menu bar app"
+        }
         return "Cantrip is already running \(what)\(holder.map { " (pid \($0.pid))" } ?? ""). "
             + "Stop it first (`cantrip daemon stop`, or quit the app).\n"
     }
 
-    /// "<pid> <headless|app>" of the host holding the lock, if any. The file outlives its host, so
+    /// "<pid> <headless|engine|app>" of the host holding the lock, if any. The file outlives its host, so
     /// the pid in it only counts while the lock is really held.
     static func holder() -> (pid: Int32, mode: String)? {
         let fd = open(url.path, O_RDONLY | O_CLOEXEC)
