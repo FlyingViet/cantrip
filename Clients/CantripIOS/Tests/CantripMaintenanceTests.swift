@@ -180,6 +180,32 @@ final class CantripMaintenanceTests: XCTestCase {
         XCTAssertFalse(model.canStart(.restart))
     }
 
+    func testReleaseInstallDownloadsWhileTabsRunAndNeverRebuilds() async throws {
+        let model = CantripMaintenanceModel(serverID: UUID(), defaults: defaults())
+        let release: [String: Any] = [
+            "revision": revision.uuidString, "available": true, "runningBuild": "v1.1.15", "busySessions": 2,
+            "acceptedRequestIDs": [], "install": "release", "latestVersion": "1.1.16",
+            "actions": ["check", "update", "restart"],
+        ]
+        let value = try JSONDecoder().decode(CantripMaintenanceSnapshot.self,
+                                             from: JSONSerialization.data(withJSONObject: release))
+        await model.refresh { value }
+        XCTAssertTrue(value.isRelease)
+        XCTAssertEqual(value.offeredActions, [.check, .update, .restart])
+        XCTAssertEqual(value.latestVersion, "1.1.16")
+        XCTAssertTrue(model.canStart(.update))
+        XCTAssertFalse(model.canStart(.rebuild))
+        XCTAssertFalse(model.canStart(.restart))
+        XCTAssertEqual(CantripMaintenanceAction.update.title(release: true), "Download Update")
+        XCTAssertEqual(CantripMaintenanceAction.update.title(release: false), "Update & Rebuild")
+
+        let source = try snapshot(busy: 2)
+        XCTAssertFalse(source.isRelease)
+        XCTAssertEqual(source.offeredActions, CantripMaintenanceAction.allCases)
+        await model.refresh { source }
+        XCTAssertFalse(model.canStart(.update))
+    }
+
     func testHostActionIsPreparedButAmbiguousPostIsNeverReplayed() async throws {
         let remote = CantripRemoteModel(urlSession: client())
         let configured = await remote.configure(url: "https://cantrip.example",

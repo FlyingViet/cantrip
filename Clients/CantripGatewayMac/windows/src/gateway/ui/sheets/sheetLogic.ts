@@ -11,6 +11,7 @@ import type {
   UsageFallbackSnapshot,
   AntigravityLimitBucket, AntigravityUsageState, ClaudeLimitWindow, ClaudeUsageState, CodexLimitWindow, CodexUsageState,
 } from "../../api/types";
+import { MAINTENANCE_ACTIONS } from "../../api/types";
 
 // MARK: Errors
 
@@ -630,6 +631,28 @@ export const MAINTENANCE_ACTION_INFO: Record<MaintenanceAction, { title: string;
   },
 };
 
+/** What each action does on a Mac that installed Cantrip from a release's disk image. */
+export const RELEASE_MAINTENANCE_ACTION_INFO: Record<MaintenanceAction, { title: string; detail: string }> = {
+  ...MAINTENANCE_ACTION_INFO,
+  check: {
+    title: "Check for Updates",
+    detail: "Look for a newer Cantrip release on GitHub without downloading or restarting.",
+  },
+  update: {
+    title: "Download Update",
+    detail: "Download the newest Cantrip release from GitHub and check Apple's notarization. Running tabs aren't touched. Restart separately to install it.",
+  },
+};
+
+export function maintenanceActionInfo(action: MaintenanceAction, snapshot: MaintenanceSnapshot | null): { title: string; detail: string } {
+  return (snapshot?.install === "release" ? RELEASE_MAINTENANCE_ACTION_INFO : MAINTENANCE_ACTION_INFO)[action];
+}
+
+/** The actions the Mac offers: a release install has nothing to rebuild. */
+export function maintenanceActions(snapshot: MaintenanceSnapshot | null): readonly MaintenanceAction[] {
+  return snapshot?.actions?.filter((action) => MAINTENANCE_ACTIONS.includes(action)) ?? MAINTENANCE_ACTIONS;
+}
+
 export function maintenanceJobRunning(job: MaintenanceJob | undefined | null): boolean {
   return Boolean(job && job.finishedAt === undefined);
 }
@@ -642,7 +665,9 @@ export function canStartMaintenance(action: MaintenanceAction, state: {
     || maintenanceJobRunning(snapshot.job)) return false;
   if (action === "update" && (snapshot.localChanges === true || (snapshot.branch !== undefined && snapshot.branch !== "main"))) return false;
   if (action === "restart" && snapshot.installedBuild === undefined) return false;
-  return action === "check" || snapshot.busySessions === 0;
+  if (!maintenanceActions(snapshot).includes(action)) return false;
+  // Downloading a release touches no running work.
+  return action === "check" || (action === "update" && snapshot.install === "release") || snapshot.busySessions === 0;
 }
 
 /** 3 s while a job runs or a request awaits its receipt, else 15 s. */

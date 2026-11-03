@@ -1864,6 +1864,13 @@ export interface MaintenanceSnapshot {
   job?: MaintenanceJob;
   /** Recently accepted request IDs (clear a pending request when its ID appears). */
   acceptedRequestIDs: UUIDString[];
+  /** "source" (a checkout: update pulls and rebuilds) or "release" (a release's disk image: update
+   * downloads the newest release). Older Macs leave it out (source). */
+  install?: "source" | "release";
+  /** A release install's newest release on GitHub, once checked. */
+  latestVersion?: string;
+  /** The actions this Mac accepts; older Macs leave it out (all of them). */
+  actions?: MaintenanceAction[];
 }
 
 // MARK: - Copilot usage

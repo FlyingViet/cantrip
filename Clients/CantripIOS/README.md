@@ -1107,8 +1107,10 @@ ID, not a new build. Status from the previous connection remains labeled stale
 until a refresh succeeds.
 
 Requires a one-time update of both apps and reopening the Mac host to enable
-the maintenance API. `Cantrip.app` must run from its source checkout with
-Git access, Xcode tools, and signing already configured on the Mac. Commands and
+the maintenance API. A source install needs Git access, Xcode tools, and
+signing already configured on the Mac. A Mac that installed Cantrip from a
+release's disk image shows **Download Update** instead: it downloads and checks
+the newest release while tabs keep running, and there's nothing to rebuild. Commands and
 paths are fixed by the host, not supplied by the phone. This does not install
 Cantrip Agent updates or upload TestFlight builds.
 
