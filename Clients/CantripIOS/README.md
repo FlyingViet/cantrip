@@ -716,7 +716,8 @@ and shows a nested task card under its reply: live status while the tab works,
 the tab's result when it finishes, and **Open tab** to jump straight to it.
 
 Create automations or structured trackers conversationally in Chat. Automations
-can use one-time, interval, or weekday schedules. A tracker carries a validated
+can use one-time, interval, weekday, or monthly schedules (a day of the month or
+its last day). A tracker carries a validated
 field and presentation schema, so Tasks renders native searchable list, detail,
 add and edit screens without task-specific app code; records can also be updated
 through Chat. Long-text values use full-width, left-aligned blocks so generated

@@ -86,12 +86,17 @@ Home never hands work to a child tab that isn't running.
 
 ## Tasks and schedules
 
-Tasks can be one-time, interval or weekday automations, or structured
+Tasks can be one-time, interval, weekday or monthly automations, or structured
 workspaces such as trackers. A one-time task removes itself after its run
 succeeds, and its result stays in Background. A failed or stopped run, or a
 one-time task with a workspace, keeps the task so it can be retried or its
 records kept. A weekday task can run at several local times a
-day in its own time zone, with DST handled. After sleep or a quit, an overdue
+day in its own time zone, with DST handled. A monthly task runs at one or more
+local times on a chosen day of the month (`"monthDay":15`) or on its last day
+(`"monthDay":"last"`, for month-end work); a day a month doesn't have (29–31)
+runs on that month's last day, so February runs on the 28th, or the 29th in a
+leap year. Cantrip writes the summary for both, for example "Last day of every
+month at 9:30 PM". After sleep or a quit, an overdue
 task runs once rather than once per missed time, and a task never runs twice at
 the same time. Touch and hold a task to drag it into a new order; the order is
 saved on the Mac.
@@ -118,6 +123,13 @@ idle:
 ```json
 {"version":1,"taskID":"…","schedule":{…}}
 ```
+
+A month-end schedule, for example, is
+`{"kind":"monthly","monthDay":"last","times":["21:30"],"timeZone":"America/Los_Angeles","summary":""}`.
+tasks.json and the API write a monthly schedule as `"kind":"weekdays"` plus
+`monthDay`, because Cantrip Agent and Gateway builds from before monthly
+schedules reject kinds they don't know; they show its summary. Clients treat a
+schedule with `monthDay` as monthly.
 
 An edit can carry `schedule`, `"runsAfter":["…"]`,
 `"runsAfterTimeoutMinutes":45`, `"model":"…"`, `"effort":"…"` and/or a
