@@ -960,7 +960,7 @@ struct LauncherView: View {
             Button("Start Fresh") { startFresh(chat) }
                 .disabled(chat.startFreshUnavailableReason != nil)
             if !chat.isLocalPrivate {
-                Button("Sign in to GitHub on Mac...") { chat.submitRemote("/login github", mode: .queue) }
+                Button(GitHubAuthMonitor.shared.signInMenuTitle) { chat.submitRemote("/login github", mode: .queue) }
                     .disabled(chat.isStreaming || !chat.queued.isEmpty)
             }
             Button("Rename Tab...") {

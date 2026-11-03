@@ -58,6 +58,8 @@ final class RemoteDeviceLogin {
                 }
                 self.onEvent = nil
                 self.buffer = ""
+                // Settings on every client shows the sign-in this left behind.
+                GitHubAuthMonitor.shared.check()
             }
         }
         do {

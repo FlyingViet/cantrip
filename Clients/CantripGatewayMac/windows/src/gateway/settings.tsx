@@ -9,7 +9,8 @@ import "./styles/app.css";
 import "./settings.css";
 import { Icon, type IconName } from "./ui/icons";
 import { APIError } from "./api/client";
-import type { BackendsAction, BackendsSnapshot, MCPSnapshot, SettingsManifest, SettingsRequest, SettingsSection } from "./api/types";
+import type { BackendsAction, BackendsSnapshot, GitHubAuth, MCPSnapshot, SettingsManifest, SettingsRequest, SettingsSection } from "./api/types";
+import { githubPresentation, githubSignInWaiting } from "./ui/sheets/sheetLogic";
 import { ConfirmLayer, confirmDialog, FormRow, FormSection, MenuLayer, openMenu, Spinner, ToastLayer } from "./ui/kit";
 import { BackendStatusList, type BackendsTransport } from "./ui/sheets/BackendStatusList";
 import { MCPServerList, type MCPTransport } from "./ui/sheets/MCPServerList";
@@ -247,7 +248,7 @@ function SettingsApp(): JSX.Element {
           ? (state ? <Connection state={state} setState={setState} notice={notice} link={link} clearLink={() => setLink(null)} /> : <Spinner />)
           : current.id === "tools"
             ? (state?.selectedID
-              ? <><BackendStatusList transport={backendsTransport} /><GitHubSignIn /><MCPServerList transport={mcpTransport} /></>
+              ? <ToolsPage />
               : <p class="callout muted">Pair a Mac on Connection first.</p>)
             : current.id === "location" ? <LocationSettings />
               : current.id === "voice" ? <VoiceSettingsPanel /> : null}
@@ -322,19 +323,40 @@ function LocationSettings(): JSX.Element {
   );
 }
 
-/** GitHub on the Mac: Sign In runs GitHub's device sign-in in Cantrip Home, whose chat shows the code. */
-function GitHubSignIn(): JSX.Element {
-  const [message, setMessage] = useState<string | null>(null);
+/** Tools & sign-ins: the Mac's backends, its GitHub sign-in (from the same backends poll) and MCP servers. */
+function ToolsPage(): JSX.Element {
+  const [backends, setBackends] = useState<BackendsSnapshot | null>(null);
+  return (
+    <>
+      <BackendStatusList transport={backendsTransport} onSnapshot={setBackends} />
+      <GitHubSignIn github={backends?.github} loaded={backends !== null} />
+      <MCPServerList transport={mcpTransport} />
+    </>
+  );
+}
+
+/** GitHub on the Mac: who's signed in there, and Sign In, which runs GitHub's device sign-in in Cantrip Home,
+ * whose chat shows the code. */
+function GitHubSignIn(props: { github: GitHubAuth | undefined; loaded: boolean }): JSX.Element {
+  const [startedAt, setStartedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const shown = githubPresentation(props.github, props.loaded);
+  const waiting = githubSignInWaiting(startedAt, props.github?.checkedAt);
+  const detail = waiting ? "Started in Cantrip Home: its chat shows GitHub's code." : shown.detail;
+  const signIn = () => void settings.githubSignIn().then((reply) => {
+    setError(reply.error ?? null);
+    if (!reply.error) setStartedAt(Date.now());
+  });
   return (
     <FormSection header="Sign-ins" footer="Signs the Mac's GitHub CLI in to github.com with GitHub's device sign-in, for pushes, pull requests and GitHub Builds in every backend. It runs in Cantrip Home, whose chat shows a code to enter at github.com/login/device; no password goes through Cantrip.">
       <FormRow label="GitHub on your Mac">
-        <button type="button" class="btn" onClick={() => void settings.githubSignIn().then((reply) => {
-          setError(reply.error ?? null);
-          setMessage(reply.error ? null : "Started in Cantrip Home: its chat shows GitHub's code.");
-        })}>Sign In…</button>
+        <button type="button" class={shown.prominent || waiting ? "btn" : "btn plain"} disabled={!waiting && !shown.buttonEnabled}
+          onClick={signIn}>{shown.button}</button>
       </FormRow>
-      {message ? <FormRow><span class="callout muted" role="status">{message}</span></FormRow> : null}
+      <FormRow>
+        <span class={waiting || !shown.warning ? "callout muted" : "alert-text"} role="status" aria-live="polite"
+          data-testid="github-status">{detail}</span>
+      </FormRow>
       {error ? <FormRow><span class="alert-text" role="alert"><Icon name="exclamationmark.triangle" size={14} />{error}</span></FormRow> : null}
     </FormSection>
   );
