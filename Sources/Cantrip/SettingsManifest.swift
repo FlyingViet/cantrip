@@ -588,6 +588,18 @@ enum SettingsManifest {
         }
 
         // About
+        var cliStatus = SettingsField(key: "commandLineToolStatus", kind: .info, label: "cantrip command",
+                                      value: .string(CantripInstall.commandLineToolStatus()))
+        cliStatus.access = .macApp
+        var cliFields = [cliStatus]
+        switch CantripInstall.commandLineTool() {
+        case .missing, .otherCantrip:
+            var install = SettingsField(key: "installCommandLineTool", kind: .action, label: "Install Command-Line Tool")
+            install.access = .macApp
+            cliFields.append(install)
+        case .installed, .blocked:
+            break
+        }
         var desktop = field("remoteDesktopEnabled", .toggle, "Allow paired devices to view and control this Mac",
                             help: "Off by default. Screen Recording and Accessibility must be granted on the Mac. Frames and typed text aren't saved or sent to models.")
         desktop.access = .atMac
@@ -685,6 +697,9 @@ enum SettingsManifest {
             ]),
             SettingsPageSpec(id: "about", title: "About & Updates", sections: [
                 SettingsSection(id: "startup", title: "Startup", fields: loginFields),
+                SettingsSection(id: "cli", title: "Command-line tool",
+                                footer: "Links ~/.local/bin/cantrip to this app's cantrip command, and adds ~/.local/bin to PATH in ~/.zshrc if no startup file has it.",
+                                fields: cliFields),
                 SettingsSection(id: "access", title: "View Mac", fields: [desktop, screenSettings, accessibilitySettings]),
                 SettingsSection(id: "storage", title: "Storage upkeep",
                                 fields: [upkeep, retention, simulatorCleanup, buildRoot, storageStatus, cleanNow]),
@@ -1060,6 +1075,12 @@ enum SettingsManifest {
         case "refreshAntigravityModels":
             s.refreshAntigravityModels()
             return ["message": "Refreshing Antigravity's models."]
+        case "installCommandLineTool":
+            do {
+                return ["message": try CantripInstall.installCommandLineTool()]
+            } catch {
+                throw SettingsManifestError(status: 422, message: error.localizedDescription)
+            }
         case "cleanUpStorageNow":
             let status = StorageUpkeepStatus.shared
             if !status.isRunning { status.runNow() }

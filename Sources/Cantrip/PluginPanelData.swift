@@ -8,11 +8,7 @@ import FoundationModels
 
 enum PluginPanelData {
     static var repoURL: URL {
-        let bundled = Bundle.main.bundleURL.deletingLastPathComponent()
-        if FileManager.default.fileExists(atPath: bundled.appendingPathComponent(".git").path) {
-            return bundled
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
+        CantripInstall.checkout ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Coding/Cantrip")
     }
 

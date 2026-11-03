@@ -33,6 +33,20 @@ def repo_dir():
     return os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 
+BUNDLED = os.sep + os.path.join("Contents", "Resources", "bin") + os.sep
+
+
+def bundled_app():
+    """The Cantrip.app this script ships inside (a release install), or None."""
+    here = os.path.realpath(__file__)
+    return here.split(BUNDLED)[0] if BUNDLED in here else None
+
+
+def own_app():
+    """The app this CLI belongs to: the one it ships in, else the one beside its checkout."""
+    return bundled_app() or os.path.join(repo_dir(), "Cantrip.app")
+
+
 def connect():
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.connect(SOCKET)
@@ -75,7 +89,7 @@ def launch_app():
               f"Try `kill {pid}` and re-run.", file=sys.stderr)
         return None
     repo = repo_dir()
-    app = os.path.join(repo, "Cantrip.app")
+    app = own_app()
     if not os.path.isdir(app):
         app = "/Applications/Cantrip.app"
     if not os.path.isdir(app):
@@ -83,7 +97,7 @@ def launch_app():
     build = quiet_output(["defaults", "read",
                           os.path.join(app, "Contents", "Info"),
                           "CantripBuildIdentity"])
-    source = source_identity(repo)
+    source = "" if bundled_app() else source_identity(repo)
     if build and source and build != source:
         print(f"cantrip: note — app built from {build}, source is at {source}."
               f" Run `cantrip-rebuild` (or `make -C {repo} run`) to update.",
@@ -256,11 +270,12 @@ def is_host_command(args):
 
 def run_host_command(args):
     """Setup and pairing commands live in the Cantrip binary itself (shared with headless hosts)."""
-    binary = os.path.join(repo_dir(), "Cantrip.app", "Contents", "MacOS", "Cantrip")
+    binary = os.path.join(own_app(), "Contents", "MacOS", "Cantrip")
     if not os.access(binary, os.X_OK):
         binary = "/Applications/Cantrip.app/Contents/MacOS/Cantrip"
     if not os.access(binary, os.X_OK):
-        print(f"cantrip: build Cantrip first: make -C {repo_dir()} app", file=sys.stderr)
+        hint = "reinstall it from the release's disk image" if bundled_app() else f"make -C {repo_dir()} app"
+        print(f"cantrip: Cantrip.app wasn't found; {hint}", file=sys.stderr)
         return 1
     os.execv(binary, [binary] + args)
 
