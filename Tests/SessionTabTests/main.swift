@@ -224,6 +224,7 @@ struct SessionTabTests {
         try await testCardDocuments()
         try await testHomeCards()
         try testCantripHomeSchedules()
+        try testCantripHomeMonthlySchedules()
         try await testCantripHome()
         try await testCantripHomeArtifactThumbnails()
         try await testCantripHomeBuilds()

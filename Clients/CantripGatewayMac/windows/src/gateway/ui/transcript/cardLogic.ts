@@ -39,8 +39,9 @@ export function cardGlyph(glyph: unknown): string | undefined {
   return typeof glyph === "string" && glyph.trim() && [...glyph].length <= 4 ? glyph : undefined;
 }
 
+/** An image the Mac's link preview cache serves: 16-64 hex characters (24 today). */
 export function isImageID(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{64}$/i.test(value);
+  return typeof value === "string" && /^[0-9a-f]{16,64}$/i.test(value);
 }
 
 export function cardBadges(badges: RemoteCardBadge[] | undefined): RemoteCardBadge[] {

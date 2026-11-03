@@ -140,7 +140,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `GET /api/v1/backends` | Settings › Tools & sign-ins › Backends: `{backends, checkInterval, revision}`, one entry per agent CLI (`copilot`, `claude`, `antigravity`, `codex`) with `name`, `state` (`ready`, `signedOut`, `outOfQuota`, `notInstalled`, `unknown`), `summary`, optional `path`, `version`, `signedIn`, `account`, `authMethod`, `plan`, `quota` (`[{name, usedPercent, resetsAt}]`), `limitedUntil`, `lastSuccessAt`, `lastAuthError {message, at}`, `checkedAt`, `problem`, plus `checking`, `unavailable` (routing skips it) and `signIn {mode: deviceCode|terminal, command, hint, url?, code?, startedAt?, message?}`. Never a token. Checks run on launch, every 30 min and after a sign-in error; poll every ~8 s, ~1.5 s while `checking` or a `signIn.code` is pending. Older hosts `404` |
 | `POST /api/v1/backends` | `{"action":"check"}` (all) or `{"action":"check","id"}`, `{"action":"signIn","id"}` (Copilot and Codex start their device sign-in, whose `url` and `code` appear in later reads; Claude Code and Antigravity open Terminal on the Mac) and `{"action":"cancelSignIn","id"}`. Replies with the `GET` payload, plus `message` for sign-in actions. A backend that goes signed out or out of quota sends one push (`kind: backendStatus`, opens Backends) and one more when it's back |
 | `GET /api/v1/voice/vocabulary` | Dictation names: project, tab, note, task and tracker terms plus the busiest people (handles, optional names); older hosts reply `404` and the app falls back to tab and task titles |
-| `GET /api/v1/link-previews/image`, `GET /api/v1/map-tile` | Rich cards on assistant messages (`linkPreviews`, `placeCard`): cached Open Graph preview images (`?id=`) and OpenStreetMap raster tiles (`?z=&x=&y=`) |
+| `GET /api/v1/link-previews/image`, `GET /api/v1/map-tile` | Rich cards on assistant messages (`linkPreviews`, `placeCard`): cached Open Graph preview images and site icons (`?id=`) and OpenStreetMap raster tiles (`?z=&x=&y=`) |
 
 Responses of 4 KB or more come gzip-compressed when the request sends
 `Accept-Encoding: gzip`: URLSession does this on the Tailscale route, and `CantripLANRequest`
@@ -577,7 +577,8 @@ interactive MCP App views** is off on the Mac.
 When an assistant reply links to a public web page (such as an Apple Store
 product page), the Mac fetches and caches its Open Graph metadata without
 cookies and attaches up to three `linkPreviews` cards (`title`, `siteName`,
-`domain`, optional cached `imageID` via `/api/v1/link-previews/image`). Tapping
+`domain`, optional cached `imageID` via `/api/v1/link-previews/image`, and the
+site's icon `iconID`, shown beside the domain). Tapping
 a card opens the URL in Safari or the default browser. Private, loopback, LAN,
 `*.ts.net`, and signed/token URLs stay plain links and are never unfurled.
 
@@ -716,7 +717,8 @@ and shows a nested task card under its reply: live status while the tab works,
 the tab's result when it finishes, and **Open tab** to jump straight to it.
 
 Create automations or structured trackers conversationally in Chat. Automations
-can use one-time, interval, or weekday schedules. A tracker carries a validated
+can use one-time, interval, weekday, or monthly schedules (a day of the month or
+its last day). A tracker carries a validated
 field and presentation schema, so Tasks renders native searchable list, detail,
 add and edit screens without task-specific app code; records can also be updated
 through Chat. Long-text values use full-width, left-aligned blocks so generated

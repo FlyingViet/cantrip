@@ -14,9 +14,12 @@ struct CantripLinkPreview: Codable, Equatable, Identifiable, Sendable {
     let domain: String
     var siteName: String? = nil
     var imageID: String? = nil
+    /// The site's icon, a small PNG the Mac cached; nil from older Macs.
+    var iconID: String? = nil
 
+    /// The Mac's cache IDs are 16-64 lowercase hex characters (24 today).
     static func validImageID(_ id: String) -> Bool {
-        id.count == 64 && id.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+        (16...64).contains(id.count) && id.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 
     static func isSafeWebURL(_ url: URL) -> Bool {
@@ -108,6 +111,7 @@ struct CantripLinkPreviewCardView: View {
     @ObservedObject var remote: CantripRemoteModel
     @Environment(\.openURL) private var openURL
     @State private var image: UIImage?
+    @State private var icon: UIImage?
 
     var body: some View {
         Button {
@@ -135,10 +139,20 @@ struct CantripLinkPreviewCardView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                    Text(card.domain)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        if let icon {
+                            Image(uiImage: icon)
+                                .resizable()
+                                .interpolation(.high)
+                                .frame(width: 16, height: 16)
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                .accessibilityHidden(true)
+                        }
+                        Text(card.domain)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
@@ -164,6 +178,13 @@ struct CantripLinkPreviewCardView: View {
                 return
             }
             image = try? await remote.linkPreviewImage(id: imageID)
+        }
+        .task(id: "\(remote.usageIdentity)/icon/\(card.iconID ?? "")") {
+            guard let iconID = card.iconID, CantripLinkPreview.validImageID(iconID) else {
+                icon = nil
+                return
+            }
+            icon = try? await remote.linkPreviewImage(id: iconID)
         }
     }
 }

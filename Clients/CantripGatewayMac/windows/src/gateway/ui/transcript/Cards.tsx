@@ -11,7 +11,7 @@ import {
   cardTone, chartBar, chartColumns, chartScale, itemLabel, mapAttribution, mapPins, mapRegion, safeActionUrl, statLabel, telNumber,
   type CardPart,
 } from "./cardLogic";
-import { useLinkPreviewImage } from "./RichCards";
+import { LinkDomain, useLinkPreviewImage } from "./RichCards";
 import { weatherIcon, weatherTint } from "./richCardLogic";
 
 type SymbolSize = 12 | 14 | 16 | 18 | 24 | 28;
@@ -114,7 +114,7 @@ function LinkHeader(props: { block: RemoteCardBlock }): JSX.Element {
       {lead ? <span class="card-link-symbol" aria-hidden="true">{lead}</span> : null}
       <div class="card-link-text">
         {cardText(block.title) ? <div class="link-preview-title">{cardText(block.title)}</div> : null}
-        {cardText(block.subtitle) ? <div class="link-preview-domain">{cardText(block.subtitle)}</div> : null}
+        {cardText(block.subtitle) ? <LinkDomain text={cardText(block.subtitle)!} iconID={block.subtitleImageID} /> : null}
         {lines.map((line, index) => <div key={index} class="link-preview-domain">{line}</div>)}
       </div>
     </div>

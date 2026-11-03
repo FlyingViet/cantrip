@@ -59,7 +59,7 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   new kind of card needs no Gateway update: weather (now, the next 12 hours and 10 days, or
   **Forecast unavailable** and why), places on an interactive map with their list (floating over
   the map, or under it in a narrow window; choosing a place focuses its pin), link previews with
-  the page's image, flights from a Kiwi.com search (cheapest and fastest marked, **Book**) and
+  the page's image and the site's icon beside its domain, flights from a Kiwi.com search (cheapest and fastest marked, **Book**) and
   cards from tools, such as a package's status. Panel cards end with the update time and their
   source's attribution; buttons open only public web pages (a place's phone number is shown, not
   dialed), and every row has a screen reader label. Replies from older Macs keep their weather,
