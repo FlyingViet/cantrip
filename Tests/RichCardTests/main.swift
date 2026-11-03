@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import MapKit
 
 @main
@@ -8,6 +9,9 @@ struct RichCardTests {
         testLinkPreviewExtractor()
         testLinkPreviewHTMLParser()
         try await testLinkPreviewStore()
+        testLinkPreviewIconCandidates()
+        try testLinkPreviewIconNormalizing()
+        try await testLinkPreviewIcons()
         testOSMOpeningHours()
         testPlaceBlockExtraction()
         testPlaceLinkFilter()
@@ -129,6 +133,206 @@ struct RichCardTests {
         precondition(card.imageID == card.id)
         let cachedImage = await store.imageData(id: card.id)
         precondition(cachedImage == jpegBytes, "Expected cached preview image bytes")
+    }
+
+    /// Which icons a page offers, best first, and which never get fetched.
+    static func testLinkPreviewIconCandidates() {
+        func candidates(_ head: String, page: String) -> [String] {
+            LinkPreviewHTMLParser.iconCandidates(in: head, pageURL: URL(string: page)!).map(\.absoluteString)
+        }
+        // Instagram: apple-touch-icons in several sizes (WebP), a rel=icon and an ICO.
+        let instagram = """
+        <link data-default-icon="https://static.cdninstagram.com/i192.webp" rel="icon" sizes="192x192" href="https://static.cdninstagram.com/i192.webp" />
+        <link rel="apple-touch-icon" sizes="76x76" href="https://static.cdninstagram.com/t76.webp" />
+        <link rel="apple-touch-icon" sizes="180x180" href="https://static.cdninstagram.com/t180.webp" />
+        <link rel="apple-touch-icon" sizes="120x120" href="https://static.cdninstagram.com/t120.webp" />
+        <link rel="shortcut icon" type="image/x-icon" href="https://static.cdninstagram.com/i.ico" />
+        """
+        precondition(candidates(instagram, page: "https://www.instagram.com/nasa/") == [
+            "https://static.cdninstagram.com/t180.webp", "https://static.cdninstagram.com/t120.webp",
+            "https://www.instagram.com/favicon.ico",
+        ], "apple-touch-icon first, largest first, then /favicon.ico: \(candidates(instagram, page: "https://www.instagram.com/nasa/"))")
+        // GitHub: a PNG alternate icon next to an SVG icon, a mask icon and a fluid icon.
+        let github = """
+        <link rel="fluid-icon" href="https://github.com/fluidicon.png" title="GitHub">
+        <link rel="mask-icon" href="https://github.githubassets.com/pinned-octocat.svg" color="#000000">
+        <link rel="alternate icon" class="js-site-favicon" type="image/png" href="https://github.githubassets.com/favicons/favicon.png">
+        <link rel="icon" class="js-site-favicon" type="image/svg+xml" href="https://github.githubassets.com/favicons/favicon.svg">
+        """
+        precondition(candidates(github, page: "https://github.com/FlyingViet") == [
+            "https://github.githubassets.com/favicons/favicon.png", "https://github.com/favicon.ico",
+        ], "SVG and mask icons are skipped")
+        // Only an SVG icon (unquoted attributes): /favicon.ico is the one to try.
+        precondition(candidates("<link rel=icon href=y18.svg>", page: "https://news.ycombinator.com/item?id=1")
+                     == ["https://news.ycombinator.com/favicon.ico"])
+        // Relative links, the largest PNG before an ICO, sizes lists, no duplicate fallback.
+        let relative = """
+        <link rel="icon" href="/favicon.ico">
+        <link rel="icon" type="image/png" sizes="16x16" href="/icons/16.png">
+        <link rel="icon" type="image/png" sizes="16x16 32x32" href="icons/32.png">
+        """
+        precondition(candidates(relative, page: "https://docs.example.com/guide/intro") == [
+            "https://docs.example.com/guide/icons/32.png", "https://docs.example.com/icons/16.png",
+            "https://docs.example.com/favicon.ico",
+        ], "\(candidates(relative, page: "https://docs.example.com/guide/intro"))")
+        precondition(LinkPreviewHTMLParser.largestIconSize("16x16 32x32") == 32
+                     && LinkPreviewHTMLParser.largestIconSize("any") == nil
+                     && LinkPreviewHTMLParser.largestIconSize(nil) == nil)
+        // The same security rules as the page: no private, tailnet, credentialed, tokened or
+        // inline icons, and none on the user's blocked domains.
+        UserDefaults.standard.set(["example-home.net"], forKey: "richCardBlockedDomains")
+        defer { UserDefaults.standard.removeObject(forKey: "richCardBlockedDomains") }
+        let hostile = """
+        <link rel="apple-touch-icon" href="http://192.168.0.10/apple-touch-icon.png">
+        <link rel="apple-touch-icon" href="https://mac-mini.example-tailnet.ts.net/icon.png">
+        <link rel="icon" href="http://localhost:8092/icon.png">
+        <link rel="icon" href="https://cdn.example.com/icon.png?token=abc">
+        <link rel="icon" href="https://user:pass@cdn.example.com/icon.png">
+        <link rel="icon" href="https://nas.example-home.net/icon.png">
+        <link rel="icon" href="data:image/png;base64,iVBORw0KGgo=">
+        <link rel="icon" href="file:///etc/icon.png">
+        <link rel=icon href=data:,>
+        """
+        precondition(candidates(hostile, page: "https://example.com/") == ["https://example.com/favicon.ico"],
+                     "unsafe icon links are dropped: \(candidates(hostile, page: "https://example.com/"))")
+        let parsed = LinkPreviewHTMLParser.parse(
+            html: "<html><head><title>Instagram</title>\(instagram)</head></html>",
+            pageURL: URL(string: "https://www.instagram.com/")!
+        )
+        precondition(parsed?.iconURLs.count == LinkPreviewHTMLParser.maximumIconCandidates
+                     && parsed?.imageURL == nil && parsed?.title == "Instagram",
+                     "a page without og:image still gets its icon candidates")
+    }
+
+    /// Test icons: a red square on a transparent background, as PNG, and the same PNG in an ICO.
+    static func iconPNG(edge: Int = 64) -> Data {
+        let context = CGContext(data: nil, width: edge, height: edge, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.clear(CGRect(x: 0, y: 0, width: edge, height: edge))
+        context.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: edge / 4, y: edge / 4, width: edge / 2, height: edge / 2))
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        precondition(CGImageDestinationFinalize(destination))
+        return data as Data
+    }
+
+    static func iconICO(png: Data, edge: Int) -> Data {
+        var data = Data([0, 0, 1, 0, 1, 0])
+        let size = UInt32(png.count)
+        data += [UInt8(edge % 256), UInt8(edge % 256), 0, 0, 1, 0, 32, 0]
+        data += withUnsafeBytes(of: size.littleEndian, Array.init)
+        data += withUnsafeBytes(of: UInt32(22).littleEndian, Array.init)
+        return data + png
+    }
+
+    /// RGBA of one pixel of a PNG, read through a known bitmap layout.
+    static func pixel(_ png: Data, x: Int, y: Int) -> (width: Int, rgba: [UInt8])? {
+        guard let source = CGImageSourceCreateWithData(png as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        var buffer = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let context = CGContext(data: &buffer, width: image.width, height: image.height, bitsPerComponent: 8,
+                                bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let offset = ((image.height - 1 - y) * image.width + x) * 4
+        return (image.width, Array(buffer[offset..<offset + 4]))
+    }
+
+    /// Icons become a small opaque PNG the Mac made; anything that isn't a raster icon is refused.
+    static func testLinkPreviewIconNormalizing() throws {
+        let png = iconPNG()
+        let normalized = try XCTUnwrapLike(LinkPreviewIcon.normalizedPNG(from: png))
+        let corner = try XCTUnwrapLike(pixel(normalized, x: 1, y: 1))
+        let center = try XCTUnwrapLike(pixel(normalized, x: 48, y: 48))
+        precondition(corner.width == LinkPreviewIcon.pixelSize && corner.rgba == [255, 255, 255, 255]
+                     && center.rgba[0] > 240 && center.rgba[1] < 20 && center.rgba[3] == 255,
+                     "the icon is fitted on white, 96 px: \(corner) \(center)")
+        precondition(normalized.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47]) && normalized != png,
+                     "clients get the Mac's own PNG, never the site's bytes")
+        let ico = iconICO(png: iconPNG(edge: 32), edge: 32)
+        precondition(LinkPreviewIcon.looksLikeIcon(ico) && LinkPreviewIcon.normalizedPNG(from: ico) != nil,
+                     "favicon.ico files are read")
+        let svg = Data(#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16"/></svg>"#.utf8)
+        for refused in [svg, Data("<!doctype html><title>Not found</title>".utf8), iconPNG(edge: 8), Data(),
+                        Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0, 1, 2, 3])] {
+            precondition(LinkPreviewIcon.normalizedPNG(from: refused) == nil, "not an icon: \(refused.prefix(16))")
+        }
+        precondition(LinkPreviewIcon.siteKey(for: URL(string: "https://www.instagram.com/nasa/?hl=en")!) == "https://www.instagram.com"
+                     && LinkPreviewIcon.siteKey(for: URL(string: "http://example.com:8080/a")!) == "http://example.com:8080")
+    }
+
+    /// The store fetches a site's icon once, through the page's checks, and falls back in order.
+    static func testLinkPreviewIcons() async throws {
+        actor FetchLog {
+            var urls: [String] = []
+            func add(_ url: URL) { urls.append(url.absoluteString) }
+            func count(_ url: String) -> Int { urls.filter { $0 == url }.count }
+        }
+        let log = FetchLog()
+        let png = iconPNG()
+        let ico = iconICO(png: iconPNG(edge: 32), edge: 32)
+        let run = UUID().uuidString.prefix(8).lowercased()
+        let instagramHead = """
+        <title>Instagram</title>
+        <link rel="apple-touch-icon" sizes="180x180" href="https://static.cdninstagram-\(run).com/t180.webp">
+        <link rel="apple-touch-icon" sizes="120x120" href="https://static.cdninstagram-\(run).com/t120.webp">
+        <link rel="icon" href="http://192.168.0.10/private-icon.png">
+        """
+        let store = LinkPreviewStore { url in
+            await log.add(url)
+            switch url.absoluteString {
+            case "https://www.instagram-\(run).com/nasa/", "https://www.instagram-\(run).com/natgeo/":
+                return (Data("<html><head>\(instagramHead)</head></html>".utf8), url, "text/html")
+            case "https://static.cdninstagram-\(run).com/t180.webp":
+                return (Data("<html>temporarily unavailable</html>".utf8), url, "text/html")
+            case "https://static.cdninstagram-\(run).com/t120.webp":
+                return (png, url, "image/webp")
+            case "https://news-\(run).example.org/item":
+                return (Data(#"<html><head><title>Hacker News</title><link rel="icon" href="y18.svg"></head></html>"#.utf8), url, "text/html")
+            case "https://news-\(run).example.org/favicon.ico":
+                return (ico, url, "image/x-icon")
+            case "https://plain-\(run).example.net/", "https://plain-\(run).example.net/other":
+                return (Data("<html><head><title>Plain page</title></head></html>".utf8), url, "text/html")
+            default:
+                throw URLError(.fileDoesNotExist)
+            }
+        }
+
+        let first = try XCTUnwrapLike(await store.resolve(urls: [URL(string: "https://www.instagram-\(run).com/nasa/")!]).first)
+        let iconID = try XCTUnwrapLike(first.iconID)
+        precondition(first.iconChecked == true && first.imageID == nil && LinkPreviewSecurity.isValidImageID(iconID)
+                     && iconID != first.id, "a page with no og:image still gets its site's icon")
+        let cached = try XCTUnwrapLike(await store.imageData(id: iconID))
+        precondition(pixel(cached, x: 0, y: 0)?.width == LinkPreviewIcon.pixelSize,
+                     "the cached icon is the Mac's normalized PNG")
+        let brokenFetches = await log.count("https://static.cdninstagram-\(run).com/t180.webp")
+        let iconFetches = await log.count("https://static.cdninstagram-\(run).com/t120.webp")
+        let privateFetched = await log.urls.contains("http://192.168.0.10/private-icon.png")
+        precondition(brokenFetches == 1 && iconFetches == 1 && !privateFetched,
+                     "a broken icon falls back to the next; private hosts are never fetched")
+
+        // Another page on the same site shares the icon without fetching it again.
+        let second = try XCTUnwrapLike(await store.resolve(urls: [URL(string: "https://www.instagram-\(run).com/natgeo/")!]).first)
+        let iconRefetches = await log.count("https://static.cdninstagram-\(run).com/t120.webp")
+        precondition(second.iconID == iconID && second.id != first.id && iconRefetches == 1,
+                     "icons are cached per site")
+
+        // Only an SVG icon: /favicon.ico, an ICO file, is used instead.
+        let news = try XCTUnwrapLike(await store.resolve(urls: [URL(string: "https://news-\(run).example.org/item")!]).first)
+        let svgFetched = await log.urls.contains("https://news-\(run).example.org/y18.svg")
+        precondition(news.iconID != nil && news.iconID != iconID && !svgFetched, "an ICO fallback replaces an SVG icon")
+
+        // No icon anywhere: the card is the same as before, and the site isn't asked again today.
+        let plain = try XCTUnwrapLike(await store.resolve(urls: [URL(string: "https://plain-\(run).example.net/")!]).first)
+        precondition(plain.iconID == nil && plain.iconChecked == true && plain.title == "Plain page"
+                     && plain.snapshot["iconID"] == nil)
+        let other = await store.resolve(urls: [URL(string: "https://plain-\(run).example.net/other")!]).first
+        let faviconTries = await log.count("https://plain-\(run).example.net/favicon.ico")
+        precondition(other?.iconID == nil && other?.title == "Plain page" && faviconTries == 1,
+                     "a site without an icon isn't asked again for a day")
     }
 
     static func testOSMOpeningHours() {

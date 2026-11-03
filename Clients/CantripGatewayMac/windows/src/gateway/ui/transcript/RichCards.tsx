@@ -5,6 +5,7 @@ import type { RemoteLinkPreview, RemotePlaceCard, RemoteWeatherCard } from "../.
 import { Icon, type IconName } from "../icons";
 import { bridge } from "../../bridge";
 import { MapComposition, type MapSpec } from "./CardMap";
+import { isImageID } from "./cardLogic";
 import {
   isSafePublicUrl, placeDirectionsUrl, placeGlyph, placeNote, weatherAttributionUrl, weatherChance, weatherDetail, weatherIcon,
   weatherRanges, weatherSpoken, weatherTint, weatherUnitName,
@@ -124,6 +125,17 @@ export function useLinkPreviewImage(imageID: string | undefined): string | null 
   return src;
 }
 
+/** A link card's domain line, with the site's icon the Mac cached in front of it when there is one. */
+export function LinkDomain(props: { text: string; iconID?: string }): JSX.Element {
+  const icon = useLinkPreviewImage(isImageID(props.iconID) ? props.iconID : undefined);
+  return (
+    <div class="link-preview-domain link-domain-line">
+      {icon ? <img class="link-preview-favicon" src={icon} alt="" aria-hidden="true" /> : null}
+      <span>{props.text}</span>
+    </div>
+  );
+}
+
 function LinkPreviewCard(props: { card: RemoteLinkPreview }): JSX.Element {
   const { card } = props;
   const heroSrc = useLinkPreviewImage(card.imageID);
@@ -143,7 +155,7 @@ function LinkPreviewCard(props: { card: RemoteLinkPreview }): JSX.Element {
       ) : null}
       <div class="link-preview-meta">
         <div class="link-preview-title">{card.title}</div>
-        <div class="link-preview-domain">{card.domain}</div>
+        <LinkDomain text={card.domain} iconID={card.iconID} />
       </div>
     </button>
   );

@@ -764,11 +764,36 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var lastActivityDate: Date? { lastActivityAt.map(Date.init(timeIntervalSince1970:)) }
 }
 
+/// A task's schedule. Screens show the Mac's `summary` ("Last day of every month at 9:30 PM"),
+/// so a kind this app doesn't know yet still reads correctly.
 struct CantripHomeSchedule: Decodable, Equatable {
     enum Kind: String, Decodable {
         case once
         case interval
         case weekdays
+        case monthly
+        /// A kind from a newer Mac.
+        case other
+    }
+
+    /// A monthly schedule's day: a day number (days a month doesn't have run on its last day)
+    /// or the last day. JSON: a number or "last".
+    enum MonthDay: Decodable, Equatable {
+        case day(Int)
+        case last
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let day = try? container.decode(Int.self) {
+                self = day == -1 ? .last : .day(day)
+            } else if try container.decode(String.self).lowercased() == "last" {
+                self = .last
+            } else {
+                throw DecodingError.dataCorruptedError(
+                    in: container, debugDescription: "monthDay is a day number or \"last\""
+                )
+            }
+        }
     }
 
     let kind: Kind
@@ -779,6 +804,27 @@ struct CantripHomeSchedule: Decodable, Equatable {
     let weekdays: [Int]?
     let hour: Int?
     let minute: Int?
+    /// Monthly schedules only. Macs send them as `weekdays` plus `monthDay`, a kind older
+    /// apps decode.
+    let monthDay: MonthDay?
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, summary, timeZone, startAt, intervalMinutes, weekdays, hour, minute, monthDay
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        monthDay = try? container.decodeIfPresent(MonthDay.self, forKey: .monthDay)
+        let known = Kind(rawValue: try container.decode(String.self, forKey: .kind)) ?? .other
+        kind = monthDay != nil && (known == .weekdays || known == .monthly) ? .monthly : known
+        summary = try container.decode(String.self, forKey: .summary)
+        timeZone = try container.decode(String.self, forKey: .timeZone)
+        startAt = try container.decodeIfPresent(Date.self, forKey: .startAt)
+        intervalMinutes = try container.decodeIfPresent(Int.self, forKey: .intervalMinutes)
+        weekdays = try container.decodeIfPresent([Int].self, forKey: .weekdays)
+        hour = try container.decodeIfPresent(Int.self, forKey: .hour)
+        minute = try container.decodeIfPresent(Int.self, forKey: .minute)
+    }
 }
 
 struct CantripHomeTaskRun: Decodable, Equatable, Identifiable {

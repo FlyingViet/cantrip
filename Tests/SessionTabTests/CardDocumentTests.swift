@@ -94,7 +94,29 @@ extension SessionTabTests {
         let link = LinkPreviewCard(id: "abc", url: "https://www.apple.com/mac-studio/", domain: "apple.com",
                                    title: "Mac Studio", siteName: "Apple", imageID: String(repeating: "a", count: 64)).document
         precondition(link.style == "link" && link.action?.url == "https://www.apple.com/mac-studio/"
-                     && link.blocks.map(\.type) == ["image", "header"] && link.blocks[1].subtitle == "apple.com")
+                     && link.blocks.map(\.type) == ["image", "header"] && link.blocks[1].subtitle == "apple.com"
+                     && link.blocks[1].subtitleImageID == nil, "no icon, no icon field: the card stays as it was")
+        // The site's icon goes beside the domain, in the card and in the older linkPreviews snapshot.
+        let iconID = "5b4a3928170f6e5d4c3b2a10"
+        let instagram = LinkPreviewCard(id: "def", url: "https://www.instagram.com/nasa/", domain: "instagram.com",
+                                        title: "NASA (@nasa) • Instagram", siteName: "Instagram", iconID: iconID,
+                                        iconChecked: true)
+        let iconCard = instagram.document
+        precondition(iconCard.blocks.map(\.type) == ["header"] && iconCard.blocks[0].subtitleImageID == iconID
+                     && iconCard.blocks[0].subtitle == "instagram.com" && iconCard.blocks[0].symbol == "link"
+                     && instagram.snapshot["iconID"] as? String == iconID && instagram.snapshot["iconChecked"] == nil,
+                     "a link card names the site's cached icon for its domain line")
+        let encodedHeader = try JSONSerialization.jsonObject(with: CardDocument.encoder.encode(iconCard)) as? [String: Any]
+        precondition(((encodedHeader?["blocks"] as? [[String: Any]])?.first?["subtitleImageID"] as? String) == iconID)
+        // Cards Cantrip didn't build can't point at cached images, icons included.
+        var authoredHeader = CardDocument.Block(type: "header")
+        authoredHeader.title = "Order"
+        authoredHeader.subtitleImageID = iconID
+        let authored = CardValidation.sanitized(
+            CardDocument(id: "x", type: "order", blocks: [authoredHeader]), allowMaps: false
+        )
+        precondition(authored?.blocks.first?.subtitleImageID == nil && authored?.blocks.first?.title == "Order",
+                     "authored cards lose subtitleImageID")
     }
 
     static func testKiwiFlightCards() throws {

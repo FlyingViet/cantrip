@@ -92,8 +92,11 @@ export type InputDecision = (typeof INPUT_DECISIONS)[number];
 export const PLACEMENTS = ['before', 'after'] as const;
 export type Placement = (typeof PLACEMENTS)[number];
 
-/** `CantripHomeSchedule.Kind`. */
-export const HOME_SCHEDULE_KINDS = ['once', 'interval', 'weekdays'] as const;
+/**
+ * `CantripHomeSchedule.Kind`. Macs send `monthly` as `weekdays` plus `monthDay` (clients from before
+ * monthly schedules reject kinds they don't know): a schedule with `monthDay` is monthly.
+ */
+export const HOME_SCHEDULE_KINDS = ['once', 'interval', 'weekdays', 'monthly'] as const;
 export type HomeScheduleKind = (typeof HOME_SCHEDULE_KINDS)[number];
 
 /** `CantripHomeTask.State`. `ready` = an unscheduled (manual) task that is not running. */
@@ -456,8 +459,10 @@ export interface RemoteLinkPreview {
   title: string;
   domain: string;
   siteName?: string;
-  /** 64-hex SHA-256 image ID for `GET /api/v1/link-previews/image?id=<imageID>`. */
+  /** Hex image ID (16-64 chars) for `GET /api/v1/link-previews/image?id=<imageID>`. */
   imageID?: HexSHA256;
+  /** The site's icon: a small PNG the Mac re-encoded and cached, fetched the same way. Newer Macs only. */
+  iconID?: HexSHA256;
 }
 
 /** One resolved place pin on an inline map card (`PlacePin.snapshot`). */
@@ -605,6 +610,8 @@ export interface RemoteCardBlock {
   title?: string;
   subtitle?: string;
   subtitleSymbol?: string;
+  /** header: a small image before the subtitle (a link card's site icon), from `GET /api/v1/link-previews/image?id=`. */
+  subtitleImageID?: HexSHA256;
   symbol?: string;
   lines?: string[];
   stat?: RemoteCardStat;
@@ -1350,8 +1357,9 @@ export interface HomeScheduleTime {
 
 /** `CantripHomeSchedule`. */
 export interface HomeSchedule {
+  /** A kind newer than this client may arrive; show `summary`, which covers every kind. */
   kind: HomeScheduleKind;
-  /** Human summary, e.g. "Weekdays at 9:00 AM". */
+  /** Human summary written by the Mac, e.g. "Weekdays at 9:00 AM", "Last day of every month at 9:30 PM". */
   summary: string;
   /** IANA zone ID. */
   timeZone: string;
@@ -1364,8 +1372,13 @@ export interface HomeSchedule {
   /** Earliest daily run time (kept for older clients). */
   hour?: Int;
   minute?: Int;
-  /** `weekdays`: every daily run time, earliest first (newer hosts; not decoded by the Mac client). */
+  /** `weekdays`/`monthly`: every daily run time, earliest first (newer hosts; not decoded by the Mac client). */
   times?: HomeScheduleTime[];
+  /**
+   * `monthly`: the day of the month, or `'last'`. Days a month doesn't have (29–31) run on its last day.
+   * Present only on monthly schedules, which arrive with `kind: 'weekdays'`.
+   */
+  monthDay?: Int | 'last';
 }
 
 /** A finished run in a task's history (newest first, ≤20). */

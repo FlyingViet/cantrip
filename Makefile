@@ -90,9 +90,9 @@ test-browser-preview:
 	swiftc Sources/Cantrip/BrowserPreview.swift Tests/BrowserPreviewTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-rich-cards:
-	@BIN="/tmp/cantrip-rich-card-tests-$$$$"; \
-	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library Sources/Cantrip/CantripPaths.swift Sources/Cantrip/RichCards.swift Sources/Cantrip/WeatherCards.swift Tests/RichCardTests/*.swift -o "$$BIN" && "$$BIN"
+	@BIN="/tmp/cantrip-rich-card-tests-$$$$"; H="$$(mktemp -d)"; \
+	trap 'rm -f "$$BIN"; rm -rf "$$H"' EXIT; \
+	swiftc -parse-as-library Sources/Cantrip/CantripPaths.swift Sources/Cantrip/RichCards.swift Sources/Cantrip/WeatherCards.swift Tests/RichCardTests/*.swift -o "$$BIN" && CFFIXED_USER_HOME="$$H" "$$BIN"
 
 test-remote-images:
 	@BIN="/tmp/cantrip-remote-image-tests-$$$$"; \

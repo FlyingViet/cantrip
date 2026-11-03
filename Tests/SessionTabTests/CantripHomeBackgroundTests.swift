@@ -776,6 +776,7 @@ extension SessionTabTests {
         try await testCantripHomeMultiTimeCatchUp(
             homeChat: homeChat, pool: pool, useFixtureRuns: useFixtureRuns
         )
+        try await testCantripHomeMonthlyCatchUp(homeChat: homeChat, pool: pool)
         try testMailRefreshCoalesces()
         try testCantripHomeOnceTaskRemoval(homeChat: homeChat)
         try await testCantripHomeTaskModelChoices(homeChat: homeChat)
@@ -1052,6 +1053,96 @@ extension SessionTabTests {
         precondition(store.runner.jobs.isEmpty,
                      "No second catch-up run for the other missed slots")
         try store.delete(id: twice.id)
+    }
+
+    /// A month-end task: created from Home's block, moved to the last day by a queued task
+    /// edit, and run once after the Mac slept through two month ends.
+    @MainActor
+    static func testCantripHomeMonthlyCatchUp(
+        homeChat: ChatSession, pool: CantripHomeRunPool
+    ) async throws {
+        let store = CantripHomeStore.shared
+        func fixture(forRun id: UUID) -> CantripHomeBackendFixture? {
+            pool.fixture(for: store.runner.session(forRun: id)?.id)
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        func local(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> Date {
+            calendar.date(from: DateComponents(
+                year: year, month: month, day: day, hour: hour, minute: minute, second: 0
+            ))!
+        }
+        homeChat.messages.append(ChatMessage(role: .assistant, text: """
+        I'll sync the expenses twice on the 15th.
+        ```cantrip-task
+        {"id":null,"title":"Monthly expenses","prompt":"Sync this month's expenses.","schedule":{"kind":"monthly","summary":"Mid-month","timeZone":"America/Los_Angeles","startAt":null,"intervalMinutes":null,"weekdays":null,"monthDay":15,"times":[{"hour":20,"minute":0},{"hour":8,"minute":0}]}}
+        ```
+        """))
+        homeChat.processCantripHomeBlocks()
+        let created = try requireHome(store.tasks.first { $0.title == "Monthly expenses" })
+        let firstRun = try requireHome(created.nextRunAt)
+        let firstSlot = calendar.dateComponents([.day, .hour, .minute], from: firstRun)
+        precondition(created.schedule.kind == .monthly && created.schedule.monthDay == .day(15)
+                     && created.schedule.runTimes.map(\.hour) == [8, 20]
+                     && firstSlot.day == 15 && [8, 20].contains(firstSlot.hour) && firstSlot.minute == 0
+                     && homeChat.messages.last?.text.hasSuffix(
+                        "Task created: **Monthly expenses** · 15th of every month at 8:00 AM and 8:00 PM"
+                     ) == true,
+                     "Home creates a monthly task from its block, with Cantrip's summary")
+
+        // Local maintenance moves it to the last day of the month at 9:30 PM.
+        let base = local(2026, 8, 20, 12, 0)
+        store.clock = { base }
+        defer { store.clock = { Date() } }
+        let editURL = CantripHomeStore.taskEditDirectory.appendingPathComponent("1-month-end.json")
+        try Data(#"""
+            {"version":1,"taskID":"\#(created.id.uuidString)","schedule":{"kind":"monthly","summary":"","timeZone":"America/Los_Angeles","monthDay":"last","times":[{"hour":21,"minute":30}]}}
+            """#.utf8).write(to: editURL, options: .atomic)
+        store.checkNow()
+        let monthEnd = try requireHome(store.tasks.first { $0.id == created.id })
+        precondition(!FileManager.default.fileExists(atPath: editURL.path)
+                     && monthEnd.schedule.summary == "Last day of every month at 9:30 PM"
+                     && monthEnd.prompt == "Sync this month's expenses." && monthEnd.enabled
+                     && monthEnd.nextRunAt == local(2026, 8, 31, 21, 30),
+                     "A queued task edit switches the task to the month's last day")
+        let saved = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: CantripHomeStore.tasksFile)
+        ) as? [[String: Any]] ?? []
+        let savedSchedule = saved.first { $0["id"] as? String == created.id.uuidString }?["schedule"]
+            as? [String: Any]
+        precondition(savedSchedule?["kind"] as? String == "weekdays"
+                     && savedSchedule?["monthDay"] as? String == "last",
+                     "tasks.json keeps a kind older builds read, plus monthDay")
+        precondition(homeChat.cantripHomeInstructions.contains(
+            "Last day of every month at 9:30 PM (times 21:30; monthDay last; America/Los_Angeles)"
+        ) && homeChat.cantripHomeInstructions.contains(#""monthDay":1-31 or "last" or null"#),
+                     "Home's protocol documents monthly schedules and lists the saved day and times")
+
+        // The Mac slept through August 31 and September 30; on October 2 it runs once.
+        let woke = local(2026, 10, 2, 10, 0)
+        store.clock = { woke }
+        store.checkNow()
+        let catchUpRun = try requireHome(store.backgroundRuns.first {
+            $0.taskID == created.id && $0.status == "running"
+        }?.id)
+        try await waitForJournalTest { fixture(forRun: catchUpRun)?.sink != nil }
+        precondition(store.runner.jobs.filter { $0.taskID == created.id }.count == 1
+                     && fixture(forRun: catchUpRun)?.lastPrompt?.contains("runs a missed schedule once") == true,
+                     "An overdue monthly task starts one catch-up run")
+        let sink = fixture(forRun: catchUpRun)?.sink
+        sink?(.textDelta("Synced."))
+        sink?(.done)
+        try await waitForJournalTest {
+            store.tasks.first(where: { $0.id == created.id })?.runs.first?.status == "succeeded"
+        }
+        let caughtUp = try requireHome(store.tasks.first { $0.id == created.id })
+        precondition(caughtUp.runs.count == 1 && caughtUp.nextRunAt == local(2026, 10, 31, 21, 30),
+                     "Missed month ends collapse into one run; the next run is this month's last day")
+        try await waitForJournalTest { store.runner.liveRunIDs.isEmpty }
+        store.checkNow()
+        precondition(store.runner.jobs.allSatisfy { $0.taskID != created.id },
+                     "No second catch-up run for the other missed month end")
+        try store.delete(id: created.id)
     }
 
     /// Concurrent jobs share one Apple Mail refresh.

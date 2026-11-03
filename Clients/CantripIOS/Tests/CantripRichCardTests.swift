@@ -124,6 +124,36 @@ final class CantripRichCardTests: XCTestCase {
         XCTAssertFalse(CantripLinkPreview.isSafeWebURL(try XCTUnwrap(URL(string: "https://user:pass@example.com"))))
     }
 
+    /// The Mac's link preview cache IDs are 24 hex characters; a link card's site icon comes in its
+    /// header (`subtitleImageID`) or, from the older `linkPreviews` field, as `iconID`.
+    func testLinkCardsCarryTheMacsImageAndSiteIcon() throws {
+        let imageID = "0a1b2c3d4e5f60718293a4b5", iconID = "5b4a3928170f6e5d4c3b2a10"
+        XCTAssertTrue(CantripLinkPreview.validImageID(imageID))
+        XCTAssertFalse(CantripLinkPreview.validImageID(String(repeating: "a", count: 15)))
+        XCTAssertFalse(CantripLinkPreview.validImageID(String(repeating: "a", count: 65)))
+        func card(_ header: String) throws -> CantripCard {
+            try JSONDecoder().decode(CantripCard.self, from: Data("""
+            {"version":1,"id":"l1","type":"link","style":"link",
+             "action":{"kind":"open","label":"Open","url":"https://www.instagram.com/nasa/"},
+             "blocks":[{"type":"image","imageID":"\(imageID)"},{"type":"header","title":"NASA",\(header)}]}
+            """.utf8))
+        }
+        let preview = try XCTUnwrap(card(#""subtitle":"instagram.com","subtitleImageID":"\#(iconID)","symbol":"link""#).linkPreview)
+        XCTAssertEqual(preview.imageID, imageID)
+        XCTAssertEqual(preview.iconID, iconID)
+        XCTAssertEqual(preview.domain, "instagram.com")
+        XCTAssertNil(try card(#""subtitle":"instagram.com","subtitleImageID":"../../etc""#).linkPreview?.iconID)
+        XCTAssertNil(try card(#""subtitle":"instagram.com""#).linkPreview?.iconID, "older Macs send no icon")
+
+        let legacy = try JSONDecoder().decode(CantripLinkPreview.self, from: Data(#"""
+            {"id":"l2","url":"https://github.com/FlyingViet/cantrip","title":"cantrip","domain":"github.com","iconID":"\#(iconID)"}
+            """#.utf8))
+        XCTAssertEqual(legacy.iconID, iconID)
+        let built = CantripCard.forReply(cards: nil, weather: nil, places: nil, links: [legacy])
+        XCTAssertEqual(built.first?.header?.subtitleImageID, iconID)
+        XCTAssertEqual(built.first?.linkPreview?.iconID, iconID)
+    }
+
     func testLinkPreviewImageFetchRequiresValidIDAndAuth() async throws {
         let client = try api()
         do {

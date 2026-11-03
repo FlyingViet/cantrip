@@ -1886,13 +1886,21 @@ last 8 steps. Cantrip Agent shows these steps instead of tool calls.
 
 When an assistant reply contains public HTTP/HTTPS links outside code blocks,
 Cantrip resolves Open Graph / Twitter Card metadata and includes up to three
-`linkPreviews` items (`id`, `url`, `title`, `domain`, optional `siteName` and
-`imageID`) on the message snapshot while **Show web link preview cards under
+`linkPreviews` items (`id`, `url`, `title`, `domain`, optional `siteName`,
+`imageID` and `iconID`) on the message snapshot while **Show web link preview cards under
 replies** is enabled on the Mac. Loopback, LAN, Tailscale (`*.ts.net`), private
 IP ranges, `*.local`, `file:`, credentialed URLs, and signed/token query
 strings are never unfurled. Paired clients load cached preview images through
 `GET /api/v1/link-previews/image?id=<imageID>` (`{"data": "<base64>"}`, or raw
 image bytes with `raw=1`).
+
+`iconID` is the site's icon, loaded the same way and drawn small beside the domain.
+The Mac picks the page's largest `apple-touch-icon`, else its largest raster `rel=icon`
+(PNG, WebP, JPEG or GIF before ICO; SVG and mask icons are skipped), else `/favicon.ico`,
+trying at most three. It fetches them like the page (same URL and DNS checks, redirects,
+size cap, no cookies), re-encodes the one that works as a 96 px PNG on white, and caches
+it once per site; a site with no usable icon is tried again a day later. Clients only ever
+get that PNG, never the site's bytes; a card without an icon looks as before.
 
 Every card on a reply is also sent as generic blocks in `cards` (main card first, then link
 cards), which current clients draw instead of the per-type keys below; see [Cards](cards.md).
