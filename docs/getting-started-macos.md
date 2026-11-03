@@ -32,6 +32,22 @@ Cantrip. You do not need to install all the backends.
 
 ## 3. Install Cantrip
 
+### Download the app
+
+1. Download **Cantrip-X.Y.Z.dmg** from the
+   [latest release](https://github.com/FlyingViet/cantrip/releases/latest).
+2. Open it and drag **Cantrip** to **Applications**, then open Cantrip from
+   Applications. It's signed with Developer ID and notarized by Apple.
+3. For the `cantrip` terminal command, open Settings (**Command+,**) ›
+   **About & Updates** › **Install Command-Line Tool**. It links
+   `~/.local/bin/cantrip` to the app and adds `~/.local/bin` to your PATH in
+   `~/.zshrc` if no shell startup file has it.
+
+This copy updates itself from GitHub releases (see
+[Update on Mac](updating-and-troubleshooting.md#a-downloaded-cantrip)).
+
+### Or build it from source
+
 Run these commands in Terminal:
 
 ```sh

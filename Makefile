@@ -9,14 +9,14 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-settings-manifest test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards test-agent-policy test-skills test-secrets test-environments cert artwork icon app run clean
+.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-settings-manifest test-maintenance test-release-updater test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards test-agent-policy test-skills test-secrets test-environments cert artwork icon app run clean
 
 all: app
 
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-rich-cards test-agent-policy test-skills test-secrets test-environments
+test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-release-updater test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-rich-cards test-agent-policy test-skills test-secrets test-environments
 
 test-agent-policy:
 	@BIN="/tmp/cantrip-agent-policy-tests-$$$$"; HOME_DIR="$$(mktemp -d)"; \
@@ -61,6 +61,13 @@ test-settings-manifest:
 	@BIN="/tmp/cantrip-settings-manifest-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc -parse-as-library $(filter-out Sources/Cantrip/main.swift,$(wildcard Sources/Cantrip/*.swift Sources/Cantrip/Backends/*.swift)) Tests/SessionTabTests/*.swift -o "$$BIN" && CANTRIP_TAB_TEST_ONLY=settings "$$BIN"
+
+# Paired-device maintenance (check, update, rebuild, restart) for source and release installs.
+test-maintenance:
+	@BIN="/tmp/cantrip-maintenance-tests-$$$$"; H="$$(mktemp -d)"; \
+	trap 'rm -f "$$BIN"; rm -rf "$$H"' EXIT; \
+	swiftc -parse-as-library $(filter-out Sources/Cantrip/main.swift,$(wildcard Sources/Cantrip/*.swift Sources/Cantrip/Backends/*.swift)) Tests/SessionTabTests/*.swift -o "$$BIN" && \
+	HOME="$$H" CFFIXED_USER_HOME="$$H" CANTRIP_TAB_TEST_HOME="$$H" CANTRIP_TAB_TEST_ONLY=maintenance "$$BIN"
 
 test-message-routing:
 	@BIN="/tmp/cantrip-message-routing-tests-$$$$"; \
@@ -110,6 +117,14 @@ test-package-tracking:
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc Sources/Cantrip/PackageTracking.swift Sources/Cantrip/ISODate.swift Tests/PackageTrackingTests/main.swift -o "$$BIN"; \
 	"$$BIN"
+
+# Release installs' updater: GitHub's release, checksums, and only Cantrip's notarized build is staged.
+# CANTRIP_RELEASE_DMG=path/Cantrip-X.Y.Z.dmg also checks a real release image.
+test-release-updater:
+	@BIN="/tmp/cantrip-release-updater-tests-$$$$"; H="$$(mktemp -d)"; \
+	trap 'rm -f "$$BIN"; rm -rf "$$H"' EXIT; \
+	swiftc Sources/Cantrip/ReleaseUpdater.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/ReleaseUpdaterTests/main.swift -o "$$BIN" && \
+	CFFIXED_USER_HOME="$$H" "$$BIN"
 
 test-recovery:
 	@BIN="/tmp/cantrip-recovery-tests-$$$$"; \

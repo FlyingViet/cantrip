@@ -85,6 +85,11 @@ struct SessionTabTests {
         precondition(SessionManager.chatsDir.path.hasPrefix(home + "/"))
         // Queue planning and routing never reach the real Copilot CLI here.
         AppSettings.shared.copilotPath = "/usr/bin/false"
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "maintenance" {
+            try await testRemoteMaintenance()
+            try await testRemoteMaintenanceRelease()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "settings" {
             try await testSettingsManifest()
             print("Settings manifest tests passed")
@@ -186,6 +191,7 @@ struct SessionTabTests {
         try await testVoiceTurns()
         try await testWatchDevices()
         try await testRemoteMaintenance()
+        try await testRemoteMaintenanceRelease()
         try await testRemoteNotifications()
         try await testRemoteBadges()
         try await testSharedAPNsToken()

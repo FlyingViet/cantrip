@@ -75,5 +75,32 @@ func cantripVersionFailures() -> [String] {
     if case .unknown = outside.state(checking: false) {} else {
         failures.append("an app outside its checkout can't check for updates")
     }
+
+    // Release installs compare release versions.
+    expect(CantripBuildVersion.isNewer("1.1.16", than: "1.1.15"), "a later patch is newer")
+    expect(CantripBuildVersion.isNewer("1.2", than: "1.1.99"), "a later minor is newer")
+    expect(CantripBuildVersion.isNewer("1.1.15.1", than: "1.1.15"), "an extra component is newer")
+    expect(!CantripBuildVersion.isNewer("1.1.15", than: "1.1.15"), "the same version isn't newer")
+    expect(!CantripBuildVersion.isNewer("1.1.9", than: "1.1.15"), "components compare as numbers")
+    var release = CantripVersionReport(runningIdentity: "v1.1.15", runningDate: nil)
+    release.releaseInstall = true
+    release.repositoryAvailable = false
+    if case .unknown = release.state(checking: false) {} else { failures.append("an unchecked release install is unknown") }
+    if case .checking = release.state(checking: true) {} else { failures.append("a release install shows its check") }
+    release.latest = CantripBuildVersion(identity: "v1.1.16")
+    release.latestDownloadable = true
+    if case .releaseAvailable(let version) = release.state(checking: false) {
+        expect(version == "1.1.16", "the available release names its version: \(version)")
+    } else {
+        failures.append("a newer release with a disk image is available")
+    }
+    release.latestDownloadable = false
+    if case .unknown = release.state(checking: false) {} else { failures.append("a release without a disk image isn't offered") }
+    release.latestDownloadable = true
+    release.staged = CantripBuildVersion(identity: "v1.1.16")
+    if case .staged = release.state(checking: false) {} else { failures.append("a staged release waits for a restart") }
+    release.staged = nil
+    release.latest = CantripBuildVersion(identity: "v1.1.15")
+    if case .upToDate = release.state(checking: false) {} else { failures.append("the newest release is up to date") }
     return failures
 }

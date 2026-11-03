@@ -1101,6 +1101,13 @@ the latest status), and `action` (`check`, `update`, `rebuild`, `restart`);
 it returns 202 while the Mac continues independently of the phone. It accepts
 no client-specified shell commands, repository paths, or branches.
 
+The status also says how Cantrip was installed: `install` is `source` (a
+checkout) or `release` (a release's disk image), and `actions` lists what the
+Mac accepts. A release install has no `rebuild`; `check` reads GitHub's latest
+release (`latestVersion`), and `update` downloads its disk image, verifies the
+checksum and the app's Developer ID signature and notarization, and stages it
+for the next launch without waiting for idle tabs. Restart installs it.
+
 The latest job and 64 request receipts persist in user-only
 `~/.cache/Cantrip/maintenance/state.json`. Retrying an accepted ID does not
 rerun it; reusing an ID for a different request fails. Every accepted operation

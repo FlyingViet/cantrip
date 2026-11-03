@@ -41,6 +41,13 @@ struct RemoteMaintenanceSnapshot: Encodable {
     let checkedAt: Date?
     let job: RemoteMaintenanceJob?
     let acceptedRequestIDs: [UUID]
+    /// "source" (a checkout: update pulls and rebuilds) or "release" (a release's disk image: update
+    /// downloads the newest release; there's nothing to rebuild).
+    let install: String
+    /// A release install's newest release on GitHub, once checked.
+    let latestVersion: String?
+    /// The actions this Mac accepts.
+    let actions: [RemoteMaintenanceAction]
 }
 
 /// Fixed, paired-host actions. Jobs belong to the Mac, not to a phone connection.
@@ -67,13 +74,21 @@ final class RemoteMaintenance {
     private var localChanges: Bool?
     private var commitsBehind: Int?
     private var checkedAt: Date?
+    private var latestRelease: ReleaseUpdater.Release?
     private var worker: Task<Void, Never>?
+    private let latest: @Sendable () async throws -> ReleaseUpdater.Release
+    private let stage: @MainActor (ReleaseUpdater.Release, URL, @escaping (String) -> Void) async throws -> String
 
     init(manager: SessionManager, app: URL = Bundle.main.bundleURL,
          stateFile: URL = CantripPaths.cache("maintenance/state.json"),
          runningBuild: String = CrashRecovery.buildIdentity,
          run: @escaping Runner = RemoteMaintenance.runCommand,
-         restart: @escaping @MainActor (URL) throws -> Void = RemoteMaintenance.relaunch) {
+         restart: @escaping @MainActor (URL) throws -> Void = RemoteMaintenance.relaunch,
+         latest: @escaping @Sendable () async throws -> ReleaseUpdater.Release = { try await ReleaseUpdater.latest() },
+         stage: @escaping @MainActor (ReleaseUpdater.Release, URL, @escaping (String) -> Void) async throws -> String
+            = { try await ReleaseUpdater.stage($0, app: $1, progress: $2) }) {
+        self.latest = latest
+        self.stage = stage
         self.manager = manager
         self.app = app
         repository = app.deletingLastPathComponent()
@@ -99,8 +114,12 @@ final class RemoteMaintenance {
         }
     }
 
+    /// Installed from a release's disk image rather than a checkout.
+    private var isRelease: Bool { CantripInstall.isRelease(app) }
+
     private var unavailableReason: String? {
         if let loadError { return loadError }
+        if isRelease { return nil }
         guard app.lastPathComponent == "Cantrip.app",
               FileManager.default.fileExists(atPath: repository.appendingPathComponent(".git").path),
               FileManager.default.fileExists(atPath: repository.appendingPathComponent("Makefile").path) else {
@@ -126,7 +145,9 @@ final class RemoteMaintenance {
             unavailableReason: unavailableReason, runningBuild: runningBuild,
             installedBuild: installedBuild, busySessions: busySessions,
             branch: branch, localChanges: localChanges, commitsBehind: commitsBehind,
-            checkedAt: checkedAt, job: state.job, acceptedRequestIDs: state.requests.map(\.id))
+            checkedAt: checkedAt, job: state.job, acceptedRequestIDs: state.requests.map(\.id),
+            install: isRelease ? "release" : "source", latestVersion: latestRelease?.version,
+            actions: isRelease ? [.check, .update, .restart] : [.check, .update, .rebuild, .restart])
     }
 
     func start(_ request: RemoteMaintenanceRequest) throws -> RemoteMaintenanceSnapshot {
@@ -144,7 +165,12 @@ final class RemoteMaintenance {
         guard state.job?.isRunning != true else {
             throw RemoteMaintenanceError(status: 409, message: "A maintenance operation is already running. Refresh its progress.")
         }
-        if request.action != .check { try requireIdle() }
+        if isRelease, request.action == .rebuild {
+            throw RemoteMaintenanceError(status: 409,
+                message: "This Mac runs a release of Cantrip, so there's no source to rebuild. Use Update to download the newest release.")
+        }
+        // Downloading a release touches no running work; builds and restarts wait for idle tabs.
+        if request.action != .check, !(isRelease && request.action == .update) { try requireIdle() }
         let previous = state
         state.revision = UUID()
         state.requests = Array((state.requests + [request]).suffix(64))
@@ -233,6 +259,7 @@ final class RemoteMaintenance {
             return
         }
 
+        if isRelease { return try await executeRelease(action) }
         try phase("checking", "Inspecting the Mac checkout...")
         try await inspect()
         if action == .check || action == .update {
@@ -271,6 +298,35 @@ final class RemoteMaintenance {
             throw RemoteMaintenanceError(status: 500, message: "The build did not produce a Cantrip app with a build identity.")
         }
         try phase("succeeded", "Build ready. Restart Cantrip when all tabs are idle to activate it.", finished: true)
+    }
+
+    /// Check and update for a release install: GitHub's Latest release, staged for the next launch.
+    private func executeRelease(_ action: RemoteMaintenanceAction) async throws {
+        try phase("checking", "Checking GitHub for the newest release...")
+        let release = try await latest()
+        latestRelease = release
+        checkedAt = Date()
+        let running = CantripBuildVersion(identity: runningBuild).release ?? "0"
+        let newer = CantripBuildVersion.isNewer(release.version, than: running)
+        if action == .check {
+            try phase("succeeded", newer ? "\(release.name) is available." : "Cantrip \(running) is the newest release.",
+                      finished: true)
+            return
+        }
+        guard newer else {
+            try phase("succeeded", "Cantrip \(running) is already the newest release.", finished: true)
+            return
+        }
+        if installedBuild == release.tag {
+            try phase("succeeded", "\(release.name) is ready. Restart Cantrip when all tabs are idle to install it.", finished: true)
+            return
+        }
+        try phase("updating", "Downloading \(release.name)...")
+        _ = try await stage(release, app) { [weak self] status in
+            Task { @MainActor in self?.state.job?.message = status }
+        }
+        UpdateChecker.shared.checkNow()
+        try phase("succeeded", "\(release.name) is ready. Restart Cantrip when all tabs are idle to install it.", finished: true)
     }
 
     /// Fast-forwards main. When origin's history was rewritten (force-pushed with new commits for

@@ -217,4 +217,92 @@ extension SessionTabTests {
         try await wait(restarted)
         print("Remote maintenance: paired actions, local edits, bounded output, durable dedup, and safe restart passed")
     }
+
+    /// A release install (no checkout beside the app) checks GitHub's releases and stages the newest
+    /// one's app; there's no source to rebuild.
+    @MainActor
+    static func testRemoteMaintenanceRelease() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("maintenance-release-tests-\(UUID())")
+        let app = root.appendingPathComponent("Applications/Cantrip.app")
+        try fm.createDirectory(at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        func stamp(_ bundle: URL, _ identity: String, date: String) throws {
+            try fm.createDirectory(at: bundle.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+            try PropertyListSerialization.data(fromPropertyList: ["CantripBuildIdentity": identity, "CantripBuildDate": date],
+                format: .xml, options: 0).write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+        }
+        try stamp(app, "v1.1.15", date: "2026-11-02T00:00:00Z")
+
+        var latestTag = "v1.1.16", stages = 0, restarts = 0
+        let release = { ReleaseUpdater.Release(tag: latestTag, name: "Cantrip \(latestTag.dropFirst())", publishedAt: nil,
+                                               page: nil, diskImage: URL(string: "https://example.invalid/c.dmg"),
+                                               checksum: URL(string: "https://example.invalid/c.dmg.sha256")) }
+        let manager = SessionManager()
+        let service = RemoteMaintenance(manager: manager, app: app,
+            stateFile: root.appendingPathComponent("state/state.json"), runningBuild: "v1.1.15",
+            run: { executable, _, _, _ in
+                precondition(executable == "/usr/bin/codesign", "a release install runs no git or make: \(executable)")
+                return ""
+            },
+            restart: { _ in restarts += 1 },
+            latest: { await MainActor.run { release() } },
+            stage: { candidate, target, progress in
+                stages += 1
+                progress("Downloading \(candidate.diskImageName)…")
+                try stamp(PendingUpdate.pendingURL(for: target), candidate.tag, date: "2026-11-03T00:00:00Z")
+                return candidate.tag
+            })
+        func wait() async throws {
+            for _ in 0..<1000 {
+                if service.snapshot().job?.isRunning != true { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            preconditionFailure("Maintenance operation did not finish")
+        }
+        func start(_ action: RemoteMaintenanceAction) throws {
+            _ = try service.start(RemoteMaintenanceRequest(id: UUID(), action: action, revision: service.snapshot().revision))
+        }
+
+        var snapshot = service.snapshot()
+        precondition(snapshot.available && snapshot.install == "release", "a release install is available")
+        precondition(snapshot.actions == [.check, .update, .restart], "no rebuild for a release: \(snapshot.actions)")
+        precondition(snapshot.branch == nil && snapshot.localChanges == nil && snapshot.commitsBehind == nil)
+        do {
+            try start(.rebuild)
+            preconditionFailure("A release install can't rebuild")
+        } catch let error as RemoteMaintenanceError {
+            precondition(error.status == 409)
+        }
+
+        try start(.check)
+        try await wait()
+        snapshot = service.snapshot()
+        precondition(snapshot.latestVersion == "1.1.16" && snapshot.job?.message == "Cantrip 1.1.16 is available.",
+                     "check finds the newer release: \(String(describing: snapshot.job?.message))")
+        precondition(stages == 0, "checking downloads nothing")
+
+        manager.active.isStreaming = true
+        try start(.update)
+        try await wait()
+        manager.active.isStreaming = false
+        snapshot = service.snapshot()
+        precondition(stages == 1 && snapshot.job?.phase == "succeeded", "update stages the release while tabs run: \(String(describing: snapshot.job))")
+        precondition(snapshot.installedBuild == "v1.1.16", "the next launch installs it: \(String(describing: snapshot.installedBuild))")
+
+        try start(.update)
+        try await wait()
+        precondition(stages == 1, "an already staged release isn't downloaded again")
+
+        latestTag = "v1.1.15"
+        try start(.check)
+        try await wait()
+        precondition(service.snapshot().job?.message == "Cantrip 1.1.15 is the newest release.", "up to date")
+
+        // The restart job stays "restarting": the app quits and the next launch reports the result.
+        try start(.restart)
+        for _ in 0..<500 where restarts == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        precondition(restarts == 1 && service.snapshot().job?.phase == "restarting", "restart installs the staged release")
+        print("Remote maintenance for release installs: check, staged update, no rebuild, restart passed")
+    }
 }

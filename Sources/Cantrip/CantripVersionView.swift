@@ -13,7 +13,8 @@ struct CantripVersionView: View {
     var body: some View {
         CantripVersionContent(
             report: updater.versionReport, isChecking: updater.isChecking,
-            busySessions: busySessions, restartError: restartError,
+            busySessions: busySessions, restartError: restartError ?? updater.downloadError,
+            downloadStatus: updater.downloadStatus,
             onCheck: { updater.checkNow() }, onUpdate: onUpdate,
             onRestart: {
                 do {
@@ -32,6 +33,8 @@ struct CantripVersionContent: View {
     let isChecking: Bool
     let busySessions: Int
     var restartError: String?
+    /// A release download in progress.
+    var downloadStatus: String?
     let onCheck: () -> Void
     let onUpdate: (() -> Void)?
     let onRestart: () -> Void
@@ -70,6 +73,12 @@ struct CantripVersionContent: View {
             if let checkedAt = report.checkedAt {
                 Text("Checked at \(checkedAt.formatted(date: .omitted, time: .shortened))")
                     .font(.caption2).foregroundStyle(.tertiary)
+            }
+            if let downloadStatus {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text(downloadStatus).font(.caption2).foregroundStyle(.secondary)
+                }
             }
             if let restartError {
                 Text(restartError).font(.caption2).foregroundStyle(.red)
@@ -127,6 +136,13 @@ struct CantripVersionContent: View {
                 Button("Update and Restart", action: onUpdate)
                     .controlSize(.small)
                     .help("Pull from GitHub, rebuild, and relaunch Cantrip. Running replies are cut off.")
+            }
+        case .releaseAvailable(let version):
+            statusLabel("Cantrip \(version) is available", symbol: "arrow.down.circle.fill", color: .accentColor)
+            if let onUpdate, downloadStatus == nil {
+                Button("Update and Restart", action: onUpdate)
+                    .controlSize(.small)
+                    .help("Download Cantrip \(version) from GitHub, check Apple's notarization, and restart once no tab is busy.")
             }
         case .rebuildNeeded:
             statusLabel("The source checkout has changes this build doesn't include.",

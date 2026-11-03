@@ -96,7 +96,11 @@ attachments or screen captures.
 ## Quick start
 
 On macOS, install Xcode Command Line Tools and
-[set up one AI backend](docs/backends.md), then run:
+[set up one AI backend](docs/backends.md). Then either download
+**Cantrip-X.Y.Z.dmg** from the [latest release](https://github.com/FlyingViet/cantrip/releases/latest),
+open it and drag Cantrip to Applications (signed with Developer ID, notarized,
+updates itself from releases; **Install Command-Line Tool** in Settings ›
+About & Updates adds the `cantrip` command), or build it from source:
 
 ```sh
 mkdir -p ~/Coding
