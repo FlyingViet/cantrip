@@ -1586,6 +1586,18 @@ final class ChatSession: ObservableObject {
         receive(text, mode: mode, includesAmbientContext: true)
     }
 
+    /// A message typed into Cantrip's panel while the background agents run the tabs: it runs like
+    /// `submit` (the Mac's ambient context included), with the selected text and screenshots the
+    /// app sent along (`RemoteMacContext`).
+    func submitFromMac(_ text: String, mode: MessageDeliveryMode = .auto, context: RemoteMacContext) {
+        if let selection = context.selection {
+            selectionContext = SelectionContext(text: selection.text, appName: selection.appName)
+        }
+        ScreenCapture.shared.adopt(context.screenshots)
+        Log.write("panel: message from this Mac's panel (selection: \(context.selection == nil ? "no" : "\(context.selection!.text.count) chars"), screenshots: \(context.screenshots.count))")
+        submit(text, mode: mode)
+    }
+
     func submitCantripHomeTask(
         id: UUID, title: String, scheduleSummary: String, prompt: String, note: String? = nil
     ) {

@@ -13,6 +13,13 @@ import SwiftUI
 /// `showSettingsWithURL:token:` opens Settings on its own (the panel's gear, ⌘,) and
 /// `setOnSettingsClose:` hears it close; `refreshWithURL:token:` follows a new port or token; and
 /// `setLocalKey:` hands over the key that tells Cantrip's server these windows are its own.
+///
+/// The ⌥Space panel (while the background agents run the tabs): `showPanelWithURL:token:` opens
+/// it, `closePanel` hides it, `isPanelOpen` reports it and `setOnPanelClose:` hears it hide.
+/// `setPanelContext:` gives it the selection and screenshots (`{selection: {text, appName}?,
+/// screenshots: [{path, index, isMain}], newOpening}`); as you type it asks `setOnPanelQuery:`'s
+/// block for apps and files, which Cantrip answers with `setPanelSuggestions:` (`[{id, kind,
+/// title, subtitle?, action?, icon?}]`), and opens one through `setOnPanelOpenSuggestion:`'s block.
 @objc(CantripHomeWindowPlugin)
 public final class CantripHomeWindowPlugin: NSObject {
     @MainActor private static var controller: EmbeddedHomeWindowController?
@@ -64,6 +71,44 @@ public final class CantripHomeWindowPlugin: NSObject {
     @MainActor @objc public static func setOnClose(_ handler: @escaping () -> Void) {
         closeHandler = handler
     }
+
+    // MARK: The ⌥Space panel
+
+    @MainActor @objc public static func showPanel(withURL url: String, token: String) {
+        CantripLocalClientKey.register(localKey, for: url)
+        shared.showPanel(url: url, token: token)
+    }
+
+    @MainActor @objc public static func closePanel() {
+        controller?.closePanel()
+    }
+
+    @MainActor @objc public static var isPanelOpen: Bool {
+        controller?.isPanelOpen ?? false
+    }
+
+    @MainActor @objc public static func setOnPanelClose(_ handler: @escaping () -> Void) {
+        shared.onPanelClose = handler
+    }
+
+    @MainActor @objc public static func setPanelContext(_ context: NSDictionary) {
+        let values = context as? [String: Any] ?? [:]
+        let (selection, screenshots) = MacPanelLauncher.context(from: values)
+        shared.launcher.setContext(selection: selection, screenshots: screenshots,
+                                   newOpening: (values["newOpening"] as? Bool) ?? false)
+    }
+
+    @MainActor @objc public static func setPanelSuggestions(_ suggestions: NSArray) {
+        shared.launcher.setSuggestions(MacPanelLauncher.suggestions(from: suggestions as? [[String: Any]] ?? []))
+    }
+
+    @MainActor @objc public static func setOnPanelQuery(_ handler: @escaping (String) -> Void) {
+        shared.launcher.onQuery = handler
+    }
+
+    @MainActor @objc public static func setOnPanelOpenSuggestion(_ handler: @escaping (String) -> Void) {
+        shared.launcher.onOpen = handler
+    }
 }
 
 /// One Home window and the models behind it, kept for the life of Cantrip so reopening keeps the
@@ -85,6 +130,13 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
     private let thisMacToken: ThisMacToken
     private var settingsWindow: NSWindow?
     private var connected: (url: String, token: String)?
+    /// The ⌥Space panel: its own navigation (sheets, composer focus) on the same model and tab.
+    private var panel: EmbeddedLauncherPanel?
+    private let panelNavigation = MacHomeNavigation()
+    let launcher = MacPanelLauncher()
+    private let chrome = EmbeddedPanelChrome()
+    private let surfaces = EmbeddedSurfaces()
+    var onPanelClose: (() -> Void)?
 
     init(onClose: @escaping () -> Void, onSettingsClose: @escaping () -> Void) {
         self.onClose = onClose
@@ -170,7 +222,7 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
                                  directLocal: directLocal)
             .environment(\.macOpenSettings, { [weak self] in self?.showSettings() })
             .preferredColorScheme(.dark)
-        let hosting = NSHostingController(rootView: root)
+        let hosting = NSHostingController(rootView: EmbeddedSheetGate(surfaces: surfaces, isPanel: false, content: root))
         hosting.sceneBridgingOptions = [.toolbars, .title]
         let window = NSWindow(contentViewController: hosting)
         window.title = "Cantrip Home"
@@ -186,6 +238,7 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         let closing = notification.object as? NSWindow
+        if closing === panel { return }
         if closing === settingsWindow {
             if window?.isVisible != true { putAway() }
             onSettingsClose()
@@ -198,9 +251,97 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
         onClose()
     }
 
-    /// Back to a menu bar app: no Dock icon and no polling while only the panel is around.
+    /// Back to a menu bar app: no Dock icon, and no polling unless the panel is up.
     private func putAway() {
-        remote.setAppActive(false)
+        if panel?.isVisible != true { remote.setAppActive(false) }
         NSApp.setActivationPolicy(.accessory)
+    }
+
+    // MARK: The ⌥Space panel
+
+    var isPanelOpen: Bool { panel?.isVisible == true }
+
+    func showPanel(url: String, token: String) {
+        if panel == nil { makePanel() }
+        guard let panel else { return }
+        refresh(url: url, token: token)
+        remote.setAppActive(true)
+        remote.setFrontmost(true)
+        if !panel.isVisible { panel.placeOnPointerScreen() }
+        NSApp.activate()
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        surfaces.panelInFront = true
+        panelNavigation.composerFocusRequest += 1
+        launcher.beginOpening()
+    }
+
+    func closePanel() {
+        guard let panel, panel.isVisible else { return }
+        panel.orderOut(nil)
+        panelDidHide()
+    }
+
+    private func panelDidHide() {
+        surfaces.panelInFront = false
+        launcher.reset()
+        if window?.isVisible != true, !isSettingsOpen {
+            voice.stopListening(finalize: false)
+            remote.setAppActive(false)
+        }
+        onPanelClose?()
+    }
+
+    private func makePanel() {
+        chrome.openHomeWindow = { [weak self] in
+            guard let self, let connected = self.connected else { return }
+            self.closePanel()
+            self.show(url: connected.url, token: connected.token)
+        }
+        chrome.openSettings = { [weak self] in self?.showSettings() }
+        chrome.close = { [weak self] in self?.closePanel() }
+        let root = MacLauncherPanelView(env: env, remote: remote, voice: voice, navigation: panelNavigation,
+                                        launcher: launcher, chrome: chrome, directLocal: directLocal)
+            .environment(\.macOpenSettings, { [weak self] in self?.showSettings() })
+            .preferredColorScheme(.dark)
+        let panel = EmbeddedLauncherPanel(defaults: defaults)
+        let hosting = NSHostingController(rootView: EmbeddedSheetGate(surfaces: surfaces, isPanel: true, content: root))
+        hosting.sizingOptions = []
+        // Keeps the panel's own title ("Cantrip") instead of the chat's.
+        hosting.sceneBridgingOptions = []
+        let size = panel.frame.size
+        panel.contentViewController = hosting
+        panel.setContentSize(size)
+        panel.delegate = self
+        panel.onEscape = { [weak self] in self?.closePanel() }
+        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel,
+                                               queue: .main) { [weak self] _ in
+            // After the switch, to see where focus went: its own sheet or a file picker keeps it up.
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.panelLostFocus() } }
+        }
+        self.panel = panel
+    }
+
+    /// Like Spotlight: clicking another app or window puts the panel away, unless it's pinned or
+    /// showing a sheet, alert or file picker of its own.
+    private func panelLostFocus() {
+        guard let panel, panel.isVisible, !panel.isKeyWindow, !chrome.pinned,
+              panel.attachedSheet == nil, NSApp.modalWindow == nil else { return }
+        if let key = NSApp.keyWindow, key.sheetParent === panel || key.parent === panel || key is NSOpenPanel {
+            return
+        }
+        closePanel()
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        let window = notification.object as? NSWindow
+        if window === panel { surfaces.panelInFront = true }
+        else if window === self.window { surfaces.panelInFront = false }
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender === panel else { return true }
+        closePanel()
+        return false
     }
 }

@@ -43,47 +43,8 @@ struct MacHomeWindow: View {
         .frame(minWidth: 760, minHeight: 540)
         .toolbar { toolbar }
         .focusedSceneValue(\.startFreshTabID, startFreshTabID)
-        .sheet(isPresented: $navigation.showingBackground) {
-            CantripHomeBackgroundView(
-                remote: remote, openLog: { navigation.openBackgroundLog() }, openSession: nil,
-                openTab: { navigation.openTab($0) }
-            )
-            .macSheetFrame(width: 620, height: 640)
-        }
-        .sheet(item: $navigation.renamingTab) { session in
-            CantripTabRenameSheet(model: remote, session: session)
-                .macSheetFrame(width: 420, height: 220)
-        }
-        .sheet(item: $navigation.sheet, content: sheet)
-        .sheet(isPresented: $navigation.showingDirectLocalSettings) {
-            MacDirectLocalSettingsView(chat: directLocal) { navigation.showingDirectLocalSettings = false }
-                .macSheetFrame(width: 640, height: 760)
-        }
-        .cantripSectionPrompt(model: remote)
-        .sheet(item: $remote.modelSettingsSession) { session in
-            CantripSessionSettingsView(model: remote, session: session, identity: remote.usageIdentity)
-                .macSheetFrame()
-        }
-        .sheet(item: $remote.inputRequestsSession) { session in
-            CantripInputRequestsView(model: remote, session: session)
-                .macSheetFrame()
-        }
-        .sheet(isPresented: $remote.showingMCPServers) {
-            CantripMCPServersView(remote: remote, tabID: remote.mcpServersTab)
-                .frame(minWidth: 520, minHeight: 560)
-        }
-        .sheet(isPresented: $remote.showingSkills) {
-            CantripSkillsView(remote: remote)
-                .frame(minWidth: 520, minHeight: 560)
-        }
-        .sheet(isPresented: $remote.showingMacAccess) {
-            NavigationStack { CantripMacAccessView(remote: remote) }
-                .macSheetFrame(width: 760, height: 620)
-        }
-        .sheet(item: $navigation.pairing) { prompt in
-            CantripPairingView(prompt: prompt, model: remote) { _ in navigation.pairing = nil }
-                .macSheetFrame(width: 520, height: prompt.link == nil ? 260 : 600)
-        }
+        .modifier(MacHomeSheets(remote: remote, voice: voice, navigation: navigation, vm: vm,
+                                usageModel: usageModel, directLocal: directLocal))
         .confirmationDialog("Clear the local conversation?", isPresented: $confirmingDirectLocalClear) {
             Button("Clear Conversation", role: .destructive) { directLocal.clear() }
         } message: {
@@ -320,6 +281,107 @@ struct MacHomeWindow: View {
         .accessibilityIdentifier(navigation.showingDirectLocal ? "directLocal.menu" : isTabOpen ? "tab.menu" : "home.menu")
     }
 
+    /// Background-run requests waiting on the user (same rule as iOS Home's header).
+    private var backgroundInputCount: Int {
+        guard remote.selectedSession?.isCantripHome == true else { return 0 }
+        return remote.selectedSession?.backgroundInputCount
+            ?? (remote.homeBackground?.runs.filter(\.needsInput).count ?? 0)
+    }
+
+    private var backgroundCount: Int {
+        guard remote.selectedSession?.isCantripHome == true else { return 0 }
+        return CantripHomeBackgroundCount.active(
+            transcript: remote.selectedSession?.transcript ?? [], session: remote.selectedSession
+        )
+    }
+
+    /// macOS keeps visible windows "active" even when another app is frontmost, so Home
+    /// keeps updating on screen (slower; see setFrontmost); a hidden or minimized-only app
+    /// stops polling.
+    private func setActive(_ phase: ScenePhase) {
+        #if CANTRIP_EMBEDDED
+        // Inside Cantrip.app the window has no SwiftUI scene, so its phase reads as background;
+        // the plug-in starts and stops polling as the window opens and closes instead.
+        let active = true
+        #else
+        let active = phase != .background
+        #endif
+        remote.setAppActive(active)
+        vm.setAppActive(active)
+    }
+}
+
+/// Whether a Home view presents the sheets the shared `CantripRemoteModel` asks for (a tab's model
+/// settings, input requests, MCP servers, skills, Mac access, sections). Inside Cantrip.app the
+/// ⌥Space panel and the Home window show the same model, so only the one in front presents them.
+private struct MacPresentsRemoteSheetsKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var macPresentsRemoteSheets: Bool {
+        get { self[MacPresentsRemoteSheetsKey.self] }
+        set { self[MacPresentsRemoteSheetsKey.self] = newValue }
+    }
+}
+
+/// Home's sheets: its own (`navigation`: Background, rename, usage, memory, voice mode, queue…)
+/// and the ones the model asks for, which follow `macPresentsRemoteSheets`. The Home window and
+/// Cantrip's ⌥Space panel both use it.
+struct MacHomeSheets: ViewModifier {
+    @ObservedObject var remote: CantripRemoteModel
+    @ObservedObject var voice: VoiceController
+    @ObservedObject var navigation: MacHomeNavigation
+    @ObservedObject var vm: ChatViewModel
+    @ObservedObject var usageModel: CopilotUsageModel
+    @ObservedObject var directLocal: DirectLocalChat
+    @Environment(\.macPresentsRemoteSheets) private var presentsRemote
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $navigation.showingBackground) {
+                CantripHomeBackgroundView(
+                    remote: remote, openLog: { navigation.openBackgroundLog() }, openSession: nil,
+                    openTab: { navigation.openTab($0) }
+                )
+                .macSheetFrame(width: 620, height: 640)
+            }
+            .sheet(item: $navigation.renamingTab) { session in
+                CantripTabRenameSheet(model: remote, session: session)
+                    .macSheetFrame(width: 420, height: 220)
+            }
+            .sheet(item: $navigation.sheet, content: sheet)
+            .sheet(isPresented: $navigation.showingDirectLocalSettings) {
+                MacDirectLocalSettingsView(chat: directLocal) { navigation.showingDirectLocalSettings = false }
+                    .macSheetFrame(width: 640, height: 760)
+            }
+            .cantripSectionPrompt(model: remote, isEnabled: presentsRemote)
+            .sheet(item: presentsRemote ? $remote.modelSettingsSession : .constant(nil)) { session in
+                CantripSessionSettingsView(model: remote, session: session, identity: remote.usageIdentity)
+                    .macSheetFrame()
+            }
+            .sheet(item: presentsRemote ? $remote.inputRequestsSession : .constant(nil)) { session in
+                CantripInputRequestsView(model: remote, session: session)
+                    .macSheetFrame()
+            }
+            .sheet(isPresented: presentsRemote ? $remote.showingMCPServers : .constant(false)) {
+                CantripMCPServersView(remote: remote, tabID: remote.mcpServersTab)
+                    .frame(minWidth: 520, minHeight: 560)
+            }
+            .sheet(isPresented: presentsRemote ? $remote.showingSkills : .constant(false)) {
+                CantripSkillsView(remote: remote)
+                    .frame(minWidth: 520, minHeight: 560)
+            }
+            .sheet(isPresented: presentsRemote ? $remote.showingMacAccess : .constant(false)) {
+                NavigationStack { CantripMacAccessView(remote: remote) }
+                    .macSheetFrame(width: 760, height: 620)
+            }
+            .sheet(item: $navigation.pairing) { prompt in
+                CantripPairingView(prompt: prompt, model: remote) { _ in navigation.pairing = nil }
+                    .macSheetFrame(width: 520, height: prompt.link == nil ? 260 : 600)
+            }
+    }
+
     @ViewBuilder private func sheet(_ sheet: MacHomeSheet) -> some View {
         switch sheet {
         case .usage:
@@ -351,35 +413,6 @@ struct MacHomeWindow: View {
                     .macSheetFrame(width: 620, height: 560)
             }
         }
-    }
-
-    /// Background-run requests waiting on the user (same rule as iOS Home's header).
-    private var backgroundInputCount: Int {
-        guard remote.selectedSession?.isCantripHome == true else { return 0 }
-        return remote.selectedSession?.backgroundInputCount
-            ?? (remote.homeBackground?.runs.filter(\.needsInput).count ?? 0)
-    }
-
-    private var backgroundCount: Int {
-        guard remote.selectedSession?.isCantripHome == true else { return 0 }
-        return CantripHomeBackgroundCount.active(
-            transcript: remote.selectedSession?.transcript ?? [], session: remote.selectedSession
-        )
-    }
-
-    /// macOS keeps visible windows "active" even when another app is frontmost, so Home
-    /// keeps updating on screen (slower; see setFrontmost); a hidden or minimized-only app
-    /// stops polling.
-    private func setActive(_ phase: ScenePhase) {
-        #if CANTRIP_EMBEDDED
-        // Inside Cantrip.app the window has no SwiftUI scene, so its phase reads as background;
-        // the plug-in starts and stops polling as the window opens and closes instead.
-        let active = true
-        #else
-        let active = phase != .background
-        #endif
-        remote.setAppActive(active)
-        vm.setAppActive(active)
     }
 }
 

@@ -16,9 +16,17 @@ token, but only one can run at a time.
 On a Mac you use at the screen, Settings › **About & Updates** › **Keep agents running when
 Cantrip quits** runs the headless host for the app. Cantrip registers a login item (listed under
 Cantrip in System Settings › General › Login Items & Extensions) that runs its own engine with no
-windows, and Cantrip.app connects to it like Cantrip Gateway does: ⌥Space and the menu bar open the
-Home window, and Settings opens the same pages. Quitting, updating or restarting the app leaves
-tabs, Cantrip Home and paired devices running.
+windows, and Cantrip.app connects to it like Cantrip Gateway does: the menu bar opens the Home
+window, and Settings opens the same pages. Quitting, updating or restarting the app leaves tabs,
+Cantrip Home and paired devices running.
+
+⌥Space opens the panel: the Home window's chat in a floating panel that opens where the pointer is
+and goes away when you click elsewhere (pin it to keep it up). Its menu switches between Home and
+your tabs, on the same Mac and tab as the Home window. As you type it suggests apps and files on
+this Mac (Return opens the app, ⌘Return asks Cantrip instead). ⌥⇧Space attaches the text selected
+in the front app, and with **Attach screen** on, screenshots taken as the panel opens go with your
+messages; both show as chips you can remove. With Settings › Appearance › Interface set to Window,
+⌥Space opens the Home window instead.
 
 - Turning it on or off waits until no tab or Home task is working, then hands the tabs over.
 - Updates (`make app`, the release updater) are staged beside the app as usual. The engine installs
@@ -27,8 +35,9 @@ tabs, Cantrip Home and paired devices running.
   appear while Cantrip.app is open.
 - `cantrip status` says "background agents for Cantrip.app"; `cantrip daemon restart` restarts the
   engine. To stop it, turn the setting off.
-- It needs macOS 26 and the Home window. The ⌥Space panel isn't available in this mode yet, and it
-  can't be combined with `cantrip daemon start`.
+- It needs macOS 26 and the Home window, and it can't be combined with `cantrip daemon start`.
+- The panel in this mode doesn't have the extensions pane, side-by-side council panes or on-screen
+  tooltips yet.
 
 ## Set up
 

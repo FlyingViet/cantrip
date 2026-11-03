@@ -669,6 +669,8 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     let supportsImageAttachments: Bool?
     let queued: [CantripRemoteQueuedPrompt]?
     var supportsAutoDelivery: Bool? = nil
+    /// Cantrip's own panel on the Mac may send its selection and screenshots (`CantripMacContext`).
+    var supportsMacContext: Bool? = nil
     var deliveryStatus: String? = nil
     var supportsQueueRemoval: Bool? = nil
     /// The Mac can deliver a queued message now; absent from older hosts.
@@ -2376,7 +2378,8 @@ struct CantripRemoteAPI {
     fileprivate func prepareMessage(
         _ text: String, mode: CantripDeliveryMode, sessionID: String,
         images: [ChatImageAttachment], videoID: String? = nil, fileIDs: [String] = [],
-        inputRequestID: UUID? = nil, location: CantripClientLocation? = nil
+        inputRequestID: UUID? = nil, location: CantripClientLocation? = nil,
+        macContext: CantripMacContext? = nil
     ) async throws -> Data {
         guard images.count <= ImageAttachmentProcessor.maximumCount else {
             throw ImageAttachmentError.tooMany
@@ -2413,9 +2416,28 @@ struct CantripRemoteAPI {
         guard mode != .auto || host.supportsAutoDelivery == true else {
             throw CantripRemoteError.autoDeliveryUnsupported
         }
-        return try JSONEncoder().encode(CantripMessageBody(text: text, mode: mode, images: images,
+        let (wireText, context) = Self.macContextRoute(text, context: macContext, isOwnMac: isOwnMac,
+                                                       supported: host.supportsMacContext == true)
+        return try JSONEncoder().encode(CantripMessageBody(text: wireText, mode: mode, images: images,
                                                          videoID: videoID, fileIDs: fileIDs,
-                                                         inputRequestID: inputRequestID, location: location))
+                                                         inputRequestID: inputRequestID, location: location,
+                                                         macContext: context))
+    }
+
+    /// This client is Cantrip's own app on the Mac it talks to (loopback with the local key).
+    var isOwnMac: Bool {
+        guard case .remote(let baseURL) = transport else { return false }
+        return CantripLocalClientKey.key(for: baseURL) != nil
+    }
+
+    /// The panel's context goes as `macContext` only to its own Mac when that Mac takes it;
+    /// otherwise its selection goes as text and the screenshots (paths on this Mac) stay behind.
+    static func macContextRoute(_ text: String, context: CantripMacContext?, isOwnMac: Bool,
+                                supported: Bool) -> (text: String, context: CantripMacContext?) {
+        guard let context else { return (text, nil) }
+        if isOwnMac, supported { return (text, context) }
+        guard let selection = context.selection else { return (text, nil) }
+        return (CantripMacContext.inline(selection, after: text), nil)
     }
 
     func videoStatus(sessionID: String, uploadID: UUID) async throws -> CantripVideoUploadStatus? {
@@ -4761,7 +4783,8 @@ final class CantripRemoteModel: ObservableObject {
         images: [ChatImageAttachment] = [],
         video: ChatVideoAttachment? = nil,
         files: [ChatFileAttachment] = [],
-        sessionID: String? = nil
+        sessionID: String? = nil,
+        macContext: CantripMacContext? = nil
     ) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !images.isEmpty || video != nil || !files.isEmpty,
@@ -4784,7 +4807,8 @@ final class CantripRemoteModel: ObservableObject {
         guard let session = await mutate(prepare: { api in
             try await api.prepareMessage(trimmed, mode: mode, sessionID: sessionID, images: images,
                                          videoID: video?.id.uuidString, fileIDs: files.map(\.id.uuidString),
-                                         inputRequestID: question?.id, location: location)
+                                         inputRequestID: question?.id, location: location,
+                                         macContext: question == nil ? macContext : nil)
         }, { api, body in
             try await api.sendMessage(body, sessionID: sessionID)
         }) else { return false }

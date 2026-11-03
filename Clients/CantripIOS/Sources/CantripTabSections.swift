@@ -236,8 +236,10 @@ struct CantripTabSectionTitle: View {
 extension View {
     /// Asks for a section's name when `model.sectionPrompt` is set (New Section, Rename Section),
     /// and shows Edit Sections when `model.editingSections` is set. Attach once per app.
-    func cantripSectionPrompt(model: CantripRemoteModel) -> some View {
-        modifier(CantripSectionPromptModifier(model: model, local: nil))
+    /// `isEnabled` false leaves them to another window showing the same model (Cantrip's ⌥Space
+    /// panel and its Home window), without changing this view's identity.
+    func cantripSectionPrompt(model: CantripRemoteModel, isEnabled: Bool = true) -> some View {
+        modifier(CantripSectionPromptModifier(model: model, local: nil, isEnabled: isEnabled))
     }
 
     /// The same name prompt driven by `prompt`, for sheets that can't show the app's alert.
@@ -250,11 +252,12 @@ private struct CantripSectionPromptModifier: ViewModifier {
     @ObservedObject var model: CantripRemoteModel
     /// Nil: the app-wide prompt (`model.sectionPrompt`), which also presents Edit Sections.
     let local: Binding<CantripSectionPrompt?>?
+    var isEnabled = true
     @State private var name = ""
 
     private var current: CantripSectionPrompt? {
         if let local { return local.wrappedValue }
-        return model.sectionPrompt
+        return isEnabled ? model.sectionPrompt : nil
     }
 
     private func dismissPrompt() {
@@ -264,11 +267,11 @@ private struct CantripSectionPromptModifier: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if local == nil {
             prompted(content)
-                .sheet(isPresented: $model.editingSections) {
+                .sheet(isPresented: isEnabled ? $model.editingSections : .constant(false)) {
                     CantripTabSectionsEditor(model: model)
                 }
                 .confirmationDialog(model.sectionDeletion.map { "Delete \u{201C}\($0.name)\u{201D}?" } ?? "Delete Section?",
-                                    isPresented: Binding(get: { model.sectionDeletion != nil },
+                                    isPresented: Binding(get: { isEnabled && model.sectionDeletion != nil },
                                                          set: { if !$0 { model.sectionDeletion = nil } }),
                                     titleVisibility: .visible, presenting: model.sectionDeletion) { section in
                     Button("Delete Section", role: .destructive) {

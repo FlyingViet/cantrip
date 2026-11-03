@@ -14,6 +14,10 @@ struct MacHomeChatView: View {
     @ObservedObject var slashCommands: BackendSlashCommandStore
     /// A project tab opened from the sidebar instead of Home's own chat.
     var isTab = false
+    /// Cantrip's ⌥Space panel: apps, files, the selection and screenshots (inactive elsewhere).
+    @ObservedObject var launcher: MacPanelLauncher = .inactive
+    /// The panel has no room for the tab's terminal pane.
+    var showsTerminal = true
     @AppStorage("hermes.paused") private var paused = false
     @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
     @State private var input = ""
@@ -67,7 +71,8 @@ struct MacHomeChatView: View {
             )
             .frame(maxWidth: Self.readableWidth)
             inputBar
-            if navigation.showingTerminal, let session = remote.selectedSession, session.id == remote.selectedSessionID {
+            if showsTerminal, navigation.showingTerminal, let session = remote.selectedSession,
+               session.id == remote.selectedSessionID {
                 MacTerminalPane(remote: remote, session: session) { navigation.showingTerminal = false }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -341,6 +346,13 @@ struct MacHomeChatView: View {
                         onChoose: { chooseSlashCommand($0, via: .activate) }
                     )
                 }
+                if launcher.isActive {
+                    MacPanelContextChips(launcher: launcher)
+                    if showsLauncherSuggestions {
+                        MacPanelSuggestionList(launcher: launcher, maxHeight: min(280, max(100, size.height * 0.35)),
+                                               onOpen: openSuggestion)
+                    }
+                }
                 if let popup = mentionPopup {
                     CantripMentionSuggestionList(
                         popup: popup,
@@ -368,6 +380,21 @@ struct MacHomeChatView: View {
             MacSlashKeyMonitor(isActive: mentionPopup != nil, onKey: handleMentionKey)
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
+        }
+        .background {
+            // The panel's app and file suggestions: Return opens the app, ⌘Return asks instead.
+            MacPanelKeyMonitor(isActive: showsLauncherSuggestions, onKey: handleLauncherKey)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+        .onChange(of: launcherQuery, initial: true) { _, query in launcher.query(query) }
+        .onChange(of: launcher.opening) { _, _ in
+            launcher.query(launcherQuery)
+            DispatchQueue.main.async { composerFocused = true }
+        }
+        // The panel opens on a tab still loading: type into it as soon as it can take text.
+        .onChange(of: destinationReady && composerAcceptsText) { _, ready in
+            if ready, launcher.isActive { DispatchQueue.main.async { composerFocused = true } }
         }
         .onChange(of: input) { _, text in
             // Text the app put in (a draft, dictation, a command) puts the caret at its end, as
@@ -407,6 +434,42 @@ struct MacHomeChatView: View {
             }
         }
         #endif
+    }
+
+    // MARK: Panel suggestions
+
+    /// What the panel searches apps and files for: a short line, not a command, mention or list.
+    private var launcherQuery: String {
+        guard launcher.isActive, !paused, !input.contains(where: \.isNewline) else { return "" }
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.hasPrefix("/"), !trimmed.hasPrefix("!"), !trimmed.contains("@") else { return "" }
+        return input
+    }
+
+    private var showsLauncherSuggestions: Bool {
+        launcher.showsSuggestions(for: launcherQuery) && slashPresentation == nil && mentionPopup == nil
+            && remote.chatInputRequest == nil && !hasImageDraft && remote.selectedSession?.isStreaming != true
+    }
+
+    private func handleLauncherKey(_ key: MacPanelKeyMonitor.Key) -> Bool {
+        switch key {
+        case .open:
+            guard let app = launcher.appSuggestion else { return false }
+            openSuggestion(app)
+            return true
+        case .ask:
+            sendText()
+            return true
+        case .dismiss:
+            launcher.dismissSuggestions()
+            return true
+        }
+    }
+
+    private func openSuggestion(_ suggestion: MacPanelLauncher.Suggestion) {
+        input = ""
+        composerRevision = UUID()
+        launcher.open(suggestion)
     }
 
     // MARK: Slash commands
@@ -734,11 +797,15 @@ struct MacHomeChatView: View {
         let mentions = CantripTabMentions.remaining(mentionDrafts[draftKey] ?? [], in: text)
         let wireText = CantripTabMentions.supportsMentions(remote.selectedSession) && !mentions.isEmpty
             ? CantripTabMentions.encode(text, mentions: mentions) : text
+        // From the panel: the selection and screenshots, for this Mac (or the selection as text).
+        let macContext = launcher.pendingContext
         submittingRemote = true
         Task { @MainActor in
             defer { submittingRemote = false }
-            let sent = await vm.sendRemote(wireText, images: images, video: video, files: files, sessionID: sessionID)
+            let sent = await vm.sendRemote(wireText, images: images, video: video, files: files, sessionID: sessionID,
+                                           macContext: macContext)
             if sent {
+                launcher.didSend(macContext)
                 let sentIDs = Set(images.map(\.id))
                 imageDrafts[draftKey]?.removeAll { sentIDs.contains($0.id) }
                 if videoDrafts[draftKey]?.id == video?.id { videoDrafts.removeValue(forKey: draftKey) }

@@ -128,6 +128,32 @@ enum ImageAttachmentProcessor {
     }
 }
 
+/// What Cantrip's panel on a Mac sends along to that same Mac (`supportsMacContext`): the text
+/// selected in the frontmost app and the screenshots the app took as the panel opened. The Mac
+/// accepts it only from its own app (the local client key), so it never goes to another Mac.
+struct CantripMacContext: Encodable, Equatable {
+    struct Selection: Encodable, Equatable {
+        let text: String
+        let appName: String
+    }
+
+    struct Screenshot: Encodable, Equatable {
+        let path: String
+        let index: Int
+        let isMain: Bool
+    }
+
+    var selection: Selection?
+    var screenshots: [Screenshot] = []
+
+    /// The selection as text in the message, for a Mac that can't take `macContext` (another Mac,
+    /// or one from before it), worded like the Mac's own panel words it.
+    static func inline(_ selection: Selection, after text: String) -> String {
+        let quoted = String(selection.text.prefix(4000))
+        return text + "\n\n(Selected text from \(selection.appName), which my request refers to:\n\"\"\"\n\(quoted)\n\"\"\")"
+    }
+}
+
 struct CantripMessageBody: Encodable {
     let text: String
     let mode: String
@@ -138,13 +164,16 @@ struct CantripMessageBody: Encodable {
     let inputRequestID: UUID?
     /// Where this device is (Settings › Location); omitted while sharing is off.
     let location: CantripClientLocation?
+    /// Only from Cantrip's panel to its own Mac; omitted otherwise.
+    let macContext: CantripMacContext?
 
     struct ImageUpload: Encodable {
         let data: Data
     }
 
     init(text: String, mode: CantripDeliveryMode, images: [ChatImageAttachment], videoID: String? = nil,
-         fileIDs: [String] = [], inputRequestID: UUID? = nil, location: CantripClientLocation? = nil) {
+         fileIDs: [String] = [], inputRequestID: UUID? = nil, location: CantripClientLocation? = nil,
+         macContext: CantripMacContext? = nil) {
         self.text = text
         self.mode = mode.rawValue
         self.images = images.isEmpty ? nil : images.map { ImageUpload(data: $0.data) }
@@ -152,5 +181,6 @@ struct CantripMessageBody: Encodable {
         self.fileIDs = fileIDs.isEmpty ? nil : fileIDs
         self.inputRequestID = inputRequestID
         self.location = location
+        self.macContext = macContext
     }
 }

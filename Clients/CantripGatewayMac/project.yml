@@ -147,6 +147,7 @@ targets:
       - path: ../CantripIOS/Tests/CantripGzipTests.swift
       - path: ../CantripIOS/Tests/CantripArtifactDownloadTests.swift
       - path: ../CantripIOS/Tests/CantripLocationSharingTests.swift
+      - path: ../CantripIOS/Tests/CantripMacContextTests.swift
       - path: ../CantripIOS/Tests/CantripTabBackTransitionTests.swift
       - path: ../CantripIOS/Tests/CantripMCPAppTests.swift
       - path: ../CantripIOS/Tests/CantripPromptUsageTests.swift

@@ -197,7 +197,8 @@ final class ChatViewModel: ObservableObject {
         images: [ChatImageAttachment] = [],
         video: ChatVideoAttachment? = nil,
         files: [ChatFileAttachment] = [],
-        sessionID: String? = nil
+        sessionID: String? = nil,
+        macContext: CantripMacContext? = nil
     ) async -> Bool {
         guard activeLane.usesCantripRemote,
               !UserDefaults.standard.bool(forKey: "hermes.paused"),
@@ -252,7 +253,8 @@ final class ChatViewModel: ObservableObject {
             images: images,
             video: video,
             files: files,
-            sessionID: targetSessionID
+            sessionID: targetSessionID,
+            macContext: macContext
         )
         sending = false
         if sent {

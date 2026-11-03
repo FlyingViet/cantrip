@@ -1,18 +1,29 @@
 import AppKit
+import Carbon.HIToolbox
 import ServiceManagement
 import UserNotifications
 
 /// Cantrip.app as the background engine's client ("Keep agents running when Cantrip quits"): the
 /// menu bar item, ⌥Space and the Home and Settings windows, on the engine's loopback server. The
 /// engine (`BackgroundEngine`, `HeadlessHost`) owns tabs, Cantrip Home and paired devices, so
-/// quitting or updating the app leaves them running. ⌥Space opens the Home window; the panel
-/// isn't a client of the engine yet.
+/// quitting or updating the app leaves them running. ⌥Space opens the panel: the Home window's
+/// chat in a floating panel (the plug-in's), with this Mac's apps and files (`PanelSearch`), the
+/// selected text (⌥⇧Space) and screenshots. With Interface set to Window it opens the Home window.
 @MainActor
-final class ClientAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+final class ClientAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
     private var statusLine: NSMenuItem!
     private var loginItemsMenuItem: NSMenuItem!
+    private var panelMenuItem: NSMenuItem!
+    private var homeMenuItem: NSMenuItem!
     private var hotkey: HotkeyManager?
+    private var selectionHotkey: HotkeyManager?
+    /// What goes with the panel's messages from this opening: the selection and screenshots.
+    private var panelContext: [String: Any] = [:]
+    /// Bumped per opening, so late screenshots never land in a later one.
+    private var panelOpening = 0
+    /// The panel has this opening's context (later changes go to it as updates).
+    private var panelContextDelivered = false
     private var timer: Timer?
     private var connection: BackgroundEngine.Connection?
     private var outbox: String?
@@ -25,11 +36,14 @@ final class ClientAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificati
     /// A window asked for before the engine answered, and when.
     private var pendingOpen: (window: Window, at: Date)?
 
-    private enum Window { case home, settings }
+    private enum Window { case home, settings, panel }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenus()
-        hotkey = HotkeyManager { [weak self] in self?.toggleHomeWindow() }
+        hotkey = HotkeyManager { [weak self] in self?.toggleMainSurface() }
+        // ⌥⇧Space: the panel with the frontmost app's selected text attached.
+        selectionHotkey = HotkeyManager(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey | shiftKey),
+                                        id: 2) { [weak self] in self?.openPanelWithSelection() }
         UNUserNotificationCenter.current().delegate = self
         AppSettings.shared.refreshLaunchAtLoginRegistrationIfNeeded()
         Log.write("client: Cantrip.app is the background agents' window, pid \(getpid()), build \(CrashRecovery.buildIdentity)")
@@ -92,7 +106,11 @@ final class ClientAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificati
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "sparkle.magnifyingglass", accessibilityDescription: "Cantrip")
         let menu = NSMenu()
-        menu.addItem(item("Open Home Window (⌥Space)", #selector(openHomeWindow)))
+        menu.delegate = self
+        panelMenuItem = item("Open Panel (⌥Space)", #selector(openPanelFromMenu))
+        menu.addItem(panelMenuItem)
+        homeMenuItem = item("Open Home Window", #selector(openHomeWindow))
+        menu.addItem(homeMenuItem)
         menu.addItem(item("Settings…", #selector(openSettingsWindow)))
         menu.addItem(.separator())
         statusLine = NSMenuItem(title: "Starting the background agents…", action: nil, keyEquivalent: "")
@@ -112,6 +130,12 @@ final class ClientAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificati
         return item
     }
 
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let panel = usesPanel
+        panelMenuItem.isHidden = !panel
+        homeMenuItem.title = panel ? "Open Home Window" : "Open Home Window (⌥Space)"
+    }
+
     private func setStatus(_ text: String, needsApproval: Bool = false) {
         statusLine.title = text
         loginItemsMenuItem.isHidden = !needsApproval
@@ -119,12 +143,83 @@ final class ClientAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificati
 
     // MARK: - Windows
 
+    /// ⌥Space: the panel, unless Interface is Window (read fresh: the engine saves Settings).
+    private var usesPanel: Bool {
+        let mode = InterfaceMode(rawValue: UserDefaults.standard.string(forKey: "interfaceMode") ?? "") ?? .panel
+        return mode == .panel && HomeWindow.supportsPanel
+    }
+
+    private func toggleMainSurface() {
+        if usesPanel { togglePanel() } else { toggleHomeWindow() }
+    }
+
     private func toggleHomeWindow() {
         if HomeWindow.isOpen, NSApp.isActive {
             HomeWindow.close()
         } else {
             openHomeWindow()
         }
+    }
+
+    /// Like Cantrip's own panel: ⌥Space puts a visible panel away (it floats above every app, and
+    /// takes the keyboard without making Cantrip the active app).
+    private func togglePanel() {
+        if HomeWindow.isPanelOpen {
+            HomeWindow.closePanel()
+        } else {
+            openPanel(selection: nil)
+        }
+    }
+
+    @objc func openPanelFromMenu() {
+        openPanel(selection: nil)
+    }
+
+    private func openPanelWithSelection() {
+        guard usesPanel else {
+            openHomeWindow()
+            return
+        }
+        let appName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "the frontmost app"
+        var selection: [String: String]?
+        if let text = SelectionGrabber.grab(), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            selection = ["text": text, "appName": appName]
+            Log.write("selection: grabbed \(text.count) chars from \(appName)")
+        }
+        if HomeWindow.isPanelOpen, let selection {
+            // Already up: the selection joins this opening.
+            panelContext["selection"] = selection
+            deliverPanelContext()
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        openPanel(selection: selection)
+    }
+
+    /// A new opening: screenshots first (before the panel covers the screen), then the panel.
+    private func openPanel(selection: [String: String]?) {
+        guard !HomeWindow.isPanelOpen else {
+            open(.panel)
+            return
+        }
+        panelOpening += 1
+        let opening = panelOpening
+        panelContextDelivered = false
+        panelContext = ["screenshots": [[String: Any]]()]
+        if let selection { panelContext["selection"] = selection }
+        ScreenCapture.shared.captureNow(attachScreen: UserDefaults.standard.bool(forKey: "attachScreen")) { [weak self] captures in
+            guard let self, opening == self.panelOpening else { return }
+            self.panelContext["screenshots"] = captures.map { ["path": $0.path, "index": $0.index, "isMain": $0.isMain] }
+            if self.panelContextDelivered { self.deliverPanelContext() }
+        }
+        open(.panel)
+    }
+
+    /// The opening's context, or an update to it once the panel has it.
+    private func deliverPanelContext() {
+        var context = panelContext
+        context["newOpening"] = !panelContextDelivered
+        if HomeWindow.isPanelOpen || !panelContextDelivered { HomeWindow.setPanelContext(context) }
     }
 
     @objc func openHomeWindow() {
@@ -145,6 +240,11 @@ final class ClientAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificati
         pendingOpen = nil
         NSApp.activate(ignoringOtherApps: true)
         switch window {
+        case .panel:
+            var context = panelContext
+            context["newOpening"] = !panelContextDelivered
+            HomeWindow.openPanel(port: connection.port, token: connection.token, context: context) {}
+            panelContextDelivered = true
         case .home: HomeWindow.open(port: connection.port, token: connection.token) {}
         case .settings:
             settingsOpen = true
