@@ -28,9 +28,11 @@ extension SessionTabTests {
         settings.fileRAGEnabled = false
         defer { (settings.linkPreviewsEnabled, settings.shareLocation, settings.memoryEnabled) = saved }
 
-        let fixture = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("RichCardTests/open-meteo-seattle.json"))
         let fetchedAt = Date()
+        // A real Open-Meteo answer from 2026-11-01, moved to now: its "Now" hour and days stay current.
+        let fixture = try weatherFixture(shiftedTo: fetchedAt, Data(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("RichCardTests/open-meteo-seattle.json")))
         // Let earlier tests' deferred stub resets land first, or one could clear the stubs below mid-test.
         try await Task.sleep(for: .milliseconds(200))
         await WeatherCardResolver.shared.setSources(.init(
@@ -151,4 +153,20 @@ extension SessionTabTests {
         await LinkPreviewStore.shared.setCustomFetcher(nil)
         print("Weather cards: device forecasts, Mac fallback, unavailable states, link filtering and Home streaming passed")
     }
+}
+
+/// The fixture's times (current, hourly, daily, sunrise and sunset) moved so its current time is `now`.
+private func weatherFixture(shiftedTo now: Date, _ data: Data) throws -> Data {
+    var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+    guard let current = (json["current"] as? [String: Any])?["time"] as? Double else { return data }
+    let offset = now.timeIntervalSince1970.rounded(.down) - current
+    for key in ["current", "hourly", "daily"] {
+        guard var section = json[key] as? [String: Any] else { continue }
+        for (name, value) in section where ["time", "sunrise", "sunset"].contains(name) {
+            if let time = value as? Double { section[name] = time + offset }
+            if let times = value as? [Double] { section[name] = times.map { $0 + offset } }
+        }
+        json[key] = section
+    }
+    return try JSONSerialization.data(withJSONObject: json)
 }
