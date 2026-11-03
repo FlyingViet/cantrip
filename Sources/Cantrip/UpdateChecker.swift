@@ -1,8 +1,9 @@
 import Foundation
 
-/// Checks whether the GitHub remote has commits we don't (the app runs
-/// out of its own git checkout — Cantrip.app's parent directory).
-/// Clicking the toolbar status pulls, rebuilds, and relaunches.
+/// Checks whether the GitHub remote has commits we don't (a source install runs
+/// out of its own git checkout — Cantrip.app's parent directory) or, for a release
+/// install, whether a newer release is out. Clicking the toolbar status pulls,
+/// rebuilds and relaunches, or downloads the release and restarts.
 final class UpdateChecker: ObservableObject {
     static let shared = UpdateChecker()
     @Published private(set) var commitsBehind = 0
@@ -12,19 +13,33 @@ final class UpdateChecker: ObservableObject {
     /// build forever — surface the same rebuild chip.
     @Published private(set) var staleBuild = false
     /// Anything that the update/rebuild chip should appear for.
-    var updateAvailable: Bool { commitsBehind > 0 || staleBuild }
+    var updateAvailable: Bool { commitsBehind > 0 || staleBuild || releaseUpdateAvailable }
+    /// A release install can download a newer release.
+    var releaseUpdateAvailable: Bool {
+        if case .releaseAvailable = versionReport.state(checking: false) { return true }
+        return false
+    }
+    /// A release download in progress, what it's doing, and why the last one failed.
+    @Published private(set) var isDownloading = false
+    @Published private(set) var downloadStatus: String?
+    @Published private(set) var downloadError: String?
+    private var latestRelease: ReleaseUpdater.Release?
     /// Running, staged, and latest GitHub versions for Settings.
     @Published private(set) var versionReport: CantripVersionReport
     @Published private(set) var isChecking = false
     private var lastCheck = Date.distantPast
     private init() {
         versionReport = Self.localReport(repositoryAvailable: true)
+        versionReport.releaseInstall = CantripInstall.isRelease()
     }
 
     /// The repo is wherever the .app lives.
     private var repoPath: String {
         (Bundle.main.bundlePath as NSString).deletingLastPathComponent
     }
+
+    /// GitHub allows 60 unauthenticated API calls an hour, so release installs check hourly.
+    private static let releaseCheckInterval: TimeInterval = 3600
 
     /// Checks on every panel show (lightly debounced so rapid
     /// summon/dismiss cycles don't spam git fetch).
@@ -38,7 +53,10 @@ final class UpdateChecker: ObservableObject {
             DispatchQueue.main.async { self.check(force: force) }
             return
         }
-        guard !isChecking, force || Date().timeIntervalSince(lastCheck) > 30 else { return }
+        let release = CantripInstall.isRelease()
+        guard !isChecking,
+              force || Date().timeIntervalSince(lastCheck) > (release ? Self.releaseCheckInterval : 30) else { return }
+        if release { checkRelease(); return }
         guard FileManager.default.fileExists(atPath: repoPath + "/.git") else {
             versionReport = Self.localReport(repositoryAvailable: false)
             return
@@ -89,6 +107,91 @@ final class UpdateChecker: ObservableObject {
                 if count > 0 { Log.write("update: \(count) commit(s) behind origin/main") }
             }
         }
+    }
+
+    private func checkRelease() {
+        lastCheck = Date()
+        isChecking = true
+        let previous = latestRelease
+        Task { [weak self] in
+            var report = Self.localReport(repositoryAvailable: false)
+            report.releaseInstall = true
+            var release = previous
+            do {
+                release = try await ReleaseUpdater.latest()
+            } catch {
+                report.fetchFailed = true
+                Log.write("update: couldn't check GitHub's releases: \(error.localizedDescription)")
+            }
+            if let release { Self.add(release, to: &report) }
+            report.checkedAt = Date()
+            let finished = report
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.latestRelease = release
+                self.versionReport = finished
+                self.isChecking = false
+                if self.releaseUpdateAvailable, let release { Log.write("update: \(release.tag) is available") }
+            }
+        }
+    }
+
+    private static func add(_ release: ReleaseUpdater.Release, to report: inout CantripVersionReport) {
+        report.latest = CantripBuildVersion(identity: release.tag)
+        report.latestSubject = release.name
+        report.latestDate = release.publishedAt
+        report.latestDownloadable = release.diskImage != nil && release.checksum != nil
+    }
+
+    /// The panel's update action. A source install pulls, rebuilds and relaunches through a `!`
+    /// command; a release install downloads the newest release and restarts if `idle()` says no tab is
+    /// busy (otherwise it stays staged for Restart to Install).
+    func update(submit: (String) -> Void, idle: @escaping () -> Bool) {
+        if CantripInstall.isRelease() {
+            downloadRelease(restartIf: idle)
+        } else {
+            submit("!" + updateCommand)
+        }
+    }
+
+    /// Downloads and stages the newest release for the next launch.
+    func downloadRelease(restartIf idle: (() -> Bool)? = nil) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.downloadRelease(restartIf: idle) }
+            return
+        }
+        guard !isDownloading, let release = latestRelease else { return }
+        isDownloading = true
+        downloadError = nil
+        downloadStatus = "Downloading \(release.name)…"
+        Task { [weak self] in
+            do {
+                _ = try await ReleaseUpdater.stage(release) { status in
+                    DispatchQueue.main.async { self?.downloadStatus = status }
+                }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.finishDownload(error: nil)
+                    guard let idle, idle() else { return }
+                    do { try RemoteMaintenance.relaunch(Bundle.main.bundleURL) }
+                    catch { self.downloadError = error.localizedDescription }
+                }
+            } catch {
+                Log.write("update: \(error.localizedDescription)")
+                DispatchQueue.main.async { self?.finishDownload(error: error.localizedDescription) }
+            }
+        }
+    }
+
+    private func finishDownload(error: String?) {
+        isDownloading = false
+        downloadStatus = nil
+        downloadError = error
+        var report = versionReport
+        let local = Self.localReport(repositoryAvailable: report.repositoryAvailable)
+        report.staged = local.staged
+        report.stagedDate = local.stagedDate
+        versionReport = report
     }
 
     private static func localReport(repositoryAvailable: Bool) -> CantripVersionReport {

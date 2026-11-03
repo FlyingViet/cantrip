@@ -7,6 +7,10 @@ struct LauncherView: View {
     /// Active session — manager forwards child objectWillChange, so
     /// observing the manager is sufficient for re-rendering.
     private var session: ChatSession { manager.active }
+    /// Tabs streaming, queued, or running a shell command; restarting would cut them off.
+    private var busySessionCount: Int {
+        manager.sessions.filter { $0.isStreaming || !$0.queued.isEmpty || $0.shell.isRunning }.count
+    }
     private var shell: PersistentShell { session.shell }
     @ObservedObject var settings = AppSettings.shared
     @StateObject private var speech = SpeechRecognizer()
@@ -581,14 +585,15 @@ struct LauncherView: View {
 
             if updater.updateAvailable {
                 Button(action: {
-                    // Stream the update through the transcript like a
+                    // A source install streams the update through the transcript like a
                     // ! command, so pull/build progress is visible.
-                    session.submit("!" + UpdateChecker.shared.updateCommand)
+                    UpdateChecker.shared.update(submit: { session.submit($0) }, idle: { busySessionCount == 0 })
                 }) {
                     HStack(spacing: 3) {
                         Image(systemName: "arrow.down.circle.fill")
                             .font(.system(size: 11))
-                        Text(updater.commitsBehind > 0 ? "New update" : "Rebuild needed")
+                        Text(updater.isDownloading ? "Downloading update…"
+                             : updater.commitsBehind > 0 || updater.releaseUpdateAvailable ? "New update" : "Rebuild needed")
                             .font(.caption)
                             .lineLimit(1)
                     }
@@ -1233,10 +1238,8 @@ struct LauncherView: View {
             .padding(.horizontal, 12)
             .padding(.top, 12)
             SettingsView(
-                busySessions: manager.sessions.filter {
-                    $0.isStreaming || !$0.queued.isEmpty || $0.shell.isRunning
-                }.count,
-                onUpdate: { session.submit("!" + UpdateChecker.shared.updateCommand) })
+                busySessions: busySessionCount,
+                onUpdate: { UpdateChecker.shared.update(submit: { session.submit($0) }, idle: { busySessionCount == 0 }) })
             Spacer(minLength: 0)
         }
         .frame(width: CGFloat(settingsPaneUserWidth), alignment: .topLeading)

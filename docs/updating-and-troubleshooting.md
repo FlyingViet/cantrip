@@ -7,6 +7,30 @@ permissions before checking the specific error.
 
 ## Update on Mac
 
+### A downloaded Cantrip
+
+A Cantrip installed from a release's disk image has no source checkout, so it
+updates from GitHub releases instead. It checks for a newer release about once
+an hour.
+
+1. When one is out, the toolbar shows **New update**, and Settings › **About &
+   Updates** › **Update & rebuild Cantrip** shows the latest release.
+2. Click **New update** (or **Update and Restart** in the version section on
+   macOS before 26). Cantrip downloads the release's disk image, checks its
+   checksum and that Apple notarized it for Cantrip's developer, and stages the
+   app beside the installed one. If no tab is busy it restarts into the new
+   version; otherwise **Restart to Install** waits until you're ready.
+3. From Cantrip Agent, Gateway or Gateway for Windows, **Download Update**
+   stages the release without touching running tabs, and **Restart Cantrip**
+   installs it.
+
+Staging needs to write next to the app (usually in `/Applications`). If it
+can't, download the new disk image from the
+[releases page](https://github.com/FlyingViet/cantrip/releases/latest) and
+drag Cantrip to Applications again.
+
+### A source checkout
+
 **Finish or stop important work first.** Updating rebuilds and relaunches
 Cantrip, interrupting its running process and Remote connections.
 

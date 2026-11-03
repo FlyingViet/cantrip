@@ -60,6 +60,18 @@ struct CantripBuildVersion: Equatable {
     /// What git can resolve for comparisons; nil for unstamped builds.
     var gitRevision: String? { commit ?? tag }
 
+    /// Whether dotted version `candidate` ("1.1.16") is later than `current`; extra
+    /// components count ("1.2.0.1" > "1.2"), and non-numbers compare as 0.
+    static func isNewer(_ candidate: String, than current: String) -> Bool {
+        let lhs = candidate.split(separator: ".").map { Int($0) ?? 0 }
+        let rhs = current.split(separator: ".").map { Int($0) ?? 0 }
+        for index in 0..<max(lhs.count, rhs.count) {
+            let a = index < lhs.count ? lhs[index] : 0, b = index < rhs.count ? rhs[index] : 0
+            if a != b { return a > b }
+        }
+        return false
+    }
+
     private static func isCommit(_ text: String) -> Bool {
         text.count >= 4 && text.count <= 40 && text.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
@@ -71,6 +83,8 @@ enum CantripUpdateState: Equatable {
     /// A staged build already includes everything on GitHub.
     case staged
     case available(commits: Int)
+    /// A release install: a newer release's disk image can be downloaded.
+    case releaseAvailable(version: String)
     /// The source checkout has changes that no build includes yet.
     case rebuildNeeded
     case unknown(String)
@@ -91,6 +105,10 @@ struct CantripVersionReport: Equatable {
     var runningAhead: Int?
     var stagedBehind: Int?
     var repositoryAvailable = true
+    /// Installed from a release's disk image: `latest` is the newest release, not origin/main.
+    var releaseInstall = false
+    /// The newest release has a disk image attached.
+    var latestDownloadable = false
     var fetchFailed = false
     var checkedAt: Date?
 
@@ -100,6 +118,7 @@ struct CantripVersionReport: Equatable {
     }
 
     func state(checking: Bool) -> CantripUpdateState {
+        if releaseInstall { return releaseState(checking: checking) }
         guard repositoryAvailable else {
             return .unknown("Updates are checked from Cantrip's source checkout, which wasn't found.")
         }
@@ -120,6 +139,22 @@ struct CantripVersionReport: Equatable {
             return .rebuildNeeded
         }
         return .upToDate(unpushedCommits: runningAhead ?? 0)
+    }
+
+    private func releaseState(checking: Bool) -> CantripUpdateState {
+        guard let runningVersion = running.release else {
+            return .unknown("This build has no release version to compare with GitHub.")
+        }
+        guard let latest, let latestVersion = latest.release else {
+            if checking { return .checking }
+            return .unknown(fetchFailed ? "Couldn't reach GitHub." : "Not checked yet.")
+        }
+        guard CantripBuildVersion.isNewer(latestVersion, than: runningVersion) else {
+            return .upToDate(unpushedCommits: 0)
+        }
+        if staged?.identity == latest.identity { return .staged }
+        return latestDownloadable ? .releaseAvailable(version: latestVersion)
+            : .unknown("Cantrip \(latestVersion) is out, but its disk image isn't attached yet.")
     }
 
     static func parseDate(_ text: String) -> Date? {
