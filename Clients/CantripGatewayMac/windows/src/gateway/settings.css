@@ -44,10 +44,12 @@
 .mac-range-value { min-width: 44px; text-align: right; color: var(--secondary); font-variant-numeric: tabular-nums; }
 .mac-info { max-width: 65%; text-align: right; overflow-wrap: anywhere; }
 .mac-secret { gap: 8px; }
-.mac-link + .mac-link { border-top: 0.5px solid var(--separator); }
 .mac-link-row { width: 100%; border: 0; background: transparent; color: var(--text); text-align: left; font: inherit; border-radius: 0; }
 .mac-link-row:hover { background: var(--row-hover); }
 .mac-summary { max-width: 55%; }
-.mac-link-body { border-top: 0.5px solid var(--separator); background: rgba(0, 0, 0, 0.12); padding-left: 10px; }
 .mac-result { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; padding: 8px 10px; border-radius: 8px; background: var(--field); }
 .mac-copy { min-width: 0; overflow-wrap: anywhere; font-size: 11.5px; }
+/* A section opened as its own page: back to the page it came from (Alt+Left, Esc, Backspace, mouse back). */
+.settings-back-row { margin-bottom: 10px; }
+.settings-back { display: inline-flex; align-items: center; gap: 4px; margin-left: -6px; color: var(--accent); font-size: 13px; }
+.settings-back:focus-visible { box-shadow: var(--focus); }

@@ -9,14 +9,14 @@ import "./styles/app.css";
 import "./settings.css";
 import { Icon, type IconName } from "./ui/icons";
 import { APIError } from "./api/client";
-import type { BackendsAction, BackendsSnapshot, MCPSnapshot, SettingsManifest, SettingsRequest } from "./api/types";
+import type { BackendsAction, BackendsSnapshot, MCPSnapshot, SettingsManifest, SettingsRequest, SettingsSection } from "./api/types";
 import { ConfirmLayer, confirmDialog, FormRow, FormSection, MenuLayer, openMenu, Spinner, ToastLayer } from "./ui/kit";
 import { BackendStatusList, type BackendsTransport } from "./ui/sheets/BackendStatusList";
 import { MCPServerList, type MCPTransport } from "./ui/sheets/MCPServerList";
 import { VoiceSettingsPanel } from "./ui/voice/VoiceControls";
 import { forgetFix, PRECISE_KEY, readFlag, readPosition, SHARE_KEY, writeFlag } from "./state/location";
-import { MacSettingsBanner, MacSettingsPage, useMacSettings, type MacSettingsTransport } from "./ui/settings/MacSettings";
-import { normalizeManifest, settingsTabs, type SettingsRevisionInfo } from "./ui/settings/macSettingsLogic";
+import { MacSettingsBanner, MacSettingsPage, MacSettingsSectionPage, useMacSettings, type MacSettingsTransport } from "./ui/settings/MacSettings";
+import { isEditableTarget, normalizeManifest, settingsBackKey, settingsTabs, type SettingsRevisionInfo } from "./ui/settings/macSettingsLogic";
 
 interface SavedMac {
   id: string;
@@ -72,6 +72,8 @@ interface SettingsBridge {
   onLink(callback: (link: string) => void): void;
   /** The Mac's settings revision moved (or the selected Mac changed: null). */
   onSettingsRevision(callback: (info: SettingsRevisionInfo | null) => void): void;
+  /** The mouse's back button, which Windows sends the window as an app command. */
+  onBack(callback: () => void): void;
 }
 
 declare global {
@@ -135,7 +137,11 @@ function SettingsApp(): JSX.Element {
   const [notice, setNotice] = useState<string | null>(null);
   const [link, setLink] = useState<string | null>(null);
   const [polled, setPolled] = useState<SettingsRevisionInfo | null>(null);
+  /** A `link` section open as its own page, with a back button (Windows has no swipe back). */
+  const [opened, setOpened] = useState<string | null>(null);
   const tabList = useRef<HTMLElement>(null);
+  const backButton = useRef<HTMLButtonElement>(null);
+  const goBackRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     void settings.state().then((value) => {
@@ -148,6 +154,7 @@ function SettingsApp(): JSX.Element {
     settings.onStatus((status) => setState((previous) => (previous ? { ...previous, status } : previous)));
     settings.onLink((value) => { setTab("macs"); setLink(value); });
     settings.onSettingsRevision((info) => setPolled(info));
+    settings.onBack(() => goBackRef.current?.());
     document.documentElement.classList.add(`platform-${navigator.userAgent.includes("Windows") ? "win32" : "darwin"}`);
   }, []);
 
@@ -156,11 +163,14 @@ function SettingsApp(): JSX.Element {
   });
   const tabs = settingsTabs(OWN_PAGES, mac.manifest?.pages ?? []);
   const current = tabs.find((item) => item.id === tab) ?? tabs[0];
+  const section = opened ? current.page?.sections.find((item) => item.id === opened) ?? null : null;
   const choose = (id: string, focus = false) => {
     setTab(id);
+    setOpened(null);
     if (focus) requestAnimationFrame(() => tabList.current?.querySelector<HTMLElement>(`[data-tab="${id}"]`)?.focus());
   };
   const onTabKey = (event: KeyboardEvent) => {
+    if (event.altKey) return;
     const index = tabs.findIndex((item) => item.id === current.id);
     const next = event.key === "ArrowRight" ? index + 1 : event.key === "ArrowLeft" ? index - 1
       : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
@@ -169,10 +179,46 @@ function SettingsApp(): JSX.Element {
     choose(tabs[(next + tabs.length) % tabs.length].id, true);
   };
 
+  const open = (item: SettingsSection) => {
+    setOpened(item.id);
+    requestAnimationFrame(() => backButton.current?.focus());
+  };
+  const lastBack = useRef(0);
+  const goBack = () => {
+    // The mouse's back button can arrive twice: as a DOM button and as the window's app command.
+    if (!opened || Date.now() - lastBack.current < 400) return;
+    lastBack.current = Date.now();
+    const row = opened;
+    setOpened(null);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-section-row="${CSS.escape(row)}"]`)?.focus());
+  };
+  goBackRef.current = section ? goBack : null;
+  useEffect(() => {
+    if (!section) return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const action = settingsBackKey({
+        key: event.key, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey,
+        defaultPrevented: event.defaultPrevented, editable: isEditableTarget(target as HTMLInputElement | null),
+      });
+      if (action === "back") { event.preventDefault(); goBack(); }
+      else if (action === "endEdit") { event.preventDefault(); target?.blur(); }
+    };
+    const onMouse = (event: MouseEvent) => {
+      if (event.button === 3) { event.preventDefault(); goBack(); }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mouseup", onMouse);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mouseup", onMouse);
+    };
+  }, [section?.id]);
+
   return (
     <div class="settings-window">
       <header class="settings-titlebar">
-        <div class="settings-title">{current.title}</div>
+        <div class="settings-title">{section ? section.title : current.title}</div>
         <nav ref={tabList} class="settings-tabs" role="tablist" aria-label="Settings" onKeyDown={onTabKey}>
           {tabs.map((item) => (
             <button key={item.id} type="button" role="tab" id={`settings-tab-${item.id}`} data-tab={item.id} class="settings-tab"
@@ -185,7 +231,18 @@ function SettingsApp(): JSX.Element {
       </header>
       <div class="settings-body" role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${current.id}`}>
         <MacSettingsBanner model={mac} showLoadError={current.id === "macs"} />
-        {current.page ? <MacSettingsPage key={current.id} model={mac} page={current.page} /> : null}
+        {section ? (
+          <>
+            <div class="settings-back-row">
+              <button ref={backButton} type="button" class="btn plain settings-back" aria-label={`Back to ${current.title}`}
+                title={`Back to ${current.title} (Alt+Left)`} onClick={goBack}>
+                <Icon name="chevron.left" size={14} />
+                <span aria-hidden="true">{current.title}</span>
+              </button>
+            </div>
+            <MacSettingsSectionPage key={section.id} model={mac} section={section} />
+          </>
+        ) : current.page ? <MacSettingsPage key={current.id} model={mac} page={current.page} onOpen={open} /> : null}
         {current.id === "macs"
           ? (state ? <Connection state={state} setState={setState} notice={notice} link={link} clearLink={() => setLink(null)} /> : <Spinner />)
           : current.id === "tools"

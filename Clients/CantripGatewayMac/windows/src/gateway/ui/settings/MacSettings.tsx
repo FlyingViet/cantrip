@@ -375,8 +375,11 @@ export function MacSettingsBanner(props: { model: MacSettingsModel; showLoadErro
 
 // MARK: A page's sections
 
-/** The Mac's sections for one page; consecutive `link` sections share one group of rows that open. */
-export function MacSettingsPage(props: { model: MacSettingsModel; page: SettingsPage }): JSX.Element | null {
+/**
+ * The Mac's sections for one page; consecutive `link` sections share one group of rows, each opening
+ * that section as its own page (`onOpen`, like the Mac and iPhone).
+ */
+export function MacSettingsPage(props: { model: MacSettingsModel; page: SettingsPage; onOpen(section: SettingsSection): void }): JSX.Element | null {
   const { model, page } = props;
   const sections = visibleSections(page, model.values);
   if (!sections.length) return null;
@@ -390,7 +393,7 @@ export function MacSettingsPage(props: { model: MacSettingsModel; page: Settings
     <div class="mac-settings" role="region" aria-label={`${page.title} on ${model.manifest?.mac || "the Mac"}`}>
       {groups.map((group) => Array.isArray(group) ? (
         <FormSection key={group.map((section) => section.id).join()} class="mac-links">
-          {group.map((section) => <LinkSection key={section.id} section={section} model={model} />)}
+          {group.map((section) => <LinkRow key={section.id} section={section} onOpen={props.onOpen} />)}
         </FormSection>
       ) : (
         <FormSection key={group.id} header={group.title || undefined} footer={group.footer}>
@@ -401,24 +404,26 @@ export function MacSettingsPage(props: { model: MacSettingsModel; page: Settings
   );
 }
 
-/** A section that opens in place: its title and `summary` while closed, its fields while open. */
-function LinkSection(props: { section: SettingsSection; model: MacSettingsModel }): JSX.Element {
-  const { section, model } = props;
-  const [open, setOpen] = useState(false);
-  const id = `mac-section-${section.id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+/** A `link` section's row: its title and `summary`; it opens the section as its own page. */
+function LinkRow(props: { section: SettingsSection; onOpen(section: SettingsSection): void }): JSX.Element {
+  const { section } = props;
   return (
-    <div class="mac-link">
-      <button type="button" class="form-row mac-link-row" aria-expanded={open ? "true" : "false"} aria-controls={id} onClick={() => setOpen(!open)}>
-        <span class="grow">{section.title}</span>
-        {!open && section.summary ? <span class="form-value truncate mac-summary">{section.summary}</span> : null}
-        <Icon name={open ? "chevron.down" : "chevron.right"} size={14} class="muted" />
-      </button>
-      {open ? (
-        <div id={id} class="mac-link-body" role="group" aria-label={section.title}>
-          {visibleFields(section, model.values).map((field) => <FieldRow key={field.key} field={field} model={model} />)}
-          {section.footer ? <div class="form-row caption muted">{section.footer}</div> : null}
-        </div>
-      ) : null}
+    <button type="button" class="form-row mac-link-row" data-section-row={section.id} onClick={() => props.onOpen(section)}>
+      <span class="grow">{section.title}</span>
+      {section.summary ? <span class="form-value truncate mac-summary">{section.summary}</span> : null}
+      <Icon name="chevron.right" size={14} class="muted" />
+    </button>
+  );
+}
+
+/** A `link` section opened as its own page (Settings shows the back button above it). */
+export function MacSettingsSectionPage(props: { model: MacSettingsModel; section: SettingsSection }): JSX.Element {
+  const { model, section } = props;
+  return (
+    <div class="mac-settings" role="region" aria-label={`${section.title} on ${model.manifest?.mac || "the Mac"}`}>
+      <FormSection footer={section.footer}>
+        {visibleFields(section, model.values).map((field) => <FieldRow key={field.key} field={field} model={model} />)}
+      </FormSection>
     </div>
   );
 }
