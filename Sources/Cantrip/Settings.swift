@@ -54,6 +54,9 @@ final class AppSettings: ObservableObject {
     @Published var remoteLANPort: Int {
         didSet { d.set(remoteLANPort, forKey: "remoteLANPort") }
     }
+    /// Cantrip's Settings window is open: the loopback server keeps running for it, even with
+    /// Remote control off and the panel as the interface. Not saved.
+    @Published var localSettingsWindowOpen = false
     /// Where the encrypted LAN listener is actually listening; nil while it is off.
     @Published private(set) var remoteLANStatus: RemoteLANStatus?
     /// Permanent hidden session used by Cantrip Agent's focused Home mode.

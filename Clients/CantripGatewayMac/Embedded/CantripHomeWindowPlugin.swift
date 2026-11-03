@@ -10,14 +10,47 @@ import SwiftUI
 /// Cantrip calls these class methods by selector after loading the bundle:
 /// `showWithURL:token:` opens or focuses the window, `close` closes it, `isOpen` reports it,
 /// and `setOnClose:` registers a block run when the user closes the window.
+/// `showSettingsWithURL:token:` opens Settings on its own (the panel's gear, ⌘,) and
+/// `setOnSettingsClose:` hears it close; `refreshWithURL:token:` follows a new port or token; and
+/// `setLocalKey:` hands over the key that tells Cantrip's server these windows are its own.
 @objc(CantripHomeWindowPlugin)
 public final class CantripHomeWindowPlugin: NSObject {
     @MainActor private static var controller: EmbeddedHomeWindowController?
     @MainActor private static var closeHandler: (() -> Void)?
+    @MainActor private static var settingsCloseHandler: (() -> Void)?
+    @MainActor private static var localKey: String?
+
+    @MainActor private static var shared: EmbeddedHomeWindowController {
+        if let controller { return controller }
+        let created = EmbeddedHomeWindowController(onClose: { closeHandler?() },
+                                                   onSettingsClose: { settingsCloseHandler?() })
+        controller = created
+        return created
+    }
 
     @MainActor @objc public static func show(withURL url: String, token: String) {
-        if controller == nil { controller = EmbeddedHomeWindowController { closeHandler?() } }
-        controller?.show(url: url, token: token)
+        CantripLocalClientKey.register(localKey, for: url)
+        shared.show(url: url, token: token)
+    }
+
+    @MainActor @objc public static func showSettings(withURL url: String, token: String) {
+        CantripLocalClientKey.register(localKey, for: url)
+        shared.showSettings(url: url, token: token)
+    }
+
+    /// This Mac's server moved (a new port) or its token changed: reconnect without showing anything.
+    @MainActor @objc public static func refresh(withURL url: String, token: String) {
+        guard let controller else { return }
+        CantripLocalClientKey.register(localKey, for: url)
+        controller.refresh(url: url, token: token)
+    }
+
+    @MainActor @objc public static func setLocalKey(_ key: String) {
+        localKey = key
+    }
+
+    @MainActor @objc public static func setOnSettingsClose(_ handler: @escaping () -> Void) {
+        settingsCloseHandler = handler
     }
 
     @MainActor @objc public static func close() {
@@ -41,6 +74,7 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
     static let defaultsSuite = "cantrip.home-window"
 
     private let onClose: () -> Void
+    private let onSettingsClose: () -> Void
     private var window: NSWindow?
     private let defaults: UserDefaults
     private let env: HermesEnv
@@ -52,8 +86,9 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
     private var settingsWindow: NSWindow?
     private var connected: (url: String, token: String)?
 
-    init(onClose: @escaping () -> Void) {
+    init(onClose: @escaping () -> Void, onSettingsClose: @escaping () -> Void) {
         self.onClose = onClose
+        self.onSettingsClose = onSettingsClose
         defaults = UserDefaults(suiteName: Self.defaultsSuite) ?? .standard
         env = HermesEnv(servers: ServerProfiles(kind: .hermes, defaults: defaults), defaults: defaults)
         let token = ThisMacToken()
@@ -71,10 +106,24 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
         remote.setAppActive(true)
+        refresh(url: url, token: token)
+    }
+
+    /// Settings without the Home window: the panel's gear and ⌘, open it on its own.
+    func showSettings(url: String, token: String) {
+        NSApp.setActivationPolicy(.regular)
+        remote.setAppActive(true)
+        refresh(url: url, token: token)
+        showSettings()
+    }
+
+    func refresh(url: String, token: String) {
         guard connected?.url != url || connected?.token != token else { return }
         connected = (url, token)
         Task { await connect(url: url, token: token) }
     }
+
+    private var isSettingsOpen: Bool { settingsWindow?.isVisible == true }
 
     func close() {
         window?.close()
@@ -104,11 +153,12 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
             let root = MacSettingsView(env: env, remote: remote, voice: voice, directLocal: directLocal)
                 .preferredColorScheme(.dark)
             let window = NSWindow(contentViewController: NSHostingController(rootView: root))
-            window.title = "Cantrip Home Settings"
+            window.title = "Cantrip Settings"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.isReleasedWhenClosed = false
             window.setFrameAutosaveName("CantripHomeSettingsWindow")
             if !window.setFrameUsingName("CantripHomeSettingsWindow") { window.center() }
+            window.delegate = self
             settingsWindow = window
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
@@ -135,12 +185,22 @@ final class EmbeddedHomeWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        settingsWindow?.close()
+        let closing = notification.object as? NSWindow
+        if closing === settingsWindow {
+            if window?.isVisible != true { putAway() }
+            onSettingsClose()
+            return
+        }
         voice.stopListening(finalize: false)
         voice.stopSpeaking()
-        remote.setAppActive(false)
-        // Back to a menu bar app: no Dock icon while only the panel is around.
-        NSApp.setActivationPolicy(.accessory)
+        // Settings stays open on its own (Cantrip's Settings window, also used from the panel).
+        if !isSettingsOpen { putAway() }
         onClose()
+    }
+
+    /// Back to a menu bar app: no Dock icon and no polling while only the panel is around.
+    private func putAway() {
+        remote.setAppActive(false)
+        NSApp.setActivationPolicy(.accessory)
     }
 }

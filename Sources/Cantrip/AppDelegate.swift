@@ -55,6 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         action: #selector(selectNextSession),
                         keyEquivalent: "\u{F703}")
         appMenu.addItem(.separator())
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettingsWindow), keyEquivalent: ",")
+        settingsItem.target = self
+        appMenu.addItem(settingsItem)
         appMenu.addItem(withTitle: "Export Settings to ~/.cantriprc",
                         action: #selector(exportSettings), keyEquivalent: "")
         appMenu.addItem(withTitle: "Import Settings from ~/.cantriprc",
@@ -92,6 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         openHomeWindowMenuItem.target = self
         menu.addItem(openHomeWindowMenuItem)
         self.openHomeWindowMenuItem = openHomeWindowMenuItem
+        let settingsMenuItem = NSMenuItem(title: "Settings…", action: #selector(openSettingsWindow), keyEquivalent: "")
+        settingsMenuItem.target = self
+        menu.addItem(settingsMenuItem)
         menu.addItem(withTitle: "Stop Current Request", action: #selector(stopRequest), keyEquivalent: "")
         menu.addItem(withTitle: "End Remote View", action: #selector(endRemoteView), keyEquivalent: "")
         menu.addItem(withTitle: "Hide Panel & Overlays", action: #selector(forceHide), keyEquivalent: "")
@@ -145,8 +151,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     self.panel.resizeContent(to: size)
                 }
             },
-            onKeepVisibleChange: { [weak self] keep in self?.panel.keepVisibleWhileUnfocused = keep }
+            onKeepVisibleChange: { [weak self] keep in self?.panel.keepVisibleWhileUnfocused = keep },
+            onOpenSettings: { [weak self] in self?.showSettingsWindow() ?? false }
         ))
+        // The Home and Settings windows reach this Mac on loopback: follow a new port or token.
+        Publishers.CombineLatest(AppSettings.shared.$remoteControlPort.removeDuplicates(),
+                                 AppSettings.shared.$remoteControlCredentialRevision.removeDuplicates())
+            .dropFirst()
+            .debounce(for: .milliseconds(600), scheduler: DispatchQueue.main)
+            .sink { port, _ in
+                guard let token = AppSettings.shared.ensureRemoteControlToken() else { return }
+                HomeWindow.refresh(port: port, token: token)
+            }
+            .store(in: &cancellables)
 
         // Global hotkey: Option + Space
         hotkey = HotkeyManager { [weak self] in
@@ -412,6 +429,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         hidePanel()
         HomeWindow.open(port: AppSettings.shared.remoteControlPort, token: token) {}
+    }
+
+    @objc func openSettingsWindow() {
+        if !showSettingsWindow() {
+            // No Settings window on this Mac (macOS before 26): the panel's Settings column.
+            showPanelSettings()
+        }
+    }
+
+    private func showPanelSettings() {
+        if !panel.isVisible { togglePanel() }
+        NotificationCenter.default.post(name: LauncherView.showSettingsNotification, object: nil)
+    }
+
+    /// Cantrip's Settings window: the same pages as Cantrip Agent and Gateway, with this Mac's
+    /// own settings too. False when the Home window plug-in isn't available (older macOS).
+    @discardableResult
+    func showSettingsWindow() -> Bool {
+        guard HomeWindow.isAvailable else { return false }
+        guard let token = AppSettings.shared.ensureRemoteControlToken() else {
+            Log.write("settings-window: no server token")
+            return true
+        }
+        let settings = AppSettings.shared
+        // The loopback server runs for the window; start it first if nothing else needs it.
+        let wasServing = settings.remoteControlEnabled || settings.interfaceMode == .window
+            || settings.localSettingsWindowOpen
+        settings.localSettingsWindowOpen = true
+        hidePanel()
+        let open = {
+            HomeWindow.openSettings(port: settings.remoteControlPort, token: token) {
+                AppSettings.shared.localSettingsWindowOpen = false
+            }
+        }
+        if wasServing { open() } else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { open() } }
+        return true
     }
 
     @objc func chooseInterface(_ sender: NSMenuItem) {
