@@ -126,7 +126,7 @@ do {
     expect((try? CantripInstall.installCommandLineTool(app: releaseApp, home: home)) == nil, "installing refuses to replace it")
     expect((try? String(contentsOf: link, encoding: .utf8)) == "other", "the other program stays")
     expect(Set(CantripInstall.bundledScripts) == ["cantrip", "cantrip-mcp", "mcp-on-demand", "messages-send", "mail-refresh"],
-           "the bundled scripts match the Makefile's BUNDLED_SCRIPTS")
+           "the bundled scripts match Scripts/assemble-app.sh")
 }
 
 if failures == 0 {

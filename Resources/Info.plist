@@ -46,6 +46,8 @@
     </array>
     <key>NSCalendarsFullAccessUsageDescription</key>
     <string>Cantrip uses your calendar to show upcoming events in Daily Briefing.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Cantrip runs AppleScript when you ask it to, for example to read Mail or send a message.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key>
