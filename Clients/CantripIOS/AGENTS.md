@@ -1,44 +1,41 @@
-# AGENTS.md — Hermes (iOS client)
+# AGENTS.md — Cantrip Agent (iOS client)
 
-Native SwiftUI iOS client for a self-hosted **Hermes agent** (`~/.hermes`) — voice
-+ chat, as an alternative to talking to Hermes through Telegram/Discord. See
-`README.md` for end-to-end setup (gateway + app).
+Native SwiftUI iPhone, iPad and Apple Watch client for Cantrip on the Mac: Cantrip Home, every
+project tab, voice and chat. This is `Clients/CantripIOS` in the Cantrip monorepo; see
+`README.md` for pairing, features and setup. The Xcode project, app scheme and target, test
+targets and Swift module keep the app's original internal name, `Hermes`.
 
 ## Build / run
 - `xcodegen generate`, then build or test with
   `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all`
   so SwiftPM can use its scoped bare-repository cache.
 - The `.xcodeproj` is generated (git-ignored); regenerate after editing `project.yml`.
+- Unit tests: `xcodebuild test -scheme Hermes` on an iOS simulator. The `HermesUITests` scheme
+  runs real-touch checks against DEBUG-only fixture screens.
 - The iOS app embeds the Apple Watch app; build or test it alone with the `CantripWatch` scheme
   on a watchOS simulator.
 - iOS 26+, universal (`TARGETED_DEVICE_FAMILY "1,2"`). Set your own bundle id +
   signing team in `project.yml` before building to a device.
 - Use the selected Xcode SDK without raising the iOS 26 deployment target.
   Duo-specific simulation/reserved-region APIs require Xcode/iOS 27.1.
+- TestFlight builds come from `.github/workflows/ios-testflight.yml` at the repo root.
 
 ## How it connects
-- Talks to the Hermes gateway's **OpenAI-compatible API server** adapter
-  (`gateway/platforms/api_server.py`), NOT the raw inference shim. The api_server
-  is the full agent (skills, memory, sessions).
-- Chat uses **`POST /v1/runs`** with a persisted `Idempotency-Key`, then
-  `GET /v1/runs/{id}/events` for live SSE and `GET /v1/runs/{id}` for
-  authoritative recovery. Closing iOS never calls `/stop`; only explicit user
-  cancellation interrupts server work.
-- The app persists a pending request before POST and an active run immediately
-  after `202`. A lost response can safely replay the same idempotency key.
-- Headers: `Authorization: Bearer <API_SERVER_KEY>`, `X-Hermes-Session-Key`
-  (stable per-install id → scopes long-term memory). The base URL is user-set in
-  Settings — nothing hardcoded.
-- Execution uses named gateway model routes. `copilot-coding` is the default;
-  `local-private` remains unavailable until explicitly advertised by
-  `/v1/models`. Never silently fall back from the private lane to Copilot.
-- Copilot and local lanes keep separate local transcripts, durable runs,
-  conversation IDs, and long-term-memory session keys.
-- Non-loopback HTTP is rejected. Use HTTPS over a private network or
-  authenticated tunnel; loopback HTTP is only for simulator development.
-- Run events drive the UI: `message.delta`, `tool.started`/`tool.completed`,
-  `approval.request`, and `run.completed`/`run.failed`.
-- Optional `GET /v1/commands` powers the `/` autocomplete + Skills list (see README).
+- Talks to Cantrip's authenticated REST API under `/api/v1/` on the paired Mac
+  (`CantripRemoteAPI` in `Sources/CantripRemote.swift`), sending the pairing token as a
+  bearer token. Nothing is hardcoded: each user pairs with their own Mac.
+- Routes, in order: the saved Tailscale Serve HTTPS URL; the local network, found with Bonjour
+  (`_cantrip-remote._tcp`); an optional direct `host:port`. The local-network and direct routes
+  run the same HTTP inside TLS 1.2 with a pre-shared key from the pairing token
+  (`CantripLANProtocol`). Plain HTTP is accepted only on loopback.
+- The Mac owns every tab, queue and run, so closing iOS never stops work. The app polls
+  (1.5 s while the visible tab works, 5 s otherwise) and reloads on foreground.
+- Before a send or other change, an authenticated read confirms the route and the needed host
+  capability; the write then goes once on that route. Writes are never replayed automatically.
+- New features are gated by capability flags in session snapshots (`supports…`); an older Mac
+  shows an update notice instead of failing.
+- `cantrip pair` links (`cantripagent://pair?…`) are parsed by `CantripPairingLink` in
+  `Sources/CantripPairing.swift`.
 
 ## Voice
 - Fully on-device: FluidAudio Parakeet EOU 120M (320 ms model) is the default
@@ -48,10 +45,10 @@ Native SwiftUI iOS client for a self-hosted **Hermes agent** (`~/.hermes`) — v
   A generation token prevents EOU/timer/cancellation races from submitting an
   utterance twice. Parakeet and Qwen release memory before switching engines.
 
-## Gateway-side prerequisite
-The api_server adapter must be enabled + reachable. It refuses non-localhost
-binding without `API_SERVER_KEY`. To use it away from home, expose it over an
-HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
+## Mac-side prerequisite
+Cantrip must be running on the Mac with Remote control on. A client feature that needs a new
+endpoint or capability flag needs the matching host change in `Sources/Cantrip/`; a change that
+spans the host and this app is one commit.
 
 ## Conventions
 - Keep SwiftUI `body` lean (extract subviews) — the type-checker chokes on long chains.
@@ -81,29 +78,30 @@ HTTPS tunnel. Full steps (incl. a copy-paste setup prompt) are in `README.md`.
   iPhones keep "‹ Home" and the swipe back to Home. Do not infer Duo from dimensions or device
   names. `AGENTGATEWAY_DUO_SDK` is selected by SDK in `project.yml`, not by the
   Swift compiler version; keep both SDK and iOS availability guards.
-- Saved servers live in `ServerProfiles`; each server's credential is stored
-  separately in Keychain. Legacy `hermes.apiKey`/Cantrip slots are migrated.
-  Settings uses blank add-server drafts, never live bindings to active credentials.
+- Paired Macs live in `ServerProfiles`; each pairing token is stored separately in Keychain
+  (this device only). Settings uses blank pairing drafts, never live bindings to active
+  credentials.
 - Settings is one map on every client (`Sources/Settings`, compiled by Gateway Mac too): a status
-  card, then `SettingsPage` (Macs, Models, Tools & sign-ins, Memory, Voice, Notifications,
-  Appearance, About & Updates). Pages are written once; sheets that double as pages take
+  card, then `SettingsPage` (Macs, Models, Tools & sign-ins, Home & tabs, Memory, Voice,
+  Location, Notifications, Appearance, About & Updates). Pages are written once; sheets that double as pages take
   `embedded: true` (`CantripSheetStack`). Stack on iPhone, side by side on an unfolded Duo and the
   Mac; the only new key is `cantrip.settings.lastPage`. Keep existing `@AppStorage` keys: settings
   saved by the previous version must keep their values (`SettingsMapTests`). Each page shows its
-  scope (`SettingsScopeLabel`). Hermes settings show only while a Hermes gateway is saved.
+  scope (`SettingsScopeLabel`).
 - The chat menu holds only the open tab's actions (`CantripTabActions` sections); app-wide items
   belong in Settings or the Tabs drawer (its footer has the Settings gear).
 - The alert `installationID` is bound to the device by a this-device-only Keychain
   marker. A transferred/restored install gets a fresh ID (its alerts become pending
   until re-paired). Removing a server whose token is missing clears only local
   alert state; it never unregisters on the Mac.
-- Hermes history, durable runs, and memory keys are scoped by server and lane.
-  The migrated server retains its original history and memory namespace.
-- The gateway URL defaults to empty so each user points at their own server.
+- Code for the retired gateway integration (`HermesClient`, the `copilot`/`local` lanes,
+  `ServerSettingsSections`) only appears on installs that saved a gateway before it was retired;
+  don't build on it.
 - Cantrip Gateway Mac (`../CantripGatewayMac`) compiles `Sources/` and
   `Shared/` for macOS, so Home logic stays identical.
   Keep UIKit, ActivityKit and AVAudioSession use behind `#if os(iOS)` (imports
-  behind `#if canImport(UIKit)`); the Mac repo supplies AppKit equivalents.
+  behind `#if canImport(UIKit)`); Gateway Mac supplies AppKit equivalents in its
+  `Sources/Platform`.
   After changing shared code, run `make test` there before pushing.
 - The Apple Watch app (`CantripWatch` target, `Watch/`, tests in `WatchTests/`) is kept out of
   `Sources/` and `Shared/` so Gateway Mac never compiles it. It records m4a (AAC mono 16 kHz) for
