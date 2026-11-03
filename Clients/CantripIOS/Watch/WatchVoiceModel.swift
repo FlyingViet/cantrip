@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import WatchKit
 
@@ -27,9 +28,21 @@ final class WatchVoiceModel: ObservableObject {
             if case .failed = self { return true }
             return false
         }
+
+        /// "Talk to Cantrip" starts a turn unless one is already under way: a reply being waited
+        /// for keeps going (pressing the Action button again brings it back), and one being spoken
+        /// gives way to the new question, as the mic does.
+        var listenRequestStartsTurn: Bool {
+            switch self {
+            case .ready, .failed, .speaking: return true
+            case .listening, .sending, .thinking: return false
+            }
+        }
     }
 
-    @Published private(set) var phase: Phase = .ready
+    @Published private(set) var phase: Phase = .ready {
+        didSet { if phase != oldValue { Self.log.debug("phase: \(self.phase.title, privacy: .public)") } }
+    }
     @Published private(set) var transcript: String?
     @Published private(set) var reply: String?
     @Published private(set) var level: Float = 0
@@ -53,6 +66,7 @@ final class WatchVoiceModel: ObservableObject {
     /// The turn being answered, picked up again if the app was closed while waiting.
     private var pendingTurn: (turn: CantripVoiceTurn, startedAt: Date)?
     private var lastConfigRefresh: Date?
+    private var isActive = false
     #if DEBUG
     private var qaStarted = false
     #endif
@@ -198,8 +212,10 @@ final class WatchVoiceModel: ObservableObject {
     // MARK: App lifecycle
 
     func scenePhaseChanged(_ scenePhase: ScenePhase) {
+        Self.log.debug("scene phase \(String(describing: scenePhase), privacy: .public), listen request \(WatchListenRequest.shared.pending)")
         switch scenePhase {
         case .background:
+            isActive = false
             // Closing the app stops recording, speech and waiting; a pending turn resumes on return.
             recorder.cancel()
             speaker.stop()
@@ -208,9 +224,11 @@ final class WatchVoiceModel: ObservableObject {
             turnGeneration += 1
             if pendingTurn == nil, phase == .listening || phase == .sending { phase = .ready }
         case .active:
+            isActive = true
             configuration = WatchSettings.configuration
             resumePendingTurn()
             refreshConfigIfStale()
+            consumeListenRequest()
             #if DEBUG
             if WatchQA.current?.autoStart == true, !qaStarted {
                 qaStarted = true
@@ -221,6 +239,17 @@ final class WatchVoiceModel: ObservableObject {
             break
         }
     }
+
+    /// "Talk to Cantrip" (the Action button, Siri, Shortcuts) asked to listen: once the app is in
+    /// front, start a turn like the mic, which follows Home to the spoken reply.
+    func consumeListenRequest() {
+        guard isActive, WatchListenRequest.shared.take() else { return }
+        Self.log.info("Talk to Cantrip: set up \(self.isSetUp), phase \(self.phase.title, privacy: .public)")
+        guard isSetUp, phase.listenRequestStartsTurn else { return }
+        micTapped()
+    }
+
+    static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "CantripWatch", category: "voice")
 
     private func resumePendingTurn() {
         guard turnTask == nil, let pending = pendingTurn else { return }

@@ -36,12 +36,21 @@ struct AskCantripIntent: AppIntent {
 }
 
 struct CantripWatchShortcuts: AppShortcutsProvider {
+    @AppShortcutsBuilder
     static var appShortcuts: [AppShortcut] {
+        AppShortcut(
+            intent: TalkToCantripIntent(),
+            phrases: [
+                "Talk to \(.applicationName)",
+                "Start talking to \(.applicationName)",
+            ],
+            shortTitle: "Talk to Cantrip",
+            systemImageName: "mic.fill"
+        )
         AppShortcut(
             intent: AskCantripIntent(),
             phrases: [
                 "Ask \(.applicationName)",
-                "Talk to \(.applicationName)",
             ],
             shortTitle: "Ask Cantrip",
             systemImageName: "waveform"
