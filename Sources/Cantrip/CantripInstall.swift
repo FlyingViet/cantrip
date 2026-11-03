@@ -5,7 +5,7 @@ import Foundation
 /// disk image, usually in /Applications, with no repository; it updates from GitHub releases.
 /// The helper scripts ship inside the app either way.
 enum CantripInstall {
-    /// Scripts copied into `Contents/Resources/bin` (the Makefile's BUNDLED_SCRIPTS).
+    /// Scripts copied into `Contents/Resources/bin` (Scripts/assemble-app.sh).
     static let bundledScripts = ["cantrip", "cantrip-mcp", "mcp-on-demand", "messages-send", "mail-refresh"]
 
     /// The repository the running app sits in, if any.

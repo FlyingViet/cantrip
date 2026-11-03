@@ -8,8 +8,6 @@ APP_BACKUP = .$(APP_NAME).app.previous
 APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
-# Helper scripts the app carries in Contents/Resources/bin (CantripInstall.bundledScripts).
-BUNDLED_SCRIPTS = cantrip cantrip-mcp mcp-on-demand messages-send mail-refresh
 
 .PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-settings-manifest test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards test-agent-policy test-skills test-secrets test-environments cert artwork icon app run clean
 
@@ -199,24 +197,9 @@ app: build cert icon home-window
 	trap cleanup EXIT HUP INT TERM; \
 	if [ ! -e "$$APP" ] && [ -e "$$BACKUP" ]; then mv "$$BACKUP" "$$APP"; fi; \
 	rm -rf "$$STAGING" "$$BACKUP"; \
-	mkdir -p "$$STAGING/Contents/MacOS" "$$STAGING/Contents/Resources"; \
-	cp "$(BUILD_DIR)/$(APP_NAME)" "$$STAGING/Contents/MacOS/"; \
-	cp Resources/Info.plist "$$STAGING/Contents/"; \
-	BUILD_ID=$$(git describe --always --dirty --match 'v[0-9]*' 2>/dev/null || echo unknown); \
-	case "$$BUILD_ID" in *-dirty) \
-		BUILD_ID="$$BUILD_ID-$$(git diff HEAD 2>/dev/null | cksum | cut -d' ' -f1)";; \
-	esac; \
-	BUILD_DATE=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
-	plutil -replace CantripBuildIdentity -string "$$BUILD_ID" "$$STAGING/Contents/Info.plist"; \
-	plutil -replace CantripBuildDate -string "$$BUILD_DATE" "$$STAGING/Contents/Info.plist"; \
-	if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$$STAGING/Contents/Resources/"; fi; \
-	mkdir -p "$$STAGING/Contents/Resources/bin"; \
-	for script in $(BUNDLED_SCRIPTS); do cp -p "Scripts/$$script" "$$STAGING/Contents/Resources/bin/"; done; \
-	if [ -d .build/home-window/CantripHomeWindow.bundle ]; then \
-		mkdir -p "$$STAGING/Contents/PlugIns"; \
-		ditto .build/home-window/CantripHomeWindow.bundle "$$STAGING/Contents/PlugIns/CantripHomeWindow.bundle"; \
-	fi; \
-	bash Scripts/verify-macos-architectures.sh "$$STAGING"; \
+	BUILD_DIR="$(BUILD_DIR)" APP_NAME="$(APP_NAME)" bash Scripts/assemble-app.sh "$$STAGING"; \
+	BUILD_ID=$$(plutil -extract CantripBuildIdentity raw "$$STAGING/Contents/Info.plist"); \
+	BUILD_DATE=$$(plutil -extract CantripBuildDate raw "$$STAGING/Contents/Info.plist"); \
 	IDENT=$$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' \
 		'/"$(CERT_NAME)"/ { print $$2; found=1; exit } /^[[:space:]]*[0-9]+\)/ && first == "" { first=$$2 } END { if (!found && first != "") print first }'); \
 	[ -n "$$IDENT" ] || IDENT="-"; \

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened runtime exceptions for the Developer ID release (Scripts/release-mac.sh). Source builds
+     (make app) don't use the hardened runtime and don't need these. -->
+<plist version="1.0">
+<dict>
+	<!-- AppleScript for Mail, Messages, Calendar and the agents' osascript calls. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<!-- Voice queries and the Watch's spoken requests. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<!-- Location for weather and "near me" answers (off by default). -->
+	<key>com.apple.security.personal-information.location</key>
+	<true/>
+	<!-- Daily Briefing: contacts and calendar. -->
+	<key>com.apple.security.personal-information.addressbook</key>
+	<true/>
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+</dict>
+</plist>
