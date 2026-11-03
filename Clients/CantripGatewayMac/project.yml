@@ -170,6 +170,7 @@ targets:
       - path: ../CantripIOS/Tests/CantripDeleteMessageTests.swift
       - path: ../CantripIOS/Tests/CantripSkillsTests.swift
       - path: ../CantripIOS/Tests/CantripBackendsTests.swift
+      - path: ../CantripIOS/Tests/CantripSettingsManifestTests.swift
     dependencies:
       - target: CantripGatewayMac
     settings:

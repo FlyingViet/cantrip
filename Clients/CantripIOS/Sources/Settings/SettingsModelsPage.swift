@@ -17,20 +17,23 @@ struct SettingsModelsPage: View {
             if env.hermesLanesShown {
                 SettingsRunOnSection(env: env, remote: remote, canChange: canChangeGateway)
             }
-            Section {
-                SettingsScopeLabel.allTabs(on: remote.macName)
-                if let fallback {
-                    LabeledContent("Backend", value: fallback.primary)
-                    if let model = fallback.primaryChoice?.defaultModel {
-                        LabeledContent("Model", value: model)
+            Section { SettingsScopeLabel.allTabs(on: remote.macName) }
+            // The Mac's default backend and each backend's model; older Macs only report them.
+            SettingsManifestSections(page: "models") {
+                Section {
+                    if let fallback {
+                        LabeledContent("Backend", value: fallback.primary)
+                        if let model = fallback.primaryChoice?.defaultModel {
+                            LabeledContent("Model", value: model)
+                        }
+                    } else if !remote.isConfigured {
+                        Text("Pair a Mac to see its models.").foregroundStyle(.secondary)
                     }
-                } else if !remote.isConfigured {
-                    Text("Pair a Mac to see its models.").foregroundStyle(.secondary)
+                } header: {
+                    Text("New tabs")
+                } footer: {
+                    Text("What a tab runs until you pick its own model. Update Cantrip on the Mac to change it from here.")
                 }
-            } header: {
-                Text("New tabs")
-            } footer: {
-                Text("What a tab runs until you pick its own model. Change the default in Cantrip's Settings on the Mac.")
             }
             tiersSection
             CantripUsageFallbackSection(model: remote, fallback: $fallback)

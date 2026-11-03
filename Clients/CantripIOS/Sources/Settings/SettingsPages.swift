@@ -149,7 +149,8 @@ struct SettingsNotificationsPage: View {
     }
 }
 
-/// The mascot and how much of a reply's work shows. Saved on this device.
+/// The mascot and how much of a reply's work shows. Saved on this device. In Cantrip's own
+/// Settings window on the Mac, also the panel and ⌥Space (the Mac app's settings).
 struct SettingsAppearancePage: View {
     @AppStorage("hermes.showSteps") private var showSteps = false
     @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
@@ -157,6 +158,7 @@ struct SettingsAppearancePage: View {
     var body: some View {
         Form {
             Section { SettingsScopeLabel.thisDevice() }
+            SettingsManifestSections(page: "appearance")
             Section {
                 NavigationLink {
                     CantripMascotCustomizationView(embedded: true)
@@ -185,12 +187,34 @@ struct SettingsAppearancePage: View {
     }
 }
 
-/// What Cantrip remembers on the paired Mac, read-only.
+/// Cantrip Home, child tabs and what new tabs start with, for every tab on the Mac.
+struct SettingsHomeTabsPage: View {
+    @ObservedObject var remote: CantripRemoteModel
+
+    var body: some View {
+        Form {
+            Section { SettingsScopeLabel.allTabs(on: remote.macName) }
+            SettingsManifestSections(page: "home") {
+                Section {
+                    Text(remote.isConfigured ? CantripRemoteError.settingsUnsupported.localizedDescription
+                                             : "Pair a Mac to change its settings.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Home & tabs")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// What Cantrip remembers on the paired Mac: whether it does and where, and its notes, read-only.
 struct SettingsMemoryPage: View {
     @ObservedObject var remote: CantripRemoteModel
 
     var body: some View {
-        CantripMemoryView(remote: remote, embedded: true)
+        CantripMemoryView(remote: remote, embedded: true,
+                          leading: AnyView(SettingsManifestSections(page: "memory")))
             .safeAreaInset(edge: .top, spacing: 0) {
                 SettingsScopeLabel.allTabs(on: remote.macName)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -214,6 +238,8 @@ struct SettingsToolsPage: View {
                               leading: AnyView(Group {
                                   CantripBackendsSection(remote: remote)
                                   SettingsGitHubSection(remote: remote, onOpenHome: onOpenHome)
+                                  SettingsRulesAndSecretsSection(remote: remote)
+                                  SettingsManifestSections(page: "tools")
                               }))
             .safeAreaInset(edge: .top, spacing: 0) {
                 SettingsScopeLabel.allTabs(on: remote.macName)
@@ -335,6 +361,7 @@ struct SettingsAboutPage: View {
                 Text("Update pulls Cantrip's latest version on the Mac and reopens it when no tab is working. Permissions shows what the Mac lets Cantrip do, and lets you view its screen. Skills & Rules turns the Mac's shared skills on or off for every backend.")
             }
             .disabled(!remote.isConfigured)
+            SettingsManifestSections(page: "about")
             if env.hermesLanesShown {
                 SettingsHermesConnectionSection(env: env)
             }

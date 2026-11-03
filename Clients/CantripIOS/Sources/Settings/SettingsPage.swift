@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Settings' pages, in the same order on iPhone, iPhone Duo and Gateway Mac.
 enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
-    case macs, models, tools, memory, voice, location, notifications, appearance, about
+    case macs, models, tools, home, memory, voice, location, notifications, appearance, about
 
     var id: String { rawValue }
 
@@ -11,6 +11,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .macs: return "Macs"
         case .models: return "Models"
         case .tools: return "Tools & sign-ins"
+        case .home: return "Home & tabs"
         case .memory: return "Memory"
         case .voice: return "Voice"
         case .location: return "Location"
@@ -25,6 +26,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .macs: return "desktopcomputer"
         case .models: return "cpu"
         case .tools: return "puzzlepiece.extension"
+        case .home: return "house"
         case .memory: return "brain"
         case .voice: return "waveform"
         case .location: return "location.fill"
@@ -39,6 +41,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         case .macs: return .blue
         case .models: return .purple
         case .tools: return .orange
+        case .home: return .cyan
         case .memory: return .pink
         case .voice: return .indigo
         case .location: return .green
@@ -52,14 +55,15 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     var summary: String {
         switch self {
         case .macs: return "Pair, switch and remove Macs"
-        case .models: return "Model tiers, backups and usage limits"
-        case .tools: return "Backends, GitHub and MCP servers, and their sign-ins"
+        case .models: return "Default backend, each backend's model, tiers and backups"
+        case .tools: return "Backends, sign-ins, MCP servers, agent policy and secrets"
+        case .home: return "Cantrip Home, child tabs and new tabs' defaults"
         case .memory: return "What Cantrip remembers on your Mac"
         case .voice: return "Speech recognition and reply voice"
         case .location: return "Answers for where this device is"
         case .notifications: return "Alerts, widget and Live Activity"
         case .appearance: return "Mascot and reply steps"
-        case .about: return "Version, updates, Mac permissions and skills"
+        case .about: return "Version, updates, Mac permissions, skills and storage"
         }
     }
 

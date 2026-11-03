@@ -16,6 +16,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var page: SettingsPage?
     @State private var fallback: CantripUsageFallback?
+    @StateObject private var macSettings = CantripSettingsStore()
     @AppStorage(SettingsPage.lastPageKey) private var lastPage = ""
 
     private var showsSideBySide: Bool {
@@ -30,10 +31,23 @@ struct SettingsView: View {
         Group {
             if showsSideBySide { split } else { stack }
         }
+        .environment(\.cantripSettings, macSettings)
+        .task {
+            macSettings.attach(remote)
+            await macSettings.load()
+        }
         .task {
             fallback = await CantripUsageFallbackSection.load(remote)
             _ = await env.refreshGateway()
         }
+        // Another device (or the Mac) changed a setting, or this device switched Macs.
+        .onChange(of: remote.settingsRevision) { _, revision in
+            Task { await macSettings.refresh(revision: revision) }
+        }
+        .onChange(of: remote.usageIdentity) { _, _ in
+            Task { await macSettings.refresh(revision: nil) }
+        }
+        .sheet(item: $macSettings.shownResult) { SettingsActionResultSheet(shown: $0) }
         .onChange(of: page) { _, page in
             if let page { lastPage = page.rawValue }
         }
@@ -115,7 +129,10 @@ struct SettingsView: View {
                 }
                 #endif
             }
-            .refreshable { fallback = await CantripUsageFallbackSection.load(remote) }
+            .refreshable {
+                fallback = await CantripUsageFallbackSection.load(remote)
+                await macSettings.load(force: true)
+            }
     }
 
     /// The Mac's sidebar selects through the list; on iOS any selection binding, even a constant
@@ -134,6 +151,9 @@ struct SettingsView: View {
         Section {
             SettingsStatusCard(remote: remote, fallback: fallback)
             SettingsPauseRow()
+        }
+        if let pending = macSettings.manifest?.pending {
+            SettingsPendingSection(store: macSettings, pending: pending)
         }
         Section {
             ForEach(SettingsPage.available) { item in
@@ -167,6 +187,8 @@ struct SettingsView: View {
             SettingsModelsPage(env: env, remote: remote, canChangeGateway: canChangeGateway, fallback: $fallback)
         case .tools:
             SettingsToolsPage(remote: remote, macTools: macTools, onOpenHome: openHome)
+        case .home:
+            SettingsHomeTabsPage(remote: remote)
         case .memory:
             SettingsMemoryPage(remote: remote)
         case .voice:

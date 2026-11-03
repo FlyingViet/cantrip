@@ -58,6 +58,7 @@ struct SettingsMacsPage: View {
                         .textSelection(.enabled)
                 }
             }
+            SettingsManifestSections(page: "macs")
             if env.hermesLanesShown {
                 ServerSettingsSections(
                     servers: env.servers,
