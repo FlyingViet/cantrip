@@ -1,7 +1,8 @@
 #!/bin/bash
 # Assembles an unsigned Cantrip.app at the given path from `make build` and `make home-window`
 # output: the binary, Info.plist stamped with the build identity and date, the icon, the helper
-# scripts (CantripInstall.bundledScripts) and the Home window plug-in when it was built.
+# scripts (CantripInstall.bundledScripts), the background engine's login agent and the Home
+# window plug-in when it was built.
 # `make app` signs it with the development identity; Scripts/release-mac.sh with Developer ID.
 #
 #   BUILD_DIR=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path) \
@@ -28,6 +29,11 @@ plutil -replace CantripBuildDate -string "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$DE
 
 if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$DEST/Contents/Resources/"; fi
 for script in "${SCRIPTS[@]}"; do cp -p "Scripts/$script" "$DEST/Contents/Resources/bin/"; done
+# The background engine's login agent (BackgroundEngine.swift), named after the bundle identifier.
+BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw "$DEST/Contents/Info.plist")
+EXECUTABLE=$(plutil -extract CFBundleExecutable raw "$DEST/Contents/Info.plist")
+mkdir -p "$DEST/Contents/Library/LaunchAgents"
+bash Scripts/engine-agent-plist.sh "$BUNDLE_ID" "$EXECUTABLE" "$DEST/Contents/Library/LaunchAgents/$BUNDLE_ID.engine.plist"
 if [ -d .build/home-window/CantripHomeWindow.bundle ]; then
     mkdir -p "$DEST/Contents/PlugIns"
     ditto .build/home-window/CantripHomeWindow.bundle "$DEST/Contents/PlugIns/CantripHomeWindow.bundle"

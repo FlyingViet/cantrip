@@ -258,8 +258,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         AppSettings.shared.refreshLaunchAtLoginRegistrationIfNeeded()
+        BackgroundEngine.onSettingChange = { [weak self] in self?.backgroundEngineSettingChanged() }
+        backgroundEngineSettingChanged()
         if recoveryReport != nil {
             DispatchQueue.main.async { [weak self] in self?.showPanel() }
+        } else if CommandLine.arguments.contains(BackgroundEngine.openSettingsArgument) {
+            // Reopened after switching to or from the background agents with this window up.
+            DispatchQueue.main.async { [weak self] in self?.openSettingsWindow() }
+        } else if CommandLine.arguments.contains(BackgroundEngine.openHomeArgument) {
+            DispatchQueue.main.async { [weak self] in self?.togglePanel() }
         }
         services.continueRestoredWork()
     }
@@ -316,21 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Notify if the panel is hidden OR the finished session isn't the
         // one on screen (background session completed).
         guard !panel.isVisible || finished.id != manager.active.id else { return }
-        let preview = finished.messages.last(where: { $0.role == .assistant && !$0.text.isEmpty })?.text
-            ?? finished.messages.last(where: { $0.role == .error })?.text
-            ?? "Response ready"
-        let title = finished.notificationTitle
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
-            guard granted else { return }
-            let content = UNMutableNotificationContent()
-            content.title = "Cantrip — \(title)"
-            content.body = RemoteCompletion.summaryPreview(preview) ?? String(preview.prefix(160))
-            UNUserNotificationCenter.current().add(UNNotificationRequest(
-                identifier: UUID().uuidString,
-                content: content,
-                trigger: nil
-            ))
-        }
+        MacNotices.post(HostServices.runFinishedNotice(finished))
     }
 
     nonisolated func userNotificationCenter(
@@ -500,6 +493,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         alert.informativeText = HomeWindow.unavailableReason ?? ""
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
+    }
+
+    // MARK: - Background agents
+
+    private var engineSwitchTimer: Timer?
+
+    /// "Keep agents running when Cantrip quits" was turned on: once nothing is working, register
+    /// the background engine (it takes over this app's tabs) and reopen Cantrip as its window.
+    private func backgroundEngineSettingChanged() {
+        guard BackgroundEngine.isEnabled, BackgroundEngine.unavailableReason == nil, engineSwitchTimer == nil else { return }
+        // First check after the Settings window has its answer.
+        engineSwitchTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.switchToEngineWhenIdle() }
+        }
+    }
+
+    private func switchToEngineWhenIdle() {
+        guard BackgroundEngine.isEnabled, BackgroundEngine.unavailableReason == nil else {
+            engineSwitchTimer?.invalidate()
+            engineSwitchTimer = nil
+            return
+        }
+        guard services.busyWork == 0 else { return }
+        engineSwitchTimer?.invalidate()
+        engineSwitchTimer = nil
+        do {
+            try BackgroundEngine.register()
+        } catch {
+            BackgroundEngine.isEnabled = false
+            BackgroundEngine.lastError = error.localizedDescription
+            Log.write("engine: \(error.localizedDescription)")
+            return
+        }
+        Log.write("engine: handing the tabs to the background agents; reopening Cantrip as their window")
+        let window = AppSettings.shared.localSettingsWindowOpen ? BackgroundEngine.openSettingsArgument
+            : usesHomeWindow && HomeWindow.isOpen ? BackgroundEngine.openHomeArgument : nil
+        BackgroundEngine.relaunchApp(opening: window)
     }
 
     /// Opening Cantrip.app again (Finder, Spotlight, the Dock while the window is up) shows the

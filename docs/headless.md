@@ -11,6 +11,25 @@ Mac or the browser Remote.
 The menu bar app and the headless host use the same sessions, settings and pairing
 token, but only one can run at a time.
 
+## Keep agents running when Cantrip quits
+
+On a Mac you use at the screen, Settings › **About & Updates** › **Keep agents running when
+Cantrip quits** runs the headless host for the app. Cantrip registers a login item (listed under
+Cantrip in System Settings › General › Login Items & Extensions) that runs its own engine with no
+windows, and Cantrip.app connects to it like Cantrip Gateway does: ⌥Space and the menu bar open the
+Home window, and Settings opens the same pages. Quitting, updating or restarting the app leaves
+tabs, Cantrip Home and paired devices running.
+
+- Turning it on or off waits until no tab or Home task is working, then hands the tabs over.
+- Updates (`make app`, the release updater) are staged beside the app as usual. The engine installs
+  one and restarts once nothing is working; the app reopens into it when you aren't using it.
+- The engine's notifications (finished runs, input needed, handoffs, sign-in and storage alerts)
+  appear while Cantrip.app is open.
+- `cantrip status` says "background agents for Cantrip.app"; `cantrip daemon restart` restarts the
+  engine. To stop it, turn the setting off.
+- It needs macOS 26 and the Home window. The ⌥Space panel isn't available in this mode yet, and it
+  can't be combined with `cantrip daemon start`.
+
 ## Set up
 
 1. Build Cantrip and put the CLI on your PATH: from the cloned repo run

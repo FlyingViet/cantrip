@@ -1,5 +1,4 @@
 import Foundation
-import UserNotifications
 
 /// Runs shared MCP in the host: the relay, keeping sign-ins fresh, alerts when a sign-in needs
 /// you, and writing each backend's config from the list.
@@ -69,19 +68,20 @@ final class MCPHost {
         alertIDs[name] = id
         remote?.notifyMCPSignIn(id: id)
         guard postsMacNotifications else { return }
-        let content = UNMutableNotificationContent()
-        content.title = phase == .awaitingApproval ? "Approve the \(name) sign-in" : "\(name) needs signing in"
-        content.body = phase == .awaitingApproval
-            ? "Approve it in Cantrip's MCP Servers settings or from Cantrip Agent."
-            : "Open Cantrip's MCP Servers settings to connect it."
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id.uuidString, content: content, trigger: nil))
+        MacNotices.post(MacNotice(
+            id: id.uuidString,
+            title: phase == .awaitingApproval ? "Approve the \(name) sign-in" : "\(name) needs signing in",
+            body: phase == .awaitingApproval
+                ? "Approve it in Cantrip's MCP Servers settings or from Cantrip Agent."
+                : "Open Cantrip's MCP Servers settings to connect it."
+        ))
     }
 
     /// The alert for `name` is no longer needed (approved, declined, signed in).
     func resolveAlert(_ name: String) {
         guard let id = alertIDs.removeValue(forKey: name) else { return }
         remote?.resolveInputNotification(id)
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id.uuidString])
+        MacNotices.remove([id.uuidString])
     }
 }
 

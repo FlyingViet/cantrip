@@ -19,6 +19,15 @@ enum HomeWindow {
     static let bundleName = "CantripHomeWindow.bundle"
     private static var pluginClass: AnyClass?
 
+    /// The key the windows send as this Mac's own app: this process's, or the background engine's
+    /// when the app is its client (`ClientAppDelegate`).
+    static var localKey: String = LocalClientKey.value {
+        didSet {
+            guard let pluginClass, localKey != oldValue else { return }
+            _ = (pluginClass as AnyObject).perform(NSSelectorFromString("setLocalKey:"), with: localKey as NSString)
+        }
+    }
+
     static var bundleURL: URL? {
         guard let url = Bundle.main.builtInPlugInsURL?.appendingPathComponent(bundleName),
               FileManager.default.fileExists(atPath: url.path) else { return nil }
@@ -97,7 +106,7 @@ enum HomeWindow {
         }
         pluginClass = principal
         // Marks the windows' requests as this Mac's own app (`SettingsManifest`, `LocalClientKey`).
-        _ = (principal as AnyObject).perform(NSSelectorFromString("setLocalKey:"), with: LocalClientKey.value as NSString)
+        _ = (principal as AnyObject).perform(NSSelectorFromString("setLocalKey:"), with: localKey as NSString)
         Log.write("home-window: loaded \(url.lastPathComponent)")
         return principal
     }

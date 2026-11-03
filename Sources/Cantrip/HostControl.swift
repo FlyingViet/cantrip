@@ -15,6 +15,20 @@ final class HostControl {
         switch request["command"] as? String {
         case "status":
             return status()
+        case "app-connection":
+            // Cantrip.app as the background engine's client (`BackgroundEngine.connection`).
+            guard HostMode.isEngine else { return ["error": "Cantrip isn't running its agents in the background."] }
+            guard let token = settings.ensureRemoteControlToken() else {
+                return ["error": settings.remoteControlError ?? "The pairing token is unavailable."]
+            }
+            // Notifications for the app to post after the last it saw (`MacNotices`); a cursor from
+            // another engine (this one restarted) doesn't count.
+            let cursor = request["outbox"] as? String == MacNotices.outboxID ? request["after"] as? Int : nil
+            let notices = MacNotices.outboxJSON(after: cursor)
+            return ["port": settings.remoteControlPort, "token": token, "localKey": LocalClientKey.value,
+                    "pid": Int(getpid()), "build": CrashRecovery.buildIdentity,
+                    "enabled": BackgroundEngine.isEnabled, "busy": HostServices.running?.busyWork ?? 0,
+                    "outbox": MacNotices.outboxID, "seq": notices.seq, "notices": notices.entries]
         case "tab":
             return TabInsight.handle(request, manager: manager)
         case "mcp":
@@ -22,7 +36,7 @@ final class HostControl {
         case "api":
             return api(request)
         case "pair":
-            guard settings.remoteControlEnabled || HostMode.isHeadless else {
+            guard settings.remoteControlEnabled || (HostMode.isHeadless && !HostMode.isEngine) else {
                 return ["error": "Remote control is off. Turn it on with `cantrip config set remoteControlEnabled true`."]
             }
             if request["rotate"] as? Bool == true {
@@ -117,7 +131,7 @@ final class HostControl {
         // The tabs remote clients list (Cantrip Home's own sessions aren't tabs).
         let sessions = manager.sessions.filter { !$0.isPrivate }
         var remote: [String: Any] = [
-            "enabled": settings.remoteControlEnabled || HostMode.isHeadless,
+            "enabled": settings.remoteControlEnabled || (HostMode.isHeadless && !HostMode.isEngine),
             "port": settings.remoteControlPort,
             "tokenStore": RemoteTokenFile.inUse ? "file" : "keychain",
         ]
@@ -128,7 +142,7 @@ final class HostControl {
         if let error = settings.openAIEndpointError { endpoint["error"] = error }
         return [
             "openAIEndpoint": endpoint,
-            "host": HostMode.isHeadless ? "headless" : "app",
+            "host": HostMode.isEngine ? "engine" : HostMode.isHeadless ? "headless" : "app",
             "pid": Int(getpid()),
             "build": CrashRecovery.buildIdentity,
             "backend": settings.backend.rawValue,

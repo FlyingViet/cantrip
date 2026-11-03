@@ -618,7 +618,11 @@ enum CantripCLI {
         let reply = try request(["command": "status"])
         if json { return printJSON(reply) }
         let remote = reply["remote"] as? [String: Any] ?? [:]
-        let mode = reply["host"] as? String == "headless" ? "headless (no windows)" : "the menu bar app"
+        let mode = switch reply["host"] as? String {
+        case "headless": "headless (no windows)"
+        case "engine": "background agents for Cantrip.app"
+        default: "the menu bar app"
+        }
         print("Cantrip is running as \(mode), pid \(reply["pid"] ?? "?"), build \(reply["build"] ?? "?").")
         print("Tabs: \(reply["tabs"] ?? 0) (\(reply["busyTabs"] ?? 0) working) · backend \(reply["backend"] ?? "?")"
               + " · Cantrip Home \(reply["cantripHome"] as? Bool == true ? "on" : "off")")
@@ -884,9 +888,15 @@ enum CantripCLI {
         switch arguments.first {
         case "start":
             if let status = try? request(["command": "status"], timeout: 3) {
-                let mode = status["host"] as? String == "headless" ? "in the background" : "as the menu bar app"
+                let mode = switch status["host"] as? String {
+                case "headless": "in the background"
+                case "engine": "its agents in the background for Cantrip.app"
+                default: "as the menu bar app"
+                }
                 throw Failure(message: "Cantrip is already running \(mode) (pid \(status["pid"] ?? "?")). "
-                              + (mode == "as the menu bar app" ? "Quit it first to run headless." : ""))
+                              + (mode == "as the menu bar app" ? "Quit it first to run headless."
+                                 : status["host"] as? String == "engine"
+                                    ? "Turn off Keep agents running when Cantrip quits in Cantrip's Settings › About & Updates first." : ""))
             }
             if let other = CrashRecovery.otherRunningHost() {
                 throw Failure(message: "Cantrip (pid \(other)) is already running. Quit it first to run headless.")
@@ -903,12 +913,17 @@ enum CantripCLI {
             throw Failure(message: "The service was started but Cantrip didn't answer yet. Check `cantrip daemon logs`.")
         case "stop":
             let wasService = Daemon.isInstalled
+            if !wasService, HostLock.holder()?.mode == "engine" {
+                throw Failure(message: "Cantrip.app runs its agents in the background. To stop them, turn off "
+                              + "Keep agents running when Cantrip quits in Cantrip's Settings › About & Updates.")
+            }
             try Daemon.stop()
             print(wasService ? "Stopped Cantrip's background service; it won't start at login." : "Stopped Cantrip.")
         case "restart":
             guard Daemon.isInstalled else {
-                // Started with `cantrip daemon run`: it restarts itself with the same arguments.
-                guard let holder = HostLock.holder(), holder.mode == "headless" else {
+                // Started with `cantrip daemon run`, or Cantrip.app's background agents: it restarts
+                // itself with the same arguments.
+                guard let holder = HostLock.holder(), holder.mode == "headless" || holder.mode == "engine" else {
                     throw Failure(message: "Cantrip isn't running in the background. Start it with `cantrip daemon start`.")
                 }
                 kill(holder.pid, SIGUSR1)

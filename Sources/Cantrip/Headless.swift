@@ -9,6 +9,8 @@ enum HeadlessHost {
     static func run(recoveryReport: CrashRecovery.Report?) -> Never {
         let services = HostServices(manager: SessionManager())
         current = services
+        // Cantrip.app shows the background engine's finished runs (`MacNotices`).
+        if HostMode.isEngine { services.onRunFinished = { MacNotices.post(HostServices.runFinishedNotice($0)) } }
         services.start(recoveryReport: recoveryReport)
         services.continueRestoredWork()
         let stop = { (signal: Int32) in
@@ -29,10 +31,40 @@ enum HeadlessHost {
         restart.setEventHandler { MainActor.assumeIsolated { restartInPlace() } }
         restart.resume()
         signalSources.append(restart)
-        Log.write("headless: started pid=\(getpid())")
+        if HostMode.isEngine { watchForUpdates(services) }
+        Log.write("\(HostMode.isEngine ? "engine" : "headless"): started pid=\(getpid())")
         while true { RunLoop.main.run() }
     }
 
+    /// The background engine restarts into a new build once nothing is running: the bundle it runs
+    /// from was replaced (a new copy in Applications), or an update is staged beside it (`make app`,
+    /// the release updater), which the restart installs.
+    /// Idle means no tab streaming, queued or running a shell command and no Home background job,
+    /// twice in a row 30 seconds apart.
+    @MainActor
+    private static func watchForUpdates(_ services: HostServices) {
+        let app = Bundle.main.bundleURL
+        var idleChecks = 0
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 30, repeating: 30)
+        timer.setEventHandler {
+            MainActor.assumeIsolated {
+                let replaced = PendingUpdate.launchedExecutableReplaced()
+                guard replaced || PendingUpdate.stagedBuild(for: app) != nil else {
+                    idleChecks = 0
+                    return
+                }
+                idleChecks = services.busyWork > 0 ? 0 : idleChecks + 1
+                guard idleChecks >= 2 else { return }
+                Log.write("engine: \(replaced ? "Cantrip.app was updated" : "an update is staged"); restarting into it now that nothing is running")
+                restartInPlace()
+            }
+        }
+        timer.resume()
+        updateTimer = timer
+    }
+
+    @MainActor private static var updateTimer: DispatchSourceTimer?
     @MainActor private static var signalSources: [DispatchSourceSignal] = []
     @MainActor private static var current: HostServices?
 

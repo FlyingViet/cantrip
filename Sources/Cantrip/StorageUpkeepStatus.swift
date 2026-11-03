@@ -1,5 +1,4 @@
 import SwiftUI
-import UserNotifications
 
 /// Runs `StorageUpkeep` in the host about once a day: 10 minutes after launch, then whenever a
 /// day has passed since the last cleanup (including one run with `cantrip cleanup`), on request
@@ -96,10 +95,7 @@ final class StorageUpkeepStatus: ObservableObject {
         Log.write("storage-upkeep: alert: \(title). \(body)")
         remote?.notifyNotice(title: title, body: body, kind: "storageLow")
         guard postsMacNotifications else { return }
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        MacNotices.post(MacNotice(id: UUID().uuidString, title: title, body: body))
     }
 
     private static func loadGuard() -> StorageUpkeep.LowDiskGuard {

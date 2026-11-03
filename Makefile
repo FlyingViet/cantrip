@@ -16,7 +16,7 @@ all: app
 build:
 	swift build $(BUILD_FLAGS)
 
-test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-release-updater test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-rich-cards test-agent-policy test-skills test-secrets test-environments
+test: test-prune test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-background-engine test-release-updater test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-rich-cards test-agent-policy test-skills test-secrets test-environments
 
 test-agent-policy:
 	@BIN="/tmp/cantrip-agent-policy-tests-$$$$"; HOME_DIR="$$(mktemp -d)"; \
@@ -131,6 +131,14 @@ test-recovery:
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc Sources/Cantrip/CrashRecovery.swift Sources/Cantrip/PendingUpdate.swift Sources/Cantrip/CantripInstall.swift Sources/Cantrip/CantripVersion.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/CrashRecoveryTests/*.swift -o "$$BIN"; \
 	"$$BIN"
+
+# The background engine's notification outbox and its login agent's plist.
+test-background-engine:
+	@BIN="/tmp/cantrip-background-engine-tests-$$$$"; H="$$(mktemp -d)"; \
+	trap 'rm -rf "$$BIN" "$$H"' EXIT; \
+	swiftc Sources/Cantrip/MacNotices.swift Sources/Cantrip/HostLock.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/CantripPaths.swift Tests/BackgroundEngineTests/main.swift -o "$$BIN" && \
+	HOME="$$H" CFFIXED_USER_HOME="$$H" "$$BIN" && \
+	bash Tests/BackgroundEngineTests/agent-plist.sh
 
 test-consolidation:
 	@BIN="/tmp/cantrip-consolidation-tests-$$$$"; \

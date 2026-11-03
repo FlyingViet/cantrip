@@ -1,6 +1,5 @@
 import Combine
 import Foundation
-import UserNotifications
 
 /// The agent backends whose CLI sign-in Cantrip checks.
 enum MonitoredBackend: String, CaseIterable, Codable {
@@ -832,10 +831,7 @@ final class BackendStatusMonitor: ObservableObject {
         Log.write("backends: alert: \(title)")
         remote?.notifyBackendStatus(title: title, body: body)
         guard postsMacNotifications else { return }
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        MacNotices.post(MacNotice(id: UUID().uuidString, title: title, body: body))
     }
 
     private func save() {
