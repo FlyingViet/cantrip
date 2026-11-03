@@ -29,8 +29,8 @@ The iOS app lives next to this folder in [`Clients/CantripIOS`](../CantripIOS/).
 compiles its `Sources/` and `Shared/`
 directly, so pairing, LAN/Tailscale routing, history paging, sending, input requests,
 tasks, artifacts, background runs, MCP Apps and voice all run the exact same code.
-The Swift module is even named `Hermes`, so the shared logic test suites run here
-unchanged.
+The Swift module even has the iOS app's internal name, `Hermes`, so the shared logic test
+suites run here unchanged.
 
 Only Mac-specific code lives in this folder:
 
@@ -38,9 +38,9 @@ Only Mac-specific code lives in this folder:
 | --- | --- |
 | `Sources/App` | App entry, window/menu commands, navigation state |
 | `Sources/Home` | Home window: sidebar (Pip, sections, connection), chat, toolbar |
-| `Sources/Settings` | Settings window: the shared pages (Hermes `Sources/Settings`) beside a sidebar, plus this Mac's local model tools |
+| `Sources/Settings` | Settings window: the shared pages (`../CantripIOS/Sources/Settings`) beside a sidebar, plus this Mac's local model tools |
 | `Sources/Platform` | AppKit stand-ins for the UIKit/ActivityKit names the shared code uses, and the macOS image viewer |
-| `Tests` | Mac tests; `project.yml` also runs the shared Hermes logic suites |
+| `Tests` | Mac tests; `project.yml` also runs the iOS app's shared logic suites |
 
 The shared files need no Mac-specific knowledge beyond `#if os(iOS)` guards around
 UIKit-only classes, which this folder replaces with AppKit versions of the same names.
@@ -53,7 +53,7 @@ Requires macOS 26, Xcode 26+ and XcodeGen (`brew install xcodegen`).
 git clone https://github.com/FlyingViet/cantrip.git
 cd cantrip/Clients/CantripGatewayMac
 make install   # Release build copied to /Applications
-make test      # Mac tests + shared Hermes logic suites
+make test      # Mac tests + the iOS app's shared logic suites
 make build     # Debug build in build/Debug
 ```
 
@@ -153,7 +153,7 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   a click picks too. The pick shows as `@Title` plus a removable chip, and goes to the Mac as
   that tab's ID, so Cantrip acts on exactly that tab. Sent mentions read **@Title** and open
   the tab when clicked. Needs a Cantrip host with `supportsTabMentions`. Shared with iOS (see
-  Hermes' README, *Mention a tab with @*).
+  [Cantrip Agent's README](../CantripIOS/README.md#mention-a-tab-with-)).
 - **Terminal:** the toolbar's terminal button (or ⌃`) opens the tab's shell on the Mac under its
   conversation: the same persistent shell as the Cantrip panel's terminal mode, so `cd`, exports
   and history carry across devices, and the agent's own commands appear there too. Type a line
@@ -277,11 +277,10 @@ run here, lists its tools with their context cost and stops it, without calling 
 
 ## Updating the shared code
 
-```sh
-cd Hermes && git pull origin master && cd ..
-make test
-git commit -am "Bump Hermes" 
-```
+The shared code is [`Clients/CantripIOS`](../CantripIOS/) in this repository, so there is
+nothing to pull or bump: `project.yml` compiles it in place. After changing it, run
+`make test` here and the iOS tests (see [Cantrip Agent's README](../CantripIOS/README.md#test)),
+and commit the iOS and Mac sides together.
 
-If a Hermes change adds UIKit-only code to a shared file, wrap it in `#if os(iOS)`.
+If a shared change adds UIKit-only code, wrap it in `#if os(iOS)`.
 If the Mac needs that piece, add an AppKit equivalent under `Sources/Platform`.
