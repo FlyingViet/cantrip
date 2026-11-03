@@ -341,25 +341,22 @@ final class MemoryStore {
     - (Nothing learned yet.)
     """
 
-    private static let selfSeed = """
+    private static var selfSeed: String { """
     # Cantrip — self-maintenance (the launcher you are running inside)
 
     Queries reach you through Cantrip, a macOS Spotlight-style \
     launcher. When asked to fix, improve, or debug "this tool" / "yourself" \
     / "the launcher" / "cantrip", THIS is what's meant — not other apps.
 
-    - Source code: `~/Coding/Cantrip` (Swift/SwiftUI, SwiftPM)
-    - Rebuild + relaunch: `make -C ~/Coding/Cantrip run`
-      WARNING: this kills the running app — the current response dies with \
-      it. Say so first, finish your message, run it last.
+    \(selfSeedInstall)
     - Debug log: `~/Library/Logs/Cantrip.log` (tail after relaunch)
     - App settings: UserDefaults domain `com.brian.agentspotlight` \
       (`defaults read com.brian.agentspotlight`)
     - Memory vault: this folder. Screenshot/paste cache: `~/.cache/Cantrip/`
 
     ## Permissions (macOS TCC)
-    - Signing uses the self-signed cert "AgentSpotlight Dev" so grants \
-      persist across rebuilds. Verify: `codesign -dvv <app> | grep Authority` \
+    - \(CantripInstall.isRelease() ? "Signed with Developer ID and notarized; updates keep the same signature, so grants persist." : "Signing uses the self-signed cert \"AgentSpotlight Dev\" (or an Apple Development identity) so grants persist across rebuilds.") \
+      Verify: `codesign -dvv <app> | grep Authority` \
       — if it says adhoc, the cert is missing/untrusted and grants will reset.
     - Mic / speech / location prompt automatically on use. Screen Recording, \
       Accessibility, and Full Disk Access can ONLY be enabled by the user in \
@@ -371,9 +368,27 @@ final class MemoryStore {
       attributed to Cantrip.
 
     Keep this note updated when you learn new fixes or the app changes.
-    """
+    """ }
 
-    private static let imessageSeed = """
+    private static var selfSeedInstall: String {
+        if let checkout = CantripInstall.checkout {
+            let path = (checkout.path as NSString).abbreviatingWithTildeInPath
+            return """
+            - Source code: `\(path)` (Swift/SwiftUI, SwiftPM)
+            - Rebuild + relaunch: `make -C \(path) run`
+              WARNING: this kills the running app — the current response dies with \
+              it. Say so first, finish your message, run it last.
+            """
+        }
+        return """
+        - Installed from a release (`\(Bundle.main.bundlePath)`); there's no source checkout \
+          on this Mac. Source: https://github.com/FlyingViet/cantrip
+        - Updates: Settings › About & Updates downloads the newest release; it installs \
+          when Cantrip restarts.
+        """
+    }
+
+    private static var imessageSeed: String { """
       # Sending Messages reliably
 
       Always resolve the recipient's exact phone/email in Contacts, then use the \
@@ -382,8 +397,8 @@ final class MemoryStore {
       if the live transport cannot be identified.
 
       ```sh
-      ~/Coding/Cantrip/Scripts/messages-send "+15551234567" "MESSAGE"
-      ~/Coding/Cantrip/Scripts/messages-send --detect "+15551234567"
+      \(CantripInstall.displayScript("messages-send")) "+15551234567" "MESSAGE"
+      \(CantripInstall.displayScript("messages-send")) --detect "+15551234567"
     ```
 
     - Recipient: phone number with country code (e.g. +14085551234) or their \
@@ -394,5 +409,5 @@ final class MemoryStore {
       the draft cleared after sending. It never retries an uncertain send.
       - Do not force a phone number through the iMessage AppleScript service; \
       Android recipients need the resolved RCS/SMS composer.
-    """
+    """ }
 }

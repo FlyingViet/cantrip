@@ -4,13 +4,8 @@ import Foundation
 /// `cantrip-mcp NAME` command; plain local servers keep their own command. No entry carries a
 /// secret: the relay adds those in the host.
 enum MCPBackendConfig {
-    /// `Scripts/cantrip-mcp` in the checkout Cantrip runs from.
-    static var relayScript: String {
-        let checkout = (Bundle.main.bundlePath as NSString).deletingLastPathComponent
-        let script = (checkout as NSString).appendingPathComponent("Scripts/cantrip-mcp")
-        if FileManager.default.isExecutableFile(atPath: script) { return script }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Coding/Cantrip/Scripts/cantrip-mcp").path
-    }
+    /// `cantrip-mcp`: the checkout's in a source install, otherwise the app's own copy.
+    static var relayScript: String { CantripInstall.script("cantrip-mcp") }
 
     /// Tool namespaces OpenAI keeps for its own tools. Copilot and Codex name an MCP tool
     /// `<server>-<tool>`, and a GPT model refuses the whole request when a server is called one of

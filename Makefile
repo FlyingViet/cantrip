@@ -8,6 +8,8 @@ APP_BACKUP = .$(APP_NAME).app.previous
 APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
+# Helper scripts the app carries in Contents/Resources/bin (CantripInstall.bundledScripts).
+BUNDLED_SCRIPTS = cantrip cantrip-mcp mcp-on-demand messages-send mail-refresh
 
 .PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-remote-routing test-message-routing test-session-tabs test-settings-manifest test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-rich-cards test-agent-policy test-skills test-secrets test-environments cert artwork icon app run clean
 
@@ -44,7 +46,7 @@ test-iso-date:
 test-cantrip-paths:
 	@BIN="/tmp/cantrip-paths-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/CantripPaths.swift Sources/Cantrip/TabDefaults.swift Tests/CantripPathsTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/CantripPaths.swift Sources/Cantrip/CantripInstall.swift Sources/Cantrip/TabDefaults.swift Tests/CantripPathsTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-github-builds:
 	@BIN="/tmp/cantrip-github-build-tests-$$$$"; \
@@ -208,6 +210,8 @@ app: build cert icon home-window
 	plutil -replace CantripBuildIdentity -string "$$BUILD_ID" "$$STAGING/Contents/Info.plist"; \
 	plutil -replace CantripBuildDate -string "$$BUILD_DATE" "$$STAGING/Contents/Info.plist"; \
 	if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$$STAGING/Contents/Resources/"; fi; \
+	mkdir -p "$$STAGING/Contents/Resources/bin"; \
+	for script in $(BUNDLED_SCRIPTS); do cp -p "Scripts/$$script" "$$STAGING/Contents/Resources/bin/"; done; \
 	if [ -d .build/home-window/CantripHomeWindow.bundle ]; then \
 		mkdir -p "$$STAGING/Contents/PlugIns"; \
 		ditto .build/home-window/CantripHomeWindow.bundle "$$STAGING/Contents/PlugIns/CantripHomeWindow.bundle"; \

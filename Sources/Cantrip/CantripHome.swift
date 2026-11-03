@@ -903,12 +903,7 @@ final class CantripHomeStore: ObservableObject {
     static var tasksFile: URL { rootDirectory.appendingPathComponent("tasks.json") }
 
     /// The shared, coalescing Apple Mail refresh that concurrent background jobs call.
-    static var mailRefreshCommand: String {
-        let bundled = Bundle.main.bundleURL.deletingLastPathComponent()
-            .appendingPathComponent("Scripts/mail-refresh")
-        if FileManager.default.isExecutableFile(atPath: bundled.path) { return bundled.path }
-        return "~/Coding/Cantrip/Scripts/mail-refresh"
-    }
+    static var mailRefreshCommand: String { CantripInstall.script("mail-refresh") }
 
     private var tasksURL: URL { Self.tasksFile }
     private var artifactsURL: URL { Self.rootDirectory.appendingPathComponent("artifacts.json") }
