@@ -219,9 +219,11 @@ struct CantripMemoryView: View {
     @ObservedObject var remote: CantripRemoteModel
     /// A page inside Settings, without its own navigation and Done.
     var embedded = false
+    /// Sections above the notes (Settings › Memory: the Mac's memory settings).
+    var leading: AnyView? = nil
 
     var body: some View {
-        CantripMemoryBrowser(remote: remote, embedded: embedded)
+        CantripMemoryBrowser(remote: remote, embedded: embedded, leading: leading)
             .id(remote.usageIdentity)
     }
 }
@@ -230,12 +232,14 @@ private struct CantripMemoryBrowser: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var remote: CantripRemoteModel
     let embedded: Bool
+    let leading: AnyView?
     @StateObject private var model = CantripMemoryCatalogModel()
     @State private var query = ""
 
     var body: some View {
         CantripSheetStack(embedded: embedded) {
             List {
+                if let leading { leading }
                 Section {
                     Text("Read-only memory saved on your connected Mac. Core memory contains facts and preferences; notes hold procedures; session history records earlier conversations.")
                         .font(.caption).foregroundStyle(.secondary)

@@ -190,6 +190,8 @@ struct SettingsLocationPage: View {
     var body: some View {
         Form {
             Section { SettingsScopeLabel.thisDevice() }
+            // Cantrip's own window on the Mac: this Mac's location for the panel's prompts.
+            SettingsManifestSections(page: "location")
             Section {
                 Toggle(isOn: $enabled) {
                     Label("Share location with messages", systemImage: "location")

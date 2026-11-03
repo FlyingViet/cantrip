@@ -1061,6 +1061,8 @@ struct CantripSessionsResponse: Decodable {
     /// Named groups for the tab lists, in order; nil from Macs without sections.
     var sections: [CantripTabSection]?
     var supportsTabSections: Bool?
+    /// Moves whenever one of the Mac's settings changes (`/api/v1/settings`); nil from older Macs.
+    var settingsRevision: String?
 }
 
 struct CantripTabSectionsResponse: Decodable {
@@ -1132,6 +1134,7 @@ enum CantripRemoteError: LocalizedError {
     case mcpUnsupported
     case backendsUnsupported
     case skillsUnsupported
+    case settingsUnsupported
     /// A `400` whose reason is shown as the Mac wrote it.
     case rejected(String)
     case modelSettingsUnsupported
@@ -1206,6 +1209,8 @@ enum CantripRemoteError: LocalizedError {
             return CantripBackendText.unsupported
         case .skillsUnsupported:
             return CantripSkills.unsupported
+        case .settingsUnsupported:
+            return "Update and reopen Cantrip on your Mac to change its settings from here."
         case .rejected(let message):
             return message
         case .modelSettingsUnsupported:
@@ -1824,6 +1829,34 @@ struct CantripRemoteAPI {
 
     fileprivate func updateModelTiers(body: Data) async throws -> CantripModelTiers {
         try await request(path: "/api/v1/model-tiers", method: "POST", body: body)
+    }
+
+    func settings() async throws -> CantripSettingsManifest {
+        do {
+            return try await request(path: "/api/v1/settings")
+        } catch CantripRemoteError.http(let status, _) where status == 404 || status == 405 {
+            throw CantripRemoteError.settingsUnsupported
+        }
+    }
+
+    fileprivate func updateSettings(body: Data) async throws -> CantripSettingsReply {
+        try await request(path: "/api/v1/settings", method: "POST", body: body)
+    }
+
+    func agentPolicy() async throws -> CantripPolicySnapshot {
+        try await request(path: "/api/v1/policy")
+    }
+
+    fileprivate func updateAgentPolicy(body: Data) async throws -> CantripPolicySnapshot {
+        try await request(path: "/api/v1/policy", method: "POST", body: body)
+    }
+
+    func secrets() async throws -> CantripSecretsSnapshot {
+        try await request(path: "/api/v1/secrets")
+    }
+
+    fileprivate func secretsAction(body: Data) async throws -> CantripSecretsSnapshot {
+        try await request(path: "/api/v1/secrets", method: "POST", body: body)
     }
 
     func mcpServers(tab: String?) async throws -> CantripMCPSnapshot {
@@ -2873,6 +2906,9 @@ struct CantripRemoteAPI {
         request.httpBody = body
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let localKey = CantripLocalClientKey.key(for: url) {
+            request.setValue(localKey, forHTTPHeaderField: "X-Cantrip-Local-Key")
+        }
         if body != nil {
             request.setValue(method == "PUT" && Self.isUploadRoute(path) ? "application/octet-stream" : "application/json",
                              forHTTPHeaderField: "Content-Type")
@@ -2973,6 +3009,10 @@ final class CantripRemoteModel: ObservableObject {
     /// Sections the Mac groups its tabs into, in order (empty: one flat list).
     @Published private(set) var tabSections: [CantripTabSection] = []
     @Published private(set) var supportsTabSections = false
+    /// The Mac's settings revision from the last tab list, so open Settings screens refresh.
+    @Published private(set) var settingsRevision: String?
+    /// Why the last settings change didn't save, in the Mac's words.
+    @Published private(set) var lastSettingsError: String?
     /// A section name being asked for, shown by `cantripSectionPrompt(model:)`.
     @Published var sectionPrompt: CantripSectionPrompt?
     /// Edit Sections is showing (`cantripSectionPrompt(model:)` presents it).
@@ -4491,6 +4531,73 @@ final class CantripRemoteModel: ObservableObject {
         })
     }
 
+    /// The Mac's own settings (Macs from before the manifest throw `settingsUnsupported`).
+    func settingsManifest() async throws -> CantripSettingsManifest {
+        try await performHistoryRead { try await $0.settings() }
+    }
+
+    /// Saves a setting, runs a button, or keeps or undoes a waiting change; nil when it didn't go
+    /// through (`lastSettingsError` says why, in the Mac's words for a refusal).
+    func updateSettings(_ change: CantripSettingsChange) async -> CantripSettingsReply? {
+        lastSettingsError = nil
+        let outcome: Result<CantripSettingsReply, CantripRemoteError>? = await mutate(prepare: { _ in try change.body }, { api, body in
+            do {
+                return .success(try await api.updateSettings(body: body))
+            } catch CantripRemoteError.http(let status, let message) where (400..<500).contains(status) && status != 401 {
+                // A refusal, not a lost route: say why without disconnecting.
+                return .failure(.rejected(message))
+            }
+        })
+        switch outcome {
+        case .success(let reply): return reply
+        case .failure(let error): lastSettingsError = error.localizedDescription
+        case nil: lastSettingsError = errorMessage
+        }
+        return nil
+    }
+
+    /// The Mac's agent policy: every rule tabs and backends follow.
+    func agentPolicy() async throws -> CantripPolicySnapshot {
+        try await performHistoryRead { try await $0.agentPolicy() }
+    }
+
+    /// One policy change with the revision read (`enabled`, `rule`, `removeRule`, `setRuleEnabled`);
+    /// nil when it didn't save (`errorMessage` says why).
+    func updateAgentPolicy(_ change: [String: Any]) async -> CantripPolicySnapshot? {
+        await mutate(prepare: { _ in try JSONSerialization.data(withJSONObject: change) }, { api, body in
+            try await api.updateAgentPolicy(body: body)
+        })
+    }
+
+    /// The Mac's secrets by name, never a value.
+    func secrets() async throws -> CantripSecretsSnapshot {
+        try await performHistoryRead { try await $0.secrets() }
+    }
+
+    /// Asks the Mac to unlock Bitwarden (its password dialog shows on the Mac) and sync.
+    func syncSecrets() async -> CantripSecretsSnapshot? {
+        await mutate(prepare: { _ in try JSONSerialization.data(withJSONObject: ["action": "sync"]) }, { api, body in
+            try await api.secretsAction(body: body)
+        })
+    }
+
+    /// After this device replaced the Mac's pairing token: saves the new one for this Mac,
+    /// reconnects with it and keeps the change, which the Mac undoes unless it's kept. The Mac
+    /// switches tokens a moment after replying, so this retries for a few seconds.
+    func adoptReplacedPairingToken(_ token: String, keep id: String) async -> CantripSettingsManifest? {
+        guard let server = servers.selected, server.id == selectedServerID, server.id != localServerID else { return nil }
+        do { try servers.replaceCredential(token, for: server) } catch {
+            lastSettingsError = error.localizedDescription
+            return nil
+        }
+        for attempt in 0..<10 {
+            try? await Task.sleep(for: .milliseconds(attempt == 0 ? 800 : 1_000))
+            guard (try? await connect(to: server)) != nil else { continue }
+            if let reply = await updateSettings(.keep(id)) { return reply.manifest }
+        }
+        return nil
+    }
+
     /// The backend commands for "/" suggestions; never holds the polling/mutation gate.
     func fetchBackendCommands(sessionID: String) async throws -> BackendCommandsResponse {
         #if DEBUG
@@ -5265,6 +5372,7 @@ final class CantripRemoteModel: ObservableObject {
             if supportsTabSections != (listing.supportsTabSections == true) {
                 supportsTabSections = listing.supportsTabSections == true
             }
+            if settingsRevision != listing.settingsRevision { settingsRevision = listing.settingsRevision }
             errorMessage = nil
             syncLiveStatusPairing()
             liveStatus?.refreshIfDue(anyStreaming: listed.contains { $0.isStreaming }
