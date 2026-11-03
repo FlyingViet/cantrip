@@ -3,6 +3,7 @@ import CoreLocation
 import CryptoKit
 import Darwin
 import Foundation
+import ImageIO
 import MapKit
 import SwiftUI
 
@@ -16,6 +17,11 @@ struct LinkPreviewCard: Codable, Equatable, Identifiable, Sendable {
     var title: String
     var siteName: String?
     var imageID: String?
+    /// The site's icon, re-encoded as a small PNG and cached on the Mac like `imageID`
+    /// (one per site, shared by its cards).
+    var iconID: String? = nil
+    /// The icon was looked for; previews cached before icons existed are fetched again.
+    var iconChecked: Bool? = nil
 
     var snapshot: [String: Any] {
         var result: [String: Any] = [
@@ -26,6 +32,7 @@ struct LinkPreviewCard: Codable, Equatable, Identifiable, Sendable {
         ]
         if let siteName, !siteName.isEmpty { result["siteName"] = siteName }
         if let imageID, !imageID.isEmpty { result["imageID"] = imageID }
+        if let iconID, !iconID.isEmpty { result["iconID"] = iconID }
         return result
     }
 }
@@ -358,7 +365,12 @@ enum LinkPreviewHTMLParser {
         var siteName: String?
         var imageURL: URL?
         var domain: String
+        /// Where to look for the site's icon, best first (`iconCandidates`).
+        var iconURLs: [URL] = []
     }
+
+    /// Icon URLs tried per page, the /favicon.ico fallback included.
+    static let maximumIconCandidates = 3
 
     static func parse(htmlData: Data, pageURL: URL) -> ParsedMetadata? {
         let prefixData = htmlData.prefix(512 * 1024)
@@ -413,21 +425,89 @@ enum LinkPreviewHTMLParser {
             title: String(chosenTitle.prefix(200)),
             siteName: siteName,
             imageURL: resolvedImageURL,
-            domain: domain
+            domain: domain,
+            iconURLs: iconCandidates(in: headScope, pageURL: pageURL)
         )
+    }
+
+    /// The site's icons, best first: apple-touch-icon (largest first), then raster rel=icon links
+    /// (PNG, WebP, JPEG or GIF before ICO; largest first), then /favicon.ico. SVG and mask icons
+    /// are skipped. Every URL passes `LinkPreviewSecurity` like the page itself.
+    static func iconCandidates(in head: String, pageURL: URL) -> [URL] {
+        struct Candidate {
+            let url: URL
+            let tier: Int
+            let size: Int
+            let order: Int
+        }
+        var candidates: [Candidate] = []
+        for (order, attrs) in tags("link", in: head).enumerated() {
+            let rel = Set((attrs["rel"] ?? "").lowercased().split(whereSeparator: \.isWhitespace).map(String.init))
+            let touch = rel.contains("apple-touch-icon") || rel.contains("apple-touch-icon-precomposed")
+            guard touch || rel.contains("icon"),
+                  let raw = attrs["href"].map(decodeHTMLEntities)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty,
+                  let url = URL(string: raw, relativeTo: pageURL)?.absoluteURL,
+                  LinkPreviewSecurity.isAllowed(url: url) else { continue }
+            let type = (attrs["type"] ?? "").lowercased()
+            let fileExtension = url.pathExtension.lowercased()
+            if type.contains("svg") || fileExtension == "svg" || fileExtension == "svgz" { continue }
+            let isICO = type.contains("icon") || fileExtension == "ico"
+            candidates.append(Candidate(
+                url: url, tier: touch ? 0 : (isICO ? 2 : 1),
+                size: largestIconSize(attrs["sizes"]) ?? (touch ? 180 : 0), order: order
+            ))
+        }
+        let ranked = candidates.sorted {
+            ($0.tier, -$0.size, $0.order) < ($1.tier, -$1.size, $1.order)
+        }
+        var urls: [URL] = []
+        for candidate in ranked where urls.count < maximumIconCandidates - 1 && !urls.contains(candidate.url) {
+            urls.append(candidate.url)
+        }
+        if let fallback = URL(string: "/favicon.ico", relativeTo: pageURL)?.absoluteURL,
+           LinkPreviewSecurity.isAllowed(url: fallback), !urls.contains(fallback) {
+            urls.append(fallback)
+        }
+        return urls
+    }
+
+    /// The largest edge in a `sizes` attribute ("16x16 32x32" -> 32); nil for "any" or none.
+    static func largestIconSize(_ sizes: String?) -> Int? {
+        let edges = (sizes ?? "").lowercased().split(whereSeparator: \.isWhitespace).compactMap { size -> Int? in
+            let parts = size.split(separator: "x")
+            guard parts.count == 2, let width = Int(parts[0]), let height = Int(parts[1]) else { return nil }
+            return max(width, height)
+        }
+        return edges.max()
     }
 
     private static func extractMetaTags(from html: String) -> [String: String] {
         var values: [String: String] = [:]
-        guard let metaRegex = try? NSRegularExpression(pattern: #"<meta\b[^>]*>"#, options: [.caseInsensitive]),
+        for attrs in tags("meta", in: html) {
+            guard let key = (attrs["property"] ?? attrs["name"] ?? attrs["itemprop"])?.lowercased(),
+                  let content = attrs["content"], !content.isEmpty else {
+                continue
+            }
+            if values[key] == nil {
+                values[key] = content
+            }
+        }
+        return values
+    }
+
+    /// Every `<name …>` tag's attributes (names lowercased), in document order.
+    private static func tags(_ name: String, in html: String) -> [[String: String]] {
+        guard let tagRegex = try? NSRegularExpression(pattern: "<\(name)\\b[^>]*>", options: [.caseInsensitive]),
               let attrRegex = try? NSRegularExpression(
                 pattern: #"([a-zA-Z0-9_:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))"#,
                 options: []
               ) else {
-            return values
+            return []
         }
+        var result: [[String: String]] = []
         let nsRange = NSRange(html.startIndex..<html.endIndex, in: html)
-        metaRegex.enumerateMatches(in: html, options: [], range: nsRange) { match, _, _ in
+        tagRegex.enumerateMatches(in: html, options: [], range: nsRange) { match, _, _ in
             guard let match, let tagRange = Range(match.range, in: html) else { return }
             let tag = String(html[tagRange])
             var attrs: [String: String] = [:]
@@ -443,15 +523,9 @@ enum LinkPreviewHTMLParser {
                     }
                 }
             }
-            guard let key = (attrs["property"] ?? attrs["name"] ?? attrs["itemprop"])?.lowercased(),
-                  let content = attrs["content"], !content.isEmpty else {
-                return
-            }
-            if values[key] == nil {
-                values[key] = content
-            }
+            result.append(attrs)
         }
-        return values
+        return result
     }
 
     private static func extractTitleTag(from html: String) -> String? {
@@ -546,6 +620,8 @@ actor LinkPreviewStore {
 
     private var memoryCards: [String: LinkPreviewCard] = [:]
     private var memoryImages: [String: Data] = [:]
+    /// Sites with no usable icon, and when that was found; looked for again after a day.
+    private var iconlessSites: [String: Date] = [:]
     private var customFetcher: FetchHandler?
     private let redirectDelegate = SafeRedirectDelegate()
     private lazy var session: URLSession = {
@@ -611,22 +687,26 @@ actor LinkPreviewStore {
         try? data.write(to: dir.appendingPathComponent("\(id).img"), options: .atomic)
     }
 
+    /// A cached preview is used while its images are still cached and its icon was looked for.
+    private func isComplete(_ card: LinkPreviewCard) -> Bool {
+        card.iconChecked == true
+            && (card.imageID.map { imageData(id: $0) != nil } ?? true)
+            && (card.iconID.map { imageData(id: $0) != nil } ?? true)
+    }
+
     private func resolveOne(url: URL) async -> LinkPreviewCard? {
         guard LinkPreviewSecurity.isAllowed(url: url) else { return nil }
         let id = LinkPreviewSecurity.cardID(for: url.absoluteString)
-        if let cached = memoryCards[id] {
-            if cached.imageID == nil || imageData(id: id) != nil {
-                return cached
-            }
+        if let cached = memoryCards[id], isComplete(cached) {
+            return cached
         }
         let metaFile = cacheDirectory.appendingPathComponent("\(id).json")
         if customFetcher == nil,
            let data = try? Data(contentsOf: metaFile),
-           let diskCard = try? JSONDecoder().decode(LinkPreviewCard.self, from: data) {
-            if diskCard.imageID == nil || imageData(id: id) != nil {
-                memoryCards[id] = diskCard
-                return diskCard
-            }
+           let diskCard = try? JSONDecoder().decode(LinkPreviewCard.self, from: data),
+           isComplete(diskCard) {
+            memoryCards[id] = diskCard
+            return diskCard
         }
 
         do {
@@ -654,7 +734,9 @@ actor LinkPreviewStore {
                 domain: parsed.domain,
                 title: parsed.title,
                 siteName: parsed.siteName,
-                imageID: imageID
+                imageID: imageID,
+                iconID: await resolveIcon(candidates: parsed.iconURLs, pageURL: finalURL),
+                iconChecked: true
             )
             memoryCards[id] = card
             let dir = cacheDirectory
@@ -666,6 +748,26 @@ actor LinkPreviewStore {
         } catch {
             return nil
         }
+    }
+
+    /// The site's icon as a cached PNG ID: one per site (scheme, host and port), fetched once
+    /// through the same checks and size cap as the preview image; nil when none works.
+    private func resolveIcon(candidates: [URL], pageURL: URL, now: Date = Date()) async -> String? {
+        guard let site = LinkPreviewIcon.siteKey(for: pageURL) else { return nil }
+        let iconID = LinkPreviewSecurity.cardID(for: "icon|" + site)
+        if imageData(id: iconID) != nil { return iconID }
+        if let missing = iconlessSites[site], now.timeIntervalSince(missing) < 86_400 { return nil }
+        for candidate in candidates.prefix(LinkPreviewHTMLParser.maximumIconCandidates) {
+            guard let (bytes, finalURL, _) = try? await fetchResource(
+                url: candidate, maxBytes: Self.maxImageBytes, accept: "image/*"
+            ), LinkPreviewSecurity.isAllowed(url: finalURL),
+                let png = LinkPreviewIcon.normalizedPNG(from: bytes) else { continue }
+            storeCachedImage(png, id: iconID)
+            iconlessSites[site] = nil
+            return iconID
+        }
+        iconlessSites[site] = now
+        return nil
     }
 
     private func fetchResource(url: URL, maxBytes: Int, accept: String) async throws -> (Data, URL, String?) {
@@ -724,6 +826,75 @@ actor LinkPreviewStore {
             return true
         }
         return false
+    }
+}
+
+// MARK: - Site icons
+
+/// Site icons for link previews. Clients only ever get the Mac's own re-encoding: a small
+/// opaque PNG (the icon fitted on white), never the site's bytes.
+enum LinkPreviewIcon {
+    /// Output edge in pixels: sharp at 32 pt on 3x screens, a few KB.
+    static let pixelSize = 96
+    static let maximumSourcePixels = 4_096 * 4_096
+
+    /// "https://www.instagram.com": icons are cached per site, not per page.
+    static func siteKey(for url: URL) -> String? {
+        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(), !host.isEmpty else {
+            return nil
+        }
+        return "\(scheme)://\(host)" + (url.port.map { ":\($0)" } ?? "")
+    }
+
+    /// PNG, JPEG, GIF, WebP or ICO by their first bytes (never SVG, HTML or anything else).
+    static func looksLikeIcon(_ data: Data) -> Bool {
+        if LinkPreviewStore.looksLikeImage(data) { return true }
+        let prefix = Array(data.prefix(4))
+        return prefix.count == 4 && prefix == [0x00, 0x00, 0x01, 0x00]
+    }
+
+    /// Decodes the icon's largest frame with ImageIO, fits it on a white `pixelSize` square and
+    /// encodes that as PNG; nil when it isn't a raster icon of 16-4096 px.
+    static func normalizedPNG(from data: Data) -> Data? {
+        guard looksLikeIcon(data),
+              let source = CGImageSourceCreateWithData(
+                data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary
+              ) else { return nil }
+        var best: (index: Int, edge: Int)?
+        for index in 0..<min(CGImageSourceGetCount(source), 16) {
+            guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                  min(width, height) >= 16, width * height <= maximumSourcePixels else { continue }
+            if best.map({ max(width, height) > $0.edge }) ?? true {
+                best = (index, max(width, height))
+            }
+        }
+        guard let best,
+              let image = CGImageSourceCreateThumbnailAtIndex(source, best.index, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: pixelSize,
+              ] as CFDictionary),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil, width: pixelSize, height: pixelSize, bitsPerComponent: 8, bytesPerRow: 0,
+                space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              ) else { return nil }
+        let side = CGFloat(pixelSize)
+        context.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        let scale = min(side / CGFloat(image.width), side / CGFloat(image.height))
+        let width = CGFloat(image.width) * scale, height = CGFloat(image.height) * scale
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: (side - width) / 2, y: (side - height) / 2, width: width, height: height))
+        let output = NSMutableData()
+        guard let flattened = context.makeImage(),
+              let destination = CGImageDestinationCreateWithData(output, "public.png" as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, flattened, nil)
+        return CGImageDestinationFinalize(destination) ? output as Data : nil
     }
 }
 
@@ -1864,6 +2035,7 @@ actor MapTileProxy {
 struct LinkPreviewCardView: View {
     let card: LinkPreviewCard
     @State private var image: NSImage?
+    @State private var icon: NSImage?
 
     var body: some View {
         Button {
@@ -1891,10 +2063,20 @@ struct LinkPreviewCardView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                    Text(card.domain)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        if let icon {
+                            Image(nsImage: icon)
+                                .resizable()
+                                .interpolation(.high)
+                                .frame(width: 14, height: 14)
+                                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                                .accessibilityHidden(true)
+                        }
+                        Text(card.domain)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
@@ -1922,6 +2104,14 @@ struct LinkPreviewCardView: View {
                let loaded = NSImage(data: data) {
                 image = loaded
             }
+        }
+        .task(id: card.iconID) {
+            guard let iconID = card.iconID, !iconID.isEmpty,
+                  let data = await LinkPreviewStore.shared.imageData(id: iconID) else {
+                icon = nil
+                return
+            }
+            icon = NSImage(data: data)
         }
     }
 }

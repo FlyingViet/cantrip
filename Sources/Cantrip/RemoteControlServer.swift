@@ -3659,7 +3659,8 @@ private extension RemoteControlServer {
     .link-card:hover{background:var(--surface-2)}.link-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     .link-card-hero{display:grid;place-items:center;width:100%;height:190px;background:#fff;overflow:hidden}.link-card-hero img{width:100%;height:100%;object-fit:contain}
     .link-card-body{display:grid;gap:3px;padding:12px 14px}.link-card-title{font-size:15px;font-weight:700;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
-    .link-card-domain{color:var(--secondary);font-size:13px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .link-card-domain{display:flex;align-items:center;gap:6px;min-width:0;color:var(--secondary);font-size:13px;line-height:1.3}.link-card-domain span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+    .link-card-favicon{display:block;width:16px;height:16px;margin:0;border-radius:4px;flex:none;object-fit:cover}.link-card-favicon[hidden]{display:none}
     .link-card.compact{flex-direction:row;align-items:center;gap:12px;padding:10px 14px}.link-card.compact .link-card-body{padding:0;min-width:0;flex:1}
     .link-card-icon{display:grid;place-items:center;width:36px;height:36px;border-radius:10px;background:var(--surface-2);color:var(--secondary);font-size:16px;flex:none}
     .link-card-icon svg{width:18px;height:18px}
@@ -5055,7 +5056,9 @@ private extension RemoteControlServer {
       const domain=header.subtitle||url;link.setAttribute("aria-label",`${card.accessibilityLabel||header.title||domain}, opens web page`);
       if(image){const hero=cdEl("div","link-card-hero"),img=cdEl("img");img.alt="";img.decoding="async";hero.append(img);link.append(hero);loadLinkPreviewImage(image.imageID,img)}
       else{const icon=cardIcon(header.symbol||"link",null,"link-card-icon");if(icon)link.append(icon)}
-      const body=cdEl("div","link-card-body");body.append(cdEl("div","link-card-title",header.title||domain),cdEl("div","link-card-domain",domain));link.append(body);return link}
+      const body=cdEl("div","link-card-body"),line=cdEl("div","link-card-domain");
+      if(header.subtitleImageID){const fav=cdEl("img","link-card-favicon");fav.alt="";fav.decoding="async";fav.hidden=true;fav.onload=()=>{fav.hidden=false};line.append(fav);loadLinkPreviewImage(header.subtitleImageID,fav)}
+      line.append(cdEl("span","",domain));body.append(cdEl("div","link-card-title",header.title||domain),line);link.append(body);return link}
     function panelCardNode(card,key){const wrap=cdEl("section","cd-card");wrap.setAttribute("aria-label",card.accessibilityLabel||card.blocks.find(b=>b?.type==="header")?.title||"Card");const blocks=card.blocks;let drew=0;
       for(let i=0;i<blocks.length;i++){const block=blocks[i];if(!block||typeof block!=="object")continue;
         if(block.type==="map"){const next=blocks[i+1],legend=next?.type==="list"&&next.mapLinked?next:null;if(legend)i++;const node=mapBlockNode(block,legend,key);if(node){wrap.append(node);wrap.classList.add("has-map");drew++}continue}

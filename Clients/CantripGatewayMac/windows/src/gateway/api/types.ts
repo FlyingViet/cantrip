@@ -459,8 +459,10 @@ export interface RemoteLinkPreview {
   title: string;
   domain: string;
   siteName?: string;
-  /** 64-hex SHA-256 image ID for `GET /api/v1/link-previews/image?id=<imageID>`. */
+  /** Hex image ID (16-64 chars) for `GET /api/v1/link-previews/image?id=<imageID>`. */
   imageID?: HexSHA256;
+  /** The site's icon: a small PNG the Mac re-encoded and cached, fetched the same way. Newer Macs only. */
+  iconID?: HexSHA256;
 }
 
 /** One resolved place pin on an inline map card (`PlacePin.snapshot`). */
@@ -608,6 +610,8 @@ export interface RemoteCardBlock {
   title?: string;
   subtitle?: string;
   subtitleSymbol?: string;
+  /** header: a small image before the subtitle (a link card's site icon), from `GET /api/v1/link-previews/image?id=`. */
+  subtitleImageID?: HexSHA256;
   symbol?: string;
   lines?: string[];
   stat?: RemoteCardStat;
