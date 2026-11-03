@@ -11,6 +11,18 @@ enum CantripMaintenanceAction: String, Codable, CaseIterable, Identifiable {
         case .restart: return "Restart Cantrip"
         }
     }
+    /// The title on a Mac that installed Cantrip from a release's disk image.
+    func title(release: Bool) -> String {
+        release && self == .update ? "Download Update" : title
+    }
+    func detail(release: Bool) -> String {
+        guard release else { return detail }
+        switch self {
+        case .check: return "Look for a newer Cantrip release on GitHub without downloading or restarting."
+        case .update: return "Download the newest Cantrip release from GitHub and check Apple's notarization. Running tabs aren't touched. Restart separately to install it."
+        default: return detail
+        }
+    }
     var detail: String {
         switch self {
         case .check: return "Fetch the latest origin/main commits without changing source or restarting."
@@ -49,6 +61,15 @@ struct CantripMaintenanceSnapshot: Decodable {
     let checkedAt: Double?
     let job: Job?
     let acceptedRequestIDs: [UUID]
+    /// "source" or "release"; older Macs leave it out (source).
+    var install: String? = nil
+    /// A release install's newest release on GitHub.
+    var latestVersion: String? = nil
+    /// The actions the Mac accepts; older Macs leave it out (all).
+    var actions: [CantripMaintenanceAction]? = nil
+
+    var isRelease: Bool { install == "release" }
+    var offeredActions: [CantripMaintenanceAction] { actions ?? CantripMaintenanceAction.allCases }
 }
 
 @MainActor
@@ -137,7 +158,9 @@ final class CantripMaintenanceModel: ObservableObject {
               let snapshot, snapshot.available, snapshot.job?.isRunning != true else { return false }
         if action == .update && (snapshot.localChanges == true || snapshot.branch.map { $0 != "main" } == true) { return false }
         if action == .restart && snapshot.installedBuild == nil { return false }
-        return action == .check || snapshot.busySessions == 0
+        guard snapshot.offeredActions.contains(action) else { return false }
+        // Downloading a release touches no running work.
+        return action == .check || (action == .update && snapshot.isRelease) || snapshot.busySessions == 0
     }
 }
 
@@ -176,6 +199,7 @@ private struct CantripMaintenanceContent: View {
                     }
                     if let branch = snapshot.branch { LabeledContent("Branch", value: branch.isEmpty ? "Detached HEAD" : branch) }
                     if let count = snapshot.commitsBehind { LabeledContent("Newer commits", value: String(count)) }
+                    if let latest = snapshot.latestVersion { LabeledContent("Latest release", value: latest) }
                     if let date = snapshot.checkedAt {
                         LabeledContent("Last checked") { Text(Date(timeIntervalSinceReferenceDate: date), style: .relative) }
                     }
@@ -193,8 +217,8 @@ private struct CantripMaintenanceContent: View {
                 }
             }
             Section {
-                ForEach(CantripMaintenanceAction.allCases) { action in
-                    Button(action.title) {
+                ForEach(model.snapshot?.offeredActions ?? CantripMaintenanceAction.allCases) { action in
+                    Button(action.title(release: isRelease)) {
                         if action == .check {
                             Task { await submit(action) }
                         } else {
@@ -205,7 +229,9 @@ private struct CantripMaintenanceContent: View {
                     .disabled(!model.canStart(action) || remote.isMutating || remote.isUploadingVideo)
                 }
             } footer: {
-                Text("Operations run on this Mac, even if you close Cantrip Agent. Building never automatically restarts Cantrip or stops a tab. This does not update the iPhone app.")
+                Text(isRelease
+                     ? "Operations run on this Mac, even if you close Cantrip Agent. A downloaded update installs when Cantrip restarts. This does not update the iPhone app."
+                     : "Operations run on this Mac, even if you close Cantrip Agent. Building never automatically restarts Cantrip or stops a tab. This does not update the iPhone app.")
             }
             if let job = model.snapshot?.job {
                 Section("Latest operation") {
@@ -227,7 +253,7 @@ private struct CantripMaintenanceContent: View {
                     if model.snapshot != nil { Text("Showing the last received status.").font(.caption).foregroundStyle(.secondary) }
                 }
                 if let pending = model.pending {
-                    Text("The Mac may have accepted \(pending.action.title). Refresh to recover its status, or retry the same request safely.")
+                    Text("The Mac may have accepted \(pending.action.title(release: isRelease)). Refresh to recover its status, or retry the same request safely.")
                         .font(.caption)
                     Button("Retry Pending Request") { Task { await submit(pending.action) } }
                         .disabled(model.isRequesting)
@@ -238,14 +264,14 @@ private struct CantripMaintenanceContent: View {
         }
         .navigationTitle("Update Cantrip")
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog(confirming?.title ?? "Cantrip", isPresented: $showConfirmation, titleVisibility: .visible) {
+        .confirmationDialog(confirming?.title(release: isRelease) ?? "Cantrip", isPresented: $showConfirmation, titleVisibility: .visible) {
             if let confirming {
-                Button(confirming.title, role: confirming == .restart ? .destructive : nil) {
+                Button(confirming.title(release: isRelease), role: confirming == .restart ? .destructive : nil) {
                     Task { await submit(confirming) }
                 }
             }
         } message: {
-            Text(confirming?.detail ?? "")
+            Text(confirming?.detail(release: isRelease) ?? "")
         }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
@@ -257,6 +283,8 @@ private struct CantripMaintenanceContent: View {
         }
         .refreshable { await refresh() }
     }
+
+    private var isRelease: Bool { model.snapshot?.isRelease == true }
 
     private func refresh() async {
         await model.refresh { try await remote.maintenanceStatus() }

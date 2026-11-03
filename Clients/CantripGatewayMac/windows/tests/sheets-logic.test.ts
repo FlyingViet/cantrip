@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type {
   CopilotQuotaBucket, CopilotUsageSnapshot, DesktopFrame, GitHubBuildJob, GitHubBuildRepository, GitHubBuildSnapshot,
-  MaintenanceSnapshot, MemoryCatalog, MemoryPage, ModelSettingsSnapshot, UsageFallbackSnapshot,
+  MaintenanceAction, MaintenanceSnapshot, MemoryCatalog, MemoryPage, ModelSettingsSnapshot, UsageFallbackSnapshot,
 } from "../src/gateway/api/types";
 import {
   EMPTY_READER, INVALID_RESPONSE, alignMemoryPage, codeFenceAfter, renderableMemory, NotSentError, QueueReadiness, amountRatio, assignmentText, bucketSummary, bucketTitle,
-  buildEntries, buildQueue, buildsPollDelay, canStartMaintenance, capitalized, clearsPendingMaintenance, contextLabel,
+  buildEntries, buildQueue, buildsPollDelay, canStartMaintenance, maintenanceActionInfo, maintenanceActions, capitalized, clearsPendingMaintenance, contextLabel,
   copilotAmount, decodeBase64, decryptDesktopFrame, desktopCommandJSON, encodeBase64, encryptDesktopCommand, endpointHost,
   frameAdditionalData, githubURL, graphemeCount, importDesktopKey, initialTabName, inputAdditionalData, isMaintenanceRequest,
   isUsageStale, jobStatusTitle, maintenancePollDelay, memoryCatalogPath, memoryCharacterCount, memoryDocumentPath,
@@ -397,6 +397,19 @@ describe("maintenance", () => {
     expect(canStartMaintenance("check", state({}, { error: "Offline" }))).toBe(false);
     expect(canStartMaintenance("check", state({}, { pending: { id: "a", action: "check", revision: "R1" } }))).toBe(false);
     expect(canStartMaintenance("check", { snapshot: null, isRequesting: false, pending: null, error: null })).toBe(false);
+  });
+
+  it("offers a release install's actions: download while tabs run, nothing to rebuild", () => {
+    const release = { install: "release" as const, branch: undefined, localChanges: undefined, commitsBehind: undefined,
+      latestVersion: "1.1.16", actions: ["check", "update", "restart"] as MaintenanceAction[] };
+    expect(maintenanceActions(state(release).snapshot)).toEqual(["check", "update", "restart"]);
+    expect(maintenanceActions(snapshot)).toEqual(["check", "update", "rebuild", "restart"]);
+    expect(canStartMaintenance("update", state({ ...release, busySessions: 2 }))).toBe(true);
+    expect(canStartMaintenance("restart", state({ ...release, busySessions: 2 }))).toBe(false);
+    expect(canStartMaintenance("rebuild", state(release))).toBe(false);
+    expect(canStartMaintenance("update", state({ busySessions: 2 }))).toBe(false);
+    expect(maintenanceActionInfo("update", state(release).snapshot).title).toBe("Download Update");
+    expect(maintenanceActionInfo("update", snapshot).title).toBe("Update & Rebuild");
   });
 
   it("polls faster while running and keeps uncertain requests", () => {

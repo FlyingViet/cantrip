@@ -7,15 +7,15 @@ import { batch, useSignal } from "@preact/signals";
 import { useMemo } from "preact/hooks";
 import { api } from "../../api/client";
 import type { MaintenanceAction, MaintenanceRequest, MaintenanceSnapshot } from "../../api/types";
-import { MAINTENANCE_ACTIONS } from "../../api/types";
 import { now } from "../../state/clock";
 import { appleDate } from "../../state/format";
 import * as remote from "../../state/remote";
 import { FormRow, FormSection, Sheet, confirmDialog } from "../kit";
 import { Caption, Loading, StatusLabel, Warning, useAlive, usePolling } from "./common";
 import {
-  MAINTENANCE_ACTION_INFO, NotSentError, busySessionsText, canStartMaintenance, clearsPendingMaintenance, endpointHost, errorText,
-  isMaintenanceRequest, isUnsupported, maintenanceJobRunning, maintenancePollDelay, relativeDuration,
+  NotSentError, busySessionsText, canStartMaintenance, clearsPendingMaintenance, endpointHost, errorText,
+  isMaintenanceRequest, isUnsupported, maintenanceActionInfo, maintenanceActions, maintenanceJobRunning, maintenancePollDelay,
+  relativeDuration,
 } from "./sheetLogic";
 
 function readPending(key: string): { pending: MaintenanceRequest | null; error: string | null } {
@@ -107,7 +107,7 @@ export function MaintenanceSheet(props: { onClose: () => void }): JSX.Element | 
       await submit(action);
       return;
     }
-    const info = MAINTENANCE_ACTION_INFO[action];
+    const info = maintenanceActionInfo(action, snapshot.value);
     const confirmed = await confirmDialog({ title: info.title, message: info.detail, confirm: info.title, destructive: action === "restart" });
     if (confirmed && alive.current) await submit(action);
   };
@@ -144,6 +144,9 @@ export function MaintenanceSheet(props: { onClose: () => void }): JSX.Element | 
             {value.commitsBehind !== undefined
               ? <FormRow label="Newer commits"><span class="sh-value">{value.commitsBehind}</span></FormRow>
               : null}
+            {value.latestVersion !== undefined
+              ? <FormRow label="Latest release"><span class="sh-value selectable">{value.latestVersion}</span></FormRow>
+              : null}
             {value.checkedAt !== undefined
               ? <FormRow label="Last checked"><span class="sh-value">{relativeDuration(appleDate(value.checkedAt), now.value)}</span></FormRow>
               : null}
@@ -162,14 +165,16 @@ export function MaintenanceSheet(props: { onClose: () => void }): JSX.Element | 
         ) : null}
       </FormSection>
       <FormSection class="sh-actions-list"
-        footer="Operations run on the Mac, even if you close Cantrip Gateway. Building never automatically restarts Cantrip or stops a tab. This does not update Cantrip Gateway on this PC.">
-        {MAINTENANCE_ACTIONS.map((action) => (
+        footer={value?.install === "release"
+          ? "Operations run on the Mac, even if you close Cantrip Gateway. A downloaded update installs when Cantrip restarts. This does not update Cantrip Gateway on this PC."
+          : "Operations run on the Mac, even if you close Cantrip Gateway. Building never automatically restarts Cantrip or stops a tab. This does not update Cantrip Gateway on this PC."}>
+        {maintenanceActions(value).map((action) => (
           <FormRow key={action}>
             <button type="button" class="btn"
               disabled={!canStartMaintenance(action, state) || remote.isMutating.value}
-              title={MAINTENANCE_ACTION_INFO[action].detail}
+              title={maintenanceActionInfo(action, value).detail}
               onClick={() => void choose(action)}>
-              {MAINTENANCE_ACTION_INFO[action].title}
+              {maintenanceActionInfo(action, value).title}
             </button>
           </FormRow>
         ))}
@@ -209,7 +214,7 @@ export function MaintenanceSheet(props: { onClose: () => void }): JSX.Element | 
           <FormRow>
             <div class="sh-stack grow">
               <Caption class="sh-footnote">
-                The Mac may have accepted {MAINTENANCE_ACTION_INFO[waiting.action].title}. Refresh to recover its status, or retry the same request safely.
+                The Mac may have accepted {maintenanceActionInfo(waiting.action, value).title}. Refresh to recover its status, or retry the same request safely.
               </Caption>
               <div>
                 <button type="button" class="btn" disabled={isRequesting.value} onClick={() => void submit(waiting.action)}>
