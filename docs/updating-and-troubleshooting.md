@@ -233,7 +233,7 @@ context, check both the toolbar toggle and macOS Screen Recording permission,
 then relaunch if required. Hide/reopen Cantrip to get a fresh screenshot.
 
 For Cantrip Agent, both apps must support uploads. Follow
-[the exact picker and host requirements](remote-control.md#send-a-photo-or-screenshot-from-agentgateway).
+[the exact picker and host requirements](remote-control.md#send-a-photo-or-screenshot-from-cantrip-agent).
 Updating the source without relaunching the built host will not add image
 support to a running old app.
 

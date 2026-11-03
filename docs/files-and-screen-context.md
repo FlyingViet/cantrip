@@ -3,7 +3,7 @@
 # Ask about a file, screenshot, or selected text
 
 **Platform: macOS.** These steps use local Cantrip. For iPhone/iPad uploads,
-see [Cantrip Agent attachments](remote-control.md#send-a-photo-or-screenshot-from-agentgateway).
+see [Cantrip Agent attachments](remote-control.md#send-a-photo-or-screenshot-from-cantrip-agent).
 Windows currently supports [screen capture](windows.md#capture-your-screen),
 not clipboard/drop file attachments.
 
