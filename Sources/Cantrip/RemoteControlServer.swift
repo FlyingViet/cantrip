@@ -2020,6 +2020,15 @@ final class RemoteControlServer {
                 // Where the device is, when its "Share location" setting is on; nil means the Mac's
                 // location stands in. Only the message's backend prompt carries it.
                 let location = try RemoteClientLocation.parse(body["location"])
+                // Cantrip's own panel on this Mac (the background agents' app): the selected text and
+                // screenshots it took, so the message runs like one typed into the panel.
+                let sendsMacContext = body["macContext"] != nil
+                if sendsMacContext, !LocalClientKey.matches(request.headers[LocalClientKey.header]) {
+                    sendError(403, "Only Cantrip on this Mac can send what's on its screen.", on: connection)
+                    return
+                }
+                let macContext = sendsMacContext
+                    ? try RemoteMacContext.parse(body["macContext"], captureDirectory: CantripPaths.cache) : nil
                 var videoID: UUID?
                 if let value = body["videoID"] {
                     guard let raw = value as? String, let uploadID = UUID(uuidString: raw) else {
@@ -2071,6 +2080,7 @@ final class RemoteControlServer {
                                 images: images, sessionID: session.id
                             )
                             if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
+                            else if let macContext { session.submitFromMac(prompt, mode: mode, context: macContext) }
                             // A paired client's queued message may auto-fork, like one sent with Auto.
                             else {
                                 let client = RemoteClientMessage(location: await location?.named())
@@ -2108,6 +2118,7 @@ final class RemoteControlServer {
                     text, images: images, sessionID: session.id
                 )
                 if let inputRequestID { try session.respondInChat(id: inputRequestID, text: prompt) }
+                else if let macContext { session.submitFromMac(prompt, mode: mode, context: macContext) }
                 else if let location, location.label == nil {
                     // Name the place first (a browser or Windows PC sends coordinates only).
                     Task {
@@ -2125,6 +2136,9 @@ final class RemoteControlServer {
                                          client: RemoteClientMessage(location: location))
                 }
             } catch let error as RemoteClientLocation.Invalid {
+                sendError(400, error.localizedDescription, on: connection)
+                return
+            } catch let error as RemoteMacContext.Invalid {
                 sendError(400, error.localizedDescription, on: connection)
                 return
             } catch let error as InputRequestError {
@@ -2772,6 +2786,8 @@ final class RemoteControlServer {
             // One message may carry images, a video and files together.
             "supportsMixedAttachments": true,
             "supportsAutoDelivery": true,
+            // Messages from Cantrip's own panel on this Mac may carry its selection and screenshots.
+            "supportsMacContext": true,
             "supportsQueueRemoval": true,
             "supportsQueueSendNow": true,
             "supportsPagedHistory": true,

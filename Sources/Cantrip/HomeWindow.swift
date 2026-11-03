@@ -85,8 +85,70 @@ enum HomeWindow {
     }
 
     static var isOpen: Bool {
+        classBool("isOpen")
+    }
+
+    // MARK: The ⌥Space panel
+
+    /// The plug-in can show the ⌥Space panel (`CantripHomeWindowPlugin.showPanel`); older ones can't.
+    static var supportsPanel: Bool {
+        guard let plugin = load() else { return false }
+        return class_getClassMethod(plugin, NSSelectorFromString("showPanelWithURL:token:")) != nil
+    }
+
+    static var isPanelOpen: Bool { classBool("isPanelOpen") }
+
+    /// Opens the panel on this Mac's server with what goes along with its messages (`context`:
+    /// the selection and screenshots), its searches answered by `PanelSearch`. False if it can't.
+    @discardableResult
+    static func openPanel(port: Int, token: String, context: [String: Any], onClose: @escaping () -> Void) -> Bool {
+        guard supportsPanel, let plugin = pluginClass else { return false }
+        installPanelSearch(plugin)
+        let handler: @convention(block) () -> Void = { onClose() }
+        _ = (plugin as AnyObject).perform(NSSelectorFromString("setOnPanelClose:"),
+                                          with: unsafeBitCast(handler, to: AnyObject.self))
+        setPanelContext(context)
+        _ = (plugin as AnyObject).perform(NSSelectorFromString("showPanelWithURL:token:"),
+                                          with: url(port) as NSString, with: token as NSString)
+        return true
+    }
+
+    /// Screenshots that finished after the panel opened, or a selection grabbed while it's up.
+    static func setPanelContext(_ context: [String: Any]) {
+        guard let plugin = pluginClass else { return }
+        _ = (plugin as AnyObject).perform(NSSelectorFromString("setPanelContext:"), with: context as NSDictionary)
+    }
+
+    static func closePanel() {
+        guard let plugin = pluginClass, isPanelOpen else { return }
+        _ = (plugin as AnyObject).perform(NSSelectorFromString("closePanel"))
+    }
+
+    private static var panelSearchInstalled = false
+
+    private static func installPanelSearch(_ plugin: AnyClass) {
+        guard !panelSearchInstalled else { return }
+        panelSearchInstalled = true
+        let search = PanelSearch.shared
+        search.publish = { list in
+            _ = (plugin as AnyObject).perform(NSSelectorFromString("setPanelSuggestions:"), with: list as NSArray)
+        }
+        search.onOpened = { closePanel() }
+        let query: @convention(block) (NSString) -> Void = { text in
+            MainActor.assumeIsolated { PanelSearch.shared.search(text as String) }
+        }
+        let open: @convention(block) (NSString) -> Void = { id in
+            MainActor.assumeIsolated { PanelSearch.shared.open(id as String) }
+        }
+        _ = (plugin as AnyObject).perform(NSSelectorFromString("setOnPanelQuery:"),
+                                          with: unsafeBitCast(query, to: AnyObject.self))
+        _ = (plugin as AnyObject).perform(NSSelectorFromString("setOnPanelOpenSuggestion:"),
+                                          with: unsafeBitCast(open, to: AnyObject.self))
+    }
+
+    private static func classBool(_ name: String) -> Bool {
         guard let plugin = pluginClass else { return false }
-        let selector = NSSelectorFromString("isOpen")
+        let selector = NSSelectorFromString(name)
         guard let method = class_getClassMethod(plugin, selector) else { return false }
         typealias Getter = @convention(c) (AnyClass, Selector) -> Bool
         return unsafeBitCast(method_getImplementation(method), to: Getter.self)(plugin, selector)

@@ -40,20 +40,24 @@ final class ScreenCapture {
     /// Capture ALL active displays (called right before the panel appears,
     /// so the shots show what the user was actually working on). Uses
     /// ScreenCaptureKit — the CGDisplay capture APIs are deprecated on
-    /// modern macOS.
-    func captureNow() {
-        guard AppSettings.shared.attachScreen else { return }
+    /// modern macOS. `completion` gets the new captures on the main
+    /// thread (not called when Attach screen is off or capture fails).
+    /// `attachScreen`: the setting as the caller read it (the background
+    /// agents' app reads it fresh, since the engine changes it).
+    func captureNow(attachScreen: Bool = AppSettings.shared.attachScreen,
+                    completion: (@MainActor ([DisplayCapture]) -> Void)? = nil) {
+        guard attachScreen else { return }
         guard hasAccess else {
             MacAttention.report(.screenRecording)
             Log.write("screen: no access — enable in System Settings → Privacy → Screen Recording, then relaunch")
             return
         }
         Task.detached(priority: .userInitiated) { [weak self] in
-            await self?.captureAllDisplays()
+            await self?.captureAllDisplays(completion: completion)
         }
     }
 
-    private func captureAllDisplays() async {
+    private func captureAllDisplays(completion: (@MainActor ([DisplayCapture]) -> Void)?) async {
         do {
             let content = try await SCShareableContent
                 .excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -85,10 +89,22 @@ final class ScreenCapture {
                     width: image.width, height: image.height))
             }
             let finished = captures
-            await MainActor.run { self.lastCaptures = finished }
+            await MainActor.run {
+                self.lastCaptures = finished
+                completion?(finished)
+            }
             Log.write("screen: captured \(finished.count) display(s) via ScreenCaptureKit")
         } catch {
             Log.write("screen: capture failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// The background engine takes the screenshots its app took as the panel opened (the app is
+    /// the one in front of the screen). None clears older ones, so they never go with a later ask.
+    @MainActor
+    func adopt(_ screenshots: [RemoteMacContext.Screenshot]) {
+        lastCaptures = screenshots.map {
+            DisplayCapture(path: $0.path, displayID: 0, isMain: $0.isMain, index: $0.index, width: 0, height: 0)
         }
     }
 
