@@ -3,6 +3,7 @@ import ApplicationServices
 import CryptoKit
 import Foundation
 import Security
+import SystemConfiguration
 
 /// One setting's value as JSON carries it.
 enum SettingValue: Equatable, Hashable {
@@ -315,7 +316,7 @@ enum SettingsManifest {
             SettingsField(key: key, kind: kind, label: label, help: help, value: v[key])
         }
         func on(_ key: String) -> (key: String, values: [SettingValue]) { (key, [.bool(true)]) }
-        let mac = HostControl.hostName
+        let mac = displayName
         let agyInstalled = AntigravityBackend.isInstalled(customPath: s.agyPath)
 
         // Macs
@@ -345,11 +346,11 @@ enum SettingsManifest {
             remoteFields.append(SettingsField(key: "remoteControlError", kind: .info, label: "Problem", value: .string(error), tone: "error"))
         }
         var rotate = SettingsField(key: "rotatePairingToken", kind: .action, label: "Replace Pairing Token",
-                                   help: "Every device paired with \(mac) has to pair again\(local ? "" : "; this one stays paired").")
+                                   help: "Every device paired with this Mac has to pair again\(local ? "" : "; this one stays paired").")
         rotate.destructive = true
         rotate.guarded = true
         rotate.confirmation = local
-            ? "Every device paired with \(mac) has to pair again."
+            ? "Every device paired with this Mac has to pair again."
             : "Every other device paired with \(mac) has to pair again. This one stays paired."
         rotate.visibleWhen = on("remoteControlEnabled")
         remoteFields.append(rotate)
@@ -629,14 +630,14 @@ enum SettingsManifest {
 
         var pages: [SettingsPageSpec] = [
             SettingsPageSpec(id: "macs", title: "Macs", sections: [
-                SettingsSection(id: "remote", title: "Remote control on \(mac)",
+                SettingsSection(id: "remote", title: "Remote control",
                                 footer: "Tailscale Serve reaches the HTTP port from anywhere on your tailnet; on the same network, devices connect directly over an encrypted connection.",
                                 fields: remoteFields),
                 SettingsSection(id: "pairing", title: "Pair a device", fields: [pairing]),
                 SettingsSection(id: "watch", title: "Apple Watch", fields: [watch]),
             ]),
             SettingsPageSpec(id: "models", title: "Models", sections: [
-                SettingsSection(id: "defaults", title: "New tabs on \(mac)",
+                SettingsSection(id: "defaults", title: "New tabs",
                                 footer: "What a tab runs until you pick its own model. Each backend's model is below.",
                                 fields: [backend, actions]),
                 SettingsSection(id: "claude", title: "Claude Code", link: true,
@@ -673,7 +674,7 @@ enum SettingsManifest {
                 SettingsSection(id: "tabs", title: "Tabs", fields: [workdir, idle, previews]),
             ]),
             SettingsPageSpec(id: "memory", title: "Memory", sections: [
-                SettingsSection(id: "memory", title: "Memory on \(mac)", fields: memoryFields),
+                SettingsSection(id: "memory", title: "Memory", fields: memoryFields),
                 SettingsSection(id: "context", title: "Context", fields: [rag, calendar]),
             ]),
             SettingsPageSpec(id: "location", title: "Location", sections: [
@@ -769,13 +770,18 @@ enum SettingsManifest {
         return "Reads the model list from the CLI. No chat or model request is made."
     }
 
+    /// The Mac's name as people know it ("Studio"), not its network name.
+    static var displayName: String {
+        (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? HostControl.hostName
+    }
+
     // MARK: - JSON
 
     static func manifest(_ s: AppSettings = .shared, local: Bool) -> [String: Any] {
         var object: [String: Any] = [
             "version": version,
             "revision": revision(s),
-            "mac": HostControl.hostName,
+            "mac": displayName,
             "local": local,
             "pages": pages(s, local: local).map { page in
                 ["id": page.id, "title": page.title, "sections": page.sections.map { section -> [String: Any] in
@@ -1034,7 +1040,7 @@ enum SettingsManifest {
                 throw SettingsManifestError(status: 500, message: s.remoteControlError ?? "The pairing token isn't available.")
             }
             let link = CantripCLI.pairingLink(name: HostControl.hostName, token: token, url: url, direct: direct)
-            return ["title": "Pair with \(HostControl.hostName)",
+            return ["title": "Pair with \(displayName)",
                     "message": "Scan with the iPhone camera, or open the link on the device. Anyone with it can use this Mac's agents.",
                     "link": link, "qr": true]
         case "makeOpenAIEndpointKey":
