@@ -108,7 +108,7 @@ cd ~/Coding/Cantrip
 The installer builds and signs `Cantrip.app`, installs the `cantrip` CLI and
 opens the app (a signing-certificate password dialog may appear). Keep the
 checkout; updates rebuild from it. Press **Option+Space**, choose a
-**Backend** under the gear, then type a question and press **Return**.
+**Backend** in Settings › Models (the gear), then type a question and press **Return**.
 See [Mac setup](docs/getting-started-macos.md) or the
 [update guide](docs/updating-and-troubleshooting.md).
 

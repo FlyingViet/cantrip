@@ -30,9 +30,9 @@ Windows:
 
 1. Complete that CLI's sign-in prompts.
 2. Ask it a short question to confirm your account works.
-3. Open Cantrip's **gear**, then select the matching **Backend**.
+3. Open Cantrip's **gear** (Settings › **Models**), then select the matching **Backend**.
 4. Start with the default **Model** and **Effort**, where those controls are
-   available.
+   available (each backend has its own screen under **Models**).
 5. Send a new question in Cantrip.
 
 Model names in examples are not a promise of access. If a model is rejected,

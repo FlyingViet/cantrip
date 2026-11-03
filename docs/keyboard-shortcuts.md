@@ -12,6 +12,7 @@
 | **Shift+Return** | Start a new line in the prompt; the input grows to six lines, then scrolls |
 | **Command+Return** | Send to AI instead of the app suggestion; while busy, interrupt and redirect |
 | **Option+Return** | Inject context into an active local Copilot or Claude Code task |
+| **Command+,** | Open Settings (its own window on macOS 26+; the panel's column before) |
 | **Command+T** | New local session |
 | **Command+N** | Reset the current local conversation |
 | **Command+W** | Close the current local tab |

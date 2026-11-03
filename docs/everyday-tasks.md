@@ -13,9 +13,9 @@ each tab's conversation and terminal, and Home's background runs. It runs on
 this Mac's own sessions, so nothing needs pairing and everything else works
 the same.
 
-1. Open the panel (**Option+Space**), click **Settings**, then under
-   **Interface** choose **Home window**. You can also click the menu bar icon
-   and choose **Interface: Window**.
+1. Open Settings (the panel's **gear**, or **Command+,**), then under
+   **Appearance › Open with ⌥Space** choose **Home window**. You can also click
+   the menu bar icon and choose **Interface: Window**.
 2. The window opens. From now on **Option+Space** and **Toggle** in the menu bar
    menu open or hide the window. **Open Home Window** in the menu works in
    either interface.

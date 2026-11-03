@@ -15,7 +15,7 @@ as granting powerful access to your user account, not merely unlocking better
 answers.
 
 1. Select the intended project with the **folder** button.
-2. Open the **gear** and review your backend's permissions.
+2. Open the **gear** (Settings › **Models** › your backend) and review its permissions.
 3. Enable **Act on my behalf** only for work you trust the agent to perform.
 4. Specify limits in the request and review the resulting changes.
 5. Turn the option off when you no longer need unattended actions.
