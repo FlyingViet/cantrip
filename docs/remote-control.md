@@ -75,7 +75,7 @@ certificate validation remains enabled.
 Ollama's installed model list and local architecture metadata are checked on
 the **configured server** before each prompt. Cloud-tagged models and Ollama
 cloud aliases are rejected. Missing models or a stopped server fail
-visibly without using Copilot, Claude, Codex, Hermes, or any cloud fallback.
+visibly without using Copilot, Claude, Codex, or any cloud fallback.
 Settings use revision checks so another device cannot overwrite a stale form.
 Loading models never submits a conversation or downloads a model.
 
