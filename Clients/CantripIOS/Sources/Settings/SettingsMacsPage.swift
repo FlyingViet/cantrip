@@ -28,6 +28,7 @@ struct SettingsMacsPage: View {
                 ForEach(servers.servers) { mac in
                     NavigationLink {
                         SettingsMacDetail(remote: remote, macID: mac.id, canChange: canChangeGateway)
+                            .settingsBack(to: SettingsPage.macs.title)
                     } label: {
                         SettingsMacRow(
                             mac: mac,

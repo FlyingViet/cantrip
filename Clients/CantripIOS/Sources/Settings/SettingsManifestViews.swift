@@ -51,6 +51,7 @@ private struct SettingsManifestPageBody<Fallback: View>: View {
                         ForEach(group.sections) { section in
                             NavigationLink {
                                 SettingsManifestLinkPage(store: store, pageID: page.id, sectionID: section.id)
+                                    .settingsBack(to: page.title)
                             } label: {
                                 LabeledContent(section.title, value: section.summary ?? "")
                             }

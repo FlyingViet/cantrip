@@ -114,12 +114,14 @@ struct SettingsRulesAndSecretsSection: View {
         Section {
             NavigationLink {
                 SettingsAgentPolicyPage(remote: remote)
+                    .settingsBack(to: SettingsPage.tools.title)
             } label: {
                 Label("Agent policy", systemImage: "checkmark.shield")
             }
             .accessibilityIdentifier("settings.policy")
             NavigationLink {
                 SettingsSecretsPage(remote: remote)
+                    .settingsBack(to: SettingsPage.tools.title)
             } label: {
                 Label("Secrets", systemImage: "key")
             }
