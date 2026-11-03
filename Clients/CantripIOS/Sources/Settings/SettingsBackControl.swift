@@ -16,6 +16,8 @@ struct SettingsBackControl: ViewModifier {
     func body(content: Content) -> some View {
         #if os(macOS)
         content
+            // A standalone window draws its own unlabeled chevron; this one replaces it.
+            .navigationBarBackButtonHidden(true)
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     Button {

@@ -13,7 +13,6 @@ extension View {
     func navigationBarTitleDisplayMode(_ mode: CompatTitleDisplayMode) -> some View { self }
     func textInputAutocapitalization(_ autocapitalization: CompatAutocapitalization?) -> some View { self }
     func keyboardType(_ type: UIKeyboardType) -> some View { self }
-    func navigationBarBackButtonHidden(_ hidden: Bool = true) -> some View { self }
     func statusBarHidden(_ hidden: Bool = true) -> some View { self }
     func persistentSystemOverlays(_ visibility: Visibility) -> some View { self }
 
