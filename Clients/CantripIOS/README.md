@@ -178,7 +178,8 @@ usage limits, Resume, voice mode and the Mac menu items. Stop, queued prompts, i
 requests, attachments, per-tab models and history paging work as before. **‹ Home** or a
 right swipe from the left edge returns to Home. The swipe drags the tab with your finger over
 Home, like a navigation back swipe: let go past about a third of the width (or flick) to
-finish, or earlier to stay in the tab. Home shows its latest look until its conversation has
+finish, or earlier to stay in the tab. A swipe that starts on a link, card or card button only
+opens the drawer or goes back; links and cards open on a tap. Home shows its latest look until its conversation has
 reloaded; with Reduce Motion, **‹ Home** switches without sliding. Handoff cards' **Open tab**, a tab's push
 notification and the Tabs widget open the tab the same way. On an iPhone Duo, folded or
 unfolded, a tab has no **‹ Home**: the right swipe from the left edge, or **Tabs** at the bottom of

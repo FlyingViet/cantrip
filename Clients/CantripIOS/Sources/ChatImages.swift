@@ -178,6 +178,8 @@ struct ChatAssistantText: View {
             .markdownImageProvider(ChatPreviewImageProvider(images: images, remote: remote))
             .textSelection(.enabled)
             .environment(\.openURL, OpenURLAction { url in
+                // Image previews open here, without reaching the root's swipe check.
+                guard CantripSwipeTaps.allowsTap() else { return .discarded }
                 switch ChatPreviewLink.action(for: url, images: images) {
                 case .preview(let source):
                     ChatImageViewer.present(source, remote: remote, index: 0)
@@ -225,6 +227,7 @@ struct ChatGeneratedImagePreview: View {
 
     var body: some View {
         Button {
+            guard CantripSwipeTaps.allowsTap() else { return }
             if let image {
                 ChatImageViewer.present(source, remote: remote, index: 0,
                                         placeholder: image, sourceFrame: viewerSource.frame)
