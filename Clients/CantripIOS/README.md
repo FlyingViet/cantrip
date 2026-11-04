@@ -608,13 +608,15 @@ Link cards for weather sites are left out under it.
 
 When the Mac has an agent-only Chrome driven by an MCP server named `browser`,
 replies that used it show a card with a live picture of the tab the agent is
-working in. While the reply is running the card is marked **Live** and
-refreshes about once a second while it's on screen; afterwards it shows the
-latest view. Tap it for a full-screen view (about three frames a second) with
-the page title and address; pinch or double-tap to zoom, **Done** to return.
-It's view only, and the Mac never shows browser-internal pages such as a
-password manager's popup. Needs an updated Mac Cantrip host
-(`GET /api/v1/browser/frame`).
+working in. While the reply is running the card is marked **Live** and follows
+the page while it's on screen (up to about ten pictures a second, as soon as the
+page changes); afterwards it shows the latest view. Tap it for a full-screen
+view with the page title and address; pinch or double-tap to zoom, **Done** to
+return. Cards pause while the full-screen view is open. It's view only, and the
+Mac never shows browser-internal pages such as a password manager's popup.
+Needs an updated Mac Cantrip host (`GET /api/v1/browser/frame`); with an older
+host the card refreshes about once a second and the full-screen view about
+three times a second.
 
 ### Subagent monitors in replies
 

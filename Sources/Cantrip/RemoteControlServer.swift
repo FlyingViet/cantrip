@@ -1132,10 +1132,11 @@ final class RemoteControlServer {
                 return
             }
             let width = request.query("width").flatMap(Int.init)
+            let after = request.query("after").flatMap(Int.init)
             let pairingToken = token
             Task {
                 do {
-                    let frame = try await BrowserPreviewCapture.shared.frame(width: width)
+                    let frame = try await BrowserPreviewCapture.shared.frame(width: width, after: after)
                     guard self.token == pairingToken, !self.token.isEmpty else {
                         sendError(401, "Pairing changed during capture.", on: connection)
                         return
@@ -4000,7 +4001,7 @@ private extension RemoteControlServer {
       const controller=(!options.method||options.method==="GET")?new AbortController():null;
       const segments=path.split("?")[0].split("/").filter(Boolean),historyRead=segments.slice(0,3).join("/")==="api/v1/sessions"&&(segments.length===4||(segments.length===6&&segments[4]==="messages"));
       if(sidebarLayout&&controller&&historyRead&&segments.length===4&&!new URLSearchParams(path.split("?")[1]).has("before"))path+="&recentExchanges=3";
-      const deadline=controller?setTimeout(()=>controller.abort(),historyRead?20000:8000):null;if(controller)options.signal=controller.signal;
+      const deadline=controller?setTimeout(()=>controller.abort(),historyRead||options.wait?20000:8000):null;if(controller)options.signal=controller.signal;
       if(!controller)uiActiveWrites++;
       try{const response=await fetch(path,options);const data=await response.json();if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;error.data=data;throw error}return data}
       catch(error){if(!controller)uiMutationWarning=`A Remote action failed: ${error.message}. Check the conversation before retrying; it was not resent.`;throw error}
@@ -4876,9 +4877,11 @@ private extension RemoteControlServer {
     // MCP App views (e.g. Mobbin galleries): each runs in a frame sandboxed to an
     // opaque origin (never allow-same-origin: this page holds the pairing token).
     const mcpMaxHeight=640,mcpApps=new Map(),mcpHeights=new Map(),mcpDark=matchMedia("(prefers-color-scheme: dark)"),mcpCoarse=matchMedia("(pointer: coarse)");
-    // Live view of the agent-controlled Chrome under replies that used its browser tools. One shared poll feeds
-    // every live card (only while the page is visible); tapping opens a larger, faster view. View only.
-    const browserCards=new Map();let browserTimer=null,browserViewerTimer=null;
+    // Live view of the agent-controlled Chrome under replies that used its browser tools. One shared request feeds
+    // every live card (only while the page is visible); tapping opens a larger view. A request that passes the last
+    // picture's seq as `after` is answered as soon as the page changes, so neither waits on a timer. Each picture is
+    // decoded before it replaces the old one, so the image never blanks between pictures. View only.
+    const browserCards=new Map();let browserTimer=null,browserViewerTimer=null,browserSeq=0,browserViewerSeq=0,browserViewerBusy=false;
     function browserSlot(session,message){const slot=document.createElement("div");const last=[...session.messages].reverse().find(item=>(item.activities||[]).some(activity=>activity.browser));
       slot.dataset.browserMessage=message.id;slot.dataset.browserLive=session.isStreaming&&last?.id===message.id?"1":"0";return slot}
     function browserCard(messageID,live){let card=browserCards.get(messageID);
@@ -4888,22 +4891,36 @@ private extension RemoteControlServer {
         card={element:figure,img,empty,badge,caption,button,live:false,loaded:false};button.onclick=()=>openBrowserViewer();browserCards.set(messageID,card)}
       card.live=live;card.badge.textContent=live?"Live":"Agent Chrome";card.badge.classList.toggle("live",live);
       card.button.setAttribute("aria-label",live?"Agent browser, live. Open full screen":"Agent browser. Open full screen");
-      if(!browserTimer)browserTimer=setInterval(browserTick,900);return card.element}
-    function browserApply(card,frame,error){if(frame){card.img.src=`data:image/jpeg;base64,${frame.data}`;card.img.hidden=false;card.empty.hidden=true;card.caption.textContent=frame.title||frame.url||"";card.loaded=true}
+      if(!browserTimer&&!browserBusy)browserTimer=setTimeout(browserTick,50);return card.element}
+    async function browserDecode(frame){const url=`data:image/jpeg;base64,${frame.data}`,img=new Image();img.src=url;try{await img.decode()}catch{}return url}
+    function browserApply(card,frame,error,url){if(frame){if(url)card.img.src=url;card.seq=frame.seq;card.img.hidden=false;card.empty.hidden=true;card.caption.textContent=frame.title||frame.url||"";card.loaded=true}
       else if(error&&!card.loaded){card.empty.textContent=error;card.empty.hidden=false}}
     let browserBusy=false;
-    async function browserTick(){for(const [key,card] of browserCards)if(!card.element.isConnected)browserCards.delete(key);
-      if(!browserCards.size){clearInterval(browserTimer);browserTimer=null;return}if(document.hidden||browserBusy||$("browserViewer").open)return;
+    async function browserTick(){browserTimer=null;for(const [key,card] of browserCards)if(!card.element.isConnected)browserCards.delete(key);
+      if(!browserCards.size||browserBusy)return;const again=ms=>{if(browserCards.size&&!browserTimer)browserTimer=setTimeout(browserTick,ms)};
+      if(document.hidden||$("browserViewer").open)return again(900);
       const visible=[...browserCards.values()].filter(card=>{const box=card.element.getBoundingClientRect();return box.bottom>0&&box.top<innerHeight});
-      const want=visible.filter(card=>card.live||!card.loaded);if(!want.length)return;browserBusy=true;
-      try{const frame=await api(`/api/v1/browser/frame?width=${Math.min(960,Math.round(560*(devicePixelRatio||1)))}`);for(const card of want)browserApply(card,frame)}
-      catch(error){for(const card of want)browserApply(card,null,error.message||"The agent browser isn't available.")}finally{browserBusy=false}}
-    function openBrowserViewer(){const viewer=$("browserViewer");if(!viewer.open)viewer.showModal();$("browserViewerError").textContent="";browserViewerTick()}
-    async function browserViewerTick(){clearTimeout(browserViewerTimer);const viewer=$("browserViewer");if(!viewer.open||document.hidden)return;
-      try{const frame=await api(`/api/v1/browser/frame?width=${Math.min(1920,Math.round(innerWidth*(devicePixelRatio||1)))}`);$("browserViewerImage").src=`data:image/jpeg;base64,${frame.data}`;
-        $("browserViewerTitle").textContent=`${frame.active?"● Live · ":""}${frame.title||"Agent Chrome"} — ${frame.url}`;$("browserViewerError").textContent=""}
-      catch(error){$("browserViewerError").textContent=error.message||"The agent browser isn't available."}
-      browserViewerTimer=setTimeout(browserViewerTick,350)}
+      const want=visible.filter(card=>card.live||!card.loaded);if(!want.length)return again(900);
+      const after=want.every(card=>card.loaded)&&browserSeq?`&after=${browserSeq}`:"";browserBusy=true;let next=2000;
+      try{const frame=await api(`/api/v1/browser/frame?width=${Math.min(960,Math.round(560*(devicePixelRatio||1)))}${after}`,{wait:true});
+        const changed=want.filter(card=>!Number.isInteger(frame.seq)||card.seq!==frame.seq);const url=changed.length?await browserDecode(frame):null;
+        for(const card of want)browserApply(card,frame,null,changed.includes(card)?url:null);
+        browserSeq=Number.isInteger(frame.seq)?frame.seq:0;next=browserSeq?0:900}
+      catch(error){for(const card of want)browserApply(card,null,error.message||"The agent browser isn't available.");browserSeq=0}
+      finally{browserBusy=false}
+      again(next)}
+    function openBrowserViewer(){const viewer=$("browserViewer");if(!viewer.open)viewer.showModal();$("browserViewerError").textContent="";browserViewerSeq=0;browserViewerTick()}
+    async function browserViewerTick(){clearTimeout(browserViewerTimer);const viewer=$("browserViewer");if(!viewer.open||browserViewerBusy)return;
+      if(document.hidden){browserViewerTimer=setTimeout(browserViewerTick,1000);return}
+      browserViewerBusy=true;let next=2000;
+      try{const frame=await api(`/api/v1/browser/frame?width=${Math.min(1920,Math.round(innerWidth*(devicePixelRatio||1)))}${browserViewerSeq?`&after=${browserViewerSeq}`:""}`,{wait:true});
+        if(!viewer.open)return;
+        if(!Number.isInteger(frame.seq)||frame.seq!==browserViewerSeq){const url=await browserDecode(frame);if(!viewer.open)return;$("browserViewerImage").src=url}
+        $("browserViewerTitle").textContent=`${frame.active?"● Live · ":""}${frame.title||"Agent Chrome"} — ${frame.url}`;$("browserViewerError").textContent="";
+        browserViewerSeq=Number.isInteger(frame.seq)?frame.seq:0;next=browserViewerSeq?0:350}
+      catch(error){if(viewer.open)$("browserViewerError").textContent=error.message||"The agent browser isn't available."}
+      finally{browserViewerBusy=false}
+      if(viewer.open)browserViewerTimer=setTimeout(browserViewerTick,next)}
     function mcpAppSlot(sessionID,app){const slot=document.createElement("div");slot.dataset.mcpSession=sessionID;slot.dataset.mcpApp=JSON.stringify(app);return slot}
     function mcpReconcile(live,staged){
       const nodes=[...staged.childNodes].map(node=>node.dataset?.mcpApp?mcpAppElement(node.dataset.mcpSession,JSON.parse(node.dataset.mcpApp)):node.dataset?.browserMessage?browserCard(node.dataset.browserMessage,node.dataset.browserLive==="1"):node),keep=new Set(nodes);

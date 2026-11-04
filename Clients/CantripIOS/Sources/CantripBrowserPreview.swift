@@ -9,12 +9,15 @@ struct CantripBrowserFrame: Decodable, Equatable {
     let title: String
     let active: Bool
     let capturedAt: String
+    /// Grows with each new picture; older Macs leave it out (then clients poll).
+    let seq: Int?
 }
 
 /// Live picture of the agent-only Chrome under a reply that used its browser tools
-/// (`activity.browser`). Refreshes about once a second while the reply is running and
-/// the card is on screen; afterwards it shows the latest view. Tap for a larger,
-/// faster view. View only.
+/// (`activity.browser`). Follows the page while the reply is running and the card is on
+/// screen: each request passes the last picture's `seq` as `after`, so the Mac answers as
+/// soon as the page changes (older Macs: about once a second). Afterwards it shows the
+/// latest view. Tap for a larger view. View only.
 struct CantripBrowserPreviewCard: View {
     @ObservedObject var remote: CantripRemoteModel
     let live: Bool
@@ -71,21 +74,26 @@ struct CantripBrowserPreviewCard: View {
 
     /// Runs while the card is on screen (SwiftUI cancels it when it scrolls away).
     private func poll() async {
+        var seq: Int?
         repeat {
-            if !expanded {
+            var delay: Duration = .milliseconds(live ? 900 : 3000)
+            if !expanded && CantripBrowserViewer.openCount == 0 {
                 do {
-                    let result = try await remote.browserFrame(width: 960)
-                    image = result.image
+                    let result = try await remote.browserFrame(width: 960, after: image == nil ? nil : seq)
+                    if let next = result.image { image = next }
                     frame = result.frame
                     error = nil
+                    seq = result.frame.seq
+                    if live, seq != nil { delay = .zero }
                 } catch is CancellationError {
                     return
                 } catch {
+                    seq = nil
                     if image == nil { self.error = error.localizedDescription }
                 }
             }
             if !live && image != nil { return }
-            try? await Task.sleep(for: .milliseconds(live ? 900 : 3000))
+            if delay > .zero { try? await Task.sleep(for: delay) }
         } while !Task.isCancelled
     }
 }
@@ -105,9 +113,12 @@ private struct CantripBrowserBadge: View {
     }
 }
 
-/// Larger live view of the agent-only Chrome: about three frames a second, with the
-/// page title and address. Pinch or double-tap to zoom on iPhone.
+/// Larger live view of the agent-only Chrome that follows the page as it changes, with
+/// the page title and address. Pinch or double-tap to zoom on iPhone.
 struct CantripBrowserViewer: View {
+    /// Open viewers. Every card pauses while one is open (it shows the same tab).
+    static var openCount = 0
+
     @ObservedObject var remote: CantripRemoteModel
     @Environment(\.dismiss) private var dismiss
     @State private var image: UIImage?
@@ -160,19 +171,26 @@ struct CantripBrowserViewer: View {
                 }
             }
         }
+        .onAppear { Self.openCount += 1 }
+        .onDisappear { Self.openCount -= 1 }
         .task {
+            var seq: Int?
             while !Task.isCancelled {
+                var delay: Duration = .seconds(1)
                 do {
-                    let result = try await remote.browserFrame(width: 1600)
-                    image = result.image
+                    let result = try await remote.browserFrame(width: 1600, after: image == nil ? nil : seq)
+                    if let next = result.image { image = next }
                     frame = result.frame
                     error = nil
+                    seq = result.frame.seq
+                    delay = seq == nil ? .milliseconds(350) : .zero
                 } catch is CancellationError {
                     return
                 } catch {
+                    seq = nil
                     self.error = error.localizedDescription
                 }
-                try? await Task.sleep(for: .milliseconds(350))
+                if delay > .zero { try? await Task.sleep(for: delay) }
             }
         }
     }
