@@ -238,6 +238,8 @@ export interface BrowserFrame {
   /** The agent used the browser in the last two minutes. */
   active: boolean;
   capturedAt: string;
+  /** Grows with each new picture; pass it back as `after` to wait for the next one. Older Macs leave it out. */
+  seq?: number;
 }
 
 /** A recent step of a subagent (last 6). The Mac client derives an id from title+toolName+state. */

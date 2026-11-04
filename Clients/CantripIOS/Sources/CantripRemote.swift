@@ -1741,10 +1741,16 @@ struct CantripRemoteAPI {
             && (parts[4] == "videos" || parts[4] == "files")
     }
 
+    static func browserFramePath(width: Int, after: Int?) -> String {
+        "/api/v1/browser/frame?width=\(min(max(width, 240), 1920))" + (after.map { $0 > 0 ? "&after=\($0)" : "" } ?? "")
+    }
+
     static func isContentRead(method: String, path: String) -> Bool {
         let parts = (URLComponents(string: path)?.percentEncodedPath ?? "").split(separator: "/")
         return method == "GET" && (
             parts == ["api", "v1", "maintenance"]
+                // The Mac holds a live-view request until the agent's page changes (up to about 8 s).
+                || parts == ["api", "v1", "browser", "frame"]
                 || parts.starts(with: ["api", "v1", "home"])
                 || parts == ["api", "v1", "memory"] || parts == ["api", "v1", "memory", "document"]
                 || parts == ["api", "v1", "link-previews", "image"]
@@ -1993,10 +1999,10 @@ struct CantripRemoteAPI {
     }
 
     /// A JPEG of the tab the Mac's agent-only Chrome is working in (`GET /api/v1/browser/frame`).
-    func browserFrame(width: Int) async throws -> CantripBrowserFrame {
-        let frame: CantripBrowserFrame = try await request(
-            path: "/api/v1/browser/frame?width=\(min(max(width, 240), 1920))"
-        )
+    /// With `after` (the `seq` of the picture already shown) the Mac answers as soon as the page
+    /// changes, or with the same picture after about 8 s.
+    func browserFrame(width: Int, after: Int? = nil) async throws -> CantripBrowserFrame {
+        let frame: CantripBrowserFrame = try await request(path: Self.browserFramePath(width: width, after: after))
         guard !frame.data.isEmpty, frame.data.count <= 8_000_000 else { throw CantripRemoteError.invalidResponse }
         return frame
     }
@@ -3836,10 +3842,13 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
-    func browserFrame(width: Int) async throws -> (frame: CantripBrowserFrame, image: UIImage) {
+    /// A picture of the agent-only Chrome, decoded off the main thread. `image` is nil when the Mac
+    /// answered `after` with the same picture (nothing changed).
+    func browserFrame(width: Int, after: Int? = nil) async throws -> (frame: CantripBrowserFrame, image: UIImage?) {
         let frame = try await performAuthenticated(allowFallback: true) { api in
-            try await api.browserFrame(width: width)
+            try await api.browserFrame(width: width, after: after)
         }
+        if let after, frame.seq == after { return (frame, nil) }
         let image = try await Task.detached(priority: .userInitiated) {
             try ChatImageDecoder.decode(frame.data, maximumDimension: 1920)
         }.value

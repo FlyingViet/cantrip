@@ -1639,18 +1639,36 @@ Tailscale-first/LAN-fallback routing as other read-only requests.
 When a reply uses tools from the MCP server named `agent_chrome` (or, in older
 history, `browser`) that drives a dedicated, agent-only Chrome, clients show a card under that reply with a live
 picture of the tab the agent is working in. While the reply is still running the
-card is marked **Live** and refreshes about once a second while it's on screen;
-afterwards it shows the latest view. Tap it for a larger view that refreshes a
-few times per second, with the page title and address.
+card is marked **Live** and follows the page while it's on screen; afterwards it
+shows the latest view. Tap it for a larger view with the page title and address.
+Both show a change as soon as Chrome paints it (up to about ten pictures a
+second), and each picture is decoded before it replaces the last, so the image
+never blanks between pictures.
 
 - The browser MCP server records its current tab in
   `~/.local/share/agent-browser/active.json` (`targetId`, `url`, `title`, `tool`,
-  `updatedAt`). Cantrip captures that tab through Chrome DevTools on
+  `updatedAt`). Cantrip streams that tab through Chrome DevTools on
   `127.0.0.1` (port 9333; change it with
-  `defaults write <bundle id> browserPreviewCDPPort -int <port>`).
+  `defaults write <bundle id> browserPreviewCDPPort -int <port>`) while a client
+  is watching, and stops 10 seconds after the last request.
+- It uses Chrome's screencast, which sends a frame only when the page repaints
+  and never changes the window. (Clipped, scaled screenshots, used before, make
+  Chrome re-render the real window at the screenshot's size for each capture, so
+  the agent's Chrome visibly flashed while a client watched.) A tab in the
+  background paints nothing, so while it's hidden Cantrip takes plain
+  screenshots of it instead (no clip, so the window isn't touched and the tab
+  stays in the background).
 - `GET /api/v1/browser` returns the current tab and whether the agent used it in
   the last two minutes. `GET /api/v1/browser/frame?width=N` returns a JPEG
-  (base64 in JSON, width 240–1920). Both need the pairing token.
+  (base64 in JSON, width 240–1920) with a `seq` that grows with each new picture.
+  Add `&after=<seq>` to wait for the next one: the Mac answers as soon as the
+  page changes, or with the same picture after 8 seconds, so clients ask again
+  straight away instead of polling (give that request a timeout above 8 s).
+  Clients that see no `seq` (an older Mac) poll instead. Both need the pairing
+  token.
+- `make test-browser-preview-live` checks it against a throwaway Chrome window:
+  frames, waits, background tabs, private pages, and screenshots of the window
+  to confirm streaming never changes it.
 - View only. It never clicks, types or navigates, and frames are kept in memory
   only: they aren't added to transcripts, journals, memory or model context.
 - Browser-internal pages are never captured: extension pages such as a password

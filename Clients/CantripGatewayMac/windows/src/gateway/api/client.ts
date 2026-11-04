@@ -2,6 +2,7 @@
 // (encrypted direct, then HTTPS); this page only proves it is the Gateway window (bridge.key).
 import { bridge } from "../bridge";
 import type { BrowserFrame, ImageDataResponse, RemoteThread, ThreadResponse } from "./types";
+import { browserFramePath } from "../ui/transcript/browserPreviewLogic";
 
 export class APIError extends Error {
   /** `body`: the error's JSON when the Mac sent one (e.g. Settings' 409 `settings` and 422 `fields`). */
@@ -144,9 +145,12 @@ export function loadImage(sessionID: string, imageID: string, full = false): Pro
   return load;
 }
 
-/** A frame of the agent-only Chrome on the Mac (view only; never cached). */
-export function browserFrame(width: number): Promise<BrowserFrame> {
-  return api<BrowserFrame>(`/api/v1/browser/frame?width=${Math.min(1920, Math.max(240, Math.round(width)))}`);
+/**
+ * A frame of the agent-only Chrome on the Mac (view only; never cached). With `after` the Mac holds the request until
+ * the page changes (up to about 8 s), so it gets a longer timeout.
+ */
+export function browserFrame(width: number, after?: number): Promise<BrowserFrame> {
+  return api<BrowserFrame>(browserFramePath(width, after), { timeoutMs: 20000 });
 }
 
 /** Loads a cached public link preview image (`GET /api/v1/link-previews/image?id=...`) as a data URL. */

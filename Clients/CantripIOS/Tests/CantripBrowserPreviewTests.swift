@@ -20,5 +20,19 @@ final class CantripBrowserPreviewTests: XCTestCase {
         XCTAssertEqual(frame.width, 640)
         XCTAssertTrue(frame.active)
         XCTAssertEqual(frame.title, "Example Domain")
+        // Older Macs don't send seq.
+        XCTAssertNil(frame.seq)
+        let streamed = try JSONDecoder().decode(CantripBrowserFrame.self, from: Data(
+            json.replacingOccurrences(of: "}", with: #","seq":42}"#).utf8))
+        XCTAssertEqual(streamed.seq, 42)
+    }
+
+    func testFrameRequestsWaitForChangesWithALongerTimeout() {
+        XCTAssertEqual(CantripRemoteAPI.browserFramePath(width: 960, after: nil), "/api/v1/browser/frame?width=960")
+        XCTAssertEqual(CantripRemoteAPI.browserFramePath(width: 5000, after: 42), "/api/v1/browser/frame?width=1920&after=42")
+        XCTAssertEqual(CantripRemoteAPI.browserFramePath(width: 10, after: 0), "/api/v1/browser/frame?width=240")
+        // The Mac holds a request with `after` for up to 8 s: it must not get the 2-3 s read timeout.
+        XCTAssertTrue(CantripRemoteAPI.isContentRead(method: "GET", path: "/api/v1/browser/frame?width=960&after=42"))
+        XCTAssertFalse(CantripRemoteAPI.isContentRead(method: "GET", path: "/api/v1/browser"))
     }
 }
