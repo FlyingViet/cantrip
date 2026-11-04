@@ -97,10 +97,11 @@ extension SessionTabTests {
         backend.newRuntimeStartupLimit = 5
         defer { backend.cancel() }
 
-        func run(_ prompt: String, history: [ConversationTurn] = []) async throws -> RecoveryEvents {
+        func run(_ prompt: String, history: [ConversationTurn] = [],
+                 on target: CopilotBackend? = nil) async throws -> RecoveryEvents {
             let events = RecoveryEvents()
-            backend.send(BackendRequest(prompt: prompt, userMessage: prompt, previousTurns: history),
-                         workdir: NSHomeDirectory(), onEvent: events.append)
+            (target ?? backend).send(BackendRequest(prompt: prompt, userMessage: prompt, previousTurns: history),
+                                     workdir: NSHomeDirectory(), onEvent: events.append)
             let deadline = Date().addingTimeInterval(15)
             while events.done == 0, events.errors.isEmpty, Date() < deadline {
                 try await Task.sleep(nanoseconds: 20_000_000)
@@ -244,6 +245,50 @@ extension SessionTabTests {
         precondition(fresh.errors.isEmpty && fresh.text.contains(":new:1:") && fresh.text.contains("OLD_TURN_RECAP"),
                      "\(fresh.errors) \(fresh.text)")
         precondition(resumes().count == resumedCount)
+
+        // Cantrip restarts: the tab's new backend resumes its saved session, which gets only the
+        // turns it missed (answered by another backend meanwhile), never a full recap.
+        let storageKey = "copilotSession-test-\(UUID().uuidString)"
+        defer { UserDefaults.standard.removeObject(forKey: storageKey) }
+        func tabBackend(model: String? = nil) -> CopilotBackend {
+            let tab = CopilotBackend(bridgeScript: script)
+            tab.readOnly = true
+            tab.newRuntimeStartupLimit = 5
+            tab.modelOverride = model
+            tab.sessionStorageKey = storageKey
+            return tab
+        }
+        let one = ConversationTurn(user: "TAB_TURN_ONE", assistant: "one")
+        let two = ConversationTurn(user: "TAB_TURN_TWO", assistant: "two")
+        let three = ConversationTurn(user: "TAB_TURN_THREE", assistant: "three")
+        let elsewhere = ConversationTurn(user: "ANSWERED_ELSEWHERE", assistant: "by another backend")
+        let beforeRestart = tabBackend()
+        let tabFirst = try await run("tab first", on: beforeRestart)
+        let tabSession = String(tabFirst.text.prefix { $0 != ":" })
+        let tabSecond = try await run("tab second", history: [one], on: beforeRestart)
+        precondition(tabSecond.text == "\(tabSession):new:2:tab second\n", "a reused session needs no recap: \(tabSecond.text)")
+        beforeRestart.cancel()   // idle: keeps the saved session
+        let afterRestart = tabBackend()
+        defer { afterRestart.cancel() }
+        let restored = try await run("after restart", history: [one, two], on: afterRestart)
+        precondition(restored.errors.isEmpty && restored.text == "\(tabSession):resumed:1:after restart\n",
+                     "a restart resumes the saved session without a recap: \(restored.errors) \(restored.text)")
+        precondition(resumes().last == tabSession)
+        let caughtUp = try await run("after switch", history: [one, two, three, elsewhere], on: afterRestart)
+        precondition(caughtUp.text.hasPrefix("\(tabSession):resumed:2:Context - selected")
+                     && caughtUp.text.contains("ANSWERED_ELSEWHERE") && !caughtUp.text.contains("TAB_TURN_TWO")
+                     && caughtUp.text.contains("New message:\nafter switch"),
+                     "only the missed turn is carried in: \(caughtUp.text)")
+        afterRestart.cancel()
+        // A different model starts a new session (with the recap), as changing it in a live tab does.
+        let otherModel = tabBackend(model: "another-model")
+        defer { otherModel.cancel() }
+        let changed = try await run("new model", history: [one, two, three, elsewhere], on: otherModel)
+        precondition(changed.text.contains(":new:1:") && changed.text.contains("TAB_TURN_THREE")
+                     && !changed.text.hasPrefix(tabSession), "\(changed.text)")
+        otherModel.reset()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        precondition(UserDefaults.standard.object(forKey: storageKey) == nil, "reset forgets the saved session")
         print("Copilot runtime recovery: crashes, stalls and idle restarts recovered without user-facing errors")
     }
 

@@ -7,6 +7,8 @@ enum TabDefaults {
     static func claudeSession(_ id: UUID) -> String { "claudeSessionID-\(id.uuidString)" }
     static func codexSession(_ id: UUID) -> String { "codexSessionID-\(id.uuidString)" }
     static func antigravitySession(_ id: UUID) -> String { "agySessionID-\(id.uuidString)" }
+    /// The tab's Copilot session, its settings and the turns it has seen (CopilotBackend).
+    static func copilotSession(_ id: UUID) -> String { "copilotSession-\(id.uuidString)" }
     static func lastRunOutcome(_ id: UUID) -> String { "lastRunOutcome-\(id.uuidString)" }
     static func queuePaused(_ id: UUID) -> String { "queuePaused-\(id.uuidString)" }
     /// Messages deleted from the tab, so paired clients drop their cached copies.
@@ -32,8 +34,8 @@ enum TabDefaults {
 
     /// Every key above for `id`. Council seats are found by prefix, whatever their count or models.
     static func removeAll(for id: UUID, in defaults: UserDefaults = .standard) {
-        for key in [workdir(id), claudeSession(id), codexSession(id), antigravitySession(id), lastRunOutcome(id),
-                    deletedMessages(id)] {
+        for key in [workdir(id), claudeSession(id), codexSession(id), antigravitySession(id), copilotSession(id),
+                    lastRunOutcome(id), deletedMessages(id)] {
             defaults.removeObject(forKey: key)
         }
         removeCouncilSeats(for: id, in: defaults)

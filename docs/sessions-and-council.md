@@ -131,12 +131,16 @@ the message, not that the model has already consumed it. Queue still means
 "do this next"; Redirect and Stop remain explicit interruptions.
 
 Each local Copilot tab keeps its own native SDK session across successful
-turns. Node.js and a recent Copilot CLI with a matching bundled SDK/runtime
+turns, and saves it, so after Cantrip restarts the tab resumes the same session
+instead of starting over (private tabs save nothing). Turns another backend
+answered meanwhile go in front of the next message. Node.js and a recent Copilot CLI with a matching bundled SDK/runtime
 are required (exercised with CLI 1.0.83). A missing/incompatible runtime is
 reported rather than silently replaying the task with another transport.
 Changing model, effort, context tier, action policy, subagent setting, or working directory takes
 effect on the next request by starting a fresh runtime with recent conversation
-context. Stop/reset closes the runtime; checkpoint recovery remains Cantrip's
+context: a short summary of earlier topics, up to two related older turns, and the
+three most recent turns in full (one over 16,000 characters keeps its start and
+end). Stop/reset closes the runtime; checkpoint recovery remains Cantrip's
 safety net after an interruption.
 
 Non-private injections are journaled before submission and sent in order.
