@@ -78,7 +78,7 @@ private func testAugmentedCurrentPromptAppearsOnlyOnce() {
 }
 
 private func testSelectedContextIsBounded() {
-    let hugeAnswer = String(repeating: "x", count: 50_000)
+    let hugeAnswer = "ANSWER_START " + String(repeating: "x", count: 50_000) + " ANSWER_END"
     let turns = (1...12).map {
         ConversationTurn(
             user: "Conversation context topic \($0)",
@@ -90,8 +90,33 @@ private func testSelectedContextIsBounded() {
         query: "Continue the conversation context topic",
         turns: turns
     )
-    expect(prompt.count < 10_000, "selected context should remain under 10,000 characters")
+    let recentBudget = 3 * 2 * ConversationContextBuilder.recentTurnLimit
+    expect(prompt.count < recentBudget + 6_000, "selected context should stay within the recent-turn budget")
     expect(prompt.contains("...[clipped]"), "oversized turns should be visibly clipped")
+    let recent = prompt.components(separatedBy: "Most recent turns:").last ?? ""
+    expect(recent.components(separatedBy: "ANSWER_END").count - 1 == 3,
+           "a huge recent turn keeps its conclusion")
+}
+
+private func testRecentTurnsAreSentWhole() {
+    let longAnswer = (1...200).map { "Detail line \($0) of the earlier answer." }.joined(separator: "\n")
+    let longQuestion = String(repeating: "Here is the pasted error output. ", count: 60)
+    let turns = [
+        ConversationTurn(user: "Older topic", assistant: String(repeating: "older ", count: 400)),
+        ConversationTurn(user: "Second topic", assistant: "Second answer"),
+        ConversationTurn(user: "Third topic", assistant: "Third answer"),
+        ConversationTurn(user: longQuestion, assistant: longAnswer),
+    ]
+    let prompt = ConversationContextBuilder.composePrompt(
+        currentPrompt: "Follow up", query: "Follow up", turns: turns
+    )
+    let recent = prompt.components(separatedBy: "Most recent turns:").last ?? ""
+    expect(recent.contains(longAnswer), "a recent assistant reply is sent whole")
+    expect(recent.contains(longQuestion), "a recent user message is sent whole")
+    expect(!recent.contains("[clipped]"), "recent turns under the limit are never clipped")
+    let messages = ConversationContextBuilder.chatMessages(for: "Follow up", turns: turns)
+    expect(messages.contains { $0.content.contains("[clipped]") },
+           "small-window chat backends keep the short recent-turn clips")
 }
 
 private func testExplicitRequestLoadsEveryTurn() {
@@ -114,6 +139,7 @@ testAlwaysKeepsThreeMostRecentTurns()
 testRetrievesRelatedOlderTurnWithoutFullHistory()
 testAugmentedCurrentPromptAppearsOnlyOnce()
 testSelectedContextIsBounded()
+testRecentTurnsAreSentWhole()
 testExplicitRequestLoadsEveryTurn()
 
 let pasted = String(repeating: "swift actor swift network ", count: 40_000)

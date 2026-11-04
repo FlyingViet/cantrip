@@ -191,8 +191,8 @@ Claude Code tabs get the same context as Copilot tabs: Cantrip's memory and note
 calendar and screen context with each message, and the tab's earlier conversation. Claude keeps
 its own session, so earlier turns are replayed only when it hasn't seen them: a tab that ran on
 Copilot until now, a new or lost Claude session, or turns another backend answered since. Those
-turns go in front of the message, selected like Copilot's continuity (a summary plus related and
-recent turns). The Copilot CLI's local MCP servers (`~/.copilot/mcp-config.json`, for example
+turns go in front of the message, selected like Copilot's continuity (a summary, related older
+turns and the most recent turns in full). The Copilot CLI's local MCP servers (`~/.copilot/mcp-config.json`, for example
 homelab and the agent vault) are passed to Claude too, unless Claude Code already has a server
 with that name; remote servers that sign in through Copilot aren't shared.
 
