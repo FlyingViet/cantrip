@@ -29,6 +29,34 @@ final class CantripTabDrawerTests: XCTestCase {
         XCTAssertTrue(CantripDrawerGesture.shouldOpen(start: CGPoint(x: 120, y: 500), translation: CGSize(width: 120, height: 0)))
     }
 
+    func testASwipeNeverCountsAsATapOnWhatItStartedOn() {
+        XCTAssertTrue(CantripSwipeTaps.allowsTap())
+        // Within the slop it's still a tap; up or down is a scroll, which cancels taps itself.
+        CantripSwipeTaps.moved(CGSize(width: 8, height: 2))
+        CantripSwipeTaps.moved(CGSize(width: 12, height: 40))
+        XCTAssertTrue(CantripSwipeTaps.allowsTap())
+        CantripSwipeTaps.ended()
+        XCTAssertTrue(CantripSwipeTaps.allowsTap(), "A drag that was never a swipe leaves taps alone")
+
+        // Past the slop, more across than up or down: a swipe, until just after it lifts.
+        CantripSwipeTaps.moved(CGSize(width: 12, height: 5))
+        XCTAssertFalse(CantripSwipeTaps.allowsTap())
+        var opened: [String] = []
+        let open = CantripSwipeTaps.tap { (id: String) in opened.append(id) }
+        open("during")
+        let lift = Date()
+        CantripSwipeTaps.ended(at: lift)
+        XCTAssertFalse(CantripSwipeTaps.allowsTap(at: lift.addingTimeInterval(0.2)), "The lift that ends it isn't a tap")
+        XCTAssertTrue(CantripSwipeTaps.allowsTap(at: lift.addingTimeInterval(CantripSwipeTaps.settle + 0.05)))
+
+        // Leftward swipes count too (they put the drawer away).
+        CantripSwipeTaps.moved(CGSize(width: -30, height: 4))
+        XCTAssertFalse(CantripSwipeTaps.allowsTap())
+        CantripSwipeTaps.ended(at: .distantPast)
+        open("tap")
+        XCTAssertEqual(opened, ["tap"], "Only the plain tap opens")
+    }
+
     func testClosingRequiresLeftSwipeNotVerticalTabScrolling() {
         XCTAssertTrue(CantripDrawerGesture.shouldClose(translation: CGSize(width: -80, height: 10)))
         for translation in [

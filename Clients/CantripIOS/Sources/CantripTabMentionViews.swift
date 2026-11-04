@@ -317,7 +317,7 @@ private struct CantripMentionLinkHandler: ViewModifier {
                         openURL(url)
                         return .handled
                     }
-                    guard links.canOpen(id) else { return .discarded }
+                    guard links.canOpen(id), CantripSwipeTaps.allowsTap() else { return .discarded }
                     links.open(id)
                     return .handled
                 })

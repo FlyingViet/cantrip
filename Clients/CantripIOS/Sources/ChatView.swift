@@ -1444,6 +1444,8 @@ struct ChatView: View {
         )
         // Maps and sideways scrollers keep their own sideways drags.
         .collectsCantripSwipeExemptions()
+        // A swipe that starts on a link or card opens the drawer (or goes Home), never the link.
+        .cantripSwipesCancelTaps()
         .onChange(of: duoSidebarOverlays) { _, _ in duoOverlaySidebarOpen = false }
         .onChange(of: showRemoteTabs) { _, showing in
             if showing {
@@ -2157,7 +2159,9 @@ struct ChatView: View {
                 CantripHistoryControls(model: remote)
                 if vm.activeLane == .cantrip, let session = remote.selectedSession,
                    session.id == remote.selectedSessionID, let child = session.child, let parentID = session.parentID {
-                    CantripChildTabBanner(child: child, onOpenParent: { openTab(parentID) })
+                    CantripChildTabBanner(child: child, onOpenParent: {
+                        if CantripSwipeTaps.allowsTap() { openTab(parentID) }
+                    })
                 }
             }
             if vm.turns.isEmpty { emptyState }
@@ -2170,10 +2174,11 @@ struct ChatView: View {
                     remote: remote,
                     cantripSessionID: vm.activeLane.usesCantripRemote ? remote.selectedSessionID : nil,
                     remoteMessage: remoteMessage,
-                    onAction: { vm.send($0.command) },
-                    onApproval: { vm.approveRun($0, for: turn.id) },
+                    // Swipes that start on a card's button don't press it.
+                    onAction: CantripSwipeTaps.tap { vm.send($0.command) },
+                    onApproval: CantripSwipeTaps.tap { vm.approveRun($0, for: turn.id) },
                     // Home's handoff cards and a parent tab's child-tab cards open tabs.
-                    onOpenTab: vm.activeLane.usesCantripRemote ? { openTab($0) } : nil,
+                    onOpenTab: vm.activeLane.usesCantripRemote ? CantripSwipeTaps.tap { openTab($0) } : nil,
                     threadLine: remoteMessage.flatMap { threadLines[$0.id] }
                 )
                 .id(turn.id)
