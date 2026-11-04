@@ -28,6 +28,9 @@ enum ConversationContextBuilder {
 
     private static let userSnippetLimit = 600
     private static let assistantSnippetLimit = 1_000
+    /// Agent prompts carry the most recent turns whole; only a huge paste or log is cut, in the
+    /// middle, so its start and its conclusion both survive.
+    static let recentTurnLimit = 16_000
     private static let summaryLimit = 700
     private static let fullHistoryLimit = 80_000
     private static let semanticThreshold = 0.28
@@ -161,7 +164,8 @@ enum ConversationContextBuilder {
         }
         if !selection.recentTurns.isEmpty {
             sections.append("Most recent turns:\n" + selection.recentTurns.map {
-                format($0)
+                "User: \(clipMiddle($0.user, to: recentTurnLimit))\n" +
+                    "Assistant: \(clipMiddle($0.assistant, to: recentTurnLimit))"
             }.joined(separator: "\n"))
         }
         sections.append("New message:\n\(currentPrompt)")
@@ -310,5 +314,13 @@ enum ConversationContextBuilder {
         guard text.count > limit else { return text }
         guard limit > 12 else { return String(text.prefix(limit)) }
         return String(text.prefix(limit - 12)) + " ...[clipped]"
+    }
+
+    private static func clipMiddle(_ text: String, to limit: Int) -> String {
+        guard text.count > limit else { return text }
+        let marker = "\n...[clipped]...\n"
+        let kept = max(0, limit - marker.count)
+        let head = kept * 2 / 3
+        return String(text.prefix(head)) + marker + String(text.suffix(kept - head))
     }
 }
