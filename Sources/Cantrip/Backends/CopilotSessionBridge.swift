@@ -432,7 +432,7 @@ enum CopilotSessionBridge {
           try { await session.rpc.mode.set({ mode: result.mode }); } catch {}
         }
         let prompt = String(result.prompt ?? '');
-        // A brand-new session also needs the conversation recap Cantrip prepared.
+        // A new session also needs the recap Cantrip prepared; a continuing one, the turns it missed.
         if (initialPrompt && originalPrompt && initialPrompt.includes(originalPrompt)) {
           prompt = initialPrompt.replace(originalPrompt, () => prompt);
         }
@@ -474,12 +474,15 @@ enum CopilotSessionBridge {
               idle = true;
               return;
             }
-            await runSlashCommand(slash, fresh && !resumed ? command.initialPrompt : null, command.prompt);
+            await runSlashCommand(slash, fresh && !resumed ? command.initialPrompt : command.carryPrompt ?? null,
+              command.prompt);
             return;
           }
-          // A resumed session already holds the conversation; only a new one needs the recap.
+          // A resumed or reused session already holds the conversation: it gets only the turns
+          // it missed (carryPrompt). A new one needs the recap.
           const messageID = await session.send({
-            prompt: fresh && !resumed ? command.initialPrompt : command.prompt, mode: 'enqueue'
+            prompt: fresh && !resumed ? command.initialPrompt : command.carryPrompt ?? command.prompt,
+            mode: 'enqueue'
           });
           emit({ kind: 'started', runID, messageID, sessionID: session.sessionId, resumed, runtimePID });
         } finally {

@@ -88,6 +88,18 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     private var agentSessionID: String?
     private var resumeTarget: (sessionID: String, config: Configuration)?
     private var lastTurnEnded: Date?
+    /// How many of the tab's completed turns the session has seen; turns past it (answered by
+    /// another backend) are carried in front of the next prompt.
+    private var seenTurns: Int?
+    private var sessionIdentity: String?
+    private let storageLock = NSLock()
+    private var storedSessionKey: String?
+    /// Where the tab saves its session so it resumes after Cantrip restarts (nil: never saved,
+    /// as in private tabs and Home's background runs).
+    var sessionStorageKey: String? {
+        get { storageLock.withLock { storedSessionKey } }
+        set { storageLock.withLock { storedSessionKey = newValue } }
+    }
 
     var guardrail: CantripHomeGuardrail? {
         get { guardrailLock.withLock { storedGuardrail } }
@@ -135,6 +147,13 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         var folderRules: String?
         /// The workdir's environment profile (a change restarts the runtime, which resumes).
         var environmentFingerprint: String?
+
+        /// What a saved session must still match to resume after Cantrip restarts: the settings
+        /// whose change starts a new session. The rest reach a resumed session as its options.
+        var resumeIdentity: String {
+            [workdir, model, effort, contextTier, "\(allowTools)", "\(readOnly)", "\(autoApprove)",
+             "\(allowSubagents)", "\(policy)", guardrail ?? ""].joined(separator: "\u{1F}")
+        }
 
         var json: [String: Any] {
             var object: [String: Any] = ["command": command, "workdir": workdir, "model": model,
@@ -255,6 +274,9 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             let id = UUID().uuidString
             self.runID = id
             if self.resumeTarget?.config != config { self.resumeTarget = nil }
+            if self.process == nil, self.resumeTarget == nil, self.agentSessionID == nil {
+                self.restoreSavedSession(config)
+            }
             if self.process?.isRunning == true, self.configuration == config,
                let ended = self.lastTurnEnded, Date().timeIntervalSince(ended) >= self.idleRuntimeLimit,
                let session = self.agentSessionID {
@@ -286,6 +308,11 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                 "userMessage": request.userMessage
             ]
             let newRuntime = process == nil
+            let continuesSession = newRuntime ? resumeTarget?.config == config : agentSessionID != nil
+            if continuesSession, let carried = promptWithMissedTurns(request) {
+                // Used only if the session really continues; a new one gets initialPrompt instead.
+                command["carryPrompt"] = carried
+            }
             if newRuntime {
                 command["initialPrompt"] = ConversationContextBuilder.composePrompt(
                     currentPrompt: request.prompt, query: request.userMessage, turns: request.previousTurns
@@ -405,7 +432,10 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             guard let self else { return }
             // Stopping a live turn starts the next one fresh; a runtime already lost (Cantrip cancels
             // after every failure) keeps its session for the next prompt or automatic resume.
-            if self.runID != nil { self.resumeTarget = nil }
+            if self.runID != nil {
+                self.resumeTarget = nil
+                self.forgetSavedSession()
+            }
             self.teardown()
         }
     }
@@ -415,7 +445,46 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         queue.async { [weak self] in
             self?.resumeTarget = nil
             self?.agentSessionID = nil
+            self?.forgetSavedSession()
         }
+    }
+
+    /// After Cantrip restarts, the tab's saved session resumes if its settings still match.
+    private func restoreSavedSession(_ config: Configuration) {
+        guard let key = sessionStorageKey, let saved = UserDefaults.standard.dictionary(forKey: key),
+              let session = saved["session"] as? String, !session.isEmpty else { return }
+        guard saved["identity"] as? String == config.resumeIdentity else {
+            Log.write("copilot: the tab's settings changed since its saved session; starting a new one")
+            return
+        }
+        resumeTarget = (session, config)
+        seenTurns = saved["seenTurns"] as? Int
+        Log.write("copilot: resuming the tab's saved session \(session.prefix(8)) in a new runtime")
+    }
+
+    private func saveSession() {
+        guard let key = sessionStorageKey, let session = agentSessionID, let sessionIdentity else { return }
+        var record: [String: Any] = ["session": session, "identity": sessionIdentity]
+        if let seenTurns { record["seenTurns"] = seenTurns }
+        UserDefaults.standard.set(record, forKey: key)
+    }
+
+    private func forgetSavedSession() {
+        seenTurns = nil
+        sessionIdentity = nil
+        if let key = sessionStorageKey { UserDefaults.standard.removeObject(forKey: key) }
+    }
+
+    /// Earlier turns this session hasn't seen (another backend answered them, or a saved session
+    /// from before Cantrip counted turns) go in front of the prompt, selected like a new session's recap.
+    private func promptWithMissedTurns(_ request: BackendRequest) -> String? {
+        let turns = request.previousTurns
+        let missed = seenTurns.map { $0 <= turns.count ? turns.dropFirst($0) : [] } ?? turns[...]
+        guard !missed.isEmpty else { return nil }
+        Log.write("copilot: carrying \(missed.count) earlier turn(s) into the session")
+        return ConversationContextBuilder.composePrompt(
+            currentPrompt: request.prompt, query: request.userMessage, turns: Array(missed)
+        )
     }
 
     /// Proxies an MCP App view's `tools/call`, `tools/list` or `resources/read`
@@ -724,6 +793,12 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                     if let session = object["sessionID"] as? String {
                         agentSessionID = session
                         onAgentSession?(session)
+                        if let attempt {
+                            // Resumed, continued or recapped: the session now has every earlier turn.
+                            seenTurns = attempt.request.previousTurns.count
+                            sessionIdentity = attempt.config.resumeIdentity
+                        }
+                        saveSession()
                     }
                     if let started = attempt?.startedAt {
                         let how = attempt?.newRuntime == true
@@ -833,6 +908,10 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     private func finishIfIdle() {
         guard idle, runID != nil, deliveries.isEmpty else { return }
         askpass?.endTurn()
+        if let attempt, agentSessionID != nil {
+            seenTurns = attempt.request.previousTurns.count + 1
+            saveSession()
+        }
         let sink = onEvent
         runID = nil
         onEvent = nil

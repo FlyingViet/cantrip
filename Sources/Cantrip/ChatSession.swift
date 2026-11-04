@@ -439,6 +439,7 @@ final class ChatSession: ObservableObject {
                 return
             }
             mcpAppContext.removeAll()
+            updateCopilotSessionStorage()
             if isPrivate {
                 cancelInputs()
                 deleteTranscript()   // scrub anything already written
@@ -551,6 +552,7 @@ final class ChatSession: ObservableObject {
         for backend in guarded { backend?.guardrail = guardrail }
         // Remember which agent files folders this session used (Home runs hand them to the log).
         if let copilot = copilotBackend as? CopilotBackend {
+            updateCopilotSessionStorage()
             copilot.onAgentSession = { [weak self] cliSessionID in
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
@@ -607,6 +609,13 @@ final class ChatSession: ObservableObject {
         cancelInputs()
         resetBackendConversations()
         deleteTranscript()
+    }
+
+    /// Copilot saves the tab's session so it resumes after Cantrip restarts, except where nothing
+    /// may persist (private tabs) or nothing is resumed (Home's background runs).
+    private func updateCopilotSessionStorage() {
+        guard let copilot = copilot as? CopilotBackend else { return }
+        copilot.sessionStorageKey = isPrivate || isCantripHomeRun ? nil : TabDefaults.copilotSession(id)
     }
 
     func deleteTranscript() {
