@@ -102,7 +102,8 @@ extension SessionTabTests {
         precondition(current()?.isActive == true && homeChat.messages.allSatisfy { $0.handoffResult == nil },
                      "a handoff sent back has no card yet")
         try await waitForJournalTest { tab.messages.contains { $0.role == .user && $0.text.hasPrefix(Check.sendBackPrefix) } }
-        precondition(tabFixture.lastPrompt?.contains("The change isn't pushed yet.") == true, tabFixture.lastPrompt ?? "")
+        // The send-back is queued: it shows in the tab before the backend gets it.
+        try await waitForJournalTest { tabFixture.lastPrompt?.contains("The change isn't pushed yet.") == true }
         try await finishTab("Pushed a1b2c3d.\n\nOutcome: sorting fixed, tests pass, pushed a1b2c3d.")
         delegations.refresh()
         try await waitForJournalTest { current()?.status == .completed }
