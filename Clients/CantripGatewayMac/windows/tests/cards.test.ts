@@ -3,15 +3,15 @@ import { describe, expect, it } from "vitest";
 import type { RemoteCardBlock, RemoteCardDocument } from "../src/gateway/api/types";
 import { symbolIcon } from "../src/gateway/ui/icons";
 import {
-  actionSymbol, cardFallback, cardFooter, cardGlyph, cardLabel, cardParts, cardText, cardTone, chartBar, chartColumns, chartScale,
-  isImageID, itemLabel, mapAttribution, mapRegion, safeActionUrl, statLabel, telNumber,
+  actionSymbol, cardClock, cardFallback, cardFooter, cardGlyph, cardLabel, cardParts, cardText, cardTone, chartBar, chartColumns, chartScale,
+  isImageID, itemLabel, mapAttribution, mapRegion, progressState, safeActionUrl, statLabel, telNumber,
 } from "../src/gateway/ui/transcript/cardLogic";
 import { fitZoom, initialZoomForDelta, tileSpan, weatherRanges } from "../src/gateway/ui/transcript/richCardLogic";
 
 // Real host output (CardDocument.snapshot) from the Cantrip Mac.
 const fixture = (name: string): RemoteCardDocument =>
   JSON.parse(readFileSync(new URL(`./fixtures/cards/${name}.json`, import.meta.url), "utf8")) as RemoteCardDocument;
-const NAMES = ["weather", "weather-unavailable", "places", "link", "flights", "tool-card"];
+const NAMES = ["weather", "weather-unavailable", "places", "link", "flights", "tool-card", "build", "build-failed"];
 const card = (blocks: RemoteCardBlock[], extra: Partial<RemoteCardDocument> = {}): RemoteCardDocument =>
   ({ version: 1, id: "c", type: "custom", blocks, ...extra });
 
@@ -245,5 +245,43 @@ describe("map blocks", () => {
     expect(tileSpan(100, 580)).toEqual([-1, 1]);
     expect(tileSpan(0, 256)).toEqual([0, 0]);
     expect(tileSpan(-30, 310)).toEqual([0, 1]);
+  });
+});
+
+describe("progress blocks (build cards)", () => {
+  const start = Date.parse("2026-11-04T20:00:00.000Z");
+  const block = (extra: Partial<RemoteCardBlock> = {}): RemoteCardBlock => ({
+    type: "progress", status: "running", label: "Testing", tone: "accent", startedAt: "2026-11-04T20:00:00.000Z",
+    expectedSeconds: 185, detail: "Usually 3m 05s (4 earlier runs)", ...extra,
+  });
+
+  it("draws the Mac's build cards: a header, then the progress block with no divider", () => {
+    const parts = cardParts(fixture("build"));
+    expect(parts.map((part) => part.kind === "block" ? part.block.type : part.kind)).toEqual(["header", "progress"]);
+    expect(parts[1].divided).toBe(false);
+    const failed = fixture("build-failed");
+    expect(failed.blocks[0]).toMatchObject({ symbol: "xmark.circle.fill", tone: "negative" });
+    expect(progressState(failed.blocks[1], Date.now())).toMatchObject({ running: false, label: "Failed", elapsed: "0:47", fraction: 1 });
+  });
+
+  it("ticks the elapsed time and the time left from the estimate", () => {
+    expect(progressState(block(), start + 65_000)).toMatchObject({
+      running: true, elapsed: "1:05", remaining: "About 2:00 left", showsBar: true,
+    });
+    expect(progressState(block(), start + 65_000).fraction).toBeCloseTo(65 / 185, 3);
+    const late = progressState(block(), start + 200_000);
+    expect(late.fraction).toBeUndefined();
+    expect(late.remaining).toBe("Longer than usual");
+    expect(progressState(block({ fraction: 0.25, expectedSeconds: undefined }), start + 30_000)).toMatchObject({ fraction: 0.25, remaining: undefined });
+  });
+
+  it("never makes up a percentage or a duration", () => {
+    const first = progressState(block({ expectedSeconds: undefined }), start + 3_729_000);
+    expect(first.fraction).toBeUndefined();
+    expect(first.elapsed).toBe("1:02:09");
+    const ended = progressState(block({ status: "ended", label: "Ended" }), start + 60_000);
+    expect(ended).toMatchObject({ running: false, elapsed: undefined, showsBar: false });
+    expect(progressState(block({ startedAt: "nonsense" }), start).elapsed).toBeUndefined();
+    expect(cardClock(-4)).toBe("0:00");
   });
 });

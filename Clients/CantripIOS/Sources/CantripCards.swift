@@ -110,13 +110,22 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
         var attribution: String?
         var imageID: String?
         var accessibilityLabel: String?
+        /// progress (build cards): "running", "succeeded", "failed", "stopped" or "ended".
+        var status: String?
+        /// progress: ISO-8601; the app counts the elapsed time from `startedAt` itself.
+        var startedAt: String?
+        var finishedAt: String?
+        /// progress: how long it usually takes (earlier runs on the Mac), for the time left.
+        var expectedSeconds: Double?
+        /// progress: 0–1 from the tool's own step counter.
+        var fraction: Double?
 
         init(type: String) { self.type = type }
 
         private enum Keys: String, CodingKey {
             case type, title, subtitle, subtitleSymbol, subtitleImageID, symbol, lines, stat, value, label, detail, text, tone, kind, rows, items
             case badges, min, max, pins, latitude, longitude, latitudeDelta, longitudeDelta, mapLinked, attribution, imageID
-            case accessibilityLabel
+            case accessibilityLabel, status, startedAt, finishedAt, expectedSeconds, fraction
         }
 
         init(from decoder: Decoder) throws {
@@ -158,6 +167,11 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
             attribution = text(.attribution)
             imageID = text(.imageID)
             accessibilityLabel = text(.accessibilityLabel)
+            status = text(.status)
+            startedAt = text(.startedAt)
+            finishedAt = text(.finishedAt)
+            expectedSeconds = number(.expectedSeconds).flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+            fraction = number(.fraction).flatMap { $0.isFinite ? Swift.min(1, Swift.max(0, $0)) : nil }
         }
     }
 
@@ -489,6 +503,7 @@ struct CantripCardPanel: View {
         case "badges": !(block.badges ?? []).filter { $0.text != nil }.isEmpty
         case "notice": block.title != nil || block.text != nil
         case "image": block.imageID.map(CantripLinkPreview.validImageID) ?? false
+        case "progress": block.label != nil || block.startedAt != nil
         default: false
         }
     }
@@ -593,6 +608,7 @@ struct CantripCardBlockView: View {
             .padding(.bottom, 12)
         case "notice": notice
         case "image": CantripCardImage(imageID: block.imageID ?? "", label: block.accessibilityLabel, remote: remote)
+        case "progress": CantripCardProgressView(block: block, isFirst: isFirst)
         default: EmptyView()
         }
     }
@@ -602,7 +618,7 @@ struct CantripCardBlockView: View {
             if let symbol = block.symbol, CantripCardStyle.symbolExists(symbol) {
                 Image(systemName: symbol)
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(CantripCardStyle.accent)
+                    .foregroundStyle(block.tone.map(CantripCardStyle.tone) ?? CantripCardStyle.accent)
                     .frame(width: 22)
                     .padding(.top, 1)
                     .accessibilityHidden(true)
@@ -822,6 +838,179 @@ struct CantripCardBlockView: View {
         .padding(.top, isFirst ? 14 : -6)
         .padding(.bottom, 14)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// What a `progress` block shows at a moment (build cards): the elapsed time, bar and time
+/// left come from the block's own times, so only the block redraws as they change.
+struct CantripCardProgress: Equatable {
+    var label: String
+    var tone: String?
+    var isRunning: Bool
+    /// "1:23"; nil when there are no times to count from (a result the Mac couldn't read).
+    var elapsed: String?
+    var elapsedSeconds: TimeInterval?
+    /// 0–1, or nil for an indeterminate bar while running.
+    var fraction: Double?
+    var showsBar: Bool
+    var detail: String?
+    /// "About 1:20 left" or "Longer than usual".
+    var remaining: String?
+
+    init(block: CantripCard.Block, now: Date) {
+        let started = Self.date(block.startedAt)
+        let finished = Self.date(block.finishedAt)
+        isRunning = block.status == "running" && finished == nil
+        label = block.label ?? (isRunning ? "Running" : "Done")
+        tone = block.tone
+        detail = block.detail
+        if let started, let end = isRunning ? now : finished {
+            let seconds = max(0, end.timeIntervalSince(started))
+            elapsedSeconds = seconds
+            elapsed = Self.clock(seconds)
+        }
+        if isRunning {
+            showsBar = true
+            if let step = block.fraction {
+                fraction = step
+            } else if let expected = block.expectedSeconds, let seconds = elapsedSeconds, seconds < expected {
+                fraction = seconds / expected
+            }
+            if let expected = block.expectedSeconds, let seconds = elapsedSeconds {
+                remaining = seconds < expected ? "About \(Self.clock(expected - seconds)) left" : "Longer than usual"
+            }
+        } else {
+            showsBar = block.status != "ended" && finished != nil
+            fraction = 1
+        }
+    }
+
+    /// "0:42", "3:05", "1:02:09".
+    static func clock(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded(.down))
+        return total >= 3600 ? String(format: "%d:%02d:%02d", total / 3600, total % 3600 / 60, total % 60)
+            : String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    private static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private static let whole = ISO8601DateFormatter()
+
+    static func date(_ text: String?) -> Date? {
+        guard let text else { return nil }
+        return fractional.date(from: text) ?? whole.date(from: text)
+    }
+
+    var accessibilityLabel: String {
+        var parts = [label]
+        if let elapsedSeconds {
+            let spoken = Duration.seconds(Int(elapsedSeconds.rounded(.down)))
+                .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide))
+            parts.append((isRunning ? "running for " : "took ") + spoken)
+        }
+        if let remaining { parts.append(remaining) }
+        if let detail { parts.append(detail) }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// A `progress` block: label and elapsed time, a bar, then where the estimate comes from. While
+/// it runs, a once-a-second timeline redraws only this block, never the transcript around it.
+struct CantripCardProgressView: View {
+    let block: CantripCard.Block
+    let isFirst: Bool
+
+    var body: some View {
+        if block.status == "running", block.finishedAt == nil, let started = CantripCardProgress.date(block.startedAt) {
+            TimelineView(.periodic(from: started, by: 1)) { context in
+                content(CantripCardProgress(block: block, now: context.date))
+            }
+        } else {
+            content(CantripCardProgress(block: block, now: Date()))
+        }
+    }
+
+    private func content(_ progress: CantripCardProgress) -> some View {
+        let color = progress.isRunning ? CantripCardStyle.accent : CantripCardStyle.tone(progress.tone)
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(progress.label)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(color)
+                Spacer(minLength: 8)
+                if let elapsed = progress.elapsed {
+                    Text(elapsed)
+                        .font(.body.weight(.semibold))
+                        .monospacedDigit()
+                }
+            }
+            if progress.showsBar {
+                CantripCardProgressBar(fraction: progress.fraction, color: color)
+                    .frame(height: 5)
+            }
+            if progress.detail != nil || progress.remaining != nil {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        detail(progress)
+                        Spacer(minLength: 8)
+                        remaining(progress)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        detail(progress)
+                        remaining(progress)
+                    }
+                }
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.78))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.top, isFirst ? 14 : 0)
+        .padding(.bottom, 14)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(progress.accessibilityLabel)
+        .accessibilityIdentifier("chat.card.progress")
+    }
+
+    @ViewBuilder private func detail(_ progress: CantripCardProgress) -> some View {
+        if let detail = progress.detail { Text(detail).fixedSize(horizontal: false, vertical: true) }
+    }
+
+    @ViewBuilder private func remaining(_ progress: CantripCardProgress) -> some View {
+        if let remaining = progress.remaining { Text(remaining).monospacedDigit().lineLimit(1) }
+    }
+}
+
+/// A thin bar filled to `fraction`, or a segment gliding back and forth without one (still for
+/// Reduce Motion).
+struct CantripCardProgressBar: View {
+    let fraction: Double?
+    let color: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var gliding = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.12))
+                if let fraction {
+                    Capsule().fill(color).frame(width: max(5, proxy.size.width * fraction))
+                } else if reduceMotion {
+                    Capsule().fill(color.opacity(0.35))
+                } else {
+                    Capsule().fill(color)
+                        .frame(width: proxy.size.width * 0.28)
+                        .offset(x: gliding ? proxy.size.width * 0.72 : 0)
+                        .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: gliding)
+                        .onAppear { gliding = true }
+                }
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 

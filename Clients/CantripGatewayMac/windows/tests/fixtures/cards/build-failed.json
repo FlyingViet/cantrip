@@ -1,0 +1,30 @@
+{
+  "accessibilityLabel" : "xcodebuild archive · Hermes, Failed",
+  "blocks" : [
+    {
+      "subtitle" : "Cantrip",
+      "symbol" : "xmark.circle.fill",
+      "title" : "xcodebuild archive · Hermes",
+      "tone" : "negative",
+      "type" : "header"
+    },
+    {
+      "accessibilityLabel" : "Failed, Exit code 65",
+      "detail" : "Exit code 65",
+      "finishedAt" : "2026-11-05T05:24:59.733Z",
+      "label" : "Failed",
+      "startedAt" : "2026-11-05T05:24:12.733Z",
+      "status" : "failed",
+      "tone" : "negative",
+      "type" : "progress"
+    }
+  ],
+  "fallbackText" : "xcodebuild archive · Hermes — Cantrip\nFailed · in 47s · Exit code 65",
+  "id" : "build-xcodebuild archive · Hermes",
+  "source" : {
+    "kind" : "build",
+    "name" : "xcodebuild archive · Hermes"
+  },
+  "type" : "build",
+  "version" : 1
+}

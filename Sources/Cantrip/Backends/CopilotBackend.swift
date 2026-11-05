@@ -1059,7 +1059,7 @@ private extension BackendEvent {
     var isVisibleOutput: Bool {
         switch self {
         case .textDelta, .thinkingDelta, .activity, .approval, .inputRequired: true
-        case .status, .usage, .context, .backgroundWake, .usageLimit, .heartbeat, .done, .failure: false
+        case .status, .usage, .context, .backgroundWake, .commandFinished, .usageLimit, .heartbeat, .done, .failure: false
         }
     }
 }

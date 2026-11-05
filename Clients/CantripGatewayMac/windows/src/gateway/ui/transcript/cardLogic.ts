@@ -7,7 +7,7 @@ import type {
 import { isSafePublicUrl } from "./richCardLogic";
 
 export const CARD_BLOCK_TYPES: ReadonlySet<string> = new Set([
-  "header", "stat", "keyValue", "strip", "chart", "list", "map", "image", "badges", "notice",
+  "header", "stat", "keyValue", "strip", "chart", "list", "map", "image", "badges", "notice", "progress",
 ]);
 /** A link card is one button, so only blocks without their own buttons draw in it. */
 const LINK_BLOCK_TYPES: ReadonlySet<string> = new Set(["image", "header", "stat", "keyValue", "badges", "notice"]);
@@ -90,9 +90,59 @@ export function blockHasContent(block: RemoteCardBlock): boolean {
       return cardBadges(block.badges).length > 0;
     case "notice":
       return !!(cardText(block.title) || cardText(block.text));
+    case "progress":
+      return !!(cardText(block.label) || cardText(block.startedAt));
     default:
       return false;
   }
+}
+
+/** "0:42", "3:05", "1:02:09". */
+export function cardClock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600), minutes = Math.floor((total % 3600) / 60), rest = String(total % 60).padStart(2, "0");
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${minutes}:${rest}`;
+}
+
+export interface ProgressState {
+  running: boolean;
+  label: string;
+  /** "1:23"; undefined when there are no times to count from (a result the Mac couldn't read). */
+  elapsed?: string;
+  /** 0-1, or undefined for an indeterminate bar while running (no step counter or estimate). */
+  fraction?: number;
+  showsBar: boolean;
+  detail?: string;
+  /** "About 1:20 left" or "Longer than usual". */
+  remaining?: string;
+  spoken: string;
+}
+
+/** What a progress block shows at `now` (ms): the elapsed time ticks from its `startedAt`. */
+export function progressState(block: RemoteCardBlock, now: number): ProgressState {
+  const started = Date.parse(cardText(block.startedAt) ?? ""), finished = Date.parse(cardText(block.finishedAt) ?? "");
+  const running = block.status === "running" && Number.isNaN(finished);
+  const end = running ? now : finished;
+  const seconds = Number.isNaN(started) || Number.isNaN(end) ? undefined : Math.max(0, (end - started) / 1000);
+  const expected = typeof block.expectedSeconds === "number" && block.expectedSeconds > 0 ? block.expectedSeconds : undefined;
+  const step = typeof block.fraction === "number" && Number.isFinite(block.fraction) ? Math.min(1, Math.max(0, block.fraction)) : undefined;
+  const label = cardText(block.label) ?? (running ? "Running" : "Done");
+  const detail = cardText(block.detail);
+  let fraction: number | undefined, remaining: string | undefined;
+  if (running) {
+    if (step !== undefined) fraction = step;
+    else if (expected !== undefined && seconds !== undefined && seconds < expected) fraction = seconds / expected;
+    if (expected !== undefined && seconds !== undefined) {
+      remaining = seconds < expected ? `About ${cardClock(expected - seconds)} left` : "Longer than usual";
+    }
+  } else {
+    fraction = 1;
+  }
+  const elapsed = seconds === undefined ? undefined : cardClock(seconds);
+  const spoken = [label, elapsed ? `${running ? "running for" : "took"} ${elapsed}` : "", remaining ?? "", detail ?? ""]
+    .filter(Boolean).join(", ");
+  return { running, label, elapsed, fraction, showsBar: running || (block.status !== "ended" && !Number.isNaN(finished)),
+    detail, remaining, spoken };
 }
 
 /** One thing a card draws: a block, or a map with the mapLinked list right after it as its legend. */
