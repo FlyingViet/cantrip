@@ -76,3 +76,58 @@ enum HostLock {
         return (pid, String(parts[1]))
     }
 }
+
+/// One window app for the background engine. An update's reopen and a second launch (`open -n`, a
+/// copy of Cantrip.app from another folder) could otherwise both become its window; the second
+/// finds the lock held, brings the first forward and exits. Held for the process's lifetime.
+enum WindowLock {
+    nonisolated(unsafe) private static var descriptor: Int32 = -1
+
+    static var url: URL {
+        CantripPaths.cache("window.lock")
+    }
+
+    /// False when another window app still holds the lock after `wait` seconds (a window quitting
+    /// to reopen into an update can overlap its successor briefly).
+    static func acquire(wait: TimeInterval = 3) -> Bool {
+        guard descriptor < 0 else { return true }
+        guard let fd = lock(url, wait: wait) else { return false }
+        descriptor = fd
+        return true
+    }
+
+    /// Takes an exclusive lock on `url` and writes this pid into it, returning the descriptor; nil
+    /// while another open file still holds it after `wait`. An unwritable cache returns -1 (no
+    /// lock), so it never keeps the window from opening.
+    static func lock(_ url: URL, wait: TimeInterval) -> Int32? {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let fd = open(url.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return -1 }
+        let deadline = Date().addingTimeInterval(wait)
+        while flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            guard Date() < deadline else {
+                close(fd)
+                return nil
+            }
+            usleep(100_000)
+        }
+        ftruncate(fd, 0)
+        _ = "\(getpid())\n".withCString { pwrite(fd, $0, strlen($0), 0) }
+        return fd
+    }
+
+    /// The window app holding `url`, if one does. The file outlives its holder, so its pid only
+    /// counts while the lock is really held.
+    static func holder(of url: URL = url) -> Int32? {
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        if flock(fd, LOCK_SH | LOCK_NB) == 0 {
+            flock(fd, LOCK_UN)
+            return nil
+        }
+        guard let text = try? String(contentsOf: url, encoding: .utf8),
+              let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), kill(pid, 0) == 0 else { return nil }
+        return pid
+    }
+}

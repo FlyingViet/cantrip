@@ -38,6 +38,16 @@ HostMode.isEngine = HostMode.isHeadless && arguments.contains("--engine")
 // "Keep agents running when Cantrip quits": the engine runs them and this app is its window. It
 // takes no host lock and leaves staged updates to the engine, which installs them once idle.
 if !HostMode.isHeadless, MainActor.assumeIsolated({ BackgroundEngine.appRunsAsClient }) {
+    // One window app: a second launch (an update's reopen racing `open -n`, another copy of the
+    // app) brings the first forward and exits instead of becoming a second window.
+    guard WindowLock.acquire() else {
+        let holder = WindowLock.holder()
+        Log.write("client: Cantrip.app is already open\(holder.map { " (pid \($0))" } ?? ""); this copy (pid \(getpid())) exits")
+        if let holder {
+            MainActor.assumeIsolated { _ = NSRunningApplication(processIdentifier: holder)?.activate() }
+        }
+        exit(EXIT_SUCCESS)
+    }
     PendingUpdate.recordLaunchedExecutable()
     MainActor.assumeIsolated {
         let app = NSApplication.shared
