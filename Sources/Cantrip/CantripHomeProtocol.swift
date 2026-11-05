@@ -415,7 +415,7 @@ enum CantripHomeProtocol {
         case .artifact:
             return #"{"title":"display title","path":"absolute or artifact-directory-relative path","kind":"document|image|audio|video"}"#
         case .delegate:
-            return #"{"tabID":"tab UUID from the list","summary":"short label","goal":"what the tab should achieve","context":["facts, names, paths and IDs it needs"],"constraints":["limits"],"doneWhen":"what finished looks like","dependsOn":"other work in that tab it must wait for, or null","prompt":"optional extra instructions"}"#
+            return #"{"tabID":"tab UUID from the list" (or, only when the user asked for a new tab, "newTab":{"title":"tab name","section":"section name or null","folder":"existing absolute folder or null"}),"summary":"short label","goal":"what the tab should achieve","context":["facts, names, paths and IDs it needs"],"constraints":["limits"],"doneWhen":"what finished looks like","dependsOn":"other work in that tab it must wait for, or null","prompt":"optional extra instructions"}"#
         }
     }
 

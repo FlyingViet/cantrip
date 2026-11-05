@@ -90,6 +90,11 @@ struct SessionTabTests {
             try await testRemoteMaintenanceRelease()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "home-handoffs" {
+            try await testCantripHomeNewTabs()
+            try await testCantripHomeDoneWhen()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "build-cards" {
             try await testBuildCards()
             return
@@ -240,6 +245,7 @@ struct SessionTabTests {
         try await testAntigravityIntermediateSteps()
         try await testCantripHomeHandoffResults()
         try await testCantripHomeDoneWhen()
+        try await testCantripHomeNewTabs()
         try await testThreadTags()
         try testCantripHomeRunSummaries()
         try testSubagentPlacement()

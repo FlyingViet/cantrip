@@ -50,6 +50,17 @@ handoff runs in order instead. A handoff that depends on work already running
 in a child tab joins that child's queue, and its card follows it there. See
 [Child tabs](sessions-and-council.md#child-tabs).
 
+### Open a new tab
+
+Ask Home for a new tab ("make a tab for the new app under Apps", "do this in
+a new tab") and it opens one with the name you asked for, filed under the
+section you name and working in an existing folder if you give one. When
+there's work to start, the new tab takes it as a handoff with its own card;
+otherwise Home just opens the tab and says so. Home opens tabs only when you
+ask, never switches the tab you're looking at, and hands work to an open tab
+with the same name instead of opening a second one. Background runs and
+scheduled tasks hand work to open tabs only.
+
 When a handoff's brief has a "Done when:" line, Cantrip checks the tab's
 finished work against it before posting the result. Work the tab can still do
 goes back to it as a queued message, at most twice; the card is posted only
