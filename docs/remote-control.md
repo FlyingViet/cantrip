@@ -457,7 +457,8 @@ required. All native clients/host need the updated build.
 ## Mac attention, View Mac and Face ID
 
 Open **Mac Permissions & View Mac** from the Remote tab menu or Cantrip Agent's
-**Settings > Cantrip Mac**. The page reports Cantrip's Screen Recording,
+**Settings > Cantrip Mac**; Cantrip Agent also has **View Mac** (a display icon) in its header,
+in Home and in tabs. The page reports Cantrip's Screen Recording,
 Accessibility, Microphone and Speech Recognition grants, plus its own Keychain
 access issues. Full Disk Access is labeled for manual review; there is no
 blanket public permission-status API. Touch ID & Password shows local

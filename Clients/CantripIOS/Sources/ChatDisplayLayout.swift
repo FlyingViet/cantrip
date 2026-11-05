@@ -182,6 +182,8 @@ struct ChatNavigationActions<Leading: View, Settings: View, Trailing: View>: Vie
     var sidebarToggle: AnyView? = nil
     /// Leaves the leading action out of the rail (the sidebar it would open is showing).
     var hidesLeadingInRail = false
+    /// View Mac, just above the menu.
+    var mac: AnyView? = nil
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var settings: () -> Settings
     @ViewBuilder var trailing: () -> Trailing
@@ -211,6 +213,10 @@ struct ChatNavigationActions<Leading: View, Settings: View, Trailing: View>: Vie
                 }
                 ToolbarItem(placement: .topBarTrailing) { settings() }
                     .axisBehavior(.verticalPreferred)
+                if let mac {
+                    ToolbarItem(placement: .topBarTrailing) { mac }
+                        .axisBehavior(.verticalPreferred)
+                }
                 ToolbarItem(placement: .topBarTrailing) { trailing() }
                     .axisBehavior(.verticalPreferred)
             } else {
@@ -220,6 +226,10 @@ struct ChatNavigationActions<Leading: View, Settings: View, Trailing: View>: Vie
                 }
                 ToolbarItem(placement: .topBarTrailing) { settings() }
                     .axisBehavior(.verticalPreferred)
+                if let mac {
+                    ToolbarItem(placement: .topBarTrailing) { mac }
+                        .axisBehavior(.verticalPreferred)
+                }
                 ToolbarItem(placement: .topBarTrailing) { trailing() }
                     .axisBehavior(.verticalPreferred)
             }
