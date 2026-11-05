@@ -192,6 +192,7 @@ struct DictationDetailsView: View {
                 Text("Speaks sample sentences with a system voice, runs them through the dictation pipeline on this device and reports each stage's time. Nothing is sent anywhere.")
             }
         }
+        .formStyle(.grouped)
         .navigationTitle("Dictation")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("Forget learned fixes?", isPresented: $confirmForget) {

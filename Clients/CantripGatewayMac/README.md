@@ -179,7 +179,8 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   **Resume** while it's on): Macs, Models (model tiers, usage-limit backups, Usage Limits), Tools & sign-ins (GitHub sign-in for the Mac, the
   Mac's shared MCP servers, and this Mac's local model tools), Memory, Voice, Appearance (the
   mascot) and About & Updates (Update & rebuild Cantrip, Mac permissions). It reopens on the
-  last page you used. Each page says who its settings change.
+  last page you used. Each page says who its settings change. Pages opened from a page show a
+  back button at the top left, beside their title (⌘[ also goes back).
 - **Weather cards:** a reply about the weather shows the forecast card the host built from
   Open-Meteo under its text, in the map card's container: whose location it is, now, the next 12
   hours and 10 days, or **Forecast unavailable** and why.
