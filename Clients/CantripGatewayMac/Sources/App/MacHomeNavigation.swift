@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Window-level state shared by the Home window, its toolbar and the menu bar commands.
@@ -12,6 +13,10 @@ final class MacHomeNavigation: ObservableObject {
     @Published var composerPrefill: String?
     /// Bumped to move keyboard focus into the composer.
     @Published var composerFocusRequest = 0
+    /// Keys typed while the sidebar list had focus, for the composer (never type-to-select).
+    @Published var composerTyping: String?
+    /// The last switch walked the sidebar with the arrow keys, so the list keeps focus.
+    var switchedWithListKeys = false
     /// The project tab being renamed from the sidebar or the tab's More menu.
     @Published var renamingTab: CantripRemoteSession?
     /// A `cantrip pair` link opened on this Mac, waiting for the user to confirm.
@@ -21,8 +26,16 @@ final class MacHomeNavigation: ObservableObject {
     @Published var showingDirectLocalSettings = false
     /// The open tab's terminal pane (`MacTerminalPane`), kept across tabs and launches.
     @Published var showingTerminal = UserDefaults.standard.bool(forKey: "cantrip.terminal.open") {
-        didSet { UserDefaults.standard.set(showingTerminal, forKey: "cantrip.terminal.open") }
+        didSet {
+            UserDefaults.standard.set(showingTerminal, forKey: "cantrip.terminal.open")
+            if showingTerminal, !oldValue { terminalWantsFocus = true }
+        }
     }
+    /// The terminal was just opened, so its command line takes the cursor; a tab switch with it
+    /// open leaves the cursor in the composer.
+    var terminalWantsFocus = false
+    /// The terminal's command line has the cursor.
+    var terminalFocused = false
     private weak var env: HermesEnv?
     private weak var remote: CantripRemoteModel?
 
@@ -38,6 +51,7 @@ final class MacHomeNavigation: ObservableObject {
     /// Opens a project tab in the detail pane: sidebar rows, handoff cards and Background.
     func openTab(_ id: String) {
         guard let env, let remote else { return }
+        switchedWithListKeys = Self.isListNavigation(NSApp.currentEvent)
         closeAll()
         showingDirectLocal = false
         if isTabOpen {
@@ -65,6 +79,7 @@ final class MacHomeNavigation: ObservableObject {
 
     /// Leaves an open tab for Home, optionally on one section.
     func showHome(_ section: CantripHomeSection? = nil) {
+        switchedWithListKeys = Self.isListNavigation(NSApp.currentEvent)
         showingDirectLocal = false
         if let section { self.section = section }
         if let env, env.executionLane != .home { env.select(.home) }
@@ -108,6 +123,26 @@ final class MacHomeNavigation: ObservableObject {
     func openRun(_ sessionID: String, remote: CantripRemoteModel) {
         remote.homeBackgroundFocus = sessionID
         showingBackground = true
+    }
+
+    /// Arrow keys moving through the sidebar list; anything else that switches (a click, a
+    /// shortcut, a card, a notification) puts the cursor in the composer.
+    static func isListNavigation(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .keyDown,
+              event.modifierFlags.isDisjoint(with: [.command, .control, .option]) else { return false }
+        // Left, right, down, up, Home, End, Page Up, Page Down.
+        return [123, 124, 125, 126, 115, 119, 116, 121].contains(event.keyCode)
+    }
+
+    /// The conversation on screen has a composer to type into.
+    var showsComposer: Bool { !showingDirectLocal && (isTabOpen || section == .chat) }
+
+    /// A key typed while the sidebar list has focus goes to the composer instead of picking a tab
+    /// by its first letter. Ignored where there's no composer.
+    func typeIntoComposer(_ text: String) {
+        guard showsComposer else { return }
+        composerTyping = (composerTyping ?? "") + text
+        composerFocusRequest += 1
     }
 
     func closeAll() {

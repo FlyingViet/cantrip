@@ -49,6 +49,8 @@ struct MacHomeChatView: View {
     /// The row picked with the arrow keys, for the text it was picked on.
     @State private var slashHighlight: SlashHighlight?
     @FocusState private var composerFocused: Bool
+    /// The cursor goes to the composer as soon as it can take text (a tab loads first).
+    @State private var focusPending = false
 
     private struct SlashHighlight: Equatable {
         let text: String
@@ -73,7 +75,10 @@ struct MacHomeChatView: View {
             inputBar
             if showsTerminal, navigation.showingTerminal, let session = remote.selectedSession,
                session.id == remote.selectedSessionID {
-                MacTerminalPane(remote: remote, session: session) { navigation.showingTerminal = false }
+                MacTerminalPane(remote: remote, session: session, takesFocus: {
+                    defer { navigation.terminalWantsFocus = false }
+                    return navigation.terminalWantsFocus
+                }, onFocusChange: { navigation.terminalFocused = $0 }) { navigation.showingTerminal = false }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -110,6 +115,8 @@ struct MacHomeChatView: View {
             composerRevision = UUID()
             voice.stopListening(finalize: false)
             voice.stopSpeaking()
+            // Switching tabs leaves the cursor in the new tab's composer, not in the sidebar list.
+            focusComposerAfterSwitch()
         }
         .onChange(of: navigation.composerFocusRequest) { _, _ in applyPrefillAndFocus() }
         .onChange(of: submittingRemote) { _, submitting in
@@ -395,6 +402,7 @@ struct MacHomeChatView: View {
         // The panel opens on a tab still loading: type into it as soon as it can take text.
         .onChange(of: destinationReady && composerAcceptsText) { _, ready in
             if ready, launcher.isActive { DispatchQueue.main.async { composerFocused = true } }
+            if ready { applyPendingFocus() }
         }
         .onChange(of: input) { _, text in
             // Text the app put in (a draft, dictation, a command) puts the caret at its end, as
@@ -830,7 +838,51 @@ struct MacHomeChatView: View {
             composerRevision = UUID()
             navigation.composerPrefill = nil
         }
-        DispatchQueue.main.async { composerFocused = true }
+        if let typed = navigation.composerTyping {
+            navigation.composerTyping = nil
+            input += typed
+        }
+        focusPending = true
+        applyPendingFocus()
+    }
+
+    /// After a switch into this conversation: not while the sidebar is walked with the arrow keys,
+    /// another field is being edited, or a sheet or dialog is up.
+    private func focusComposerAfterSwitch() {
+        if navigation.switchedWithListKeys {
+            navigation.switchedWithListKeys = false
+            return
+        }
+        if NSApp.modalWindow != nil { return }
+        if let key = NSApp.keyWindow {
+            if key.attachedSheet != nil || key.sheetParent != nil { return }
+            // Typing in another field (search, rename) keeps the cursor; the terminal belongs to the tab being left.
+            if key.firstResponder is NSText, !composerFocused, !navigation.terminalFocused { return }
+        }
+        focusPending = true
+        applyPendingFocus()
+    }
+
+    private func applyPendingFocus() {
+        guard focusPending, destinationReady, composerAcceptsText, !vm.sending, !submittingRemote else { return }
+        focusPending = false
+        focusComposerField()
+        // The rebuilt field can join the window after the first try: try once more if nothing took it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            guard let window = NSApp.keyWindow, window.attachedSheet == nil,
+                  !(window.firstResponder is NSText) else { return }
+            focusComposerField()
+        }
+    }
+
+    /// A switch rebuilds the composer while the flag may still be true from the last tab's, and
+    /// setting it to true again would focus nothing: clear it, then set it after the update.
+    private func focusComposerField() {
+        composerFocused = false
+        DispatchQueue.main.async {
+            composerFocused = true
+            MacSlashKeyMonitor.moveInsertionPointToEnd()
+        }
     }
 
     // MARK: Drafts
