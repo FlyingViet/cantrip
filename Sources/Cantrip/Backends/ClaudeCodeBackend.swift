@@ -451,6 +451,21 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
                 onEvent(.activity(activity))
             }
         case "task_notification":
+            // A background command (or agent) ended; build cards finish on it.
+            let ids = [taskID, callID].compactMap { $0 }
+            if !ids.isEmpty {
+                let status = obj["status"] as? String ?? ""
+                let summary = obj["summary"] as? String ?? ""
+                let exitCode = summary.range(of: #"exit code (\d+)"#, options: .regularExpression)
+                    .flatMap { Int(summary[$0].split(separator: " ").last ?? "") }
+                let state: ToolActivityState? = switch status {
+                case "completed": .succeeded
+                case "failed": .failed
+                case "killed", "stopped", "cancelled": .cancelled
+                default: nil
+                }
+                onEvent(.commandFinished(FinishedCommand(ids: ids, exitCode: exitCode, state: state)))
+            }
             guard let taskID, taskCalls[taskID] != nil || callID.map({ callTasks[$0] != nil }) == true else { return }
             let call = callID ?? taskCalls[taskID] ?? taskID
             taskCalls.removeValue(forKey: taskID)

@@ -53,6 +53,67 @@ final class CantripCardTests: XCTestCase {
         XCTAssertEqual(restored.cards, cards, "a saved chat turn keeps its cards")
     }
 
+    /// Build cards: a progress block the app ticks itself from `startedAt`, with the bar and time left
+    /// from the Mac's estimate or the tool's step counter, then the result and total time.
+    func testBuildCardProgress() throws {
+        let running = #"""
+        {"version":1,"id":"build-c1","type":"build","accessibilityLabel":"xcodebuild test · Hermes, Testing",
+         "source":{"kind":"build","name":"xcodebuild test · Hermes"},
+         "blocks":[{"type":"header","title":"xcodebuild test · Hermes","subtitle":"CantripIOS","symbol":"hammer"},
+                   {"type":"progress","status":"running","label":"Testing","tone":"accent","startedAt":"2026-11-04T20:00:00.000Z",
+                    "expectedSeconds":185,"detail":"Usually 3m 05s (4 earlier runs)"}]}
+        """#
+        let reply = try message(#","cards":[\#(running)]"#)
+        let card = try XCTUnwrap(reply.cards?.first)
+        let block = card.blocks[1]
+        XCTAssertEqual(block.type, "progress")
+        XCTAssertEqual(block.expectedSeconds, 185)
+        XCTAssertEqual(CantripCardPanel.sections(card.blocks).count, 2)
+        let start = try XCTUnwrap(CantripCardProgress.date(block.startedAt))
+        var progress = CantripCardProgress(block: block, now: start.addingTimeInterval(65))
+        XCTAssertTrue(progress.isRunning)
+        XCTAssertEqual(progress.elapsed, "1:05")
+        XCTAssertEqual(progress.remaining, "About 2:00 left")
+        XCTAssertEqual(progress.fraction ?? 0, 65.0 / 185, accuracy: 0.001)
+        progress = CantripCardProgress(block: block, now: start.addingTimeInterval(200))
+        XCTAssertNil(progress.fraction, "past the estimate the bar is indeterminate")
+        XCTAssertEqual(progress.remaining, "Longer than usual")
+
+        var stepped = block
+        stepped.fraction = 0.25
+        stepped.expectedSeconds = nil
+        progress = CantripCardProgress(block: stepped, now: start.addingTimeInterval(30))
+        XCTAssertEqual(progress.fraction, 0.25)
+        XCTAssertNil(progress.remaining)
+
+        var first = block
+        first.expectedSeconds = nil
+        progress = CantripCardProgress(block: first, now: start.addingTimeInterval(3_729))
+        XCTAssertNil(progress.fraction, "no estimate yet: an indeterminate bar, never a made-up percentage")
+        XCTAssertEqual(progress.elapsed, "1:02:09")
+
+        var done = block
+        done.status = "failed"
+        done.label = "Failed"
+        done.tone = "negative"
+        done.finishedAt = "2026-11-04T20:00:47.000Z"
+        progress = CantripCardProgress(block: done, now: start.addingTimeInterval(9_999))
+        XCTAssertFalse(progress.isRunning)
+        XCTAssertEqual(progress.elapsed, "0:47")
+        XCTAssertEqual(progress.fraction, 1)
+        XCTAssertTrue(progress.accessibilityLabel.hasPrefix("Failed, took "))
+
+        var ended = block
+        ended.status = "ended"
+        progress = CantripCardProgress(block: ended, now: start.addingTimeInterval(60))
+        XCTAssertNil(progress.elapsed, "an unknown end shows no made-up duration")
+        XCTAssertFalse(progress.showsBar)
+
+        let turn = ChatTurn(role: .assistant, text: "", cards: [card])
+        let restored = try JSONDecoder().decode(ChatTurn.self, from: JSONEncoder().encode(turn))
+        XCTAssertEqual(restored.cards, [card], "a saved turn keeps its build card")
+    }
+
     func testMalformedCardsNeverFailTheMessage() throws {
         let reply = try message(#"""
         ,"cards":[{"id":"x","blocks":[{"type":"chart","items":[{"label":"Mon","low":"cold","high":50},{"label":"Tue","low":40,"high":55}]},

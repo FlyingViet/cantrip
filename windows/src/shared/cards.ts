@@ -9,7 +9,7 @@ export const CARD_VERSION = 1;
 export type Tone = "positive" | "negative" | "warning" | "accent" | "neutral";
 
 export interface Source {
-  /** "resolver", "tool" or "preview". */
+  /** "resolver", "tool", "preview", "records" or "build". */
   kind: string;
   name?: string;
   attribution?: string;
@@ -78,7 +78,7 @@ export interface Pin {
   symbol?: string;
 }
 
-/** `type`: header, stat, keyValue, strip, chart, list, map, image, badges or notice (others are skipped). */
+/** `type`: header, stat, keyValue, strip, chart, list, map, image, badges, notice or progress (others are skipped). */
 export interface Block {
   type: string;
   title?: string;
@@ -110,6 +110,15 @@ export interface Block {
   imageID?: string;
   aspectRatio?: number;
   accessibilityLabel?: string;
+  /** progress (build cards): "running", "succeeded", "failed", "stopped" or "ended" (result unknown). */
+  status?: string;
+  /** progress: ISO-8601 times; the client counts the elapsed time from `startedAt` itself. */
+  startedAt?: string;
+  finishedAt?: string;
+  /** progress: how long it usually takes (earlier runs on the Mac), for the time left. */
+  expectedSeconds?: number;
+  /** progress: 0-1 from the tool's own step counter. */
+  fraction?: number;
 }
 
 export interface CardDocument {
@@ -162,6 +171,9 @@ export function cardPlainText(card: Pick<CardDocument, "blocks">): string {
         break;
       case "notice":
         lines.push(present([block.title, block.text]).join(": "));
+        break;
+      case "progress":
+        lines.push(present([block.label, block.detail]).join(" · "));
         break;
     }
   }

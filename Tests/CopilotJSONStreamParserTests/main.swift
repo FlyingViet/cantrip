@@ -459,7 +459,49 @@ private func testNarrationBecomesVisible() {
            "the run's answer includes the narration summary: \(parser.answer)")
 }
 
+/// Build cards: step counters from streamed command output (also after the call returns and the
+/// command keeps running in the background) and shell completion notifications.
+private func testBuildProgressAndShellCompletion() {
+    var parser = CopilotJSONStreamParser()
+    func feed(_ line: String) -> [BackendEvent] { parser.consume(Data((line + "\n").utf8)) { _, _ in } }
+    func activity(_ events: [BackendEvent]) -> ToolActivity? {
+        events.compactMap { if case .activity(let activity) = $0 { return activity } else { return nil } }.last
+    }
+    _ = feed(#"{"type":"tool.execution_start","id":"s1","data":{"toolCallId":"b1","toolName":"bash","arguments":{"command":"swift build"}}}"#)
+    let first = activity(feed(#"{"type":"tool.execution_partial_result","id":"p1","data":{"toolCallId":"b1","partialOutput":"Building for debugging...\n[1/1] Planning build\n[12/340] Compiling Cantrip A.swift\n"}}"#))
+    expect(first?.buildStep == BuildStep(current: 12, total: 340), "a step counter updates the running command")
+    expect(feed(#"{"type":"tool.execution_partial_result","id":"p2","data":{"toolCallId":"b1","partialOutput":"[12/340] Compiling Cantrip A.swift\n"}}"#).isEmpty,
+           "the same step sends nothing")
+    expect(feed(#"{"type":"tool.execution_partial_result","id":"p3","data":{"toolCallId":"b1","partialOutput":"no counter here"}}"#).isEmpty,
+           "output without a counter sends nothing")
+    let backgrounded = activity(feed(#"{"type":"tool.execution_complete","id":"c1","data":{"toolCallId":"b1","success":true,"result":{"content":"[20/340] Compiling\n<command with shellId: 7 is still running after 30 seconds. The command is still running.>"}}}"#))
+    expect(backgrounded?.state == .succeeded && BackgroundCommand.shellID(in: backgrounded?.output ?? "") == "7",
+           "a sync wait that timed out names its shell")
+    let later = activity(feed(#"{"type":"tool.execution_partial_result","id":"p4","data":{"toolCallId":"b1","partialOutput":"[200/340] Compiling Cantrip Z.swift\n"}}"#))
+    expect(later?.id == "b1" && later?.buildStep == BuildStep(current: 200, total: 340),
+           "a command running on in the background keeps reporting steps")
+    let finished = feed(#"{"type":"system.notification","id":"n1","data":{"content":"done","kind":{"type":"shell_completed","shellId":"7","exitCode":1}}}"#)
+    func ended(_ events: [BackendEvent]) -> [FinishedCommand] {
+        events.compactMap { if case .commandFinished(let command) = $0 { return command } else { return nil } }
+    }
+    expect(ended(finished) == [FinishedCommand(ids: ["7"], exitCode: 1, state: .failed)],
+           "a shell notification reports its exit code")
+    let detached = feed(#"{"type":"system.notification","id":"n2","data":{"kind":{"type":"shell_detached_completed","shellId":"d1"}}}"#)
+    expect(ended(detached) == [FinishedCommand(ids: ["d1"], exitCode: nil, state: nil)],
+           "a detached shell's result stays unknown")
+    expect(feed(#"{"type":"system.notification","id":"n3","data":{"kind":{"type":"agent_idle","agentId":"a1"}}}"#).isEmpty,
+           "other notifications are ignored")
+    expect(BuildStep.latest(in: "[302 / 314] Compiling\n[303 / 314] Demo-product\n") == BuildStep(current: 303, total: 314),
+           "newer SwiftPM spaces its counter")
+    expect(BuildStep.latest(in: "Building for debugging...\r[Pre-planning 1\u{2009}/\u{2009}385]\r[89\u{2009}/\u{2009}192]\r[131\u{2009}/\u{2009}224] Part2\r")
+           == BuildStep(current: 131, total: 224), "a terminal's progress line uses thin spaces and carriage returns")
+    expect(BuildStep.latest(in: "\u{1B}[2K[40/90] Compiling A.swift") == BuildStep(current: 40, total: 90), "color codes are ignored")
+    expect(BuildStep.latest(in: "[1/1] Planning build\n") == nil && BuildStep.latest(in: "see [3/2] ") == nil,
+           "single-step and impossible counters are ignored")
+}
+
 testMalformedLineDoesNotAbortBatch()
+testBuildProgressAndShellCompletion()
 testMalformedEventDoesNotPoisonLaterChunks()
 testMalformedFinalLineIsReportedAndSkipped()
 testSDKMessagesAndUsage()

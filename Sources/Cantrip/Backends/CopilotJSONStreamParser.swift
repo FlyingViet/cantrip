@@ -26,6 +26,9 @@ struct CopilotJSONStreamParser {
     private let canCancelSubagents: Bool
     /// The runtime reports the root context window (`session.usage_info`).
     private var contextReported = false
+    /// Root commands whose call returned while they kept running in a background shell; their
+    /// output still streams, so their step counters keep updating.
+    private var backgroundCommands: [String: ToolActivity] = [:]
 
     init(canCancelSubagents: Bool = false) {
         self.canCancelSubagents = canCancelSubagents
@@ -295,6 +298,41 @@ struct CopilotJSONStreamParser {
             activities[id] = activity
             return [.activity(activity)]
 
+        case "tool.execution_partial_result":
+            // A running command's output so far (the bridge forwards only ones with a step counter).
+            guard let id = eventData?["toolCallId"] as? String,
+                  let output = eventData?["partialOutput"] as? String,
+                  let step = BuildStep.latest(in: output) else { return [] }
+            if childParents[id] != nil {
+                var changed = false
+                let root = modify(id) { activity in
+                    guard activity.buildStep != step else { return }
+                    activity.buildStep = step
+                    changed = true
+                }
+                return changed ? root.map { [.activity($0)] } ?? [] : []
+            }
+            if var command = backgroundCommands[id] {
+                guard command.buildStep != step else { return [] }
+                command.buildStep = step
+                backgroundCommands[id] = command
+                return [.activity(command)]
+            }
+            guard var activity = activities[id], activity.state == .running, activity.buildStep != step else { return [] }
+            activity.buildStep = step
+            activities[id] = activity
+            return [.activity(activity)]
+
+        case "system.notification":
+            // A command moved to the background (or started there) has finished. A detached one
+            // reports no exit code, so its result stays unknown.
+            guard let kind = eventData?["kind"] as? [String: Any],
+                  ["shell_completed", "shell_detached_completed"].contains(kind["type"] as? String ?? ""),
+                  let shell = (kind["shellId"] as? String) ?? (kind["shellId"] as? NSNumber)?.stringValue else { return [] }
+            let exitCode = (kind["exitCode"] as? NSNumber)?.intValue
+            return [.commandFinished(FinishedCommand(
+                ids: [shell], exitCode: exitCode, state: exitCode.map { $0 == 0 ? .succeeded : .failed }))]
+
         case "tool.execution_complete":
             guard let id = eventData?["toolCallId"] as? String else {
                 return []
@@ -326,6 +364,13 @@ struct CopilotJSONStreamParser {
             ))
             if completed.toolName == "task" {
                 completed = noteLaunch(of: completed, success: success, result: result, eventData: eventData)
+            }
+            if completed.terminalCommand != nil, let output = completed.output,
+               BackgroundCommand.shellID(in: output) != nil {
+                if backgroundCommands.count >= 16, let oldest = backgroundCommands.keys.first {
+                    backgroundCommands.removeValue(forKey: oldest)
+                }
+                backgroundCommands[id] = completed
             }
             // Only root calls get views; nested subagent calls returned above.
             if let eventData {
