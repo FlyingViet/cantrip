@@ -20,6 +20,8 @@ struct DesktopLease: Codable {
     let expiresAt: Double
     let control: Bool
     let displays: [DesktopDisplay]
+    /// Takes "drag" input (press, move, release). Missing from older Macs.
+    var supportsDrag: Bool? = true
 }
 
 struct DesktopFrame: Codable {
@@ -42,12 +44,23 @@ struct DesktopCommand: Codable {
     var text: String?
     var key: String?
     var delta: Int?
+    /// Where a drag lets go; `x` and `y` are where it presses.
+    var toX: Double?
+    var toY: Double?
 
     func validate() throws {
+        func onScreen(_ x: Double?, _ y: Double?) -> Bool {
+            guard let x, let y else { return false }
+            return x.isFinite && y.isFinite && (0...1).contains(x) && (0...1).contains(y)
+        }
         switch kind {
         case "click", "rightClick", "doubleClick":
-            guard let x, let y, x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) else {
+            guard onScreen(x, y) else {
                 throw SessionModelSettingsError(400, "Tap inside the displayed screen.")
+            }
+        case "drag":
+            guard onScreen(x, y), onScreen(toX, toY) else {
+                throw SessionModelSettingsError(400, "Drag inside the displayed screen.")
             }
         case "text":
             guard let text, !text.isEmpty, text.utf8.count <= 4096, !text.contains("\0") else {
@@ -219,7 +232,7 @@ final class RemoteDesktop: ObservableObject {
         // Claim before posting: a lost acknowledgement must never type or click twice.
         sequence = incoming
         try post(command, display)
-        if ["click", "rightClick", "doubleClick"].contains(command.kind) { lastInteraction = display.id }
+        if ["click", "rightClick", "doubleClick", "drag"].contains(command.kind) { lastInteraction = display.id }
         lastRead = now()
     }
 
@@ -297,6 +310,33 @@ final class RemoteDesktop: ObservableObject {
                 down.flags = []; up.flags = []
                 down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
             }
+        case "drag":
+            func mouse(_ type: CGEventType, _ point: CGPoint) throws {
+                guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
+                                          mouseButton: .left) else {
+                    throw SessionModelSettingsError(503, "Could not create pointer input.")
+                }
+                event.setIntegerValueField(.mouseEventClickState, value: 1)
+                event.flags = []
+                event.post(tap: .cghidEventTap)
+            }
+            let from = Self.point(x: command.x!, y: command.y!, display: display)
+            let to = Self.point(x: command.toX!, y: command.toY!, display: display)
+            try mouse(.mouseMoved, from)
+            try mouse(.leftMouseDown, from)
+            // A window only follows once the press has registered, and in steps, as a hand would move it.
+            // It anchors where it first sees movement, so that first movement is a 1-point nudge.
+            usleep(40_000)
+            let length = max(hypot(to.x - from.x, to.y - from.y), 1)
+            try mouse(.leftMouseDragged, CGPoint(x: from.x + (to.x - from.x) / length, y: from.y + (to.y - from.y) / length))
+            usleep(40_000)
+            let steps = 12
+            for step in 1...steps {
+                let t = CGFloat(step) / CGFloat(steps)
+                try mouse(.leftMouseDragged, CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t))
+                usleep(8_000)
+            }
+            try mouse(.leftMouseUp, to)
         case "text":
             for character in command.text! { try key(0, text: String(character)) }
         case "key": try key(DesktopCommand.keys[command.key!]!)

@@ -78,9 +78,18 @@ extension SessionTabTests {
         try rejected({ try desktop.input(id: lease.id, token: lease.token, sequence: 3, encrypted: encrypted(invalid, sequence: 3)) }, status: 409)
         precondition(posted.count == 2)
         let fresh = try await desktop.frame(id: lease.id, token: lease.token, displayID: display.id)
+        // Touch drags: a press, a move and a release, both ends on the screen.
+        precondition(lease.supportsDrag == true)
+        var drag = DesktopCommand(frameID: fresh.id, kind: "drag", x: 0.2, y: 0.1)
+        try rejected({ try desktop.input(id: lease.id, token: lease.token, sequence: 3, encrypted: encrypted(drag, sequence: 3)) }, status: 400)
+        drag.toX = 0.6; drag.toY = 1.2
+        try rejected({ try desktop.input(id: lease.id, token: lease.token, sequence: 3, encrypted: encrypted(drag, sequence: 3)) }, status: 400)
+        drag.toY = 0.4
+        try desktop.input(id: lease.id, token: lease.token, sequence: 3, encrypted: encrypted(drag, sequence: 3))
+        precondition(posted.count == 3 && posted[2].kind == "drag" && posted[2].toX == 0.6 && posted[2].toY == 0.4)
         displays = []
-        try rejected({ try desktop.input(id: lease.id, token: lease.token, sequence: 3,
-            encrypted: encrypted(.init(frameID: fresh.id, kind: "key", key: "return"), sequence: 3)) }, status: 409)
+        try rejected({ try desktop.input(id: lease.id, token: lease.token, sequence: 4,
+            encrypted: encrypted(.init(frameID: fresh.id, kind: "key", key: "return"), sequence: 4)) }, status: 409)
         displays = [display]
         desktop.enabled = false
         precondition(desktop.activeUntil == nil)
