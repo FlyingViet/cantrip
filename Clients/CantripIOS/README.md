@@ -238,7 +238,7 @@ The hamburger menu holds only this tab's actions, in labeled sections: **Model &
 conversation** (Model Settings, Start Fresh, Tools for This Tab, Delivery, Resume),
 **Tab** (Rename, Lock, Move to Section, Move Up/Down) and Close Tab. Voice Mode opens from
 the composer's microphone (double-tap it, or its VoiceOver action). **Pause Agent**, Memory, Usage Limits, the mascot, **Update & rebuild Cantrip**, **Mac
-permissions & View Mac** and **Skills & Rules** are in Settings; Builds and Background jobs are in Home and the
+permissions & View Mac** (also the display icon in the header) and **Skills & Rules** are in Settings; Builds and Background jobs are in Home and the
 Tabs drawer.
 
 ### Settings
@@ -1133,8 +1133,9 @@ If Face ID finishes before its system sheet closes, Cantrip Agent waits for the
 app to become active before proceeding. Backgrounding or cancelling still
 requires fresh authentication.
 
-Open **hamburger menu > Mac Permissions & View Mac** under **Cantrip Mac**, or the same action
-in a tab's menu. See Cantrip's permission status and supported Keychain issues,
+Tap **View Mac** (the display icon) in the header, beside the menu, in Home and in tabs. On
+the iPhone Duo it's in the side bar or rail. It's also in **Settings > About & Updates > Mac
+permissions & View Mac**. See Cantrip's permission status and supported Keychain issues,
 then open the relevant settings on the Mac. Full Disk Access needs manual review.
 Touch ID status refers to the Mac; it cannot be satisfied with phone Face ID.
 

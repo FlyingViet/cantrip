@@ -1650,7 +1650,8 @@ struct ChatView: View {
             // (in a tab too: on the Duo a tab has no "‹ Home", the tab picker leads back).
             hidesLeadingInRail: showsDuoSidebar
                 || (displayTraits.isUnfoldedDuo && vm.activeLane.usesCantripRemote),
-            actionsInRail: showsDuoAppRail
+            actionsInRail: showsDuoAppRail,
+            mac: viewMacButton
         ) {
             if vm.activeLane == .cantrip {
                 CantripTabHeaderTitle(
@@ -2465,6 +2466,7 @@ struct ChatView: View {
                 duoSidebarToggle
                 ChatSettingsButton { showSettings = true }
                     .disabled(vm.sending || importingImages || submittingRemote)
+                viewMacButton
                 chatMenu.frame(width: 44, height: 44)
             } bottom: {
                 if vm.activeLane == .home {
@@ -2475,6 +2477,16 @@ struct ChatView: View {
                 }
             }
         }
+    }
+
+    /// View Mac in the header (Home and tabs), wherever the header's actions are.
+    private var viewMacButton: AnyView? {
+        guard vm.activeLane.usesCantripRemote else { return nil }
+        return AnyView(CantripViewMacButton {
+            composerFocused = false
+            remote.showingMacAccess = true
+        }
+        .disabled(!remote.isConfigured))
     }
 
     /// The rail's first item on an unfolded iPhone Duo: opens and closes the sidebar.
@@ -3246,6 +3258,32 @@ struct ChatSettingsButton: View {
     }
 }
 
+/// Opens View Mac: the Mac's screen (full screen from there) and its permissions.
+struct CantripViewMacButton: View {
+    @Environment(\.chatHeaderGlassAction) private var inGlass
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            if inGlass {
+                Image(systemName: "display")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            } else {
+                // Styled like the settings gear beside it.
+                Image(systemName: "display")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+        }
+        .accessibilityLabel("View Mac")
+        .accessibilityHint("Shows your Mac's screen and its permissions")
+        .accessibilityIdentifier("chat.viewMac")
+    }
+}
+
 enum ChatHeaderStyle {
     /// Title row plus a connection, usage and delivery row on an opaque bar.
     case standard
@@ -3264,12 +3302,15 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     @Environment(\.chatDisplayTraits) private var displayTraits
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var tabLeadingWidth: CGFloat = 96
+    @State private var tabTrailingWidth: CGFloat = 44
     @State private var tabHeaderWidth: CGFloat = 393
     var style = ChatHeaderStyle.standard
     var sidebarToggle: AnyView? = nil
     var hidesLeadingInRail = false
     /// The unfolded iPhone Duo's app-drawn rail (upright) holds the actions instead of the header.
     var actionsInRail = false
+    /// View Mac, beside the menu (in the vertical bar or the rail when those hold the actions).
+    var mac: AnyView? = nil
     @ViewBuilder var title: () -> Title
     @ViewBuilder var connection: () -> Connection
     @ViewBuilder var lane: () -> Lane
@@ -3298,6 +3339,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                     // On the unfolded iPhone Duo these are in the rail.
                     if !actionsElsewhere {
                         settings()
+                        mac
                         trailing().frame(width: 44, height: 44)
                     }
                 }
@@ -3309,6 +3351,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                     }
                     title().frame(maxWidth: .infinity, minHeight: 44)
                     if !actionsElsewhere {
+                        mac
                         trailing().frame(width: 44, height: 44)
                     }
                 }
@@ -3320,6 +3363,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                     }
                     title().frame(maxWidth: .infinity, minHeight: 44)
                     if !actionsElsewhere {
+                        mac
                         trailing().frame(width: 44, height: 44)
                     }
                 }
@@ -3342,17 +3386,18 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         .accessibilityIdentifier("chat.header")
         .modifier(ChatNavigationActions(
             sharesVerticalBarWithTabBar: style == .mascot,
-            sidebarToggle: sidebarToggle, hidesLeadingInRail: hidesLeadingInRail,
+            sidebarToggle: sidebarToggle, hidesLeadingInRail: hidesLeadingInRail, mac: mac,
             leading: leading, settings: settings, trailing: trailing
         ))
         // Unfolding adds the sidebar toggle and model settings above the bar's items; the system
-        // keeps the existing items' slots but draws them empty. A fresh toolbar per layout fixes it.
-        .id(ChatToolbarLayout(traits: displayTraits))
+        // keeps the existing items' slots but draws them empty. A fresh toolbar per layout (and per
+        // item set: View Mac shows only with a Mac) fixes it.
+        .id([AnyHashable(ChatToolbarLayout(traits: displayTraits)), AnyHashable(mac != nil)])
     }
 
     /// The title stays centered on the screen and clear of the wider of the two side controls.
     private var tabRow: some View {
-        let inset = actionsElsewhere ? 0 : max(tabLeadingWidth, 44) + 8
+        let inset = actionsElsewhere ? 0 : max(tabLeadingWidth, tabTrailingWidth, 44) + 8
         return ZStack {
             title()
                 .frame(maxWidth: .infinity, minHeight: 44)
@@ -3362,7 +3407,11 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                     leading()
                         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabLeadingWidth = $0 }
                     Spacer(minLength: 0)
-                    glassAction(trailing())
+                    HStack(spacing: 8) {
+                        if let mac { glassAction(mac) }
+                        glassAction(trailing())
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { tabTrailingWidth = $0 }
                 }
             }
         }
@@ -3376,6 +3425,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
             HStack(alignment: .top, spacing: 8) {
                 glassAction(leading())
                 Spacer(minLength: 0)
+                if let mac { glassAction(mac) }
                 glassAction(trailing())
             }
         }
