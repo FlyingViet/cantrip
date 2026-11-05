@@ -31,6 +31,8 @@ messages; both show as chips you can remove. With Settings › Appearance › In
 - Turning it on or off waits until no tab or Home task is working, then hands the tabs over.
 - Updates (`make app`, the release updater) are staged beside the app as usual. The engine installs
   one and restarts once nothing is working; the app reopens into it when you aren't using it.
+- There is one Cantrip.app window process at a time: opening another (for example `open -n`, or a
+  copy of Cantrip.app from another folder) brings the open one forward and quits.
 - The engine's notifications (finished runs, input needed, handoffs, sign-in and storage alerts)
   appear while Cantrip.app is open.
 - `cantrip status` says "background agents for Cantrip.app"; `cantrip daemon restart` restarts the

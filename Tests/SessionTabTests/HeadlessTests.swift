@@ -120,6 +120,26 @@ extension SessionTabTests {
         precondition(HostLock.holder() == nil, "The pid left in the file doesn't count once the lock is free")
         precondition(flock(other, LOCK_EX | LOCK_NB) == 0, "Released for an update's new build")
         flock(other, LOCK_UN)
+        try testWindowLock()
+    }
+
+    /// One window app for the background engine: while one holds the lock, a second launch can't
+    /// take it (it waits briefly for a quitting window, then gives up) and learns who holds it.
+    private static func testWindowLock() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("window-lock-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        precondition(WindowLock.holder(of: url) == nil, "no file, no window")
+        let first = try requireHome(WindowLock.lock(url, wait: 0))
+        precondition(first >= 0 && WindowLock.holder(of: url) == getpid())
+        let started = Date()
+        precondition(WindowLock.lock(url, wait: 0.3) == nil, "a second window app can't take the lock")
+        precondition(Date().timeIntervalSince(started) >= 0.3, "it waits for a quitting window first")
+        flock(first, LOCK_UN)
+        close(first)
+        precondition(WindowLock.holder(of: url) == nil, "the pid left in the file doesn't count once it's free")
+        let next = try requireHome(WindowLock.lock(url, wait: 0))
+        precondition(next >= 0 && WindowLock.holder(of: url) == getpid(), "the reopened window takes it")
+        close(next)
     }
 
     /// `cantrip status|config|pair` through the real socket, as the terminal client sends them.
