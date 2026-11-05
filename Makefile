@@ -65,7 +65,7 @@ test-settings-manifest:
 # Paired-device maintenance (check, update, rebuild, restart) for source and release installs.
 test-maintenance:
 	@BIN="/tmp/cantrip-maintenance-tests-$$$$"; H="$$(mktemp -d)"; \
-	trap 'rm -f "$$BIN"; rm -rf "$$H"' EXIT; \
+	trap 'rm -f "$$BIN"; rm -rf "$$H"; defaults delete "$${BIN##*/}" >/dev/null 2>&1; rm -f "$$HOME/Library/Preferences/$${BIN##*/}.plist"' EXIT; \
 	swiftc -parse-as-library $(filter-out Sources/Cantrip/main.swift,$(wildcard Sources/Cantrip/*.swift Sources/Cantrip/Backends/*.swift)) Tests/SessionTabTests/*.swift -o "$$BIN" && \
 	HOME="$$H" CFFIXED_USER_HOME="$$H" CANTRIP_TAB_TEST_HOME="$$H" CANTRIP_TAB_TEST_ONLY=maintenance "$$BIN"
 

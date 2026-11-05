@@ -34,7 +34,7 @@ expect_failure() {
 expect_failure "missing app executable" "Missing executable:"
 cp "$scratch/universal" "$bundle/Contents/MacOS/Cantrip"
 expect_failure "missing app metadata" "LSMinimumSystemVersion"
-cp Resources/Info.plist "$bundle/Contents/Info.plist"
+cp Resources/Cantrip-Info.plist "$bundle/Contents/Info.plist"
 for minimum in 26.0 27.0 14.0.1 invalid; do
     plutil -replace LSMinimumSystemVersion -string "$minimum" "$bundle/Contents/Info.plist"
     expect_failure "unsupported app minimum $minimum" "Incompatible LSMinimumSystemVersion:"
@@ -43,7 +43,7 @@ plutil -replace LSMinimumSystemVersion -string 13.0 "$bundle/Contents/Info.plist
 expect_failure "app metadata below binary minimum" "Incompatible macOS deployment target:"
 plutil -replace LSMinimumSystemVersion -string 14.0.0 "$bundle/Contents/Info.plist"
 bash "$verifier" "$bundle"
-cp Resources/Info.plist "$bundle/Contents/Info.plist"
+cp Resources/Cantrip-Info.plist "$bundle/Contents/Info.plist"
 cp "$scratch/universal.dylib" "$bundle/Contents/Frameworks/helper.dylib"
 cp "$verifier" "$bundle/Contents/MacOS/script-helper"
 ln -s helper.dylib "$bundle/Contents/Frameworks/helper-link"

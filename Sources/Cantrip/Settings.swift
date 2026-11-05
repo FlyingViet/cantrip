@@ -1102,7 +1102,22 @@ final class AppSettings: ObservableObject {
         Log.write("launchAtLogin failed: \(error.localizedDescription)")
     }
 
+    /// Why this process must not open its settings: it has a bundle ID without being an app. A test
+    /// or QA binary takes the ID of a folder macOS reads as a bundle (one holding Info.plist or
+    /// Resources/Info.plist), and with Cantrip's its writes would land in Cantrip.app's real
+    /// settings. Nil for Cantrip.app and for binaries without a bundle.
+    static func borrowedIdentityProblem(bundleIdentifier: String?, bundlePath: String) -> String? {
+        guard let bundleIdentifier, URL(fileURLWithPath: bundlePath).pathExtension != "app" else { return nil }
+        return "This process has the bundle ID \(bundleIdentifier) from \(bundlePath) without being an app, "
+            + "so it would change that app's real settings. Run it from a folder without an Info.plist."
+    }
+
     private init() {
+        if let problem = Self.borrowedIdentityProblem(bundleIdentifier: Bundle.main.bundleIdentifier,
+                                                      bundlePath: Bundle.main.bundlePath) {
+            FileHandle.standardError.write(Data(("cantrip: " + problem + "\n").utf8))
+            exit(78)
+        }
         remoteControlEnabled = d.bool(forKey: "remoteControlEnabled")
         interfaceMode = InterfaceMode(rawValue: d.string(forKey: "interfaceMode") ?? "") ?? .panel
         let storedRemotePort = d.integer(forKey: "remoteControlPort")
