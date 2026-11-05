@@ -1,0 +1,30 @@
+{
+  "accessibilityLabel" : "swift build (release), Building",
+  "blocks" : [
+    {
+      "subtitle" : "Cantrip",
+      "symbol" : "hammer",
+      "title" : "swift build (release)",
+      "type" : "header"
+    },
+    {
+      "accessibilityLabel" : "Building, Step 212 of 640 · usually 2m 20s (2 earlier runs)",
+      "detail" : "Step 212 of 640 · usually 2m 20s (2 earlier runs)",
+      "expectedSeconds" : 140,
+      "fraction" : 0.33124999999999999,
+      "label" : "Building",
+      "startedAt" : "2026-11-05T05:24:21.733Z",
+      "status" : "running",
+      "tone" : "accent",
+      "type" : "progress"
+    }
+  ],
+  "fallbackText" : "swift build (release) — Cantrip\nBuilding · since 9:24 PM · Step 212 of 640 · usually 2m 20s (2 earlier runs)",
+  "id" : "build-swift build (release)",
+  "source" : {
+    "kind" : "build",
+    "name" : "swift build (release)"
+  },
+  "type" : "build",
+  "version" : 1
+}

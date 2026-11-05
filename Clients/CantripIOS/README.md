@@ -605,6 +605,15 @@ uses the map card's container (680 pt wide at most, dark), every hour and day ha
 a VoiceOver label, and a malformed card never stops the message from showing.
 Link cards for weather sites are left out under it.
 
+When an agent runs a build, test run or upload in a tab (xcodebuild, `swift build`, make,
+Gradle, npm/Expo/EAS builds, fastlane, App Store uploads…), the reply shows a build card
+(docs/cards.md "Build cards"): the command and its folder, then a bar with the elapsed time,
+which the app counts itself once a second from the Mac's start time (only that card redraws).
+When the Mac has timed the same command before it shows the usual time and the time left; when
+the tool prints `[n/m]` steps the bar follows them; with neither, the bar is indeterminate.
+When the build ends the card shows Succeeded, Failed (with its exit code) or Stopped and the
+total time. Footer lines that don't fit side by side stack (iPhone, Duo folded).
+
 ### Live agent browser preview
 
 When the Mac has an agent-only Chrome driven by an MCP server named `browser`,

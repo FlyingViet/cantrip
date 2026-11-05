@@ -208,6 +208,14 @@ enum CopilotSessionBridge {
     }
     function onEvent(event) {
       if (!runID || stopping) return;
+      // A running command's output so far: Cantrip only reads its newest [n/m] step counter.
+      if (event.type === 'tool.execution_partial_result') {
+        const tail = String(event.data?.partialOutput ?? '').slice(-2000);
+        if (/\[\d+\s?\/\s?\d+\]/.test(tail)) {
+          emit({ kind: 'event', runID, event: { ...event, data: { ...event.data, partialOutput: tail } } });
+        }
+        return;
+      }
       // A command that starts an agent turn (/fleet) ends with session.idle; compaction doesn't.
       if (!event.agentId && (event.type === 'assistant.turn_start' || event.type === 'user.message')) {
         slashTurnSeen = true;

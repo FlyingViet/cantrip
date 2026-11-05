@@ -90,6 +90,10 @@ struct SessionTabTests {
             try await testRemoteMaintenanceRelease()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "build-cards" {
+            try await testBuildCards()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "settings" {
             try await testSettingsManifest()
             print("Settings manifest tests passed")
@@ -222,6 +226,7 @@ struct SessionTabTests {
         try await testRichCardsRemote()
         try await testWeatherCardsRemote()
         try await testCardDocuments()
+        try await testBuildCards()
         try await testHomeCards()
         try testCantripHomeSchedules()
         try testCantripHomeMonthlySchedules()
