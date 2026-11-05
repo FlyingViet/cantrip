@@ -404,6 +404,7 @@ struct QwenVoiceSettingsView: View {
                 }
             }
         }
+        .formStyle(.grouped)
         .confirmationDialog("Delete the Qwen3 voice model?", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button("Delete model", role: .destructive) { engine.deleteModel() }
             Button("Cancel", role: .cancel) {}

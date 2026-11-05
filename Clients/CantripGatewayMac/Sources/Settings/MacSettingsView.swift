@@ -13,6 +13,27 @@ struct MacSettingsView: View {
                      macTools: AnyView(MacLocalModelToolsSettings(chat: directLocal)))
             .frame(minWidth: 780, idealWidth: 900, maxWidth: .infinity,
                    minHeight: 540, idealHeight: 680, maxHeight: .infinity)
+            .background { MacUnifiedToolbar().frame(width: 0, height: 0).accessibilityHidden(true) }
+    }
+}
+
+/// A Settings scene's window gets a preferences toolbar, which centers items under the title, so a
+/// nested page's back chevron sat mid-window. Unified, as in Home's window, it sits at the top left
+/// beside the page's title.
+private struct MacUnifiedToolbar: NSViewRepresentable {
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) { view.apply() }
+
+    final class Probe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+
+        func apply() {
+            guard let window, window.toolbarStyle != .unified else { return }
+            window.toolbarStyle = .unified
+        }
     }
 }
 

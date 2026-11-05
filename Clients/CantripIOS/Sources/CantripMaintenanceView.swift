@@ -262,6 +262,9 @@ private struct CantripMaintenanceContent: View {
                 if model.isRequesting { ProgressView("Contacting Mac...") }
             }
         }
+        // Grouped, as on iPhone: on the Mac the default columns put labels and long lines outside
+        // the detail pane.
+        .formStyle(.grouped)
         .navigationTitle("Update Cantrip")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog(confirming?.title(release: isRelease) ?? "Cantrip", isPresented: $showConfirmation, titleVisibility: .visible) {
