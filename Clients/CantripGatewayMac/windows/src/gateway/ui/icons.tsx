@@ -1,6 +1,6 @@
 // Icons: Lucide outlines standing in for the Mac app's SF Symbols, keyed by SF Symbol-like names.
 import {
-  Activity, Antenna, Archive, ArrowDown, ArrowUp, ArrowUpDown, AudioWaveform, BedDouble, Bell, Bot, Box, Brain, BriefcaseMedical,
+  Activity, Antenna, Archive, ArrowDown, ArrowLeftRight, ArrowUp, ArrowUpDown, AudioWaveform, BedDouble, Bell, Bot, Box, Brain, BriefcaseMedical,
   CakeSlice, Calendar, Check, Coffee, CreditCard, DollarSign, Dumbbell, Fuel, Globe, GraduationCap, Landmark, Package, Phone, Plane,
   Route, ShoppingBag, ShoppingCart, Tag, Ticket, TreeDeciduous, Truck, Utensils, Wine,
   ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Circle, CircleArrowUp, CircleCheck, CircleDot, CircleEllipsis, CircleHelp,
@@ -26,6 +26,7 @@ const ICONS = {
   "gauge.with.dots.needle.33percent": Gauge, "pause.circle": CirclePause, "play.circle": CirclePlay, play: Play, pause: Pause,
   hammer: Hammer, brain: Brain, tshirt: Shirt, "antenna.radiowaves.left.and.right": RadioTower, antenna: Antenna,
   "checkmark.circle": CircleCheck, "xmark.circle": CircleX, "exclamationmark.triangle": TriangleAlert, "arrow.up.circle": CircleArrowUp,
+  "arrow.left.arrow.right": ArrowLeftRight,
   "questionmark.circle": CircleHelp, clock: Clock, trash: Trash2, pencil: Pencil, "doc.text": FileText, photo: Image,
   "photo.on.rectangle": Images, film: Film, paperclip: Paperclip, "arrow.up.forward.square": SquareArrowOutUpRight,
   "arrow.up.right": ExternalLink, "arrow.down": ArrowDown, "arrow.up": ArrowUp, xmark: X, "doc.on.doc": Copy,

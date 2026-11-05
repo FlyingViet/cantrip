@@ -384,8 +384,10 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
             let updated = lock.withLock { () -> ToolActivity? in
                 guard var activity = activities[id] else { return nil }
                 activity.output = String(((activity.output ?? "") + delta).suffix(4_000))
-                // A build's `[n/m]` counter moves its card (BuildCards.swift).
+                // A build's `[n/m]` counter or a transfer's progress moves its card (BuildCards.swift).
                 if let step = BuildStep.latest(in: activity.output ?? "") { activity.buildStep = step }
+                let transfer = TransferProgress.latest(in: activity.output ?? "")
+                if TransferProgress.moves(activity.transfer, to: transfer) { activity.transfer = transfer }
                 activities[id] = activity
                 return activity
             }

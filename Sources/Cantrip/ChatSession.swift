@@ -4820,12 +4820,13 @@ final class ChatSession: ObservableObject {
                 continue
             }
             messages[update.messageIndex].apply(update.run)
+            let kind = update.run.isTransfer ? "transfer" : "build"
             if update.ended {
                 BuildHistory.shared.record(update.run)
-                Log.write("build: \(update.run.state.rawValue) after \(Int(update.run.duration ?? 0))s "
+                Log.write("\(kind): \(update.run.state.rawValue) after \(Int(update.run.duration ?? 0))s "
                           + "(\(id.uuidString.prefix(8)), call \(update.run.id.suffix(8)))")
-            } else if update.run.step == nil, update.run.shellID == nil {
-                Log.write("build: started (\(id.uuidString.prefix(8)), call \(update.run.id.suffix(8)), "
+            } else if update.run.step == nil, update.run.shellID == nil, update.run.reading == nil {
+                Log.write("\(kind): started (\(id.uuidString.prefix(8)), call \(update.run.id.suffix(8)), "
                           + "estimate \(update.run.expectedSeconds.map { "\(Int($0))s" } ?? "none"))")
             }
         }

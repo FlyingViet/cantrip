@@ -22,7 +22,7 @@ can resolve or check the data, so a wrong block shows nothing:
 | Tool results Cantrip knows | Automatic, e.g. a Kiwi.com `search-flight` result | The tool's result |
 | `"cantrip/card"` in a tool's JSON result | Any tool (or MCP server) can return a ready card | The tool |
 | `card` block | The model writes labels and copies values from a tool it cites | Checked against that tool's output |
-| Build cards | Automatic when an agent runs a build, test run or upload (see [Build cards](#build-cards)) | The command itself and this Mac's earlier runs of it |
+| Build cards | Automatic when an agent runs a build, test run, upload or data transfer (see [Build cards](#build-cards)) | The command itself and this Mac's earlier runs of it |
 
 A reply has at most one **main card**: a places card, else a weather card, else a checked
 `card` block, else a tool card. Other `card` blocks, and any `card` block whose values aren't
@@ -57,8 +57,10 @@ scripts named for building or packaging (`build`, `package:win`, `dist`…), `ex
 `prebuild`, `eas build`/`submit`, fastlane lanes, App Store uploads (`altool --upload-app`,
 iTMSTransporter), `notarytool submit`, Cargo, Go, .NET, Flutter, CMake/Ninja, Docker and Bazel
 builds, and scripts named `build`, `release` or `archive`. Wrappers such as `cd … &&`, `xcrun`,
-`bundle exec`, `npx`, `timeout`, `script -q` and `perl -e '… exec @ARGV'` are looked through. It
-works in subagents too, so a `watch-*` agent that reads a build's shell finishes its card.
+`bundle exec`, `npx`, `timeout`, `script -q`, `perl -e '… exec @ARGV'` and `cantrip env run … --`
+are looked through, and so are interpreters: `python -u build-x.py`, `node scripts/build.js` and
+`python -m tool` count as the script or module they run. It works in subagents too, so a
+`watch-*` agent that reads a build's shell finishes its card.
 
 Every number is real:
 
@@ -83,6 +85,38 @@ Every number is real:
 
 A build card is a header (the command, such as `xcodebuild test · Hermes`, and its folder) and
 a `progress` block. Only Cantrip makes `progress` blocks: tool and model cards can't use them.
+
+#### Transfer cards
+
+Data transfers get the same card (`type` `"transfer"`), following the bytes they move: `rsync`
+and `scp` (not dry runs; to a `host:` is Uploading, from one Downloading, else Copying),
+`rclone copy`/`sync`/`move`, `aws s3 cp`/`sync`/`mv`, curl and wget downloads of big files
+(archives, disk images, apps, media, models such as `.zip`, `.xip`, `.ipa`, `.dmg`, `.gguf`; or
+resumed with `-C`/`-c`, or with curl's progress bar), aria2c, `hf`/`huggingface-cli download`,
+`ollama pull`, device copies and installs (`devicectl device copy to`/`from` and `install app`,
+ios-deploy, `pymobiledevice3 afc push`/`pull` and `apps install`, ideviceinstaller, `adb push`/
+`pull`/`install`), and scripts named for moving data (`push-…`, `upload_…`, `download-…`,
+`sync-…`, `transfer-…`, `copy-…`, `backup-…`), such as `python -u push-fefw-usb.py`. API calls,
+pages and small files get no card.
+
+- **Progress** comes from what the command prints, newest first: sizes of a total (`Transferred
+  6102712320/29051813685 bytes`, tqdm's `555M/1.23G`, rclone's `555 MiB / 1.2 GiB`, `1.2 GB of
+  4.7 GB`), curl's progress meter, or else a percentage (wget, rsync, adb). Sizes win over a
+  nearby percentage, which can be one file's. Cantrip reads it from streamed output (Copilot,
+  Codex), from a background shell's output when an agent reads it (`read_bash`, Claude Code's
+  `BashOutput`), and from the result when the command ends. The card moves once per whole
+  percent.
+- **Rate and time left**: measured between Cantrip's first and newest readings (at least 5
+  seconds apart), so a resumed transfer's earlier bytes don't count; the block's
+  `expectedSeconds` is when it will finish at that rate, which clients count down like a build's
+  estimate. A reading that goes back (another file, a restart) starts the measurement again.
+  Until a transfer prints progress its card is a build card's: elapsed time, and the usual time
+  from earlier runs. The line under the bar reads `27.0 GB of 29.1 GB · 34.5 MB/s` (or `45%`).
+- **Result**: as for builds; a failed or stopped transfer says where it got to (`Exit code 1 at
+  27.0 GB of 29.1 GB`), and a finished one its size and average rate.
+
+The header's icon follows the direction: an up arrow for uploads, transfers to a device and
+installs, a down arrow for downloads, two arrows for copies and syncs.
 
 ### Tool cards and MCP Apps
 
