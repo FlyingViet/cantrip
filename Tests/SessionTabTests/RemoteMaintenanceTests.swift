@@ -30,7 +30,7 @@ extension SessionTabTests {
 
         let manager = SessionManager()
         let stateFile = root.appendingPathComponent("state/state.json")
-        var builds = 0, restarts = 0, failBuild = false, busyDuringRestart = false
+        var builds = 0, restarts = 0, failBuild = false, busyDuringRestart = false, homeRuns = 0
         var verifiedBundles: [String] = []
         let runner: RemoteMaintenance.Runner = { executable, arguments, directory, output in
             if executable == "/usr/bin/codesign" {
@@ -49,7 +49,7 @@ extension SessionTabTests {
             runningBuild: "old-test", run: runner, restart: { received in
                 precondition(received == app)
                 restarts += 1
-            })
+            }, homeRuns: { homeRuns })
         func wait(_ service: RemoteMaintenance = service) async throws {
             for _ in 0..<1000 {
                 if service.snapshot().job?.isRunning != true { return }
@@ -81,6 +81,18 @@ extension SessionTabTests {
         manager.active.isStreaming = false
         manager.active.isPrivate = false
 
+        // A Home task cut off mid-run isn't retried, so a queued or running one blocks restart too.
+        homeRuns = 1
+        precondition(service.snapshot().busySessions == 1)
+        do {
+            _ = try service.start(action(.restart))
+            preconditionFailure("A Home task must block restart")
+        } catch let error as RemoteMaintenanceError {
+            precondition(error.status == 409 && error.message.contains("Home tasks"))
+        }
+        homeRuns = 0
+        precondition(service.snapshot().busySessions == 0)
+
         let edit = repo.appendingPathComponent("local.txt")
         try "Keep this local work".write(to: edit, atomically: true, encoding: .utf8)
         _ = try service.start(action(.update))
@@ -97,7 +109,7 @@ extension SessionTabTests {
         _ = try service.start(rebuild)
         precondition(builds == 1, "The same accepted request is never rebuilt")
         let recovered = RemoteMaintenance(manager: manager, app: app, stateFile: stateFile,
-            runningBuild: "old-test", run: runner, restart: { _ in restarts += 1 })
+            runningBuild: "old-test", run: runner, restart: { _ in restarts += 1 }, homeRuns: { homeRuns })
         _ = try recovered.start(rebuild)
         precondition(builds == 1, "Deduplication survives host restart")
         do {
@@ -184,7 +196,7 @@ extension SessionTabTests {
         precondition(verifiedBundles.last == staged.path, "Restart must verify the staged build's signature")
         try fm.removeItem(at: staged)
         let restarted = RemoteMaintenance(manager: manager, app: app, stateFile: stateFile,
-            runningBuild: "staged-test", run: runner, restart: { _ in restarts += 1 })
+            runningBuild: "staged-test", run: runner, restart: { _ in restarts += 1 }, homeRuns: { homeRuns })
         precondition(restarted.snapshot().job?.phase == "succeeded")
         _ = try restarted.start(restartRequest)
         precondition(restarts == 1)
@@ -245,7 +257,7 @@ extension SessionTabTests {
                 precondition(executable == "/usr/bin/codesign", "a release install runs no git or make: \(executable)")
                 return ""
             },
-            restart: { _ in restarts += 1 },
+            restart: { _ in restarts += 1 }, homeRuns: { 0 },
             latest: { await MainActor.run { release() } },
             stage: { candidate, target, progress in
                 stages += 1

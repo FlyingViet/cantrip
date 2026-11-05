@@ -172,7 +172,8 @@ struct CantripVersionContent: View {
                 .controlSize(.small)
                 .disabled(busySessions > 0)
             if busySessions > 0 {
-                Text("Waiting for \(busySessions) running tab\(busySessions == 1 ? "" : "s") to finish.")
+                Text(busySessions == 1 ? "Waiting for 1 running tab or Home task to finish."
+                     : "Waiting for \(busySessions) running tabs or Home tasks to finish.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }
