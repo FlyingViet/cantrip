@@ -367,6 +367,128 @@ final class CantripMacAccessTests: XCTestCase {
             authenticating: Data("cantrip-desktop|\(leaseID)|input|2".utf8)))
     }
 
+    func testTypingQueueMergesKeysTypedWhileAnInputIsOnItsWay() {
+        var queue = CantripDesktopTypingQueue()
+        queue.type("he"); queue.type("l"); queue.type("lo\nok\t")
+        XCTAssertEqual(queue.pending, [.text("hello"), .key("return"), .text("ok"), .key("tab")])
+        XCTAssertEqual(queue.next(), .text("hello"))
+        queue.press("escape")
+        XCTAssertEqual(queue.pending, [.key("return"), .text("ok"), .key("tab"), .key("escape")])
+
+        // Delete takes back what hasn't left; with nothing waiting it deletes on the Mac.
+        queue = CantripDesktopTypingQueue()
+        queue.type("ab"); queue.deleteBackward()
+        XCTAssertEqual(queue.pending, [.text("a")])
+        queue.deleteBackward()
+        XCTAssertTrue(queue.isEmpty)
+        queue.deleteBackward()
+        XCTAssertEqual(queue.pending, [.key("delete")])
+
+        // One input never carries more than the Mac takes.
+        queue = CantripDesktopTypingQueue()
+        queue.type(String(repeating: "a", count: CantripDesktopTypingQueue.maxTextBytes - 1))
+        queue.type("é")
+        XCTAssertEqual(queue.pending.count, 2)
+        queue.clear()
+        XCTAssertNil(queue.next())
+    }
+
+    func testFullScreenFitsTheMacAndMapsTapsToIt() {
+        let image = CGSize(width: 1600, height: 1000)
+        XCTAssertEqual(CantripDesktopFit.size(image: image, in: CGSize(width: 800, height: 800), zoom: 1),
+                       CGSize(width: 800, height: 500))
+        XCTAssertEqual(CantripDesktopFit.size(image: image, in: CGSize(width: 1200, height: 500), zoom: 1),
+                       CGSize(width: 800, height: 500), "Fits the shorter side, e.g. above the keyboard")
+        XCTAssertEqual(CantripDesktopFit.size(image: image, in: CGSize(width: 800, height: 800), zoom: 2),
+                       CGSize(width: 1600, height: 1000))
+        XCTAssertEqual(CantripDesktopFit.size(image: .zero, in: CGSize(width: 800, height: 800), zoom: 1), .zero)
+
+        let shown = CGSize(width: 800, height: 500)
+        XCTAssertEqual(CantripDesktopFit.point(CGPoint(x: 400, y: 125), in: shown), CGPoint(x: 0.5, y: 0.25))
+        XCTAssertEqual(CantripDesktopFit.point(CGPoint(x: 800, y: 500), in: shown)?.x ?? 1, 0.999999, accuracy: 1e-9)
+        XCTAssertNil(CantripDesktopFit.point(CGPoint(x: -1, y: 10), in: shown))
+        XCTAssertNil(CantripDesktopFit.point(CGPoint(x: 10, y: 501), in: shown))
+
+        XCTAssertEqual(CantripDesktopFit.remaining(until: 1_000_245, now: Date(timeIntervalSince1970: 1_000_000)), "4:05")
+        XCTAssertEqual(CantripDesktopFit.remaining(until: 1_000_000, now: Date(timeIntervalSince1970: 1_000_010)), "0:00")
+    }
+
+    func testLiveTypingReachesTheMacInOrderOneInputAtATime() async throws {
+        let remote = try await model { _ in }
+        let leaseID = UUID(), frameID = UUID()
+        let key = SymmetricKey(size: .bits256)
+        let keyText = key.withUnsafeBytes { Data($0).base64EncodedString() }
+        let jpeg = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 16, height: 10)).image { context in
+            UIColor.gray.setFill(); context.fill(CGRect(x: 0, y: 0, width: 16, height: 10))
+        }.jpegData(compressionQuality: 0.8))
+        let sealed = try AES.GCM.seal(jpeg, using: key,
+            authenticating: Data("cantrip-desktop|\(leaseID)|\(frameID)|1|16|10".utf8)).combined!.base64EncodedString()
+        var inputs: [(sequence: Int, kind: String, value: String)] = []
+        MacAccessProtocol.handler = { request in
+            switch request.url!.path {
+            case "/api/v1/mac-access": return (200, self.status)
+            case "/api/v1/desktop/start":
+                return (200, Data("""
+                {"id":"\(leaseID)","token":"lease-token","key":"\(keyText)","control":true,
+                "expiresAt":\(Date().addingTimeInterval(300).timeIntervalSince1970),
+                "displays":[{"id":1,"name":"Main","x":0,"y":0,"width":1440,"height":900}]}
+                """.utf8))
+            case "/api/v1/desktop/frame":
+                return (200, Data("""
+                {"id":"\(frameID)","display":{"id":1,"name":"Main","x":0,"y":0,"width":1440,"height":900},
+                "width":16,"height":10,"encryptedJPEG":"\(sealed)"}
+                """.utf8))
+            case "/api/v1/desktop/input":
+                let body = try self.body(request)
+                let sequence = try XCTUnwrap(body["sequence"] as? Int)
+                let cipher = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(body["encrypted"] as? String)))
+                let plain = try AES.GCM.open(AES.GCM.SealedBox(combined: cipher), using: key,
+                                             authenticating: Data("cantrip-desktop|\(leaseID)|input|\(sequence)".utf8))
+                let command = try XCTUnwrap(JSONSerialization.jsonObject(with: plain) as? [String: Any])
+                XCTAssertEqual(command["frameID"] as? String, frameID.uuidString)
+                let kind = try XCTUnwrap(command["kind"] as? String)
+                inputs.append((sequence, kind, (command["text"] ?? command["key"]) as? String ?? ""))
+                return (200, Data(#"{"accepted":true}"#.utf8))
+            case "/api/v1/desktop/stop": return (200, Data(#"{"stopped":true}"#.utf8))
+            default: XCTFail("Unexpected \(request.url!.path)"); return (404, Data())
+            }
+        }
+        let desktop = CantripDesktopModel(remote: remote)
+        await desktop.start(control: true)
+        XCTAssertNil(desktop.error)
+        for _ in 0..<50 where desktop.frame == nil { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertNotNil(desktop.frame, "The first screen arrives")
+
+        // Typed before the first input leaves: they go in order, merged, and "d" is taken back unsent.
+        desktop.type("ab")
+        desktop.press("return")
+        desktop.type("c")
+        desktop.type("d")
+        desktop.deleteBackward()
+        desktop.type("\t")
+        for _ in 0..<100 where inputs.count < 4 { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(inputs.map(\.kind), ["text", "key", "text", "key"])
+        XCTAssertEqual(inputs.map(\.value), ["ab", "return", "c", "tab"])
+        XCTAssertEqual(inputs.map(\.sequence), [1, 2, 3, 4], "Each input after the last, never two at once")
+        await desktop.stop()
+        XCTAssertNil(desktop.lease)
+    }
+
+    private func body(_ request: URLRequest) throws -> [String: Any] {
+        var data = request.httpBody ?? Data()
+        if data.isEmpty, let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                guard count > 0 else { break }
+                data.append(buffer, count: count)
+            }
+        }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
     func testMacPermissionsFormFitsAccessibleNarrowAndTabletLayouts() async throws {
         let remote = try await model { _ in XCTFail("Opening permissions must not start biometrics or viewing") }
         MacAccessProtocol.handler = { request in
