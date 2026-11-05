@@ -11,7 +11,7 @@ import { fitZoom, initialZoomForDelta, tileSpan, weatherRanges } from "../src/ga
 // Real host output (CardDocument.snapshot) from the Cantrip Mac.
 const fixture = (name: string): RemoteCardDocument =>
   JSON.parse(readFileSync(new URL(`./fixtures/cards/${name}.json`, import.meta.url), "utf8")) as RemoteCardDocument;
-const NAMES = ["weather", "weather-unavailable", "places", "link", "flights", "tool-card", "build", "build-failed"];
+const NAMES = ["weather", "weather-unavailable", "places", "link", "flights", "tool-card", "build", "build-failed", "transfer"];
 const card = (blocks: RemoteCardBlock[], extra: Partial<RemoteCardDocument> = {}): RemoteCardDocument =>
   ({ version: 1, id: "c", type: "custom", blocks, ...extra });
 
@@ -262,6 +262,14 @@ describe("progress blocks (build cards)", () => {
     const failed = fixture("build-failed");
     expect(failed.blocks[0]).toMatchObject({ symbol: "xmark.circle.fill", tone: "negative" });
     expect(progressState(failed.blocks[1], Date.now())).toMatchObject({ running: false, label: "Failed", elapsed: "0:47", fraction: 1 });
+  });
+
+  it("follows a transfer's own progress, with icons for every direction", () => {
+    const transfer = fixture("transfer");
+    expect(transfer).toMatchObject({ type: "transfer" });
+    expect(progressState(transfer.blocks[1], Date.now())).toMatchObject({ running: true, label: "Transferring", fraction: 0.66 });
+    expect(transfer.blocks[1].detail).toBe("19.2 GB of 29.1 GB · 32.6 MB/s");
+    for (const symbol of ["arrow.up.circle", "arrow.down.circle", "arrow.left.arrow.right"]) expect(symbolIcon(symbol), symbol).toBeDefined();
   });
 
   it("ticks the elapsed time and the time left from the estimate", () => {

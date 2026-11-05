@@ -150,9 +150,10 @@ struct CardDocument: Codable, Equatable, Sendable, Identifiable {
         /// progress: ISO-8601 times; clients count the elapsed time from `startedAt` themselves.
         var startedAt: String?
         var finishedAt: String?
-        /// progress: how long it usually takes, from earlier runs; clients show the time left.
+        /// progress: how long it usually takes (from earlier runs), or when a transfer will finish at
+        /// its rate so far; clients show the time left.
         var expectedSeconds: Double?
-        /// progress: 0–1 from the tool's own step counter.
+        /// progress: 0–1 from the tool's own step counter or transfer progress.
         var fraction: Double?
 
         init(type: String) { self.type = type }

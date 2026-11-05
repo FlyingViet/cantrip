@@ -55,6 +55,8 @@ const ICONS: Record<string, string> = {
   "stop.circle": "<circle cx='12' cy='12' r='10'/><rect x='9' y='9' width='6' height='6' rx='1'/>",
   "questionmark.circle": "<circle cx='12' cy='12' r='10'/><path d='M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3'/><path d='M12 17h.01'/>",
   "arrow.up.circle": "<circle cx='12' cy='12' r='10'/><path d='m16 12-4-4-4 4'/><path d='M12 16V8'/>",
+  "arrow.down.circle": "<circle cx='12' cy='12' r='10'/><path d='M12 8v8'/><path d='m8 12 4 4 4-4'/>",
+  "arrow.left.arrow.right": "<path d='M8 3 4 7l4 4'/><path d='M4 7h16'/><path d='m16 21 4-4-4-4'/><path d='M20 17H4'/>",
   "wineglass.fill": "<path d='M8 22h8'/><path d='M7 10h10'/><path d='M12 15v7'/><path d='M12 15a5 5 0 0 0 5-5c0-2-.5-4-2-8H9c-1.5 4-2 6-2 8a5 5 0 0 0 5 5Z'/>",
 };
 
