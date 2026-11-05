@@ -1112,11 +1112,50 @@ final class AppSettings: ObservableObject {
             + "so it would change that app's real settings. Run it from a folder without an Info.plist."
     }
 
+    /// The settings naming a CLI's executable; empty means auto-detect.
+    static let cliPathKeys = ["claudePath", "copilotPath", "codexPath", "agyPath"]
+    /// Stand-ins tests and QA hosts use so they never start a real CLI.
+    static let placeholderCLIPaths: Set<String> = ["/usr/bin/false", "/bin/false", "/usr/bin/true", "/bin/true"]
+
+    /// Why `path` can't be run as a CLI, or nil when it can be used: empty (auto-detect), a bare
+    /// command name (looked up on PATH), or an executable file.
+    static func unusableCLIPath(_ path: String, fileManager: FileManager = .default) -> String? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let expanded = (trimmed as NSString).expandingTildeInPath
+        guard expanded.hasPrefix("/") else { return nil }
+        let resolved = URL(fileURLWithPath: expanded).resolvingSymlinksInPath().path
+        if placeholderCLIPaths.contains(expanded) || placeholderCLIPaths.contains(resolved) {
+            return "a test placeholder, not the CLI"
+        }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: expanded, isDirectory: &isDirectory) else { return "it doesn't exist" }
+        guard !isDirectory.boolValue, fileManager.isExecutableFile(atPath: expanded) else { return "it isn't an executable" }
+        return nil
+    }
+
+    /// Clears CLI paths that can't run, so each of those CLIs is auto-detected instead, and returns
+    /// what it cleared. A path that runs is left alone.
+    @discardableResult
+    static func repairCLIPaths(in defaults: UserDefaults,
+                               fileManager: FileManager = .default) -> [(key: String, path: String, reason: String)] {
+        cliPathKeys.compactMap { key in
+            guard let path = defaults.string(forKey: key), let reason = unusableCLIPath(path, fileManager: fileManager) else {
+                return nil
+            }
+            defaults.set("", forKey: key)
+            return (key, path, reason)
+        }
+    }
+
     private init() {
         if let problem = Self.borrowedIdentityProblem(bundleIdentifier: Bundle.main.bundleIdentifier,
                                                       bundlePath: Bundle.main.bundlePath) {
             FileHandle.standardError.write(Data(("cantrip: " + problem + "\n").utf8))
             exit(78)
+        }
+        for repaired in Self.repairCLIPaths(in: d) {
+            Log.write("settings: \(repaired.key) was \(repaired.path) (\(repaired.reason)); the CLI is auto-detected instead")
         }
         remoteControlEnabled = d.bool(forKey: "remoteControlEnabled")
         interfaceMode = InterfaceMode(rawValue: d.string(forKey: "interfaceMode") ?? "") ?? .panel

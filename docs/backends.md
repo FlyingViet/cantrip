@@ -84,6 +84,11 @@ one-shot prompt process. Use a recent CLI with its bundled SDK and runtime
 (exercised with 1.0.83), and ensure `node` is available in your login shell.
 Cantrip resolves both from the configured CLI installation/version; it does
 not substitute another cached version when a custom path is invalid.
+A custom path that can't run at all (a file that's gone, a folder, a file
+without execute permission, or a test stand-in such as `/usr/bin/false`) is
+cleared when Cantrip starts, with a line in `~/Library/Logs/Cantrip.log`
+naming the old path, so that CLI is detected automatically again. This applies
+to the Claude Code, Copilot, Codex and Antigravity paths.
 This enables [live context injection](sessions-and-council.md#send-instructions-while-the-agent-is-busy).
 Without action permissions the native adapter exposes only read/search tools;
 read-only council advisors receive no tools. Permission requests that cannot
