@@ -613,6 +613,11 @@ When the Mac has timed the same command before it shows the usual time and the t
 the tool prints `[n/m]` steps the bar follows them; with neither, the bar is indeterminate.
 When the build ends the card shows Succeeded, Failed (with its exit code) or Stopped and the
 total time. Footer lines that don't fit side by side stack (iPhone, Duo folded).
+Data transfers (rsync, downloads, device copies and installs, `push-…` scripts) get the same
+card (docs/cards.md "Transfer cards"): the bar follows the bytes the Mac read from the command,
+the line under it says how much is done and how fast (`27.0 GB of 29.1 GB · 34.5 MB/s`), and the
+time left counts down from the Mac's estimate at that rate. The app draws it from the same
+blocks, with an up, down or two-way arrow in the header.
 
 ### Live agent browser preview
 

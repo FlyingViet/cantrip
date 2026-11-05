@@ -1,0 +1,30 @@
+{
+  "accessibilityLabel" : "push-fefw-usb.py, Transferring",
+  "blocks" : [
+    {
+      "subtitle" : "nxnative",
+      "symbol" : "arrow.up.circle",
+      "title" : "push-fefw-usb.py",
+      "type" : "header"
+    },
+    {
+      "accessibilityLabel" : "Transferring, 19.2 GB of 29.1 GB · 32.6 MB\/s",
+      "detail" : "19.2 GB of 29.1 GB · 32.6 MB\/s",
+      "expectedSeconds" : 892.8125,
+      "fraction" : 0.66000000000000003,
+      "label" : "Transferring",
+      "startedAt" : "2026-11-05T15:20:06.495Z",
+      "status" : "running",
+      "tone" : "accent",
+      "type" : "progress"
+    }
+  ],
+  "fallbackText" : "push-fefw-usb.py — nxnative\nTransferring · since 7:20 AM · 19.2 GB of 29.1 GB · 32.6 MB\/s",
+  "id" : "build-push-fefw-usb.py",
+  "source" : {
+    "kind" : "build",
+    "name" : "push-fefw-usb.py"
+  },
+  "type" : "transfer",
+  "version" : 1
+}

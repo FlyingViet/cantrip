@@ -299,27 +299,38 @@ struct CopilotJSONStreamParser {
             return [.activity(activity)]
 
         case "tool.execution_partial_result":
-            // A running command's output so far (the bridge forwards only ones with a step counter).
+            // A running command's output so far (the bridge forwards only ones with a step counter
+            // or transfer progress).
             guard let id = eventData?["toolCallId"] as? String,
-                  let output = eventData?["partialOutput"] as? String,
-                  let step = BuildStep.latest(in: output) else { return [] }
+                  let output = eventData?["partialOutput"] as? String else { return [] }
+            let step = BuildStep.latest(in: output)
+            let transfer = TransferProgress.latest(in: output)
+            guard step != nil || transfer != nil else { return [] }
+            func advance(_ activity: inout ToolActivity) -> Bool {
+                var changed = false
+                if let step, activity.buildStep != step {
+                    activity.buildStep = step
+                    changed = true
+                }
+                if TransferProgress.moves(activity.transfer, to: transfer) {
+                    activity.transfer = transfer
+                    changed = true
+                }
+                return changed
+            }
             if childParents[id] != nil {
                 var changed = false
                 let root = modify(id) { activity in
-                    guard activity.buildStep != step else { return }
-                    activity.buildStep = step
-                    changed = true
+                    changed = advance(&activity)
                 }
                 return changed ? root.map { [.activity($0)] } ?? [] : []
             }
             if var command = backgroundCommands[id] {
-                guard command.buildStep != step else { return [] }
-                command.buildStep = step
+                guard advance(&command) else { return [] }
                 backgroundCommands[id] = command
                 return [.activity(command)]
             }
-            guard var activity = activities[id], activity.state == .running, activity.buildStep != step else { return [] }
-            activity.buildStep = step
+            guard var activity = activities[id], activity.state == .running, advance(&activity) else { return [] }
             activities[id] = activity
             return [.activity(activity)]
 

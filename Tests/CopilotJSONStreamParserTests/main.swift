@@ -500,8 +500,55 @@ private func testBuildProgressAndShellCompletion() {
            "single-step and impossible counters are ignored")
 }
 
+/// Transfer cards: bytes or percentages a copy prints, streamed while it runs (also in the
+/// background), moving the activity once per whole percent.
+private func testTransferProgress() {
+    var parser = CopilotJSONStreamParser()
+    func feed(_ line: String) -> [BackendEvent] { parser.consume(Data((line + "\n").utf8)) { _, _ in } }
+    func activity(_ events: [BackendEvent]) -> ToolActivity? {
+        events.compactMap { if case .activity(let activity) = $0 { return activity } else { return nil } }.last
+    }
+    func partial(_ id: String, _ output: String) -> String {
+        let data = try! JSONSerialization.data(withJSONObject: ["type": "tool.execution_partial_result", "id": id,
+                                                                "data": ["toolCallId": "t1", "partialOutput": output]])
+        return String(decoding: data, as: UTF8.self)
+    }
+    _ = feed(#"{"type":"tool.execution_start","id":"s1","data":{"toolCallId":"t1","toolName":"bash","arguments":{"command":"python -u -B push-fefw-usb.py"}}}"#)
+    let first = activity(feed(partial("p1", "Verified prefix; resuming at byte 27009220608.\nTransferred 27104395264/29051813685 bytes (93.3%), 5s\n")))
+    expect(first?.transfer?.bytes == 27_104_395_264 && first?.transfer?.totalBytes == 29_051_813_685 && first?.transfer?.percent == 93,
+           "a script's byte counts move the running command: \(String(describing: first?.transfer))")
+    expect(feed(partial("p2", "Transferred 27204395264/29051813685 bytes (93.6%), 10s\n")).isEmpty,
+           "less than a whole percent sends nothing")
+    let next = activity(feed(partial("p3", "Transferred 27404395264/29051813685 bytes (94.3%), 15s\n")))
+    expect(next?.transfer?.percent == 94 && next?.transfer?.bytes == 27_404_395_264, "the next percent does")
+    let backgrounded = activity(feed(#"{"type":"tool.execution_complete","id":"c1","data":{"toolCallId":"t1","success":true,"result":{"content":"<command with shellId: fefw is still running after 30 seconds. The command is still running.>"}}}"#))
+    expect(backgrounded?.state == .succeeded, "the wait timed out")
+    let later = activity(feed(partial("p4", "Transferred 28404395264/29051813685 bytes (97.8%), 45s\n")))
+    expect(later?.id == "t1" && later?.transfer?.percent == 97, "a transfer running on in the background keeps reporting")
+
+    func read(_ text: String) -> TransferProgress? { TransferProgress.latest(in: text) }
+    let tqdm = read(" 45%|████▌     | 555M/1.23G [00:16<00:19, 34.5MB/s]")
+    expect(tqdm?.bytes == 555_000_000 && tqdm?.totalBytes == 1_230_000_000, "tqdm's sizes: \(String(describing: tqdm))")
+    let rclone = read("Transferred:   \t  555 MiB / 1.234 GiB, 43%, 34.5 MiB/s, ETA 19s\nTransferred:            3 / 10, 30%\nElapsed time:        16.0s\nTransferring:\n *  big.bin: 45% /1.2Gi, 34.5Mi/s, 19s\n")
+    expect(rclone?.bytes == 555 * 1_048_576 && rclone?.percent == 43, "rclone's total wins over one file's percent: \(String(describing: rclone))")
+    let ollama = read("pulling 6a0746a1ec1a...  45% ▕████            ▏ 1.2 GB/4.7 GB   34 MB/s   1m40s")
+    expect(ollama?.totalBytes == 4_700_000_000 && ollama?.bytes == 1_200_000_000, "Ollama's sizes")
+    expect(read("Completed 512.0 MiB/1.0 GiB (34.5 MiB/s) with 1 file(s) remaining")?.percent == 50, "aws s3 cp")
+    expect(read("Copied 1.5 GB of 3 GB")?.percent == 50, "sizes with \"of\"")
+    let curl = read("  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r 45 1024M   45  460M    0     0  34.5M      0  0:00:29  0:00:13  0:00:16 34.9M")
+    expect(curl?.totalBytes == 1024 * 1_048_576 && curl?.bytes == 460 * 1_048_576, "curl's meter: \(String(describing: curl))")
+    expect(read("Xcode_27.2.xip      45%[=======>         ] 921.00M  34.5MB/s    eta 32s")?.percent == 45, "wget's percentage")
+    expect(read("    555,000,000  45%   34.50MB/s    0:00:19 (xfr#3, to-chk=10/20)")?.percent == 45, "rsync's percentage")
+    expect(read("[ 72%] /sdcard/Download/big.bin")?.percent == 72, "adb's percentage")
+    expect(read("\u{1B}[32m 12%\u{1B}[0m done")?.percent == 12, "color codes are ignored")
+    expect(read("2026/11/05 10:00:01 INFO starting") == nil && read("Transferred 3 / 10 files") == nil
+           && read("no progress here") == nil && read("1234%") == nil && read("10/5 GB") == nil,
+           "dates, file counts, impossible sizes and plain text aren't progress")
+}
+
 testMalformedLineDoesNotAbortBatch()
 testBuildProgressAndShellCompletion()
+testTransferProgress()
 testMalformedEventDoesNotPoisonLaterChunks()
 testMalformedFinalLineIsReportedAndSkipped()
 testSDKMessagesAndUsage()
@@ -520,4 +567,4 @@ if failures > 0 {
     fputs("\(failures) Copilot parser test(s) failed\n", stderr)
     exit(1)
 }
-print("All 14 Copilot parser test groups passed (incl. MCP Apps)")
+print("All 15 Copilot parser test groups passed (incl. MCP Apps)")

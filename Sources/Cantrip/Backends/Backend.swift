@@ -69,6 +69,9 @@ struct ToolActivity: Identifiable, Equatable {
     var subagent: SubagentInfo?
     /// The newest `[n/m]` counter a running command printed (Copilot streams command output).
     var buildStep: BuildStep?
+    /// The newest transfer progress (bytes or percent) a running command printed, kept at whole
+    /// percents so a transfer's card moves at most a hundred times.
+    var transfer: TransferProgress?
     /// The end of `output` when it was too long to keep whole: where exit codes and results are.
     var outputTail: String?
 
@@ -113,6 +116,104 @@ struct BuildStep: Equatable, Codable {
               let total = Range(match.range(at: 2), in: tail).flatMap({ Int(tail[$0]) }),
               total >= 2, current <= total else { return nil }
         return BuildStep(current: current, total: total)
+    }
+}
+
+/// How far a transfer says it is, read from what it prints: bytes of a total (`Transferred
+/// 6102712320/29051813685 bytes`, tqdm's `555M/1.23G`, rclone's `555 MiB / 1.2 GiB`, `1.2 GB of
+/// 4.7 GB`), curl's progress meter, or else a percentage (`45%`: wget, rsync, adb).
+struct TransferProgress: Equatable, Codable {
+    var fraction: Double
+    var bytes: Int64?
+    var totalBytes: Int64?
+
+    var percent: Int { Int((fraction * 100).rounded(.down)) }
+
+    /// Whether `new` moves a card showing `old`: another whole percent, or a new total.
+    static func moves(_ old: TransferProgress?, to new: TransferProgress?) -> Bool {
+        guard let new else { return false }
+        guard let old else { return true }
+        return old.percent != new.percent || old.totalBytes != new.totalBytes
+    }
+
+    private static let number = #"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"#
+    private static let unit = #"(bytes|[kKMGTP]i?B|[kKMGTP]i?|B)"#
+    private static let sizedPattern = try! NSRegularExpression(
+        pattern: #"(?<![\w.,])"# + number + #"\s?"# + unit + #"?(?:\s*/\s*|\s+of\s+)"# + number + #"\s?"# + unit + #"(?![A-Za-z])"#)
+    private static let curlSize = #"(\d+(?:\.\d+)?[kMGTP]?)"#
+    /// `  45 1234M   45  555M    0     0  34.5M      0  0:00:35  0:00:16  0:00:19 34.9M`
+    private static let curlPattern = try! NSRegularExpression(
+        pattern: #"^\s*(\d{1,3})\s+"# + curlSize + #"\s+\d{1,3}\s+"# + curlSize + #"\s+\d{1,3}\s+"# + curlSize
+            + #"\s+\S+\s+\S+\s+(?:--:--:--|\d+:\d\d:\d\d)"#)
+    private static let percentPattern = try! NSRegularExpression(pattern: #"(?<![\d.])(\d{1,3}(?:\.\d+)?)\s?%"#)
+    private static let escapes = try! NSRegularExpression(pattern: #"\x{1B}\[[0-9;?]*[A-Za-z]"#)
+
+    /// The newest progress in the end of `text`. Sizes win over a nearby percentage, which can be
+    /// one file's (rclone and tqdm print both).
+    static func latest(in text: String) -> TransferProgress? {
+        guard !text.isEmpty else { return nil }
+        var tail = String(text.suffix(4_000))
+        if tail.contains("\u{1B}") {
+            tail = escapes.stringByReplacingMatches(in: tail, range: NSRange(tail.startIndex..., in: tail), withTemplate: "")
+        }
+        let lines = tail.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).suffix(60).map(String.init)
+        for line in lines.suffix(12).reversed() {
+            if let progress = sized(line) { return progress }
+        }
+        for line in lines.reversed() {
+            if let progress = curl(line) ?? percentage(line) { return progress }
+        }
+        return nil
+    }
+
+    private static func groups(_ regex: NSRegularExpression, in line: String) -> [String]? {
+        guard let match = regex.matches(in: line, range: NSRange(line.startIndex..., in: line)).last else { return nil }
+        return (0..<match.numberOfRanges).map { index in
+            Range(match.range(at: index), in: line).map { String(line[$0]) } ?? ""
+        }
+    }
+
+    private static func make(_ done: Double, of total: Double) -> TransferProgress? {
+        guard total > 0, done >= 0, done <= total * 1.001 else { return nil }
+        return TransferProgress(fraction: min(1, done / total), bytes: Int64(done.rounded()), totalBytes: Int64(total.rounded()))
+    }
+
+    private static func sized(_ line: String) -> TransferProgress? {
+        guard line.contains("/") || line.contains(" of "), let found = groups(sizedPattern, in: line),
+              let done = Double(found[1].replacingOccurrences(of: ",", with: "")),
+              let total = Double(found[3].replacingOccurrences(of: ",", with: "")) else { return nil }
+        let totalUnit = found[4]
+        let doneUnit = found[2].isEmpty ? totalUnit : found[2]
+        return make(done * multiplier(doneUnit), of: total * multiplier(totalUnit))
+    }
+
+    /// curl counts in 1024s: `k`, `M`, `G`.
+    private static func curl(_ line: String) -> TransferProgress? {
+        guard let found = groups(curlPattern, in: line), let total = curlBytes(found[2]), total > 0,
+              let received = curlBytes(found[3]), let sent = curlBytes(found[4]) else { return nil }
+        return make(max(received, sent), of: total)
+    }
+
+    private static func curlBytes(_ text: String) -> Double? {
+        guard let last = text.last else { return nil }
+        let powers: [String: Double] = ["k": 1, "M": 2, "G": 3, "T": 4, "P": 5]
+        let power = powers[String(last)]
+        guard let value = Double(power == nil ? text : String(text.dropLast())) else { return nil }
+        return value * pow(1024, power ?? 0)
+    }
+
+    private static func percentage(_ line: String) -> TransferProgress? {
+        guard line.contains("%"), let found = groups(percentPattern, in: line), let value = Double(found[1]),
+              value <= 100 else { return nil }
+        return TransferProgress(fraction: value / 100)
+    }
+
+    /// `MiB`/`Gi` count in 1024s, `MB`/`M` in 1000s.
+    static func multiplier(_ unit: String) -> Double {
+        guard let first = unit.first, unit != "B", unit != "bytes" else { return 1 }
+        let powers: [String: Double] = ["K": 1, "M": 2, "G": 3, "T": 4, "P": 5]
+        let base: Double = unit.contains("i") ? 1024 : 1000
+        return pow(base, powers[first.uppercased()] ?? 0)
     }
 }
 

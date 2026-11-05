@@ -2,10 +2,10 @@ import Foundation
 
 // MARK: - Build cards (docs/cards.md "Build cards")
 
-/// A build, test run or upload an agent ran in a tab, shown as a live card under the reply:
-/// how long it has run, its progress when the tool prints step counters or earlier runs of the
-/// same command give an estimate, then its result and total time. Every number comes from the
-/// command itself or from `BuildHistory`.
+/// A build, test run, upload or other transfer an agent ran in a tab, shown as a live card under
+/// the reply: how long it has run, its progress when the tool prints step counters or transfer
+/// progress, or earlier runs of the same command give an estimate, then its result and total time.
+/// Every number comes from the command itself or from `BuildHistory`.
 struct BuildRun: Codable, Equatable, Identifiable {
     enum State: String, Codable {
         case running, succeeded, failed, stopped
@@ -13,10 +13,20 @@ struct BuildRun: Codable, Equatable, Identifiable {
         case ended
     }
 
+    enum Kind: String, Codable {
+        case build, transfer
+    }
+
+    /// What a transfer printed about its progress, and when Cantrip read it.
+    struct TransferReading: Codable, Equatable {
+        var progress: TransferProgress
+        var at: Date
+    }
+
     /// The tool call that ran the command.
     var id: String
     var title: String
-    /// "Building", "Testing", "Archiving", "Uploading"…
+    /// "Building", "Testing", "Archiving", "Uploading", "Downloading", "Transferring"…
     var verb: String
     /// The folder's name, such as the project it built.
     var project: String?
@@ -32,8 +42,14 @@ struct BuildRun: Codable, Equatable, Identifiable {
     var timedRuns: Int?
     /// The background shell (Copilot) or task (Claude) the command moved to.
     var shellID: String?
+    /// Nil for a build (and for cards saved before transfers had them).
+    var kind: Kind?
+    /// A transfer's first and newest progress readings: its rate and time left come from these.
+    var firstReading: TransferReading?
+    var reading: TransferReading?
 
     var duration: TimeInterval? { finishedAt.map { max(0, $0.timeIntervalSince(startedAt)) } }
+    var isTransfer: Bool { kind == .transfer }
 
     init(id: String, command: BuildCommand, startedAt: Date, estimate: BuildHistory.Estimate?) {
         self.id = id
@@ -44,6 +60,7 @@ struct BuildRun: Codable, Equatable, Identifiable {
         self.startedAt = startedAt
         expectedSeconds = estimate?.seconds
         timedRuns = estimate?.runs
+        kind = command.isTransfer ? .transfer : nil
     }
 
     mutating func finish(_ state: State, exitCode: Int? = nil, at date: Date) {
@@ -51,6 +68,48 @@ struct BuildRun: Codable, Equatable, Identifiable {
         self.state = state
         self.exitCode = exitCode ?? self.exitCode
         finishedAt = state == .ended ? nil : max(date, startedAt)
+    }
+
+    /// Takes a running command's newest step counter and, for a transfer, its newest progress.
+    /// True when the card moved.
+    mutating func advance(step newStep: BuildStep?, transfer: TransferProgress?, at date: Date) -> Bool {
+        guard state == .running else { return false }
+        var moved = false
+        if let newStep, newStep != step {
+            step = newStep
+            moved = true
+        }
+        if isTransfer, let transfer, TransferProgress.moves(reading?.progress, to: transfer) {
+            let new = TransferReading(progress: transfer, at: max(date, startedAt))
+            // Going back or to another total is another file or a restart: the rate starts again.
+            let continues = firstReading.map { first in
+                transfer.fraction >= (reading?.progress.fraction ?? first.progress.fraction)
+                    && transfer.totalBytes == first.progress.totalBytes
+            } ?? false
+            if !continues { firstReading = new }
+            reading = new
+            moved = true
+        }
+        return moved
+    }
+
+    /// Bytes a second between the first and newest readings, once they're 5 seconds apart.
+    var bytesPerSecond: Double? {
+        guard let first = firstReading, let last = reading,
+              let from = first.progress.bytes, let to = last.progress.bytes, to > from,
+              first.progress.totalBytes == last.progress.totalBytes else { return nil }
+        let seconds = last.at.timeIntervalSince(first.at)
+        return seconds >= 5 ? Double(to - from) / seconds : nil
+    }
+
+    /// When a transfer will be done at its rate so far, in seconds from `startedAt`: clients count
+    /// the time left down from it, as from a build's usual time.
+    var transferExpectedSeconds: Double? {
+        guard let first = firstReading, let last = reading, last.progress.fraction < 1 else { return nil }
+        let seconds = last.at.timeIntervalSince(first.at)
+        let done = last.progress.fraction - first.progress.fraction
+        guard seconds >= 5, done > 0 else { return nil }
+        return last.at.timeIntervalSince(startedAt) + (1 - last.progress.fraction) * seconds / done
     }
 }
 
@@ -60,7 +119,7 @@ extension BuildRun {
     var document: CardDocument {
         var header = CardDocument.Block(type: "header")
         header.symbol = switch state {
-        case .running: verb == "Uploading" || verb == "Notarizing" ? "arrow.up.circle" : "hammer"
+        case .running: runningSymbol
         case .succeeded: "checkmark.circle.fill"
         case .failed: "xmark.circle.fill"
         case .stopped: "stop.circle"
@@ -77,13 +136,28 @@ extension BuildRun {
         progress.startedAt = Self.iso(startedAt)
         progress.finishedAt = finishedAt.map(Self.iso)
         if state == .running {
-            progress.expectedSeconds = expectedSeconds
-            if let step { progress.fraction = Double(step.current) / Double(step.total) }
+            if let reading {
+                // The transfer's own numbers: its share done, and the time left at its rate so far.
+                progress.fraction = reading.progress.fraction
+                progress.expectedSeconds = transferExpectedSeconds
+            } else {
+                progress.expectedSeconds = expectedSeconds
+                if let step { progress.fraction = Double(step.current) / Double(step.total) }
+            }
         }
         progress.detail = detail
         progress.accessibilityLabel = [label, detail].compactMap { $0 }.joined(separator: ", ")
-        return CardDocument(id: "build-" + id, type: "build", accessibilityLabel: "\(title), \(label)",
+        return CardDocument(id: "build-" + id, type: isTransfer ? "transfer" : "build", accessibilityLabel: "\(title), \(label)",
                             source: .init(kind: "build", name: title), blocks: [header, progress]).withFallbackText()
+    }
+
+    private var runningSymbol: String {
+        switch verb {
+        case "Downloading": "arrow.down.circle"
+        case "Copying", "Syncing": "arrow.left.arrow.right"
+        case "Uploading", "Notarizing", "Transferring", "Installing": "arrow.up.circle"
+        default: "hammer"
+        }
     }
 
     var label: String {
@@ -108,6 +182,7 @@ extension BuildRun {
 
     /// The line under the bar: where the numbers come from.
     var detail: String {
+        if let transfer = transferDetail { return transfer }
         let usual = expectedSeconds.map { seconds in
             "usually " + Self.durationText(seconds) + (timedRuns.map { $0 == 1 ? " (1 earlier run)" : " (\($0) earlier runs)" } ?? "")
         }
@@ -130,6 +205,44 @@ extension BuildRun {
         }
     }
 
+    /// A transfer that printed its progress: how much of it is done ("27.0 GB of 29.1 GB", or
+    /// "45%") and its rate, measured between Cantrip's readings.
+    private var transferDetail: String? {
+        guard let progress = reading?.progress else { return nil }
+        let amount = if let bytes = progress.bytes, let total = progress.totalBytes {
+            Self.bytesText(Double(bytes)) + " of " + Self.bytesText(Double(total))
+        } else {
+            "\(progress.percent)%"
+        }
+        let rate = bytesPerSecond.map { Self.bytesText($0) + "/s" }
+        switch state {
+        case .running:
+            return [amount, rate].compactMap { $0 }.joined(separator: " · ")
+        case .succeeded:
+            guard let total = progress.totalBytes else { return nil }
+            return [Self.bytesText(Double(total)), rate].compactMap { $0 }.joined(separator: " · ")
+        case .failed:
+            return (exitCode.map { "Exit code \($0)" } ?? "Failed") + " at " + amount
+        case .stopped:
+            return "Stopped at " + amount
+        case .ended:
+            return "Last read at \(amount); ended without a result Cantrip could read"
+        }
+    }
+
+    /// "555 MB", "1.85 GB", "29.1 GB": counted in 1000s, as Finder does.
+    static func bytesText(_ bytes: Double) -> String {
+        let units = ["KB", "MB", "GB", "TB", "PB"]
+        guard bytes >= 1000 else { return "\(Int(bytes)) bytes" }
+        var value = bytes / 1000
+        var index = 0
+        while value >= 1000, index < units.count - 1 {
+            value /= 1000
+            index += 1
+        }
+        return String(format: value < 10 ? "%.2f %@" : value < 100 ? "%.1f %@" : "%.0f %@", value, units[index])
+    }
+
     static let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -144,15 +257,18 @@ extension BuildRun {
 
 // MARK: - Recognizing build commands
 
-/// A build or upload command, as Cantrip names and remembers it.
+/// A build, upload or transfer command, as Cantrip names and remembers it.
 struct BuildCommand: Equatable {
-    /// "xcodebuild test · Hermes", "swift build", "make test", "App Store upload"…
+    /// "xcodebuild test · Hermes", "swift build", "make test", "App Store upload", "rsync · Roms"…
     var title: String
     var verb: String
     /// Where it ran: a `cd` (or `make -C`) in the command, else the tab's folder.
     var directory: String
     /// The same command in the same folder; estimates come from earlier runs with this key.
     var key: String
+    /// It moves data (a copy, download, upload or device install): its card follows the bytes
+    /// or percentage it prints.
+    var isTransfer = false
 
     var project: String? {
         let name = (directory as NSString).lastPathComponent
@@ -169,7 +285,7 @@ enum BuildDetector {
     static func detect(_ command: String, workdir: String) -> BuildCommand? {
         guard command.count <= 20_000 else { return nil }
         var directory = workdir
-        var found: [(title: String, verb: String, words: [String], directory: String)] = []
+        var found: [(title: String, verb: String, words: [String], directory: String, transfer: Bool)] = []
         for segment in ShellCommandText.segments(of: command) {
             let words = unwrapped(ShellCommandText.commandWords(segment))
             guard let program = words.first else { continue }
@@ -181,13 +297,15 @@ enum BuildDetector {
             if ["bash", "sh", "zsh"].contains(name), let index = words.firstIndex(where: { $0.hasPrefix("-") && $0.contains("c") }),
                index + 1 < words.count {
                 if let inner = detect(words[index + 1], workdir: directory) {
-                    found.append((inner.title, inner.verb, [inner.key], inner.directory))
+                    found.append((inner.title, inner.verb, [inner.key], inner.directory, inner.isTransfer))
                 }
                 continue
             }
             var runDirectory = directory
             if let match = match(words, name: name, directory: &runDirectory) {
-                found.append((match.title, match.verb, words, runDirectory))
+                found.append((match.title, match.verb, words, runDirectory, false))
+            } else if let moved = transfer(words, name: name) {
+                found.append((moved.title, moved.verb, words, runDirectory, true))
             }
         }
         guard let first = found.first else { return nil }
@@ -195,17 +313,19 @@ enum BuildDetector {
         let title = titles.prefix(2).joined(separator: " → ") + (titles.count > 2 ? " …" : "")
         let normalized = found.map { $0.words.map(normalizedWord).joined(separator: " ") }.joined(separator: " && ")
         return BuildCommand(title: String(title.prefix(90)), verb: first.verb, directory: first.directory,
-                            key: first.directory + "\n" + normalized)
+                            key: first.directory + "\n" + normalized, isTransfer: first.transfer)
     }
 
     /// The command inside wrappers `ShellCommandText` leaves: xcrun, bundle exec, npx, timeout,
-    /// `script -q LOG`, `perl -e '… exec @ARGV'`, `arch -arm64`.
+    /// `script -q LOG`, `perl -e '… exec @ARGV'`, `arch -arm64`, `cantrip env run … --`, and the
+    /// script or module an interpreter runs (`python -u push.py`, `python -m pymobiledevice3`, `node build.js`).
     static func unwrapped(_ words: [String]) -> [String] {
         var words = words
         while let first = words.first {
             var rest = Array(words.dropFirst())
             func dropFlags() { while let flag = rest.first, flag.hasPrefix("-") { rest.removeFirst() } }
-            switch ShellCommandText.baseName(first) {
+            let name = ShellCommandText.baseName(first)
+            switch name {
             case "xcrun":
                 // `xcrun --sdk iphoneos xcodebuild`: skip its options and their values.
                 while let flag = rest.first, flag.hasPrefix("-") {
@@ -227,6 +347,23 @@ enum BuildDetector {
             case "perl":
                 guard let script = rest.firstIndex(where: { $0.contains("exec @ARGV") }) else { return words }
                 rest = Array(rest[(script + 1)...])
+            case "cantrip" where rest.starts(with: ["env", "run"]):
+                // `cantrip env run --dir DIR -- COMMAND`: a project's environment, then the command.
+                guard let separator = rest.firstIndex(of: "--") else { return words }
+                rest = Array(rest[(separator + 1)...])
+            case _ where name.range(of: #"^python[0-9.]*$"#, options: .regularExpression) != nil:
+                while let flag = rest.first, flag.hasPrefix("-") {
+                    rest.removeFirst()
+                    if flag == "-m" { break }
+                    if flag == "-" || flag.hasPrefix("-c") { return words }
+                    if ["-X", "-W"].contains(flag), !rest.isEmpty { rest.removeFirst() }
+                }
+            case "node", "tsx", "ts-node", "ruby":
+                while let flag = rest.first, flag.hasPrefix("-") {
+                    rest.removeFirst()
+                    if ["-e", "--eval", "-p", "--print"].contains(flag) { return words }
+                    if ["-r", "--require", "--import", "--loader", "-I"].contains(flag), !rest.isEmpty { rest.removeFirst() }
+                }
             default:
                 return words
             }
@@ -406,14 +543,313 @@ enum BuildDetector {
         return parts.contains(where: words.contains)
     }
 
-    /// `./build.sh`, `Scripts/build-home-window.sh`, `scripts/release.sh`: a script named for building.
+    /// `./build.sh`, `Scripts/build-home-window.sh`, `scripts/release.sh`, `build-fefw.py`: a script named for building.
     private static func buildScript(_ program: String) -> (String, String)? {
-        guard program.contains("/") || program.hasSuffix(".sh") else { return nil }
+        guard isScript(program) else { return nil }
         let name = (program as NSString).lastPathComponent
-        let stem = name.hasSuffix(".sh") ? String(name.dropLast(3)) : name
-        let parts = stem.lowercased().split(whereSeparator: { "-_.".contains($0) }).map(String.init)
-        guard parts.contains(where: ["build", "release", "archive"].contains) else { return nil }
+        guard scriptWords(name).contains(where: ["build", "release", "archive"].contains) else { return nil }
         return (name, "Building")
+    }
+
+    private static let scriptExtensions: Set = ["sh", "bash", "zsh", "command", "py", "js", "mjs", "cjs", "ts", "rb", "pl"]
+
+    private static func isScript(_ program: String) -> Bool {
+        program.contains("/") || scriptExtensions.contains((program as NSString).pathExtension.lowercased())
+    }
+
+    /// `push-fefw-usb.py` → push, fefw, usb.
+    private static func scriptWords(_ name: String) -> [String] {
+        let ext = (name as NSString).pathExtension.lowercased()
+        let stem = scriptExtensions.contains(ext) ? (name as NSString).deletingPathExtension : name
+        return stem.lowercased().split(whereSeparator: { "-_.".contains($0) }).map(String.init)
+    }
+
+    // MARK: Transfers
+
+    /// Copies, downloads, uploads and device installs: rsync, scp, rclone, `aws s3`, curl and wget
+    /// downloads of big files, aria2c, Hugging Face and Ollama model pulls, `devicectl device copy`
+    /// and `install app`, ios-deploy, pymobiledevice3, ideviceinstaller, adb, and scripts named for
+    /// moving data (`push-…`, `upload_…`, `download-…`, `sync-…`).
+    static func transfer(_ words: [String], name: String) -> (title: String, verb: String)? {
+        let args = Array(words.dropFirst())
+        func titled(_ tool: String, _ target: String?) -> String { tool + (targetName(target).map { " · " + $0 } ?? "") }
+        switch name {
+        case "rsync":
+            guard !args.contains(where: { ["--dry-run", "--list-only", "--version", "--help"].contains($0) || shortFlags($0, contain: "n") })
+            else { return nil }
+            let paths = operands(args, valued: ["-e", "-f", "-T", "-B", "-M", "--rsh", "--filter", "--exclude", "--include",
+                                                "--exclude-from", "--include-from", "--files-from", "--log-file", "--partial-dir",
+                                                "--temp-dir", "--backup-dir", "--link-dest", "--compare-dest", "--copy-dest", "--port",
+                                                "--timeout", "--bwlimit", "--chmod", "--chown", "--password-file", "--out-format",
+                                                "--max-size", "--min-size", "--suffix", "--info", "--debug", "--remote-option",
+                                                "--usermap", "--groupmap", "--iconv", "--max-delete", "--block-size", "--contimeout"])
+            guard paths.count >= 2, let destination = paths.last else { return nil }
+            return (titled("rsync", destination), direction(from: paths.dropLast(), to: destination))
+        case "scp":
+            let paths = operands(args, valued: ["-c", "-D", "-F", "-i", "-J", "-l", "-o", "-P", "-S", "-X"])
+            guard paths.count >= 2, let destination = paths.last else { return nil }
+            return (titled("scp", destination), direction(from: paths.dropLast(), to: destination))
+        case "rclone":
+            let words = operands(args, valued: ["--transfers", "--checkers", "--bwlimit", "--config", "--log-file", "--log-level",
+                                                "--include", "--exclude", "--filter", "--files-from", "--include-from", "--exclude-from",
+                                                "--max-age", "--min-age", "--max-size", "--min-size", "--stats", "--backup-dir",
+                                                "--retries", "--timeout"])
+            guard let sub = words.first, ["copy", "copyto", "sync", "bisync", "move", "moveto", "copyurl"].contains(sub),
+                  words.count >= 3, !args.contains(where: { ["--dry-run", "-n", "--interactive", "-i"].contains($0) }) else { return nil }
+            let verb = sub.hasSuffix("sync") ? "Syncing" : direction(from: [words[1]], to: words[2])
+            return (titled("rclone \(sub)", words[2]), verb)
+        case "aws":
+            guard let s3 = args.firstIndex(of: "s3"), s3 + 1 < args.count, ["cp", "sync", "mv"].contains(args[s3 + 1]),
+                  !args.contains("--dryrun") else { return nil }
+            let paths = operands(Array(args[(s3 + 2)...]), valued: ["--profile", "--region", "--exclude", "--include",
+                                                                   "--storage-class", "--acl", "--sse", "--content-type",
+                                                                   "--cache-control", "--endpoint-url", "--metadata", "--expected-size"])
+            guard paths.count >= 2 else { return nil }
+            let remote = { (path: String) in path.hasPrefix("s3://") }
+            let verb = remote(paths[1]) ? (remote(paths[0]) ? "Copying" : "Uploading") : remote(paths[0]) ? "Downloading" : "Copying"
+            return (titled("aws s3 \(args[s3 + 1])", paths[1]), args[s3 + 1] == "sync" ? "Syncing" : verb)
+        case "curl":
+            return curl(args)
+        case "wget":
+            return wget(args)
+        case "aria2c":
+            let urls = operands(args, valued: ["-d", "--dir", "-o", "--out", "-i", "--input-file", "-x", "-s", "-j", "-k", "--max-tries"])
+            return (titled("aria2c", urls.first.map(urlFileName)), "Downloading")
+        case "huggingface-cli", "hf":
+            let words = operands(args, valued: ["--local-dir", "--cache-dir", "--revision", "--include", "--exclude", "--repo-type", "--token"])
+            guard let sub = words.first, sub == "download" || sub == "upload" else { return nil }
+            return (titled("\(name) \(sub)", words.dropFirst().first), sub == "download" ? "Downloading" : "Uploading")
+        case "ollama":
+            guard let sub = args.first, sub == "pull" || sub == "push", args.count > 1 else { return nil }
+            return ("ollama \(sub) · \(args[1])", sub == "pull" ? "Downloading" : "Uploading")
+        case "devicectl":
+            if args.starts(with: ["device", "copy", "to"]) || args.starts(with: ["device", "copy", "from"]) {
+                let destination = value(of: ["--destination", "--dest"], in: args)
+                return (titled("devicectl copy \(args[2])", destination), args[2] == "to" ? "Transferring" : "Downloading")
+            }
+            if args.starts(with: ["device", "install", "app"]) {
+                return (titled("devicectl install", args.last { $0.hasSuffix(".app") || $0.hasSuffix(".ipa") }), "Installing")
+            }
+            return nil
+        case "ios-deploy":
+            if let bundle = value(of: ["-b", "--bundle"], in: args) { return (titled("ios-deploy", bundle), "Installing") }
+            if let file = value(of: ["-o", "--upload"], in: args) { return (titled("ios-deploy upload", file), "Transferring") }
+            if args.contains(where: { $0 == "-w" || $0.hasPrefix("--download") }) { return ("ios-deploy download", "Downloading") }
+            return nil
+        case "pymobiledevice3":
+            let words = operands(args, valued: ["--udid", "--rsd", "--tunnel"])
+            if words.starts(with: ["afc", "push"]) || words.starts(with: ["afc", "pull"]) {
+                return (titled("pymobiledevice3 afc \(words[1])", words.count > 3 ? words[3] : nil),
+                        words[1] == "push" ? "Transferring" : "Downloading")
+            }
+            if words.starts(with: ["apps", "install"]) { return (titled("pymobiledevice3 install", words.dropFirst(2).first), "Installing") }
+            return nil
+        case "ideviceinstaller":
+            guard let index = args.firstIndex(where: { ["-i", "--install", "install"].contains($0) }) else { return nil }
+            return (titled("ideviceinstaller", index + 1 < args.count ? args[index + 1] : nil), "Installing")
+        case "adb":
+            let words = operands(args, valued: ["-s", "-t", "-H", "-P", "-L"])
+            guard let sub = words.first else { return nil }
+            switch sub {
+            case "push": return (titled("adb push", words.count > 2 ? words.last : nil), "Transferring")
+            case "pull": return (titled("adb pull", words.dropFirst().first), "Downloading")
+            case "install", "install-multiple": return (titled("adb install", words.last), "Installing")
+            case "sync": return ("adb sync", "Syncing")
+            default: return nil
+            }
+        case "bash", "sh", "zsh":
+            guard let script = args.first, !script.hasPrefix("-") else { return nil }
+            return transferScript(script)
+        default:
+            return words.first.flatMap(transferScript)
+        }
+    }
+
+    /// `push-fefw-usb.py`, `scripts/upload-ipa.sh`, `download_models.py`: a script named for moving data.
+    private static func transferScript(_ program: String) -> (String, String)? {
+        guard isScript(program) else { return nil }
+        let name = (program as NSString).lastPathComponent
+        let verbs = ["push": "Transferring", "transfer": "Transferring", "upload": "Uploading", "download": "Downloading",
+                     "pull": "Downloading", "sync": "Syncing", "rsync": "Syncing", "mirror": "Syncing", "copy": "Copying",
+                     "backup": "Copying"]
+        return scriptWords(name).lazy.compactMap { verbs[$0] }.first.map { (name, $0) }
+    }
+
+    /// A copy's direction: to a remote host (`host:path`, `user@host:path`, `rsync://`) is an
+    /// upload, from one a download, and anything else a copy.
+    private static func direction(from sources: some Collection<String>, to destination: String) -> String {
+        let fromRemote = sources.contains(where: isRemote)
+        switch (fromRemote, isRemote(destination)) {
+        case (false, true): return "Uploading"
+        case (true, false): return "Downloading"
+        default: return "Copying"
+        }
+    }
+
+    private static func isRemote(_ path: String) -> Bool {
+        path.range(of: #"^(?:[a-z][a-z0-9+.-]*://|[^/:\s]+:)"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// What a path or URL names, for a card's title: `nas:/Volumes/Roms/` → Roms.
+    private static func targetName(_ target: String?) -> String? {
+        guard var path = target, !path.isEmpty, !path.contains("$") else { return nil }
+        if path.contains("://") { return urlFileName(path) }
+        if isRemote(path), let colon = path.firstIndex(of: ":") {
+            let rest = String(path[path.index(after: colon)...])
+            if rest.trimmingCharacters(in: CharacterSet(charactersIn: "/.~")).isEmpty { return String(path[..<colon]) }
+            path = rest
+        }
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        let name = (path as NSString).lastPathComponent
+        return [".", "..", "~", "/", ""].contains(name) ? nil : String(name.prefix(60))
+    }
+
+    private static func urlFileName(_ url: String) -> String {
+        let path = URL(string: url)?.path ?? url
+        let name = (path as NSString).lastPathComponent
+        return name.isEmpty || name == "/" ? (URL(string: url)?.host ?? url) : name
+    }
+
+    /// The words that aren't options or option values: `valued` options take the next word.
+    private static func operands(_ args: [String], valued: Set<String>) -> [String] {
+        var result: [String] = []
+        var index = 0
+        while index < args.count {
+            let word = args[index]
+            index += 1
+            if word == "--" {
+                result += args[index...]
+                break
+            }
+            if word.hasPrefix("-"), word.count > 1 {
+                if valued.contains(word) { index += 1 }
+                continue
+            }
+            result.append(word)
+        }
+        return result
+    }
+
+    private static func value(of options: [String], in args: [String]) -> String? {
+        for (index, word) in args.enumerated() {
+            if options.contains(word), index + 1 < args.count { return args[index + 1] }
+            if let option = options.first(where: { $0.hasPrefix("--") && word.hasPrefix($0 + "=") }) {
+                return String(word.dropFirst(option.count + 1))
+            }
+        }
+        return nil
+    }
+
+    /// `-avn` holds `-n`.
+    private static func shortFlags(_ word: String, contain letter: Character) -> Bool {
+        word.hasPrefix("-") && !word.hasPrefix("--") && word.count > 1 && word.dropFirst().contains(letter)
+    }
+
+    /// Downloads worth a card: files with a big file's extension (archives, disk images, apps,
+    /// media, models), resumed ones, or ones that draw a progress bar; not API calls or pages.
+    private static let bigFileExtensions: Set = [
+        "zip", "xip", "ipa", "apk", "aab", "dmg", "pkg", "iso", "img", "tar", "tgz", "gz", "bz2", "xz", "zst", "7z", "rar",
+        "bin", "mp4", "mkv", "mov", "m4v", "avi", "mp3", "flac", "wav", "nsp", "xci", "nsz", "gguf", "safetensors", "ckpt",
+        "pt", "pth", "onnx", "deb", "rpm", "exe", "msi", "appimage", "vmdk", "qcow2", "ova", "raw",
+    ]
+
+    private static func isBigFile(_ name: String?) -> Bool {
+        guard let name else { return false }
+        return bigFileExtensions.contains((name as NSString).pathExtension.lowercased())
+    }
+
+    private static func curl(_ args: [String]) -> (String, String)? {
+        let valuedShort = Set("AbcCdDeEFHKmoPQrTuUwxXyYz")
+        let valuedLong: Set = ["--output", "--upload-file", "--continue-at", "--url", "--header", "--data", "--data-binary",
+                               "--data-raw", "--data-urlencode", "--request", "--user", "--user-agent", "--referer", "--cookie",
+                               "--cookie-jar", "--form", "--max-time", "--write-out", "--proxy", "--config", "--range", "--retry",
+                               "--retry-delay", "--retry-max-time", "--connect-timeout", "--limit-rate", "--cacert", "--cert",
+                               "--key", "--resolve", "--dump-header", "--output-dir", "--speed-limit", "--speed-time", "--max-filesize"]
+        var output: String?
+        var upload: String?
+        var remoteName = false
+        var resumed = false
+        var bar = false
+        var urls: [String] = []
+        var index = 0
+        while index < args.count {
+            let word = args[index]
+            index += 1
+            let next = index < args.count ? args[index] : nil
+            if word.hasPrefix("--") {
+                let option = word.split(separator: "=", maxSplits: 1).first.map(String.init) ?? word
+                let inline = word.contains("=") ? String(word.drop(while: { $0 != "=" }).dropFirst()) : nil
+                let given = inline ?? next
+                switch option {
+                case "--output": output = given
+                case "--upload-file": upload = given
+                case "--continue-at": resumed = true
+                case "--url": if let given { urls.append(given) }
+                case "--remote-name", "--remote-name-all": remoteName = true
+                case "--progress-bar": bar = true
+                default: break
+                }
+                if inline == nil, valuedLong.contains(option) { index += 1 }
+            } else if word.hasPrefix("-"), word.count > 1 {
+                // `-sSLo FILE`, `-ofile.zip`, `-LO`: flags up to the first one that takes a value,
+                // which is the rest of the cluster or the next word.
+                let letters = Array(word.dropFirst())
+                let at = letters.firstIndex(where: valuedShort.contains)
+                let flags = at.map { letters[..<$0] } ?? letters[...]
+                if flags.contains("O") { remoteName = true }
+                if flags.contains("#") { bar = true }
+                guard let at else { continue }
+                let attached = at + 1 < letters.count ? String(letters[(at + 1)...]) : nil
+                let given = attached ?? next
+                switch letters[at] {
+                case "o": output = given
+                case "T": upload = given
+                case "C": resumed = true
+                default: break
+                }
+                if attached == nil { index += 1 }
+            } else {
+                urls.append(word)
+            }
+        }
+        if let upload {
+            return isBigFile(upload) || resumed || bar ? ("curl · " + (targetName(upload) ?? upload), "Uploading") : nil
+        }
+        guard (output != nil && output != "-" && output != "/dev/null") || remoteName else { return nil }
+        let name = output.flatMap(targetName) ?? urls.first.map(urlFileName)
+        guard isBigFile(name) || resumed || bar else { return nil }
+        return ("curl" + (name.map { " · " + $0 } ?? ""), "Downloading")
+    }
+
+    private static func wget(_ args: [String]) -> (String, String)? {
+        guard !args.contains("--spider") else { return nil }
+        let valuedShort = Set("OoPatTwQeUiBlARDXI")
+        var output: String?
+        var resumed = false
+        var urls: [String] = []
+        var index = 0
+        while index < args.count {
+            let word = args[index]
+            index += 1
+            if word.hasPrefix("--") {
+                if word == "--continue" { resumed = true }
+                if word.hasPrefix("--output-document=") { output = String(word.dropFirst("--output-document=".count)) }
+                if word == "--output-document", index < args.count { output = args[index]; index += 1 }
+            } else if word.hasPrefix("-"), word.count > 1 {
+                let letters = Array(word.dropFirst())
+                let at = letters.firstIndex(where: valuedShort.contains)
+                if (at.map { letters[..<$0] } ?? letters[...]).contains("c") { resumed = true }
+                guard let at else { continue }
+                let attached = at + 1 < letters.count ? String(letters[(at + 1)...]) : nil
+                if letters[at] == "O" { output = attached ?? (index < args.count ? args[index] : nil) }
+                if attached == nil { index += 1 }
+            } else {
+                urls.append(word)
+            }
+        }
+        let name = (output == "-" ? nil : output.flatMap(targetName)) ?? urls.first.map(urlFileName)
+        guard isBigFile(name) || resumed else { return nil }
+        return ("wget" + (name.map { " · " + $0 } ?? ""), "Downloading")
     }
 
     static func resolved(_ path: String, from directory: String) -> String {
@@ -638,19 +1074,21 @@ enum BuildTracker {
                 if step.state != .running, run.shellID == nil {
                     // The call returned: the command finished, or moved to a background shell.
                     let output = Self.output(of: step)
+                    let printed = run.isTransfer ? TransferProgress.latest(in: output) ?? step.transfer : nil
                     if step.state != .succeeded, BuildOutput.neverRan(output) {
                         working.remove(run, at: index)
                     } else if let shell = BuildOutput.backgroundShell(in: output) {
                         run.shellID = shell
-                        run.step = step.buildStep ?? run.step
+                        _ = run.advance(step: step.buildStep, transfer: printed, at: now)
                         working.put(run, at: index, ended: false)
                     } else {
+                        // Its last progress says where a failed or stopped transfer got to.
+                        _ = run.advance(step: nil, transfer: printed, at: now)
                         let (state, code) = BuildOutput.outcome(output: output, state: step.state)
                         run.finish(state, exitCode: code, at: now)
                         working.put(run, at: index, ended: true)
                     }
-                } else if let progress = step.buildStep, progress != run.step {
-                    run.step = progress
+                } else if run.advance(step: step.buildStep, transfer: step.transfer, at: now) {
                     working.put(run, at: index, ended: false)
                 }
                 continue
@@ -666,7 +1104,16 @@ enum BuildTracker {
             // A finished step that isn't a build: reading or stopping a build's background shell.
             guard seen.ends.insert(step.id).inserted,
                   working.find({ $0.state == .running && $0.shellID != nil }) != nil else { continue }
-            for shell in BuildOutput.finishedShells(in: Self.output(of: step)) {
+            let output = Self.output(of: step)
+            // Reading a transfer's background shell (read_bash, BashOutput): its newest progress.
+            if let shell = Self.shellRead(by: step),
+               let (index, found) = working.find({ $0.state == .running && $0.shellID == shell && $0.isTransfer }) {
+                var run = found
+                if run.advance(step: nil, transfer: TransferProgress.latest(in: output), at: now) {
+                    working.put(run, at: index, ended: false)
+                }
+            }
+            for shell in BuildOutput.finishedShells(in: output) {
                 guard let (index, found) = working.find({ $0.state == .running && $0.shellID == shell.id }) else { continue }
                 var run = found
                 run.finish(shell.exitCode == 0 ? .succeeded : .failed, exitCode: shell.exitCode, at: now)
@@ -715,6 +1162,17 @@ enum BuildTracker {
 
     private static func output(of step: ToolActivity) -> String {
         [step.output, step.outputTail].compactMap { $0 }.joined(separator: "\n")
+    }
+
+    /// The background shell a step reads: Copilot's `read_bash`/`write_bash`, Claude's `BashOutput`/`TaskOutput`.
+    private static func shellRead(by step: ToolActivity) -> String? {
+        guard ["readbash", "writebash", "bashoutput", "taskoutput"].contains(ToolCards.normalized(step.toolName)),
+              let input = step.input, let object = JSONPrefix.firstObject(in: input) else { return nil }
+        for key in ["shellId", "shell_id", "bash_id", "task_id"] {
+            if let id = object[key] as? String { return id }
+            if let id = object[key] as? NSNumber { return id.stringValue }
+        }
+        return nil
     }
 }
 
