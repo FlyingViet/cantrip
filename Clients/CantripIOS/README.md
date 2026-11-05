@@ -238,7 +238,7 @@ The hamburger menu holds only this tab's actions, in labeled sections: **Model &
 conversation** (Model Settings, Start Fresh, Tools for This Tab, Delivery, Resume),
 **Tab** (Rename, Lock, Move to Section, Move Up/Down) and Close Tab. Voice Mode opens from
 the composer's microphone (double-tap it, or its VoiceOver action). **Pause Agent**, Memory, Usage Limits, the mascot, **Update & rebuild Cantrip**, **Mac
-permissions & View Mac** (also the display icon in the header) and **Skills & Rules** are in Settings; Builds and Background jobs are in Home and the
+permissions** (View Mac is the display icon in the header) and **Skills & Rules** are in Settings; Builds and Background jobs are in Home and the
 Tabs drawer.
 
 ### Settings
@@ -259,7 +259,7 @@ same pages as Gateway Mac:
 | Location | **Share location with messages** (off by default) and **Precise location**. While on, each message you send carries this device's location (rounded to about 1 km unless Precise is on), a place name and its time zone, so weather and "near me" answers are for where you are; the Mac tells the model to use it and name the place. While off, the Mac's own location stands in and the reply says so. When In Use permission only: one fix when you send, reused for up to 15 minutes, never in the background. It goes only to the paired Mac with that message and isn't saved in Cantrip's memory, the conversation or its logs. **Current location** shows the place it would send. |
 | Notifications | Completion and input alerts, the widget and the Live Activity. |
 | Appearance | The mascot and **Show reasoning steps**. |
-| About & Updates | This app's version, **Update & rebuild Cantrip**, **Mac permissions & View Mac** and **Skills & Rules**. |
+| About & Updates | This app's version, **Update & rebuild Cantrip**, **Mac permissions** and **Skills & Rules**. |
 
 Each page says who its settings change: **This device**, **All tabs on <Mac>** or, in a
 tab's Model Settings, **This tab**. Changes save as you make them. On an unfolded iPhone Duo
@@ -1121,7 +1121,7 @@ temporary code. GitHub Builds points to the same row when the Mac isn't signed i
 the CLI's successful exit confirms login. The Mac may store the resulting
 credential through the normal GitHub CLI credential store.
 
-### Face ID and Mac Permissions / View Mac
+### Face ID, Mac Permissions and View Mac
 
 Cantrip Agent requires **Face ID or Touch ID** before approvals, action confirmations,
 password/passphrase submission and starting a Mac viewing/control session.
@@ -1133,36 +1133,41 @@ If Face ID finishes before its system sheet closes, Cantrip Agent waits for the
 app to become active before proceeding. Backgrounding or cancelling still
 requires fresh authentication.
 
-Tap **View Mac** (the display icon) in the header, beside the menu, in Home and in tabs. On
-the iPhone Duo it's in the side bar or rail. It's also in **Settings > About & Updates > Mac
-permissions & View Mac**. See Cantrip's permission status and supported Keychain issues,
-then open the relevant settings on the Mac. Full Disk Access needs manual review.
-Touch ID status refers to the Mac; it cannot be satisfied with phone Face ID.
+**Settings > About & Updates > Mac permissions** shows Cantrip's permission status, whether View
+Mac is on, and supported Keychain issues, then opens the relevant settings on the Mac. Full Disk
+Access needs manual review. Touch ID status refers to the Mac; it cannot be satisfied with phone
+Face ID.
 
-View Mac is disabled until someone enables **Allow paired clients to view and
-control this Mac** in Cantrip settings on the host. Screen Recording is required
-for viewing, Accessibility for control. Once enabled, holders of the pairing
-token can start sessions; keep that token private. Choose view-only or control,
-authenticate, pick a display and zoom. Tap the destination field/window before
-typing or sending keys/scroll. Typed text goes to the Mac's actual focused
-field: verify focus before entering a password.
-The keyboard/pointer control preference is remembered on this device, but is not
-an active session or a permission grant. Each session requires authentication;
-**Done** ends the current session, and reopening Mac Access does not reconnect.
+**View Mac** is the display icon in the header, beside the menu, in Home and in tabs (on the
+iPhone Duo, in the side bar or rail). It opens straight into full screen and asks Face ID; the
+status bar, the iPhone Duo's side bar and the home indicator are hidden. It is disabled on the
+Mac until someone enables **Allow paired clients to view and control this Mac** in Cantrip
+settings on the host; Screen Recording is required for viewing, Accessibility for control. Once
+enabled, holders of the pairing token can start sessions; keep that token private. If a session
+can't start (or ends), a card says why, with **Keyboard and pointer control** (remembered on
+this device; not a session or a permission grant), **Authenticate**, **Mac Permissions** and
+**Close**.
 
-**Full Screen** (beside Zoom once a session is on) shows the Mac edge to edge, with the
-status bar, the iPhone Duo's side bar and the home indicator hidden. A toolbar drops down from
-the top: **Exit Full Screen**, **Show/Hide Keyboard**, the tap action (Click, Double Click,
-Right Click), Escape, Tab, Return, Delete, the arrows and scroll (in a menu on narrow screens),
-zoom and display, the time left, and **Hide Toolbar**, which folds it into a small tab at
-the top (tap or pull it down to bring it back). With the keyboard up, each key goes straight to
-the Mac as you type (keys typed while one is on its way travel together, in order); nothing
-typed is shown, suggested or learned on this device. A hardware keyboard's arrows and Escape
-work too. The Mac's screen shrinks to stay above the keyboard. Exit returns to View Mac with the
-session still on; the session ends as before.
+Touch works on the Mac: tap to click (or the chosen tap action), double-tap to double-click,
+tap with two fingers to right-click, and drag with one finger to drag (move a window by its title
+bar, select text, drag a file); a dashed line shows the drag until the next frame does. Pinch to
+zoom (up to 4×) and move the zoomed screen with two fingers. Dragging needs Cantrip on the Mac
+from this release; on older Macs one finger moves the zoomed screen instead. Click the
+destination field or window before typing, sending keys or scrolling. Typed text goes to the
+Mac's actual focused field: verify focus before entering a password.
+
+A toolbar drops down from the top: **Close View Mac** (ends the session), **Show/Hide
+Keyboard**, the tap action (Click, Double Click, Right Click), Escape, Tab, Return, Delete, the
+arrows and scroll (in a menu on narrow screens), **Screen** (Fit to Screen, the display, and
+switching between view-only and control, which starts a new session), the time left, and
+**Hide Toolbar**, which folds it into a small tab at the top (tap or pull it down to bring it
+back). With the keyboard up, each key goes straight to the Mac as you type (keys typed while one
+is on its way travel together, in order); nothing typed is shown, suggested or learned on this
+device. A hardware keyboard's arrows and Escape work too. The Mac's screen shrinks to stay above
+the keyboard.
 
 Sessions use in-memory encrypted snapshots about once a second, with basic
-click/right-click/double-click, text, navigation keys and scroll. No images or
+click/right-click/double-click, drag, text, navigation keys and scroll. No images or
 typed input are saved by Cantrip/Cantrip Agent or sent to an AI model by this
 feature. The receiving Mac app may still store what you type. Keys and frames
 are discarded when the view closes/backgrounds. Host leases expire after five

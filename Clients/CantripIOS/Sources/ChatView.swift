@@ -2484,7 +2484,11 @@ struct ChatView: View {
         guard vm.activeLane.usesCantripRemote else { return nil }
         return AnyView(CantripViewMacButton {
             composerFocused = false
+            #if os(iOS)
+            CantripViewMacPresenter.present(remote: remote)
+            #else
             remote.showingMacAccess = true
+            #endif
         }
         .disabled(!remote.isConfigured))
     }
@@ -3258,7 +3262,7 @@ struct ChatSettingsButton: View {
     }
 }
 
-/// Opens View Mac: the Mac's screen (full screen from there) and its permissions.
+/// Opens View Mac: the Mac's screen, full screen.
 struct CantripViewMacButton: View {
     @Environment(\.chatHeaderGlassAction) private var inGlass
     let onOpen: () -> Void
@@ -3279,7 +3283,7 @@ struct CantripViewMacButton: View {
             }
         }
         .accessibilityLabel("View Mac")
-        .accessibilityHint("Shows your Mac's screen and its permissions")
+        .accessibilityHint("Shows your Mac's screen, full screen")
         .accessibilityIdentifier("chat.viewMac")
     }
 }

@@ -38,6 +38,8 @@ struct CantripDesktopLease: Decodable {
     let expiresAt: Double
     let control: Bool
     let displays: [CantripDesktopDisplay]
+    /// The Mac takes "drag" input; older Macs leave this out.
+    var supportsDrag: Bool? = nil
 }
 
 struct CantripDesktopFrame: Decodable {
@@ -66,6 +68,9 @@ struct CantripDesktopCommand: Encodable {
     var text: String?
     var key: String?
     var delta: Int?
+    /// Where a drag lets go; `x` and `y` are where it presses.
+    var toX: Double?
+    var toY: Double?
 
     func encrypted(lease: CantripDesktopLease, sequence: Int) throws -> String {
         guard let data = Data(base64Encoded: lease.key), data.count == 32 else { throw CantripRemoteError.invalidResponse }
@@ -272,9 +277,6 @@ struct CantripMacAccessView: View {
     @State private var clickKind = "click"
     @State private var text = ""
     @State private var settingsBusy = false
-    #if os(iOS)
-    @State private var fullScreen: UIViewController?
-    #endif
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
 
@@ -287,6 +289,11 @@ struct CantripMacAccessView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text(snapshot?.name ?? "Cantrip Mac").font(.headline)
+                #if os(iOS)
+                // View Mac itself opens full screen from the header's display icon.
+                viewMacStatus
+                if let error { Text(error).foregroundStyle(.orange) }
+                #else
                 Text("Explicit remote viewing only. Screen frames and typed input are not saved or sent to the model. The paired connection carries the viewing key; only use a trusted HTTPS endpoint.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Text("Face ID or Touch ID confirms sensitive approvals, secure input, and each View Mac session. It authorizes Cantrip Agent actions, not macOS Touch ID or Keychain access. Deny and Cancel do not need biometrics.")
@@ -297,21 +304,9 @@ struct CantripMacAccessView: View {
                     Picker("Display", selection: $desktop.displayID) {
                         ForEach(lease.displays) { Text($0.name).tag(Optional($0.id)) }
                     }
-                    HStack(spacing: 12) {
-                        Picker("Zoom", selection: $zoom) {
-                            Text("1x").tag(1); Text("2x").tag(2); Text("3x").tag(3)
-                        }.pickerStyle(.segmented)
-                        #if os(iOS)
-                        Button(action: openFullScreen) {
-                            Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
-                                .frame(minHeight: 32)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .accessibilityHint(lease.control ? "Shows the Mac edge to edge, with a keyboard that types on the Mac."
-                                                         : "Shows the Mac edge to edge.")
-                        .accessibilityIdentifier("desktop.fullScreen.open")
-                        #endif
-                    }
+                    Picker("Zoom", selection: $zoom) {
+                        Text("1x").tag(1); Text("2x").tag(2); Text("3x").tag(3)
+                    }.pickerStyle(.segmented)
                     screen
                     if lease.control { controls }
                     Text("Protected dialogs may be hidden or reject input. A sent click is not confirmation that macOS authorized an operation. Touch ID cannot be performed remotely.")
@@ -336,22 +331,19 @@ struct CantripMacAccessView: View {
                         Text("First enable “Allow paired clients to view and control this Mac” in Cantrip settings on the Mac. The phone cannot enable this permission remotely.")
                     }
                 }
+                #endif
                 permissions
             }.padding()
         }
-        .navigationTitle("Mac Access").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(Self.title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-            ToolbarItem(placement: .primaryAction) { Button("Refresh") { Task { await load() } } }
+            ToolbarItem(placement: .primaryAction) {
+                Button { Task { await load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+            }
         }
         .task { await load() }
-        .onDisappear {
-            text = ""
-            #if os(iOS)
-            fullScreen?.dismiss(animated: false)
-            #endif
-            Task { await desktop.stop() }
-        }
+        .onDisappear { text = ""; Task { await desktop.stop() } }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || (phase == .inactive && desktop.lease != nil) {
                 text = ""; Task { await desktop.stop() }
@@ -418,6 +410,24 @@ struct CantripMacAccessView: View {
         }.disabled(desktop.busy || desktop.frame == nil)
     }
 
+    #if os(iOS)
+    static let title = "Mac Permissions"
+
+    @ViewBuilder private var viewMacStatus: some View {
+        if let snapshot {
+            Label(snapshot.desktopEnabled
+                  ? "View Mac is on. Open it with the display icon at the top of the chat."
+                  : "View Mac is off. Turn on “Allow paired clients to view and control this Mac” in Cantrip settings on the Mac; the phone can't turn it on.",
+                  systemImage: "display")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("cantrip.macAccess.viewMac")
+        }
+    }
+    #else
+    static let title = "Mac Access"
+    #endif
+
     private var permissions: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Mac Permissions & Attention").font(.headline)
@@ -456,13 +466,6 @@ struct CantripMacAccessView: View {
         guard let frame = desktop.frame else { return }
         Task { await desktop.send(.init(frameID: frame.id, kind: "scroll", delta: delta)) }
     }
-
-    #if os(iOS)
-    private func openFullScreen() {
-        guard fullScreen?.presentingViewController == nil else { return }
-        fullScreen = CantripDesktopFullScreenPresenter.present(desktop: desktop, clickKind: $clickKind, zoom: $zoom)
-    }
-    #endif
 
     private func load() async {
         do { snapshot = try await remote.macAccess(); error = nil }

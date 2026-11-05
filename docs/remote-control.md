@@ -456,9 +456,9 @@ required. All native clients/host need the updated build.
 
 ## Mac attention, View Mac and Face ID
 
-Open **Mac Permissions & View Mac** from the Remote tab menu or Cantrip Agent's
-**Settings > Cantrip Mac**; Cantrip Agent also has **View Mac** (a display icon) in its header,
-in Home and in tabs. The page reports Cantrip's Screen Recording,
+Open **Mac Permissions & View Mac** from the Remote tab menu, or **Mac permissions** in
+Cantrip Agent's **Settings > About & Updates** (Cantrip Agent's View Mac is the display icon in
+its header and opens full screen). The page reports Cantrip's Screen Recording,
 Accessibility, Microphone and Speech Recognition grants, plus its own Keychain
 access issues. Full Disk Access is labeled for manual review; there is no
 blanket public permission-status API. Touch ID & Password shows local
@@ -492,9 +492,14 @@ To use View Mac:
    sending text, Return/Tab/Escape/Delete/arrows or scroll commands. Text entry
    is masked locally but is typed into the Mac's actual focused field, which
    may not be a password field. Check focus before sending secrets.
-5. In Cantrip Agent, **Full Screen** shows the Mac edge to edge with a toolbar
-   that drops down from the top; its keyboard button brings up the keyboard,
-   which types each key straight onto the Mac.
+5. In Cantrip Agent, View Mac opens full screen with a toolbar that drops down
+   from the top. Tap to click, double-tap to double-click, tap with two fingers
+   to right-click and drag with one finger to drag (e.g. a window by its title
+   bar); pinch to zoom and move the zoomed screen with two fingers. Its keyboard
+   button brings up the keyboard, which types each key straight onto the Mac.
+   Drags are a `drag` input (`x`/`y` press, `toX`/`toY` release, fractions of
+   the display); the Mac presses, moves in steps and releases, and leases say
+   `supportsDrag: true` (older hosts leave it out).
 
 This is a roughly one-frame-per-second assistance view, not full-rate screen
 sharing or a replacement for all remote desktop features. Only one session is
