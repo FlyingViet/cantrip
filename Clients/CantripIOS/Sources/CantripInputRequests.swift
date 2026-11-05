@@ -402,7 +402,7 @@ struct CantripInputRequestsView: View {
                     Text(session.title).font(.headline)
                     Text("Use this secure form only for passwords and passphrases. Questions and approvals appear in chat.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    NavigationLink("Mac Permissions & View Mac") { CantripMacAccessView(remote: model) }
+                    NavigationLink(CantripMacAccessView.title) { CantripMacAccessView(remote: model) }
                     if loading { ProgressView("Loading pending requests...") }
                     if let error { Text(error).foregroundStyle(.orange).accessibilityIdentifier("cantrip.input.error") }
                     if !loading, requests.isEmpty {

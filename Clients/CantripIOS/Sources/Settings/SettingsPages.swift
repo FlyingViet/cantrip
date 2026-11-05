@@ -364,6 +364,14 @@ struct SettingsGitHubSection: View {
 
 /// This app's version, Cantrip's update on the Mac, and the Mac's permissions.
 struct SettingsAboutPage: View {
+    #if os(iOS)
+    // View Mac opens full screen from the header; this page is the Mac's permissions.
+    static let macAccessTitle = "Mac permissions"
+    static let macAccessFooter = "Permissions shows what the Mac lets Cantrip do; View Mac is the display icon at the top of the chat."
+    #else
+    static let macAccessTitle = "Mac permissions & View Mac"
+    static let macAccessFooter = "Permissions shows what the Mac lets Cantrip do, and lets you view its screen."
+    #endif
     @ObservedObject var env: HermesEnv
     @ObservedObject var remote: CantripRemoteModel
 
@@ -387,7 +395,7 @@ struct SettingsAboutPage: View {
                     CantripMacAccessView(remote: remote)
                         .settingsBack(to: SettingsPage.about.title)
                 } label: {
-                    Label("Mac permissions & View Mac", systemImage: "display")
+                    Label(Self.macAccessTitle, systemImage: "display")
                 }
                 .accessibilityIdentifier("settings.macAccess")
                 NavigationLink {
@@ -400,7 +408,7 @@ struct SettingsAboutPage: View {
             } header: {
                 Text("Cantrip on \(remote.macName)")
             } footer: {
-                Text("Update pulls Cantrip's latest version on the Mac and reopens it when no tab is working. Permissions shows what the Mac lets Cantrip do, and lets you view its screen. Skills & Rules turns the Mac's shared skills on or off for every backend.")
+                Text("Update pulls Cantrip's latest version on the Mac and reopens it when no tab is working. \(Self.macAccessFooter) Skills & Rules turns the Mac's shared skills on or off for every backend.")
             }
             .disabled(!remote.isConfigured)
             SettingsManifestSections(page: "about")

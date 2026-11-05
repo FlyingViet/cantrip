@@ -317,17 +317,19 @@ final class CantripMacAccessTests: XCTestCase {
         let suite = "CantripMacAccessTests.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let remote = try await model { _ in XCTFail("A saved preference is not authorization") }
-        MacAccessProtocol.handler = { request in
-            XCTAssertEqual(request.httpMethod, "GET")
-            XCTAssertEqual(request.url?.path, "/api/v1/mac-access")
+        _ = try await model { _ in XCTFail("A saved preference is not authorization") }
+        MacAccessProtocol.handler = { _ in
+            XCTFail("Changing the preference must not reach the Mac")
             return (200, self.status)
         }
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
         for expected in [false, true, false] {
             let controller = UIHostingController(rootView:
-                NavigationStack { CantripMacAccessView(remote: remote) }.defaultAppStorage(defaults))
+                CantripDesktopStartCard(macName: "Fixture Mac", busy: false, error: nil, onStart: {
+                    XCTFail("Changing the preference must not start a session")
+                }, onOpenPermissions: {}, onClose: {})
+                .defaultAppStorage(defaults))
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
             window.rootViewController = controller
@@ -393,24 +395,59 @@ final class CantripMacAccessTests: XCTestCase {
         XCTAssertNil(queue.next())
     }
 
-    func testFullScreenFitsTheMacAndMapsTapsToIt() {
+    func testFullScreenFitsTheMacAndMapsTouchesToIt() {
         let image = CGSize(width: 1600, height: 1000)
-        XCTAssertEqual(CantripDesktopFit.size(image: image, in: CGSize(width: 800, height: 800), zoom: 1),
-                       CGSize(width: 800, height: 500))
-        XCTAssertEqual(CantripDesktopFit.size(image: image, in: CGSize(width: 1200, height: 500), zoom: 1),
-                       CGSize(width: 800, height: 500), "Fits the shorter side, e.g. above the keyboard")
-        XCTAssertEqual(CantripDesktopFit.size(image: image, in: CGSize(width: 800, height: 800), zoom: 2),
-                       CGSize(width: 1600, height: 1000))
-        XCTAssertEqual(CantripDesktopFit.size(image: .zero, in: CGSize(width: 800, height: 800), zoom: 1), .zero)
+        XCTAssertEqual(CantripDesktopFit.fitScale(image: image, in: CGSize(width: 800, height: 800)), 0.5)
+        XCTAssertEqual(CantripDesktopFit.fitScale(image: image, in: CGSize(width: 1200, height: 500)), 0.5,
+                       "Fits the shorter side, e.g. above the keyboard")
+        XCTAssertEqual(CantripDesktopFit.fitScale(image: .zero, in: CGSize(width: 800, height: 800)), 1)
 
         let shown = CGSize(width: 800, height: 500)
         XCTAssertEqual(CantripDesktopFit.point(CGPoint(x: 400, y: 125), in: shown), CGPoint(x: 0.5, y: 0.25))
         XCTAssertEqual(CantripDesktopFit.point(CGPoint(x: 800, y: 500), in: shown)?.x ?? 1, 0.999999, accuracy: 1e-9)
-        XCTAssertNil(CantripDesktopFit.point(CGPoint(x: -1, y: 10), in: shown))
+        XCTAssertNil(CantripDesktopFit.point(CGPoint(x: -1, y: 10), in: shown), "A tap off the screen clicks nothing")
         XCTAssertNil(CantripDesktopFit.point(CGPoint(x: 10, y: 501), in: shown))
+        // A drag that runs off the screen lets go at its edge.
+        XCTAssertEqual(CantripDesktopFit.clampedPoint(CGPoint(x: -40, y: 250), in: shown), CGPoint(x: 0, y: 0.5))
+        XCTAssertEqual(CantripDesktopFit.clampedPoint(CGPoint(x: 900, y: 600), in: shown)?.y ?? 0, 0.999999, accuracy: 1e-9)
 
         XCTAssertEqual(CantripDesktopFit.remaining(until: 1_000_245, now: Date(timeIntervalSince1970: 1_000_000)), "4:05")
         XCTAssertEqual(CantripDesktopFit.remaining(until: 1_000_000, now: Date(timeIntervalSince1970: 1_000_010)), "0:00")
+    }
+
+    func testScreenFitsPinchesAndKeepsOneFingerForTheMac() throws {
+        let screen = CantripDesktopScreenView(frame: CGRect(x: 0, y: 0, width: 800, height: 800))
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 1600, height: 1000)).image { context in
+            UIColor.gray.setFill(); context.fill(CGRect(x: 0, y: 0, width: 1600, height: 1000))
+        }
+        screen.show(image)
+        screen.layoutIfNeeded()
+        XCTAssertEqual(screen.zoomScale, 0.5, accuracy: 0.001, "Starts fitted")
+        XCTAssertEqual(screen.minimumZoomScale, 0.5, accuracy: 0.001)
+        XCTAssertEqual(screen.maximumZoomScale, 0.5 * CantripDesktopFit.maxZoom, accuracy: 0.001, "Pinch zooms in up to 4×")
+        XCTAssertEqual(screen.contentInset.top, 150, accuracy: 0.5, "Centered between the bands")
+
+        // The keyboard takes room: a fitted screen stays fitted.
+        screen.frame = CGRect(x: 0, y: 0, width: 800, height: 400)
+        screen.layoutIfNeeded()
+        XCTAssertEqual(screen.zoomScale, 0.4, accuracy: 0.001)
+        // Zoomed in, it stays zoomed when the room changes, and Fit brings it back.
+        screen.zoomScale = 1.2
+        screen.frame = CGRect(x: 0, y: 0, width: 800, height: 800)
+        screen.layoutIfNeeded()
+        XCTAssertEqual(screen.zoomScale, 1.2, accuracy: 0.001)
+        screen.fit()
+        XCTAssertEqual(screen.zoomScale, 0.5, accuracy: 0.001)
+
+        // View only: one finger moves the zoomed screen. In control: one finger is the Mac's.
+        XCTAssertEqual(screen.panGestureRecognizer.minimumNumberOfTouches, 1)
+        screen.controls = true
+        XCTAssertEqual(screen.panGestureRecognizer.minimumNumberOfTouches, 1, "A Mac without drags keeps one-finger panning")
+        screen.dragsOnMac = true
+        XCTAssertEqual(screen.panGestureRecognizer.minimumNumberOfTouches, 2, "Two fingers move the zoomed screen")
+        XCTAssertNotNil(screen.pinchGestureRecognizer)
+        XCTAssertEqual(screen.imageView.accessibilityIdentifier, "desktop.fullScreen.screen")
+        XCTAssertTrue(screen.imageView.accessibilityTraits.contains(.allowsDirectInteraction))
     }
 
     func testLiveTypingReachesTheMacInOrderOneInputAtATime() async throws {
