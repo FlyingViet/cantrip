@@ -268,6 +268,21 @@ final class SessionManager: ObservableObject {
         return session
     }
 
+    /// Adds a tab Cantrip Home opened, filed under a section. The selected tab stays selected:
+    /// Home never switches what the user is looking at.
+    @discardableResult
+    func addTab(_ session: ChatSession, inSection sectionID: UUID?) throws -> ChatSession {
+        if let sectionID, !tabSections.contains(where: { $0.id == sectionID }) { throw TabSectionError.unavailable }
+        let selectedID = sessions.isEmpty ? nil : active.id
+        adopt(session)
+        if let selectedID, let index = sessions.firstIndex(where: { $0.id == selectedID }), index != activeIndex {
+            activeIndex = index
+        }
+        persistOpenSessions()
+        if let sectionID { try setSection(sectionID, for: session.id) }
+        return session
+    }
+
     func select(_ index: Int) {
         guard sessions.indices.contains(index) else { return }
         activeIndex = index
