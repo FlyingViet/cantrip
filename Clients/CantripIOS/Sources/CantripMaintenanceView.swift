@@ -208,7 +208,7 @@ private struct CantripMaintenanceContent: View {
                               systemImage: "pencil")
                     }
                     if snapshot.busySessions > 0 {
-                        Label("\(snapshot.busySessions) busy Mac tab(s). Builds and restart require idle tabs.",
+                        Label("\(snapshot.busySessions) busy Mac tab(s) or Home task(s). Builds and restart wait until they finish.",
                               systemImage: "hourglass")
                     }
                     if let reason = snapshot.unavailableReason {

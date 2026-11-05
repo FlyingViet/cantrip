@@ -696,7 +696,7 @@ export function isMaintenanceRequest(value: unknown): value is MaintenanceReques
 }
 
 export function busySessionsText(count: number): string {
-  return `${count} busy Mac tab(s). Builds and restart require idle tabs.`;
+  return `${count} busy Mac tab(s) or Home task(s). Builds and restart wait until they finish.`;
 }
 
 /** The connected Mac's host for the maintenance header (CantripRemoteModel.endpointHost). */

@@ -7,9 +7,11 @@ struct LauncherView: View {
     /// Active session — manager forwards child objectWillChange, so
     /// observing the manager is sufficient for re-rendering.
     private var session: ChatSession { manager.active }
-    /// Tabs streaming, queued, or running a shell command; restarting would cut them off.
+    /// Tabs streaming, queued, or running a shell command, and Home's queued and running tasks;
+    /// restarting would cut them off.
     private var busySessionCount: Int {
         manager.sessions.filter { $0.isStreaming || !$0.queued.isEmpty || $0.shell.isRunning }.count
+            + CantripHomeStore.shared.runner.jobs.count
     }
     private var shell: PersistentShell { session.shell }
     @ObservedObject var settings = AppSettings.shared

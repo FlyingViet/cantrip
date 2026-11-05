@@ -68,6 +68,7 @@ final class RemoteMaintenance {
     private let runningBuild: String
     private let run: Runner
     private let restart: @MainActor (URL) throws -> Void
+    private let homeRuns: @MainActor () -> Int
     private var state = State()
     private var loadError: String?
     private var branch: String?
@@ -84,6 +85,7 @@ final class RemoteMaintenance {
          runningBuild: String = CrashRecovery.buildIdentity,
          run: @escaping Runner = RemoteMaintenance.runCommand,
          restart: @escaping @MainActor (URL) throws -> Void = RemoteMaintenance.relaunch,
+         homeRuns: @escaping @MainActor () -> Int = { CantripHomeStore.shared.runner.jobs.count },
          latest: @escaping @Sendable () async throws -> ReleaseUpdater.Release = { try await ReleaseUpdater.latest() },
          stage: @escaping @MainActor (ReleaseUpdater.Release, URL, @escaping (String) -> Void) async throws -> String
             = { try await ReleaseUpdater.stage($0, app: $1, progress: $2) }) {
@@ -96,6 +98,7 @@ final class RemoteMaintenance {
         self.runningBuild = runningBuild
         self.run = run
         self.restart = restart
+        self.homeRuns = homeRuns
         do {
             if let saved = try PrivateFile.read(State.self, from: stateFile) {
                 state = saved
@@ -128,8 +131,11 @@ final class RemoteMaintenance {
         return nil
     }
 
+    /// Work a restart would cut off: tabs streaming, queued or running a shell command, and Cantrip
+    /// Home's queued and running tasks (a task interrupted mid-run isn't retried).
     private var busySessions: Int {
-        manager?.sessions.filter { $0.isStreaming || !$0.queued.isEmpty || $0.shell.isRunning }.count ?? 0
+        (manager?.sessions.filter { $0.isStreaming || !$0.queued.isEmpty || $0.shell.isRunning }.count ?? 0)
+            + homeRuns()
     }
 
     /// A build staged while Cantrip runs is installed by the next launch.
@@ -169,7 +175,7 @@ final class RemoteMaintenance {
             throw RemoteMaintenanceError(status: 409,
                 message: "This Mac runs a release of Cantrip, so there's no source to rebuild. Use Update to download the newest release.")
         }
-        // Downloading a release touches no running work; builds and restarts wait for idle tabs.
+        // Downloading a release touches no running work; builds and restarts wait for tabs and Home tasks.
         if request.action != .check, !(isRelease && request.action == .update) { try requireIdle() }
         let previous = state
         state.revision = UUID()
@@ -201,7 +207,7 @@ final class RemoteMaintenance {
     private func requireIdle() throws {
         guard manager != nil, busySessions == 0 else {
             throw RemoteMaintenanceError(status: 409,
-                message: "Wait for all Mac tabs, queued prompts, and shell commands to finish. No work has been stopped.")
+                message: "Wait for all Mac tabs, queued prompts, shell commands and Home tasks to finish. No work has been stopped.")
         }
     }
 

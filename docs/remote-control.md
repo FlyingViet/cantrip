@@ -1106,12 +1106,14 @@ macOS permissions. Status reports that staged build as `installedBuild`.
 **Restart Cantrip** is separate and explicitly confirmed, verifies the staged
 (or installed) signature, flushes session journals, rechecks for active work,
 then quits cleanly and reopens that exact bundle path. The launch installs the
-staged build before starting. Builds and restart refuse busy tabs, queues, and persistent shell
-commands, including private sessions; they never cancel a run. New work that
+staged build before starting. Builds and restart refuse busy tabs, queues, persistent shell
+commands (including private sessions) and Cantrip Home's queued or running tasks, since a task
+cut off mid-run isn't retried; they never cancel a run. New work that
 starts during a build is left alone and blocks a subsequent restart.
 
 Pairing-authenticated `GET /api/v1/maintenance` returns build identities,
-availability, an opaque `revision`, aggregate busy-tab count, latest operation,
+availability, an opaque `revision`, `busySessions` (busy tabs plus Home's queued and running
+tasks), latest operation,
 and accepted request IDs. `POST` accepts exactly `id` (UUID), `revision` (from
 the latest status), and `action` (`check`, `update`, `rebuild`, `restart`);
 it returns 202 while the Mac continues independently of the phone. It accepts
