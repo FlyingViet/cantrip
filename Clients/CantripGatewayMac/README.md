@@ -123,7 +123,9 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   Collapsed sections still show working tabs. Child tabs sit indented under their parent
   with a branch mark and stay there until their work merges. The footer
   shows the connection.
-- **Tabs:** selecting a tab shows its transcript and composer in place. The toolbar shows its
+- **Tabs:** selecting a tab shows its transcript and composer in place, with the cursor in the
+  composer. Typing while the sidebar list has focus goes to the composer instead of jumping to a
+  tab by its first letter; the arrow keys still move through the list. The toolbar shows its
   name and **Working / Idle · folder**, with Stop, delivery (**Auto**) and **⋯** for the tab's
   actions, Resume, voice mode and **Back to Home**. ⌘1–⌘3 or any Home section returns.
   **Start Fresh** (also in the Tab menu) keeps the tab and its messages but starts the next
@@ -156,7 +158,8 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   [Cantrip Agent's README](../CantripIOS/README.md#mention-a-tab-with-)).
 - **Terminal:** the toolbar's terminal button (or ⌃`) opens the tab's shell on the Mac under its
   conversation: the same persistent shell as the Cantrip panel's terminal mode, so `cd`, exports
-  and history carry across devices, and the agent's own commands appear there too. Type a line
+  and history carry across devices, and the agent's own commands appear there too. Opening it puts
+  the cursor on its command line; switching tabs puts it back in the composer. Type a line
   and press Return (while a command runs, the line goes to its input); Up/Down browse history,
   ⌃C interrupts, and the pane has Clear, Restart Shell and Close. Drag its top edge to resize.
   The button turns orange while a command runs with the pane hidden. Line-based, so full-screen

@@ -78,7 +78,25 @@ struct MacHomeSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        // Typing while the list has focus goes to the composer: a stray letter never picks a tab by
+        // its first letter. The arrow keys still move through the list.
+        .onKeyPress(phases: .down) { press in
+            guard let text = MacHomeSidebar.composerText(press.characters, modifiers: press.modifiers) else { return .ignored }
+            navigation.typeIntoComposer(text)
+            return .handled
+        }
         .accessibilityIdentifier("sidebar.list")
+    }
+
+    /// Printable text (letters, digits, punctuation, space) typed without ⌘, ⌃ or ⌥.
+    static func composerText(_ characters: String, modifiers: EventModifiers) -> String? {
+        guard modifiers.isDisjoint(with: [.command, .control, .option]), !characters.isEmpty,
+              characters.unicodeScalars.allSatisfy({ scalar in
+                  !CharacterSet.controlCharacters.contains(scalar)
+                      // AppKit's function keys (arrows, Home, F1…) live in the private-use range.
+                      && !(0xF700...0xF8FF).contains(scalar.value)
+              }) else { return nil }
+        return characters
     }
 
     /// Rows reorder inside their list; dropping one on a section's header files it there.

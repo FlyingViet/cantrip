@@ -6,6 +6,10 @@ import SwiftUI
 struct MacTerminalPane: View {
     @ObservedObject var remote: CantripRemoteModel
     let session: CantripRemoteSession
+    /// True once, right after the pane is opened: its command line takes the cursor.
+    var takesFocus: () -> Bool = { false }
+    /// The command line gained or lost the cursor.
+    var onFocusChange: (Bool) -> Void = { _ in }
     let onClose: () -> Void
     @AppStorage("cantrip.terminal.height") private var height = 240.0
     @StateObject private var terminal = CantripTerminalModel()
@@ -13,6 +17,8 @@ struct MacTerminalPane: View {
     @State private var history = CantripTerminalHistory()
     @State private var dragStart: Double?
     @FocusState private var focused: Bool
+    /// Opened just now: the command line takes the cursor once it's enabled.
+    @State private var focusWhenLoaded = false
 
     static let minimumHeight = 120.0
 
@@ -27,14 +33,24 @@ struct MacTerminalPane: View {
         }
         .frame(height: height)
         .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
-        .onAppear { start() }
+        .onAppear {
+            start()
+            focusWhenLoaded = takesFocus()
+            focusIfLoaded()
+        }
+        .onChange(of: terminal.isLoaded) { _, _ in focusIfLoaded() }
         .onChange(of: session.id) { _, _ in
             command = ""
             history.reset()
+            focusWhenLoaded = false
             start()
         }
         .onChange(of: remote.isConfigured) { _, _ in start() }
-        .onDisappear { terminal.stop() }
+        .onChange(of: focused) { _, now in onFocusChange(now) }
+        .onDisappear {
+            terminal.stop()
+            onFocusChange(false)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("terminal.pane")
     }
@@ -42,7 +58,13 @@ struct MacTerminalPane: View {
     private func start() {
         guard session.supportsTerminal == true else { return terminal.stop() }
         terminal.start(remote: remote, sessionID: session.id)
-        focused = true
+    }
+
+    private func focusIfLoaded() {
+        guard focusWhenLoaded, session.supportsTerminal == true, terminal.isLoaded else { return }
+        focusWhenLoaded = false
+        // The field enables in this same update; focus it once it has.
+        DispatchQueue.main.async { focused = true }
     }
 
     /// Drag the top edge to resize; the height is kept for every tab.

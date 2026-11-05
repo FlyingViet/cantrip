@@ -243,3 +243,66 @@ final class MacHomeWindowSmokeTests: XCTestCase {
         window.close()
     }
 }
+
+/// A stray key never picks a tab: switching or typing in the sidebar puts it in the composer,
+/// while the arrow keys still walk the list.
+@MainActor
+final class MacComposerFocusTests: XCTestCase {
+    private func key(_ code: UInt16, _ flags: NSEvent.ModifierFlags = []) -> NSEvent? {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+                         context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false,
+                         keyCode: code)
+    }
+
+    func testOnlyPlainListKeysKeepTheListFocused() {
+        XCTAssertTrue(MacHomeNavigation.isListNavigation(key(125)), "down arrow")
+        XCTAssertTrue(MacHomeNavigation.isListNavigation(key(126, [.numericPad, .function])), "up arrow")
+        XCTAssertTrue(MacHomeNavigation.isListNavigation(key(119)), "End")
+        XCTAssertFalse(MacHomeNavigation.isListNavigation(key(125, .command)))
+        XCTAssertFalse(MacHomeNavigation.isListNavigation(key(8)), "a letter")
+        XCTAssertFalse(MacHomeNavigation.isListNavigation(nil), "a programmatic switch")
+        let click = NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                       windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+        XCTAssertFalse(MacHomeNavigation.isListNavigation(click))
+    }
+
+    func testSidebarHandsOnlyPrintableKeysToTheComposer() {
+        XCTAssertEqual(MacHomeSidebar.composerText("c", modifiers: []), "c")
+        XCTAssertEqual(MacHomeSidebar.composerText("C", modifiers: .shift), "C")
+        XCTAssertEqual(MacHomeSidebar.composerText(" ", modifiers: []), " ")
+        XCTAssertNil(MacHomeSidebar.composerText("c", modifiers: .command), "shortcuts keep working")
+        XCTAssertNil(MacHomeSidebar.composerText("c", modifiers: .control))
+        XCTAssertNil(MacHomeSidebar.composerText("\r", modifiers: []))
+        XCTAssertNil(MacHomeSidebar.composerText("\u{1B}", modifiers: []))
+        XCTAssertNil(MacHomeSidebar.composerText("\u{F700}", modifiers: []), "arrow keys move the list")
+        XCTAssertNil(MacHomeSidebar.composerText("", modifiers: []))
+    }
+
+    func testListTypingGoesToTheComposerOnlyWhereThereIsOne() {
+        let navigation = MacHomeNavigation()
+        navigation.section = .tasks
+        navigation.typeIntoComposer("x")
+        XCTAssertNil(navigation.composerTyping, "Tasks has no composer")
+        XCTAssertEqual(navigation.composerFocusRequest, 0)
+
+        navigation.section = .chat
+        navigation.typeIntoComposer("h")
+        navigation.typeIntoComposer("i")
+        XCTAssertEqual(navigation.composerTyping, "hi")
+        XCTAssertEqual(navigation.composerFocusRequest, 2)
+    }
+
+    func testOpeningTheTerminalHandsItTheCursor() {
+        let key = "cantrip.terminal.open"
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        let navigation = MacHomeNavigation()
+        navigation.showingTerminal = false
+        navigation.terminalWantsFocus = false
+        navigation.showingTerminal = true
+        XCTAssertTrue(navigation.terminalWantsFocus)
+        navigation.terminalWantsFocus = false
+        navigation.showingTerminal = true
+        XCTAssertFalse(navigation.terminalWantsFocus, "Only opening it moves the cursor")
+    }
+}
