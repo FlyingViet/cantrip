@@ -76,6 +76,57 @@ struct CantripDesktopCommand: Encodable {
     }
 }
 
+/// Keys typed on the full-screen keyboard, waiting to reach the Mac in order. Characters typed while
+/// an input is on its way travel together in the next one; Return and Tab go as their own keys.
+struct CantripDesktopTypingQueue: Equatable {
+    enum Input: Equatable {
+        case text(String)
+        case key(String)
+    }
+
+    /// The Mac takes at most this many bytes of text per input.
+    static let maxTextBytes = 4096
+    private(set) var pending: [Input] = []
+
+    var isEmpty: Bool { pending.isEmpty }
+
+    mutating func type(_ text: String) {
+        for character in text {
+            switch character {
+            case "\n", "\r", "\r\n": pending.append(.key("return"))
+            case "\t": pending.append(.key("tab"))
+            default:
+                let value = String(character)
+                if case .text(let run)? = pending.last, run.utf8.count + value.utf8.count <= Self.maxTextBytes {
+                    pending[pending.count - 1] = .text(run + value)
+                } else {
+                    pending.append(.text(value))
+                }
+            }
+        }
+    }
+
+    mutating func press(_ key: String) {
+        pending.append(.key(key))
+    }
+
+    /// Takes back a character that hasn't left yet; otherwise deletes on the Mac.
+    mutating func deleteBackward() {
+        if case .text(var run)? = pending.last {
+            run.removeLast()
+            if run.isEmpty { pending.removeLast() } else { pending[pending.count - 1] = .text(run) }
+        } else {
+            pending.append(.key("delete"))
+        }
+    }
+
+    mutating func next() -> Input? {
+        pending.isEmpty ? nil : pending.removeFirst()
+    }
+
+    mutating func clear() { pending.removeAll() }
+}
+
 @MainActor
 final class CantripDesktopModel: ObservableObject {
     @Published private(set) var lease: CantripDesktopLease?
@@ -134,6 +185,7 @@ final class CantripDesktopModel: ObservableObject {
         generation += 1
         starting?.cancel(); starting = nil
         poll?.cancel(); poll = nil
+        typingTask?.cancel(); typing.clear()
         let old = lease
         lease = nil; frame = nil; image = nil
         if let old {
@@ -142,16 +194,71 @@ final class CantripDesktopModel: ObservableObject {
         }
     }
 
+    /// A tap or button press: dropped while another input is on its way, so it never lands twice.
     func send(_ command: CantripDesktopCommand) async {
-        guard let lease, lease.control, !busy else { return }
+        guard lease?.control == true, !busy else { return }
         busy = true
-        defer { busy = false }
+        _ = await post(command)
+        busy = false
+        pumpTyping()
+    }
+
+    /// Typing goes in order, one input at a time (the Mac refuses an input older than the last).
+    func type(_ text: String) {
+        typing.type(text)
+        pumpTyping()
+    }
+
+    func press(_ key: String) {
+        typing.press(key)
+        pumpTyping()
+    }
+
+    func deleteBackward() {
+        typing.deleteBackward()
+        pumpTyping()
+    }
+
+    private var typing = CantripDesktopTypingQueue()
+    private var typingTask: Task<Void, Never>?
+
+    private func pumpTyping() {
+        guard typingTask == nil, !busy, !typing.isEmpty else { return }
+        guard lease?.control == true else { typing.clear(); return }
+        typingTask = Task { [weak self] in
+            while let self, !Task.isCancelled, !self.busy, let input = self.typing.next() {
+                guard let frame = self.frame else {
+                    self.typing.clear()
+                    self.error = "Wait for the screen before typing. Nothing was sent."
+                    break
+                }
+                var command = CantripDesktopCommand(frameID: frame.id, kind: "text")
+                switch input {
+                case .text(let text): command.text = text
+                case .key(let key): command = CantripDesktopCommand(frameID: frame.id, kind: "key", key: key)
+                }
+                self.busy = true
+                let sent = await self.post(command)
+                self.busy = false
+                // A refused input means the rest may land in the wrong place: drop it.
+                if !sent { self.typing.clear() }
+            }
+            self?.typingTask = nil
+        }
+    }
+
+    private func post(_ command: CantripDesktopCommand) async -> Bool {
+        guard let lease, lease.control else { return false }
         sequence += 1
         do {
             let encrypted = try command.encrypted(lease: lease, sequence: sequence)
             try await remote.desktopInput(lease: lease, sequence: sequence, encrypted: encrypted, identity: identity)
             error = nil
-        } catch { self.error = error.localizedDescription + " Input was not retried. Check the screen before trying again." }
+            return true
+        } catch {
+            self.error = error.localizedDescription + " Input was not retried. Check the screen before trying again."
+            return false
+        }
     }
 }
 
@@ -165,6 +272,9 @@ struct CantripMacAccessView: View {
     @State private var clickKind = "click"
     @State private var text = ""
     @State private var settingsBusy = false
+    #if os(iOS)
+    @State private var fullScreen: UIViewController?
+    #endif
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
 
@@ -187,9 +297,21 @@ struct CantripMacAccessView: View {
                     Picker("Display", selection: $desktop.displayID) {
                         ForEach(lease.displays) { Text($0.name).tag(Optional($0.id)) }
                     }
-                    Picker("Zoom", selection: $zoom) {
-                        Text("1x").tag(1); Text("2x").tag(2); Text("3x").tag(3)
-                    }.pickerStyle(.segmented)
+                    HStack(spacing: 12) {
+                        Picker("Zoom", selection: $zoom) {
+                            Text("1x").tag(1); Text("2x").tag(2); Text("3x").tag(3)
+                        }.pickerStyle(.segmented)
+                        #if os(iOS)
+                        Button(action: openFullScreen) {
+                            Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
+                                .frame(minHeight: 32)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityHint(lease.control ? "Shows the Mac edge to edge, with a keyboard that types on the Mac."
+                                                         : "Shows the Mac edge to edge.")
+                        .accessibilityIdentifier("desktop.fullScreen.open")
+                        #endif
+                    }
                     screen
                     if lease.control { controls }
                     Text("Protected dialogs may be hidden or reject input. A sent click is not confirmation that macOS authorized an operation. Touch ID cannot be performed remotely.")
@@ -223,7 +345,13 @@ struct CantripMacAccessView: View {
             ToolbarItem(placement: .primaryAction) { Button("Refresh") { Task { await load() } } }
         }
         .task { await load() }
-        .onDisappear { text = ""; Task { await desktop.stop() } }
+        .onDisappear {
+            text = ""
+            #if os(iOS)
+            fullScreen?.dismiss(animated: false)
+            #endif
+            Task { await desktop.stop() }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || (phase == .inactive && desktop.lease != nil) {
                 text = ""; Task { await desktop.stop() }
@@ -328,6 +456,13 @@ struct CantripMacAccessView: View {
         guard let frame = desktop.frame else { return }
         Task { await desktop.send(.init(frameID: frame.id, kind: "scroll", delta: delta)) }
     }
+
+    #if os(iOS)
+    private func openFullScreen() {
+        guard fullScreen?.presentingViewController == nil else { return }
+        fullScreen = CantripDesktopFullScreenPresenter.present(desktop: desktop, clickKind: $clickKind, zoom: $zoom)
+    }
+    #endif
 
     private func load() async {
         do { snapshot = try await remote.macAccess(); error = nil }

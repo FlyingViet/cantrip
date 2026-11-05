@@ -492,6 +492,9 @@ To use View Mac:
    sending text, Return/Tab/Escape/Delete/arrows or scroll commands. Text entry
    is masked locally but is typed into the Mac's actual focused field, which
    may not be a password field. Check focus before sending secrets.
+5. In Cantrip Agent, **Full Screen** shows the Mac edge to edge with a toolbar
+   that drops down from the top; its keyboard button brings up the keyboard,
+   which types each key straight onto the Mac.
 
 This is a roughly one-frame-per-second assistance view, not full-rate screen
 sharing or a replacement for all remote desktop features. Only one session is

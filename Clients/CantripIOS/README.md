@@ -1150,6 +1150,17 @@ The keyboard/pointer control preference is remembered on this device, but is not
 an active session or a permission grant. Each session requires authentication;
 **Done** ends the current session, and reopening Mac Access does not reconnect.
 
+**Full Screen** (beside Zoom once a session is on) shows the Mac edge to edge, with the
+status bar, the iPhone Duo's side bar and the home indicator hidden. A toolbar drops down from
+the top: **Exit Full Screen**, **Show/Hide Keyboard**, the tap action (Click, Double Click,
+Right Click), Escape, Tab, Return, Delete, the arrows and scroll (in a menu on narrow screens),
+zoom and display, the time left, and **Hide Toolbar**, which folds it into a small tab at
+the top (tap or pull it down to bring it back). With the keyboard up, each key goes straight to
+the Mac as you type (keys typed while one is on its way travel together, in order); nothing
+typed is shown, suggested or learned on this device. A hardware keyboard's arrows and Escape
+work too. The Mac's screen shrinks to stay above the keyboard. Exit returns to View Mac with the
+session still on; the session ends as before.
+
 Sessions use in-memory encrypted snapshots about once a second, with basic
 click/right-click/double-click, text, navigation keys and scroll. No images or
 typed input are saved by Cantrip/Cantrip Agent or sent to an AI model by this
