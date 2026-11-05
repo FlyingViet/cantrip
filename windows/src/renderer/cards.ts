@@ -50,6 +50,11 @@ const ICONS: Record<string, string> = {
   "fuelpump.fill": "<path d='M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 4 0v-6.998a2 2 0 0 0-.59-1.42L18 5'/><path d='M14 21V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v16'/><path d='M2 21h13'/><path d='M3 9h11'/>",
   "graduationcap.fill": "<path d='M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z'/><path d='M22 10v6'/><path d='M6 12.5V16a6 3 0 0 0 12 0v-3.5'/>",
   "tree.fill": "<path d='M10 10v.2A3 3 0 0 1 8.9 16H5a3 3 0 0 1-1-5.8V10a3 3 0 0 1 6 0Z'/><path d='M7 16v6'/><path d='M13 19v3'/><path d='M12 19h8.3a1 1 0 0 0 .7-1.7L18 14h.3a1 1 0 0 0 .7-1.7L16 9h.2a1 1 0 0 0 .8-1.7L13 3l-1.4 1.5'/>",
+  "hammer": "<path d='m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9'/><path d='m18 15 4-4'/><path d='m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-2.26a6 6 0 0 0-4.202-1.756L9 2.96l.92.82A6.18 6.18 0 0 1 12 8.4V10l2 2h1.172a2 2 0 0 1 1.414.586L18.5 14.5'/>",
+  "xmark.circle.fill": "<circle cx='12' cy='12' r='10'/><path d='m15 9-6 6'/><path d='m9 9 6 6'/>",
+  "stop.circle": "<circle cx='12' cy='12' r='10'/><rect x='9' y='9' width='6' height='6' rx='1'/>",
+  "questionmark.circle": "<circle cx='12' cy='12' r='10'/><path d='M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3'/><path d='M12 17h.01'/>",
+  "arrow.up.circle": "<circle cx='12' cy='12' r='10'/><path d='m16 12-4-4-4 4'/><path d='M12 16V8'/>",
   "wineglass.fill": "<path d='M8 22h8'/><path d='M7 10h10'/><path d='M12 15v7'/><path d='M12 15a5 5 0 0 0 5-5c0-2-.5-4-2-8H9c-1.5 4-2 6-2 8a5 5 0 0 0 5 5Z'/>",
 };
 
@@ -60,7 +65,7 @@ const ACTION_SYMBOLS: Record<string, string> = {
 };
 const TONES = new Set(["positive", "negative", "warning", "accent", "neutral"]);
 /** The blocks this client draws; anything else (map, image, newer types) is skipped. */
-const DRAWN = new Set(["header", "stat", "keyValue", "strip", "chart", "list", "badges", "notice"]);
+const DRAWN = new Set(["header", "stat", "keyValue", "strip", "chart", "list", "badges", "notice", "progress"]);
 
 const has = (record: Record<string, string>, key: string | undefined): key is string =>
   typeof key === "string" && Object.prototype.hasOwnProperty.call(record, key);
@@ -125,6 +130,7 @@ export function drawableBlocks(card: Pick<CardDocument, "blocks">): Block[] {
       case "strip": case "chart": case "list": return entries(block.items).length > 0;
       case "badges": return entries(block.badges).some((badge) => badge.text);
       case "notice": return Boolean(block.title || block.text);
+      case "progress": return Boolean(block.label || block.startedAt);
       default: return false;
     }
   });
@@ -171,7 +177,7 @@ function label(node: HTMLElement, text: string | undefined): void {
 
 function headerBlock(block: Block): HTMLElement {
   const head = el("div", "card-block card-header");
-  const leading = icon(block.symbol, "card-icon card-header-icon");
+  const leading = icon(block.symbol, `card-icon card-header-icon ${toneClass(block.tone)}`.trim());
   if (leading) head.append(leading);
   const info = el("div", "card-header-text");
   if (block.title) info.append(el("div", "card-title", block.title));
@@ -357,6 +363,81 @@ function noticeBlock(block: Block): HTMLElement {
   return node;
 }
 
+/** "0:42", "3:05", "1:02:09". */
+export function clock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600), minutes = Math.floor((total % 3600) / 60), rest = String(total % 60).padStart(2, "0");
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${minutes}:${rest}`;
+}
+
+/** What a progress block (build cards) shows at `now` (ms): the elapsed time ticks from `startedAt`. */
+export function progressState(block: Block, now: number): {
+  running: boolean; label: string; elapsed?: string; fraction?: number; showsBar: boolean; remaining?: string; spoken: string;
+} {
+  const started = Date.parse(block.startedAt ?? ""), finished = Date.parse(block.finishedAt ?? "");
+  const running = block.status === "running" && Number.isNaN(finished);
+  const end = running ? now : finished;
+  const seconds = Number.isNaN(started) || Number.isNaN(end) ? undefined : Math.max(0, (end - started) / 1000);
+  const expected = typeof block.expectedSeconds === "number" && block.expectedSeconds > 0 ? block.expectedSeconds : undefined;
+  const step = typeof block.fraction === "number" && Number.isFinite(block.fraction) ? Math.min(1, Math.max(0, block.fraction)) : undefined;
+  const label = block.label || (running ? "Running" : "Done");
+  let fraction: number | undefined, remaining: string | undefined;
+  if (running) {
+    if (step !== undefined) fraction = step;
+    else if (expected !== undefined && seconds !== undefined && seconds < expected) fraction = seconds / expected;
+    if (expected !== undefined && seconds !== undefined) remaining = seconds < expected ? `About ${clock(expected - seconds)} left` : "Longer than usual";
+  } else {
+    fraction = 1;
+  }
+  const elapsed = seconds === undefined ? undefined : clock(seconds);
+  const spoken = [label, elapsed ? `${running ? "running for" : "took"} ${elapsed}` : "", remaining ?? "", block.detail ?? ""]
+    .filter(Boolean).join(", ");
+  return { running, label, elapsed, fraction, showsBar: running || (block.status !== "ended" && !Number.isNaN(finished)), remaining, spoken };
+}
+
+/** Running progress blocks on screen; one timer ticks them all and stops when none are left. */
+const ticking = new Set<() => boolean>();
+let ticker: ReturnType<typeof setInterval> | undefined;
+
+function progressBlock(block: Block): HTMLElement {
+  const tone = block.status === "running" ? "tone-accent" : toneClass(block.tone);
+  const node = el("div", `card-block card-progress card-flow ${tone}`.trim());
+  node.setAttribute("role", "group");
+  const time = el("span", "card-progress-time"), bar = el("div", "card-progress-bar"), fill = el("span");
+  const top = el("div", "card-progress-top");
+  top.append(el("span", "card-progress-label", block.label ?? ""), time);
+  bar.setAttribute("aria-hidden", "true");
+  bar.append(fill);
+  const foot = el("div", "card-progress-foot"), left = el("span", "card-progress-left");
+  foot.append(el("span", "", block.detail ?? ""), left);
+  node.append(top, bar, foot);
+  const draw = (): boolean => {
+    const state = progressState(block, Date.now());
+    time.textContent = state.elapsed ?? "";
+    bar.hidden = !state.showsBar;
+    bar.classList.toggle("indeterminate", state.fraction === undefined);
+    fill.style.width = state.fraction === undefined ? "" : `${Math.max(2, state.fraction * 100)}%`;
+    left.textContent = state.remaining ?? "";
+    foot.hidden = !block.detail && !state.remaining;
+    node.setAttribute("aria-label", state.spoken);
+    return state.running;
+  };
+  if (draw()) {
+    // It goes on screen after this returns; it stops ticking once it leaves (or never arrives).
+    let attached = false, waits = 0;
+    ticking.add(() => {
+      if (node.isConnected) attached = true;
+      else return !attached && ++waits < 5;
+      return draw();
+    });
+    ticker ??= setInterval(() => {
+      for (const tick of ticking) if (!tick()) ticking.delete(tick);
+      if (!ticking.size) { clearInterval(ticker); ticker = undefined; }
+    }, 1000);
+  }
+  return node;
+}
+
 function drawBlock(block: Block, open: Open): HTMLElement | null {
   switch (block.type) {
     case "header": return headerBlock(block);
@@ -367,6 +448,7 @@ function drawBlock(block: Block, open: Open): HTMLElement | null {
     case "list": return listBlock(block, open);
     case "badges": return badgesBlock(block);
     case "notice": return noticeBlock(block);
+    case "progress": return progressBlock(block);
     default: return null;
   }
 }

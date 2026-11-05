@@ -641,6 +641,15 @@ export interface RemoteCardBlock {
   imageID?: HexSHA256;
   aspectRatio?: number;
   accessibilityLabel?: string;
+  /** progress (build cards): "running", "succeeded", "failed", "stopped" or "ended" (result unknown). */
+  status?: string;
+  /** progress: ISO-8601 times; the client counts the elapsed time from `startedAt` itself. */
+  startedAt?: string;
+  finishedAt?: string;
+  /** progress: how long it usually takes (earlier runs on the Mac), for the time left. */
+  expectedSeconds?: number;
+  /** progress: 0-1 from the tool's own step counter. */
+  fraction?: number;
 }
 
 export interface RemoteCardDocument {

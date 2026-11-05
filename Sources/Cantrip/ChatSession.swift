@@ -44,6 +44,8 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var weatherCard: WeatherCard?
     /// A card from a tool result (built by Cantrip, or a model's `card` block verified against it).
     var cards: [CardDocument] = []
+    /// Builds, test runs and uploads this reply's commands ran, each shown as a live card.
+    var builds: [BuildRun] = []
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
     /// `freshStart`: the Start Fresh divider; turns above it are never sent to the model.
     enum Role: String, Codable { case user, assistant, error, handoff, freshStart }
@@ -54,7 +56,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
-        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards
+        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards, builds
     }
 }
 
@@ -75,7 +77,8 @@ extension ChatMessage {
     func cardDocuments(linkPreviews showsLinks: Bool) -> [CardDocument] {
         let extra = weatherCard == nil && placeCard == nil ? Array(cards.dropFirst()) : []
         let documents = CardComposer.documents(main: mainCard, links: showsLinks ? visibleLinkPreviews : [])
-        return Array(documents.prefix(1)) + extra + documents.dropFirst()
+        // Build cards report what ran while the reply was written, so they come before its answer's cards.
+        return builds.map(\.document) + Array(documents.prefix(1)) + extra + documents.dropFirst()
     }
 
     /// Appends streamed reasoning. Reasoning after a new tool call or answer text is a new block.
@@ -144,6 +147,12 @@ extension ChatMessage {
         placeCard = try? container.decodeIfPresent(PlaceCard.self, forKey: .placeCard)
         weatherCard = try? container.decodeIfPresent(WeatherCard.self, forKey: .weatherCard)
         cards = (try? container.decodeIfPresent([CardDocument].self, forKey: .cards)) ?? []
+        // A saved build still running was cut off (Cantrip restarted): nothing will finish it.
+        builds = ((try? container.decodeIfPresent([BuildRun].self, forKey: .builds)) ?? []).map { build in
+            var build = build
+            if build.state == .running { build.finish(.ended, at: Date()) }
+            return build
+        }
         if (try? container.decodeIfPresent(Bool.self, forKey: .freshStart)) == true {
             role = .freshStart
         } else {
@@ -181,6 +190,7 @@ extension ChatMessage {
         try container.encodeIfPresent(placeCard, forKey: .placeCard)
         try container.encodeIfPresent(weatherCard, forKey: .weatherCard)
         if !cards.isEmpty { try container.encode(cards, forKey: .cards) }
+        if !builds.isEmpty { try container.encode(builds, forKey: .builds) }
     }
 }
 
@@ -639,7 +649,7 @@ final class ChatSession: ObservableObject {
         // only content was runtime-only would reload as invisible husks.
         let persistable = messages.filter {
             !($0.role == .assistant && $0.text.isEmpty && $0.apps.isEmpty
-              && $0.delegations.isEmpty)
+              && $0.delegations.isEmpty && $0.builds.isEmpty)
         }
         do {
             if isLocalPrivate {
@@ -2866,7 +2876,7 @@ final class ChatSession: ObservableObject {
             }
         case .usage(let usage):
             recordUsage(usage)
-        case .context, .backgroundWake, .usageLimit, .heartbeat:
+        case .context, .backgroundWake, .commandFinished, .usageLimit, .heartbeat:
             break // several models share the prompt
         case .approval(let approval):
             recordApproval(approval)
@@ -2965,7 +2975,7 @@ final class ChatSession: ObservableObject {
                     }
                 case .usage(let usage):
                     self.recordUsage(usage)
-                case .context, .backgroundWake, .usageLimit, .heartbeat:
+                case .context, .backgroundWake, .commandFinished, .usageLimit, .heartbeat:
                     break
                 case .approval(let approval):
                     self.recordApproval(approval)
@@ -3374,6 +3384,7 @@ final class ChatSession: ObservableObject {
             if let message = messages.last(where: { $0.activities.contains { $0.id == activity.id } }) {
                 recordActivity(activity, messageID: message.id)
             }
+            trackBuilds(activity)
             statusText = currentActivity?.title ?? "Thinking…"
         case .usage(let usage):
             recordUsage(usage)
@@ -3384,6 +3395,9 @@ final class ChatSession: ObservableObject {
             recordApproval(approval)
         case .backgroundWake(let ids):
             openBackgroundResultBubble(for: ids)
+        case .commandFinished(let finished):
+            guard !isLocalPrivate else { break }
+            applyBuildUpdates(BuildTracker.updates(for: finished, in: messages))
         case .heartbeat:
             break // armWatchdog() above is the point
         case .usageLimit(let report):
@@ -4785,6 +4799,38 @@ final class ChatSession: ObservableObject {
         }
     }
 
+    // MARK: - Build cards
+
+    /// Tool calls the build tracker has read (`BuildTracker.Seen`).
+    private var buildSeen = BuildTracker.Seen()
+
+    /// Starts, advances or ends build cards for a tool step and the steps nested in it.
+    private func trackBuilds(_ activity: ToolActivity) {
+        guard !isLocalPrivate,
+              let index = messages.lastIndex(where: { $0.activities.contains { $0.id == activity.id } }) else { return }
+        applyBuildUpdates(BuildTracker.updates(for: activity, at: index, in: messages, workdir: workdir,
+                                               history: .shared, seen: &buildSeen))
+    }
+
+    private func applyBuildUpdates(_ updates: [BuildTracker.Update]) {
+        for update in updates where messages.indices.contains(update.messageIndex) {
+            if update.removed {
+                messages[update.messageIndex].remove(update.run)
+                Log.write("build: never ran, card removed (\(id.uuidString.prefix(8)), call \(update.run.id.suffix(8)))")
+                continue
+            }
+            messages[update.messageIndex].apply(update.run)
+            if update.ended {
+                BuildHistory.shared.record(update.run)
+                Log.write("build: \(update.run.state.rawValue) after \(Int(update.run.duration ?? 0))s "
+                          + "(\(id.uuidString.prefix(8)), call \(update.run.id.suffix(8)))")
+            } else if update.run.step == nil, update.run.shellID == nil {
+                Log.write("build: started (\(id.uuidString.prefix(8)), call \(update.run.id.suffix(8)), "
+                          + "estimate \(update.run.expectedSeconds.map { "\(Int($0))s" } ?? "none"))")
+            }
+        }
+    }
+
     private func updateActivity(_ activity: ToolActivity) {
         guard let messageIndex = messages.lastIndex(where: {
             $0.activities.contains { $0.id == activity.id }
@@ -4839,6 +4885,9 @@ final class ChatSession: ObservableObject {
     }
 
     private func finalizeRunningActivities(as state: ToolActivityState) {
+        if !isLocalPrivate {
+            applyBuildUpdates(BuildTracker.endingUnfinished(in: messages, stopped: state == .cancelled))
+        }
         for messageIndex in messages.indices {
             for activityIndex in messages[messageIndex].activities.indices {
                 let finalized = finalize(

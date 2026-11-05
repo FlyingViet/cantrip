@@ -2,14 +2,15 @@
 // needs no code here. Panel cards share the weather card's container; `link` cards look like link
 // previews. Strings are only ever drawn as text, and actions open public http(s) pages only.
 import type { ComponentChildren, JSX } from "preact";
+import { useEffect, useState } from "preact/hooks";
 import type { RemoteCardAction, RemoteCardBadge, RemoteCardBlock, RemoteCardDocument, RemoteCardItem } from "../../api/types";
 import { bridge } from "../../bridge";
 import { Icon, symbolIcon } from "../icons";
 import { MapComposition, type LegendState, type MapSpec } from "./CardMap";
 import {
   actionSymbol, cardBadges, cardFallback, cardFooter, cardGlyph, cardItems, cardLabel, cardLines, cardParts, cardRows, cardStyle, cardText,
-  cardTone, chartBar, chartColumns, chartScale, itemLabel, mapAttribution, mapPins, mapRegion, safeActionUrl, statLabel, telNumber,
-  type CardPart,
+  cardTone, chartBar, chartColumns, chartScale, itemLabel, mapAttribution, mapPins, mapRegion, progressState, safeActionUrl, statLabel,
+  telNumber, type CardPart,
 } from "./cardLogic";
 import { LinkDomain, useLinkPreviewImage } from "./RichCards";
 import { weatherIcon, weatherTint } from "./richCardLogic";
@@ -48,7 +49,7 @@ export function CardView(props: { card: RemoteCardDocument }): JSX.Element | nul
   return cardStyle(card) === "link" ? <LinkCard card={card} parts={parts} /> : <PanelCard card={card} parts={parts} />;
 }
 
-const FLOW_BLOCKS = new Set(["header", "stat", "notice", "badges"]);
+const FLOW_BLOCKS = new Set(["header", "stat", "notice", "badges", "progress"]);
 
 function PanelCard(props: { card: RemoteCardDocument; parts: CardPart[] }): JSX.Element {
   const { card, parts } = props;
@@ -133,6 +134,7 @@ function BlockView(props: { block: RemoteCardBlock }): JSX.Element | null {
     case "image": return <CardImage block={block} />;
     case "badges": return <Badges badges={block.badges} />;
     case "notice": return <NoticeBlock block={block} />;
+    case "progress": return <ProgressBlock block={block} />;
     default: return null;
   }
 }
@@ -145,7 +147,7 @@ function HeaderBlock(props: { block: RemoteCardBlock }): JSX.Element {
   const lead = symbolNode(block.symbol, undefined, 18, true);
   return (
     <div class="card-head">
-      {lead ? <span class="card-head-symbol" aria-hidden="true">{lead}</span> : null}
+      {lead ? <span class={`card-head-symbol${block.tone ? ` tone-${cardTone(block.tone)}` : ""}`} aria-hidden="true">{lead}</span> : null}
       <div class="card-head-info">
         {title ? <div class="card-title" role="heading" aria-level={3}>{title}</div> : null}
         {subtitle ? <div class="card-subtitle">{symbolNode(block.subtitleSymbol, undefined, 12)}{subtitle}</div> : null}
@@ -347,6 +349,39 @@ function NoticeBlock(props: { block: RemoteCardBlock }): JSX.Element {
     <div class={`card-notice tone-${cardTone(block.tone)}`}>
       {title ? <div class="card-notice-title">{icon ? <span class="card-notice-symbol">{icon}</span> : null}{title}</div> : null}
       {text ? <div class="card-notice-text">{text}</div> : null}
+    </div>
+  );
+}
+
+/** A progress block (build cards): label and elapsed time, a bar, then where the estimate comes from.
+ *  While it runs, a once-a-second timer redraws only this block. */
+function ProgressBlock(props: { block: RemoteCardBlock }): JSX.Element {
+  const { block } = props;
+  const [now, setNow] = useState(() => Date.now());
+  const state = progressState(block, now);
+  useEffect(() => {
+    if (!state.running) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [state.running, block.startedAt]);
+  const tone = state.running ? "accent" : cardTone(block.tone);
+  return (
+    <div class={`card-progress tone-${tone}`} role="group" aria-label={state.spoken}>
+      <div class="card-progress-top">
+        <span class="card-progress-label">{state.label}</span>
+        {state.elapsed ? <span class="card-progress-time">{state.elapsed}</span> : null}
+      </div>
+      {state.showsBar ? (
+        <div class={`card-progress-bar${state.fraction === undefined ? " indeterminate" : ""}`} aria-hidden="true">
+          <span style={state.fraction === undefined ? undefined : { width: `${Math.max(2, state.fraction * 100)}%` }} />
+        </div>
+      ) : null}
+      {state.detail || state.remaining ? (
+        <div class="card-progress-foot">
+          <span>{state.detail ?? ""}</span>
+          {state.remaining ? <span class="card-progress-left">{state.remaining}</span> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

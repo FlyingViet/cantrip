@@ -67,6 +67,10 @@ struct ToolActivity: Identifiable, Equatable {
     var app: MCPAppPayload?
     /// Set when this activity spawned a subagent (Copilot task, Claude Task).
     var subagent: SubagentInfo?
+    /// The newest `[n/m]` counter a running command printed (Copilot streams command output).
+    var buildStep: BuildStep?
+    /// The end of `output` when it was too long to keep whole: where exit codes and results are.
+    var outputTail: String?
 
     /// Every subagent in this activity tree, parents before their nested agents.
     var subagentActivities: [ToolActivity] {
@@ -84,6 +88,63 @@ struct ToolActivity: Identifiable, Equatable {
         }
         activity.children = activity.children.map { $0.finishing(as: state, at: date) }
         return activity
+    }
+}
+
+/// A `[12/345]` step counter, as SwiftPM, Ninja and CMake print while they build. Newer SwiftPM
+/// spaces it (`[12 / 345]`, thin spaces in a terminal, where each update ends in a carriage return).
+struct BuildStep: Equatable, Codable {
+    var current: Int
+    var total: Int
+
+    private static let pattern = try! NSRegularExpression(pattern: #"(?:^|[\r\n])[ \t]*\[(\d{1,7})\s?/\s?(\d{1,7})\](?=\s|$)"#)
+    private static let escapes = try! NSRegularExpression(pattern: #"\x{1B}\[[0-9;?]*[A-Za-z]"#)
+
+    /// The newest counter in the end of `text`.
+    static func latest(in text: String) -> BuildStep? {
+        guard text.contains("/") else { return nil }
+        var tail = String(text.suffix(4_000))
+        if tail.contains("\u{1B}") {
+            tail = escapes.stringByReplacingMatches(in: tail, range: NSRange(tail.startIndex..., in: tail), withTemplate: "")
+        }
+        let range = NSRange(tail.startIndex..., in: tail)
+        guard let match = pattern.matches(in: tail, range: range).last,
+              let current = Range(match.range(at: 1), in: tail).flatMap({ Int(tail[$0]) }),
+              let total = Range(match.range(at: 2), in: tail).flatMap({ Int(tail[$0]) }),
+              total >= 2, current <= total else { return nil }
+        return BuildStep(current: current, total: total)
+    }
+}
+
+/// A command the backend moved to the background (or started there) has ended.
+struct FinishedCommand: Equatable {
+    /// The shell or task ID and the tool call that started it, whichever the backend knows.
+    var ids: [String]
+    var exitCode: Int?
+    /// Nil when the backend didn't say how it ended.
+    var state: ToolActivityState?
+}
+
+/// A command whose call returned before it finished.
+enum BackgroundCommand {
+    private static let patterns = [
+        #"<command started in background with shellId: ([^\s>]+)>"#,
+        #"<command with shellId: ([^\s>]+) is still running"#,
+        #"[Rr]unning in background with ID: ([A-Za-z0-9_-]+)"#,
+    ].map { try! NSRegularExpression(pattern: $0) }
+
+    /// The shell or task it moved to: Copilot's async mode or a sync wait that timed out,
+    /// Claude's run_in_background. Only the end of a result says so.
+    static func shellID(in output: String) -> String? {
+        guard output.contains("background") || output.contains("still running") else { return nil }
+        let tail = String(output.suffix(800))
+        for pattern in patterns {
+            if let match = pattern.matches(in: tail, range: NSRange(tail.startIndex..., in: tail)).last,
+               let range = Range(match.range(at: 1), in: tail) {
+                return String(tail[range])
+            }
+        }
+        return nil
     }
 }
 
@@ -394,6 +455,8 @@ enum BackendEvent {
     case inputRequired(BackendInputRequest)
     /// The root agent was idle and finished background work (agent or shell IDs) woke it.
     case backgroundWake([String])
+    /// A background command ended (Copilot's shell notification, Claude's task notification).
+    case commandFinished(FinishedCommand)
     /// The backend's own error code says its plan is used up for now. Sent just before the
     /// run's `.failure`, so Cantrip switches backends without reading the error's wording.
     case usageLimit(UsageLimitReport)
@@ -551,8 +614,13 @@ enum ToolActivityFactory {
         )
         completed.state = success ? .succeeded : .failed
         completed.output = detailText(output)
+        if let text = output as? String, text.count > outputLimit {
+            completed.outputTail = String(text.suffix(4_000))
+        }
         return completed
     }
+
+    static let outputLimit = 20_000
 
     static func detailText(_ value: Any?) -> String? {
         guard let value, !(value is NSNull) else { return nil }
@@ -794,7 +862,7 @@ enum ToolActivityFactory {
         }.first
     }
 
-    private static func clipped(_ text: String, limit: Int = 20_000) -> String {
+    private static func clipped(_ text: String, limit: Int = outputLimit) -> String {
         guard text.count > limit else { return text }
         return String(text.prefix(limit)) + "\n… output truncated"
     }

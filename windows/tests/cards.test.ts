@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { cardPlainText, isoSeconds, weatherDocument, type CardDocument } from "../src/shared/cards";
 import { buildCard, conditionSymbol, unavailableCard } from "../src/shared/weather";
-import { barPosition, chartScale, drawableBlocks, iconMarkup, safeUrl, symbolTint, toneClass } from "../src/renderer/cards";
+import { barPosition, chartScale, clock, drawableBlocks, iconMarkup, progressState, safeUrl, symbolTint, toneClass } from "../src/renderer/cards";
 
 const read = (path: string) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
 /** Cards the Mac built (Sources/Cantrip/CardDocuments.swift), from the same Open-Meteo fixture. */
@@ -110,5 +110,27 @@ describe("card renderer helpers", () => {
     // Malformed entries don't count (or break the card).
     expect(drawableBlocks({ blocks: [{ type: "list", items: [null as never] }, { type: "badges", badges: [{ text: "" }] },
       { type: "keyValue", rows: "x" as never }, { type: "header", lines: [3 as never] }] })).toEqual([]);
+  });
+});
+
+describe("progress blocks (build cards)", () => {
+  const build = read("./cards/build.json") as CardDocument;
+  const failed = read("./cards/build-failed.json") as CardDocument;
+  const start = Date.parse("2026-11-04T20:00:00.000Z");
+  const running = { type: "progress", status: "running", label: "Testing", startedAt: "2026-11-04T20:00:00.000Z", expectedSeconds: 185 };
+
+  it("draws the Mac's build cards with their icons", () => {
+    expect(drawableBlocks(build).map((block) => block.type)).toEqual(["header", "progress"]);
+    for (const card of [build, failed]) expect(iconMarkup(card.blocks[0].symbol), card.blocks[0].symbol).toBeDefined();
+    expect(progressState(failed.blocks[1], Date.now())).toMatchObject({ running: false, label: "Failed", elapsed: "0:47", fraction: 1 });
+    expect(cardPlainText(failed)).toContain("Failed · Exit code 65");
+  });
+
+  it("ticks the elapsed time and the time left, never a made-up percentage", () => {
+    expect(progressState(running, start + 65_000)).toMatchObject({ running: true, elapsed: "1:05", remaining: "About 2:00 left" });
+    expect(progressState(running, start + 200_000)).toMatchObject({ fraction: undefined, remaining: "Longer than usual" });
+    expect(progressState({ ...running, expectedSeconds: undefined }, start + 30_000).fraction).toBeUndefined();
+    expect(progressState({ ...running, status: "ended" }, start).elapsed).toBeUndefined();
+    expect(clock(3_729)).toBe("1:02:09");
   });
 });

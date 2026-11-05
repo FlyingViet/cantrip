@@ -8,7 +8,7 @@ import Foundation
 /// shown only when its values are found in that tool's output.
 struct CardDocument: Codable, Equatable, Sendable, Identifiable {
     struct Source: Codable, Equatable, Sendable {
-        /// "resolver", "tool", "preview" or "records".
+        /// "resolver", "tool", "preview", "records" or "build".
         var kind: String
         var name: String?
         var attribution: String?
@@ -145,11 +145,22 @@ struct CardDocument: Codable, Equatable, Sendable, Identifiable {
         var imageID: String?
         var aspectRatio: Double?
         var accessibilityLabel: String?
+        /// progress: "running", "succeeded", "failed", "stopped" or "ended" (result unknown).
+        var status: String?
+        /// progress: ISO-8601 times; clients count the elapsed time from `startedAt` themselves.
+        var startedAt: String?
+        var finishedAt: String?
+        /// progress: how long it usually takes, from earlier runs; clients show the time left.
+        var expectedSeconds: Double?
+        /// progress: 0–1 from the tool's own step counter.
+        var fraction: Double?
 
         init(type: String) { self.type = type }
     }
 
     static let version = 1
+    /// Blocks a tool or model card may use. `progress` is only for cards Cantrip builds itself
+    /// from a command it watched (build cards), so its times are always real.
     static let blockTypes: Set<String> = ["header", "stat", "keyValue", "strip", "chart", "list", "map", "image", "badges", "notice"]
 
     var version = CardDocument.version
@@ -244,11 +255,23 @@ struct CardDocument: Codable, Equatable, Sendable, Identifiable {
                 lines.append((block.badges ?? []).map(\.text).joined(separator: " · "))
             case "notice":
                 lines.append([block.title, block.text].compactMap { $0 }.joined(separator: ": "))
+            case "progress":
+                lines.append([block.label, Self.progressTime(block), block.detail].compactMap { $0 }.joined(separator: " · "))
             default:
                 break
             }
         }
         return lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.joined(separator: "\n")
+    }
+
+    /// "since 8:41 PM" while running, "in 3m 05s" once finished (a fallback can't tick).
+    private static func progressTime(_ block: Block) -> String? {
+        guard let started = CardProgress.date(block.startedAt) else { return nil }
+        if let finished = CardProgress.date(block.finishedAt) {
+            return "in " + SubagentInfo.elapsedLabel(max(0, finished.timeIntervalSince(started)))
+        }
+        guard block.status == "running" else { return nil }
+        return "since " + started.formatted(date: .omitted, time: .shortened)
     }
 
     func withFallbackText() -> CardDocument {
