@@ -113,6 +113,7 @@ struct SessionTabTests {
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "settings" {
             try testSettingsIdentity()
+            try testCLIPathRepair()
             try await testSettingsManifest()
             print("Settings manifest tests passed")
             return
@@ -230,6 +231,7 @@ struct SessionTabTests {
         try await testModelTiers()
         try await testUsageLimitFallback()
         try testSettingsIdentity()
+        try testCLIPathRepair()
         try await testSettingsManifest()
         try await testBackendStatus()
         try await testOpenAIEndpoint()

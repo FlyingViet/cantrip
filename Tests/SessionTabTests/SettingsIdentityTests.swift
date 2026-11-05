@@ -53,4 +53,46 @@ extension SessionTabTests {
                      && Bundle(path: repo.appendingPathComponent("Resources").path)?.bundleIdentifier == nil)
         print("Settings identity: test and QA builds stay out of Cantrip's real settings passed")
     }
+
+    /// A CLI path that can't run (a test placeholder, a missing file, a folder) is cleared at launch
+    /// so the CLI is auto-detected; empty, a command name and a runnable file are kept.
+    static func testCLIPathRepair() throws {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent("cli-paths-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: folder) }
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let tool = folder.appendingPathComponent("copilot")
+        try "#!/bin/sh\necho 1.0\n".write(to: tool, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        let notes = folder.appendingPathComponent("notes.txt")
+        try "not a program".write(to: notes, atomically: true, encoding: .utf8)
+        let placeholderLink = folder.appendingPathComponent("copilot-link")
+        try fm.createSymbolicLink(at: placeholderLink, withDestinationURL: URL(fileURLWithPath: "/usr/bin/false"))
+
+        for usable in ["", "  ", "copilot", tool.path] {
+            precondition(AppSettings.unusableCLIPath(usable) == nil, "\(usable) can run")
+        }
+        for placeholder in ["/usr/bin/false", " /usr/bin/false ", "/bin/true", placeholderLink.path] {
+            precondition(AppSettings.unusableCLIPath(placeholder) == "a test placeholder, not the CLI", placeholder)
+        }
+        precondition(AppSettings.unusableCLIPath(folder.path + "/missing/copilot") == "it doesn't exist")
+        precondition(AppSettings.unusableCLIPath(notes.path) == "it isn't an executable")
+        precondition(AppSettings.unusableCLIPath(folder.path) == "it isn't an executable")
+
+        let defaults = UserDefaults.standard
+        let saved = AppSettings.cliPathKeys.map { defaults.object(forKey: $0) }
+        defer { for (key, value) in zip(AppSettings.cliPathKeys, saved) { defaults.set(value, forKey: key) } }
+        defaults.set("/usr/bin/false", forKey: "copilotPath")
+        defaults.set(tool.path, forKey: "claudePath")
+        defaults.set(folder.path + "/gone/codex", forKey: "codexPath")
+        defaults.removeObject(forKey: "agyPath")
+        let repaired = AppSettings.repairCLIPaths(in: defaults)
+        precondition(repaired.map(\.key) == ["copilotPath", "codexPath"]
+                     && repaired.first?.path == "/usr/bin/false", "\(repaired)")
+        precondition(defaults.string(forKey: "copilotPath") == "" && defaults.string(forKey: "codexPath") == ""
+                     && defaults.string(forKey: "claudePath") == tool.path && defaults.object(forKey: "agyPath") == nil,
+                     "only the paths that can't run are cleared")
+        precondition(AppSettings.repairCLIPaths(in: defaults).isEmpty, "a repaired path stays repaired")
+        print("CLI path repair: placeholders, missing files and folders fall back to auto-detect passed")
+    }
 }
