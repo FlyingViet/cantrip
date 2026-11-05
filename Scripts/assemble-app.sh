@@ -18,7 +18,10 @@ SCRIPTS=(cantrip cantrip-mcp mcp-on-demand messages-send mail-refresh)
 rm -rf "$DEST"
 mkdir -p "$DEST/Contents/MacOS" "$DEST/Contents/Resources/bin"
 cp "$BIN_DIR/$APP_NAME" "$DEST/Contents/MacOS/"
-cp Resources/Info.plist "$DEST/Contents/"
+# Not named Info.plist in the checkout: a folder holding Info.plist or Resources/Info.plist is a
+# bundle to macOS, so a test or QA binary run from a checkout would take Cantrip's bundle ID and
+# write Cantrip's real settings.
+cp Resources/Cantrip-Info.plist "$DEST/Contents/Info.plist"
 
 BUILD_ID=$(git describe --always --dirty --match 'v[0-9]*' 2>/dev/null || echo unknown)
 case "$BUILD_ID" in *-dirty)

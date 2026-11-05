@@ -68,9 +68,17 @@ struct SessionTabTests {
             let home = FileManager.default.temporaryDirectory
                 .appendingPathComponent("cantrip-tab-tests-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: home) }
+            // Always a private copy: a binary in a folder macOS reads as a bundle (a checkout with an
+            // Info.plist) takes that bundle's ID, and Cantrip's would point every test at Cantrip's
+            // real settings. The copy's folder holds nothing else, so the run's settings are its own.
+            let source = (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]))
+                .resolvingSymlinksInPath()
+            let binary = home.appendingPathComponent(".bin", isDirectory: true)
+                .appendingPathComponent(source.lastPathComponent)
+            try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: source, to: binary)
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+            process.executableURL = binary
             var environment = ProcessInfo.processInfo.environment
             environment["CFFIXED_USER_HOME"] = home.path
             environment["HOME"] = home.path
@@ -78,9 +86,13 @@ struct SessionTabTests {
             process.environment = environment
             try process.run()
             process.waitUntilExit()
+            removeTestPreferences(domain: binary.lastPathComponent)
+            try? FileManager.default.removeItem(at: home)
             exit(process.terminationStatus)
         }
         let home = ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"]!
+        precondition(Bundle.main.bundleIdentifier == nil,
+                     "Tests must not run with a bundle ID (\(Bundle.main.bundlePath)): its settings would be an app's")
         precondition(FileManager.default.homeDirectoryForCurrentUser.path == home)
         precondition(SessionManager.chatsDir.path.hasPrefix(home + "/"))
         // Queue planning and routing never reach the real Copilot CLI here.
@@ -100,6 +112,7 @@ struct SessionTabTests {
             return
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "settings" {
+            try testSettingsIdentity()
             try await testSettingsManifest()
             print("Settings manifest tests passed")
             return
@@ -216,6 +229,7 @@ struct SessionTabTests {
         try await testRunContinuity()
         try await testModelTiers()
         try await testUsageLimitFallback()
+        try testSettingsIdentity()
         try await testSettingsManifest()
         try await testBackendStatus()
         try await testOpenAIEndpoint()
