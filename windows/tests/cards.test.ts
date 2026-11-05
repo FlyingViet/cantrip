@@ -116,14 +116,22 @@ describe("card renderer helpers", () => {
 describe("progress blocks (build cards)", () => {
   const build = read("./cards/build.json") as CardDocument;
   const failed = read("./cards/build-failed.json") as CardDocument;
+  const transfer = read("./cards/transfer.json") as CardDocument;
   const start = Date.parse("2026-11-04T20:00:00.000Z");
   const running = { type: "progress", status: "running", label: "Testing", startedAt: "2026-11-04T20:00:00.000Z", expectedSeconds: 185 };
 
   it("draws the Mac's build cards with their icons", () => {
     expect(drawableBlocks(build).map((block) => block.type)).toEqual(["header", "progress"]);
-    for (const card of [build, failed]) expect(iconMarkup(card.blocks[0].symbol), card.blocks[0].symbol).toBeDefined();
+    for (const card of [build, failed, transfer]) expect(iconMarkup(card.blocks[0].symbol), card.blocks[0].symbol).toBeDefined();
+    for (const symbol of ["arrow.down.circle", "arrow.left.arrow.right"]) expect(iconMarkup(symbol), symbol).toBeDefined();
     expect(progressState(failed.blocks[1], Date.now())).toMatchObject({ running: false, label: "Failed", elapsed: "0:47", fraction: 1 });
     expect(cardPlainText(failed)).toContain("Failed · Exit code 65");
+  });
+
+  it("follows a transfer's own progress", () => {
+    expect(transfer.type).toBe("transfer");
+    expect(progressState(transfer.blocks[1], Date.now())).toMatchObject({ running: true, label: "Transferring", fraction: 0.66 });
+    expect(cardPlainText(transfer)).toContain("19.2 GB of 29.1 GB · 32.6 MB/s");
   });
 
   it("ticks the elapsed time and the time left, never a made-up percentage", () => {
