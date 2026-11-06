@@ -159,6 +159,10 @@ extension BuildRun {
             var list = CardDocument.Block(type: "list")
             list.title = shown.count < earlier.count ? "Earlier steps · latest \(shown.count) of \(earlier.count)" : "Earlier steps"
             list.items = shown.map { $0.row(leadProject: lead.project) }
+            let summary = earlierSummary(earlier, counted: shown.count == earlier.count)
+            list.collapsed = true
+            list.subtitle = summary.text
+            list.tone = summary.tone
             blocks.append(list)
         }
         let steps = earlier.count + parallel.count
@@ -174,6 +178,24 @@ extension BuildRun {
         } ?? []
         card.fallbackText = ([live] + rows).joined(separator: "\n")
         return card
+    }
+
+    /// The collapsed "Earlier steps" line: "4 steps · 1 failed", "3 steps · all succeeded" (the step
+    /// count is left to the title when it already says "latest 5 of 8").
+    static func earlierSummary(_ runs: [BuildRun], counted: Bool) -> (text: String, tone: String?) {
+        func count(_ state: State) -> Int { runs.filter { $0.state == state }.count }
+        let failed = count(.failed), stopped = count(.stopped), running = count(.running), ended = count(.ended)
+        var parts = counted ? ["\(runs.count) \(runs.count == 1 ? "step" : "steps")"] : []
+        if failed > 0 { parts.append("\(failed) failed") }
+        if stopped > 0 { parts.append("\(stopped) stopped") }
+        if running > 0 { parts.append("\(running) running") }
+        if ended > 0 { parts.append("\(ended) ended") }
+        let allSucceeded = failed + stopped + running + ended == 0
+        if allSucceeded { parts.append(runs.count == 1 ? "succeeded" : "all succeeded") }
+        var text = parts.joined(separator: " · ")
+        text = text.prefix(1).uppercased() + text.dropFirst()
+        let tone: String? = failed > 0 ? "negative" : stopped > 0 ? "warning" : allSucceeded ? "positive" : nil
+        return (text, tone)
     }
 
     /// The card: a header naming the command and its folder, then a `progress` block that

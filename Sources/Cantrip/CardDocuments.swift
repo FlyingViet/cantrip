@@ -141,6 +141,9 @@ struct CardDocument: Codable, Equatable, Sendable, Identifiable {
         var longitudeDelta: Double?
         /// list: its items are the previous map block's pins (`pinID`), shown as its legend.
         var mapLinked: Bool?
+        /// list: starts collapsed to its title, with `subtitle` beside it (tinted by `tone`); choosing
+        /// the title shows the rows, and clients remember that while they run.
+        var collapsed: Bool?
         var attribution: String?
         var imageID: String?
         var aspectRatio: Double?

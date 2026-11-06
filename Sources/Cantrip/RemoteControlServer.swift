@@ -3725,7 +3725,7 @@ private extension RemoteControlServer {
     .cd-chart-row{display:grid;grid-template-columns:52px 26px 38px 36px minmax(40px,1fr) 36px;align-items:center;gap:8px;padding:6px 16px;font-size:13px;border-bottom:1px solid rgba(255,255,255,.06)}.cd-chart-row:last-child{border-bottom:0}
     .cd-chart-label{font-weight:600}.cd-chart-low{color:#c9d0da;text-align:right;font-variant-numeric:tabular-nums}.cd-chart-high{color:#fff;font-weight:650;text-align:right;font-variant-numeric:tabular-nums}
     .cd-bar{position:relative;height:5px;border-radius:999px;background:rgba(255,255,255,.14)}.cd-bar span{position:absolute;top:0;bottom:0;border-radius:999px;background:linear-gradient(90deg,#5ac8fa,#ffcc40)}
-    .cd-list{padding:2px 0}.cd-list-head{padding:8px 16px;border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#9ca3af}
+    .cd-list{padding:2px 0}.cd-list-toggle{display:flex;align-items:center;gap:7px;width:100%;min-height:34px;padding:8px 16px;border:0;background:transparent;color:#9ca3af;font:inherit;text-align:left;cursor:pointer}.cd-list-toggle:focus-visible{outline:2px solid #8ccaff;outline-offset:-2px}.cd-list-toggle .cd-chevron{display:inline-block;width:10px;font-size:17px;font-weight:600;line-height:1;text-align:center;transition:transform .15s}.cd-list-toggle[aria-expanded=true] .cd-chevron{transform:rotate(90deg)}.cd-list-head-text{flex:1;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}.cd-list-sum{font-size:11.5px;font-weight:500;color:#d1d5db}.cd-list-sum.positive{color:#34d399}.cd-list-sum.negative{color:#f87171}.cd-list-sum.warning{color:#f5b841}.cd-list-sum.accent{color:#8ccaff}.cd-list-toggle[aria-expanded=true]{border-bottom:1px solid rgba(255,255,255,.08)}.cd-list-rows[hidden]{display:none}@media(prefers-reduced-motion:reduce){.cd-list-toggle .cd-chevron{transition:none}}.cd-list-head{padding:8px 16px;border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#9ca3af}
     .cd-item{display:grid;gap:4px;padding:10px 16px;border-bottom:1px solid rgba(255,255,255,.06)}.cd-item:last-child{border-bottom:0}
     .cd-item-top{display:flex;align-items:center;gap:8px;min-width:0}.cd-item-icon{width:18px;height:18px;color:#8ccaff}.cd-item-title{flex:1;min-width:0;font-size:14px;font-weight:700;line-height:1.3;color:#fff;overflow-wrap:anywhere}.place-item .place-item-name{flex:1;min-width:0}
     .cd-item-trailing{flex:none;font-size:14px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
@@ -5130,7 +5130,7 @@ private extension RemoteControlServer {
     function panelCardNode(card,key){const wrap=cdEl("section","cd-card");wrap.setAttribute("aria-label",card.accessibilityLabel||card.blocks.find(b=>b?.type==="header")?.title||"Card");const blocks=card.blocks;let drew=0;
       for(let i=0;i<blocks.length;i++){const block=blocks[i];if(!block||typeof block!=="object")continue;
         if(block.type==="map"){const next=blocks[i+1],legend=next?.type==="list"&&next.mapLinked?next:null;if(legend)i++;const node=mapBlockNode(block,legend,key);if(node){wrap.append(node);wrap.classList.add("has-map");drew++}continue}
-        const node=cardBlockNode(block);if(node){wrap.append(node);drew++}}
+        const node=cardBlockNode(block,`${key}:${i}`);if(node){wrap.append(node);drew++}}
       if(!drew)wrap.append(cdEl("div","cd-fallback",card.fallbackText||""));
       const source=card.source||{},updated=source.updatedAt?new Date(source.updatedAt):null;
       if(source.attribution||(updated&&!Number.isNaN(updated.getTime()))){const foot=cdEl("div","cd-foot");
@@ -5138,7 +5138,7 @@ private extension RemoteControlServer {
         if(source.attribution){const url=cardURL(source.url);const attr=cdEl(url?"a":"span","cd-attr",source.attribution);if(url){attr.href=url;attr.target="_blank";attr.rel="noopener noreferrer"}foot.append(attr)}
         wrap.append(foot)}
       return wrap}
-    function cardBlockNode(b){switch(b.type){
+    function cardBlockNode(b,key){switch(b.type){
       case "header":{const head=cdEl("div","cd-head"),info=cdEl("div","cd-info");const lead=cardIcon(b.symbol,null,`cd-lead ${b.tone||""}`);if(lead)head.append(lead);
         info.append(cdEl("div","cd-title",b.title||""));
         if(b.subtitle){const sub=cdEl("div","cd-sub"),icon=cardIcon(b.subtitleSymbol,null,"cd-sub-icon");if(icon)sub.append(icon);sub.append(document.createTextNode(b.subtitle));info.append(sub)}
@@ -5161,7 +5161,15 @@ private extension RemoteControlServer {
           const low=cardNum(item.low)??min,high=cardNum(item.high)??low,bar=cdEl("span","cd-bar"),fill=cdEl("span");bar.setAttribute("aria-hidden","true");
           const left=Math.min(100,Math.max(0,(low-min)/span*100));fill.style.left=`${left}%`;fill.style.width=`${Math.min(100-left,Math.max(4,(high-low)/span*100))}%`;bar.append(fill);
           row.append(cdEl("span","cd-chart-label",item.label||""),cardIcon(item.symbol,item.glyph,"cd-chart-icon")||cdEl("span","cd-chart-icon"),cdEl("span","cd-note accent",item.note||""),cdEl("span","cd-chart-low",item.lowText||""),bar,cdEl("span","cd-chart-high",item.highText||""));node.append(row)}return node}
-      case "list":{const items=(Array.isArray(b.items)?b.items:[]).slice(0,24);if(!items.length)return null;const node=cdEl("div","cd-list");node.setAttribute("role","list");
+      case "list":{const items=(Array.isArray(b.items)?b.items:[]).slice(0,24);if(!items.length)return null;const node=cdEl("div","cd-list");
+        // A collapsed list (a build card's Earlier steps) opens from its title; the page remembers it while it's open.
+        if(b.collapsed===true&&b.title&&key){const openKey=`list:${key}`,open=expanded.has(openKey),toggle=cdEl("button","cd-list-toggle"),rows=cdEl("div","cd-list-rows");
+          toggle.type="button";toggle.setAttribute("aria-expanded",String(open));toggle.append(cdEl("span","cd-chevron","›"),cdEl("span","cd-list-head-text",b.title));
+          if(b.subtitle)toggle.append(cdEl("span",`cd-list-sum ${b.tone||""}`.trim(),b.subtitle));rows.setAttribute("role","list");rows.setAttribute("aria-label",b.title);rows.hidden=!open;
+          for(const item of items)rows.append(cardItemNode(item,"cd-item"));
+          toggle.onclick=()=>{const opening=rows.hidden;rows.hidden=!opening;toggle.setAttribute("aria-expanded",String(opening));if(opening)expanded.add(openKey);else expanded.delete(openKey)};
+          node.append(toggle,rows);return node}
+        node.setAttribute("role","list");
         if(b.title)node.append(cdEl("div","cd-list-head",b.title));for(const item of items)node.append(cardItemNode(item,"cd-item"));return node}
       case "badges":{const badges=Array.isArray(b.badges)?b.badges:[];if(!badges.length)return null;const node=cdEl("div","cd-badges padded");for(const badge of badges)node.append(cardBadgeNode(badge));return node}
       case "notice":{const node=cdEl("div",`cd-notice ${b.tone||""}`),title=cdEl("div","cd-notice-title"),icon=cardIcon(b.symbol,null,"cd-notice-icon");if(icon)title.append(icon);title.append(document.createTextNode(b.title||""));node.append(title);if(b.text)node.append(cdEl("div","cd-line",b.text));return node}

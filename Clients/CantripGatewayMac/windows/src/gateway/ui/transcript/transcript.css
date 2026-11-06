@@ -562,6 +562,18 @@ button.mention:hover { text-decoration: underline; }
 
 .card-list { padding: 4px 0; }
 .card-list-title { padding: 8px 14px 2px; font-size: 12px; font-weight: 600; color: rgba(235, 235, 245, 0.78); }
+.card-list-toggle { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 34px; padding: 6px 14px; border: 0; background: transparent; color: rgba(235, 235, 245, 0.78); font: inherit; text-align: left; cursor: pointer; }
+.card-list-toggle:focus-visible { outline: 2px solid #8ccaff; outline-offset: -2px; }
+.card-list-toggle .card-list-title { flex: 1; padding: 0; }
+.card-list-chevron { flex: none; transition: transform 0.15s; }
+.card-list-chevron.open { transform: rotate(90deg); }
+.card-list-summary { flex: none; font-size: 12px; font-weight: 500; color: rgba(235, 235, 245, 0.85); }
+.card-list-summary.tone-positive { color: #34d399; }
+.card-list-summary.tone-negative { color: #f87171; }
+.card-list-summary.tone-warning { color: #f5b841; }
+.card-list-summary.tone-accent { color: #8ccaff; }
+.card-list-collapsible { padding: 2px 0; }
+@media (prefers-reduced-motion: reduce) { .card-list-chevron { transition: none; } }
 .card-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
 .card-row:last-child { border-bottom: none; }
 .card-row.selectable { cursor: pointer; }

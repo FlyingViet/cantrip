@@ -67,7 +67,7 @@ function PanelCard(props: { card: RemoteCardDocument; parts: CardPart[] }): JSX.
         const flow = FLOW_BLOCKS.has(part.block.type);
         return (
           <div key={index} class={`card-block card-${part.block.type}-block${flow ? " card-flow" : ""}${part.divided ? " card-divided" : ""}`}>
-            <BlockView block={part.block} />
+            <BlockView block={part.block} stateKey={`${typeof card.id === "string" ? card.id : ""}:${index}`} />
           </div>
         );
       })}
@@ -122,7 +122,7 @@ function LinkHeader(props: { block: RemoteCardBlock }): JSX.Element {
   );
 }
 
-function BlockView(props: { block: RemoteCardBlock }): JSX.Element | null {
+function BlockView(props: { block: RemoteCardBlock; stateKey?: string }): JSX.Element | null {
   const { block } = props;
   switch (block.type) {
     case "header": return <HeaderBlock block={block} />;
@@ -130,7 +130,9 @@ function BlockView(props: { block: RemoteCardBlock }): JSX.Element | null {
     case "keyValue": return <KeyValueBlock block={block} />;
     case "strip": return <StripBlock block={block} />;
     case "chart": return <ChartBlock block={block} />;
-    case "list": return <ListBlock block={block} />;
+    case "list": return block.collapsed === true && cardText(block.title) && props.stateKey
+      ? <CollapsedList block={block} stateKey={props.stateKey} />
+      : <ListBlock block={block} />;
     case "image": return <CardImage block={block} />;
     case "badges": return <Badges badges={block.badges} />;
     case "notice": return <NoticeBlock block={block} />;
@@ -247,6 +249,39 @@ function ListBlock(props: { block: RemoteCardBlock; legend?: LegendState }): JSX
           <ListRow key={typeof item.id === "string" ? item.id : index} item={item} legend={legend} />
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Collapsed lists the user opened, by card and block, while the app runs (a card that updates in place stays open). */
+const openedLists = new Set<string>();
+
+/** A list that starts collapsed to its title and summary (a build card's Earlier steps). */
+function CollapsedList(props: { block: RemoteCardBlock; stateKey: string }): JSX.Element {
+  const { block, stateKey } = props;
+  const [open, setOpen] = useState(() => openedLists.has(stateKey));
+  const title = cardText(block.title)!;
+  const summary = cardText(block.subtitle);
+  const toggle = () => {
+    const next = !open;
+    if (next) openedLists.add(stateKey);
+    else openedLists.delete(stateKey);
+    setOpen(next);
+  };
+  return (
+    <div class="card-list card-list-collapsible">
+      <button type="button" class="card-list-toggle" aria-expanded={open} onClick={toggle}>
+        <Icon name="chevron.right" size={12} class={`card-list-chevron${open ? " open" : ""}`} />
+        <span class="card-list-title">{title}</span>
+        {summary ? <span class={`card-list-summary${block.tone ? ` tone-${block.tone}` : ""}`}>{summary}</span> : null}
+      </button>
+      {open ? (
+        <div role="list" aria-label={title}>
+          {cardItems(block).filter((item) => cardText(item.title)).map((item, index) => (
+            <ListRow key={typeof item.id === "string" ? item.id : index} item={item} />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

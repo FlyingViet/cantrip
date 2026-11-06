@@ -636,6 +636,8 @@ export interface RemoteCardBlock {
   longitudeDelta?: number;
   /** list: right after a map, its items are that map's pins (`pinID`), shown as its legend. */
   mapLinked?: boolean;
+  /** list: starts collapsed to its title and `subtitle` (tinted by `tone`); the title opens it. */
+  collapsed?: boolean;
   attribution?: string;
   /** image: `GET /api/v1/link-previews/image?id=<imageID>` (only images the Mac cached). */
   imageID?: HexSHA256;

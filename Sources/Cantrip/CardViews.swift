@@ -152,7 +152,7 @@ struct CardPanelView: View {
                 case .map(let map, let legend):
                     CardMapView(block: map, legend: legend)
                 case .block(let block):
-                    CardBlockView(block: block, isFirst: index == 0)
+                    CardBlockView(block: block, isFirst: index == 0, stateKey: "\(card.id):\(index)")
                 }
             }
             footer
@@ -206,9 +206,25 @@ struct CardPanelView: View {
 
 // MARK: - Blocks
 
+/// Collapsed lists a person opened, by card and block, while Cantrip runs (a card that updates in
+/// place keeps its list open).
+@MainActor final class CardDisclosures: ObservableObject {
+    static let shared = CardDisclosures()
+    @Published private(set) var opened: Set<String> = []
+
+    func isOpen(_ key: String) -> Bool { opened.contains(key) }
+
+    func toggle(_ key: String) {
+        if opened.contains(key) { opened.remove(key) } else { opened.insert(key) }
+    }
+}
+
 struct CardBlockView: View {
     let block: CardDocument.Block
     let isFirst: Bool
+    /// The card's ID and this block's place, for a collapsed list's open state.
+    var stateKey: String? = nil
+    @ObservedObject private var disclosures = CardDisclosures.shared
 
     var body: some View {
         switch block.type {
@@ -409,8 +425,40 @@ struct CardBlockView: View {
 
     private var list: some View {
         let items = block.items ?? []
+        let collapsible = block.collapsed == true && block.title != nil
+        let key = stateKey ?? block.title ?? ""
+        let open = !collapsible || disclosures.isOpen(key)
         return VStack(alignment: .leading, spacing: 0) {
-            if let title = block.title {
+            if collapsible, let title = block.title {
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) { disclosures.toggle(key) }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .bold))
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                            .foregroundStyle(.white.opacity(0.62))
+                        Text(title.uppercased())
+                            .font(.system(size: 10.5, weight: .bold))
+                            .tracking(0.5)
+                            .foregroundStyle(.white.opacity(0.62))
+                        Spacer(minLength: 8)
+                        if let subtitle = block.subtitle {
+                            Text(subtitle)
+                                .font(.system(size: 11.5, weight: .medium))
+                                .foregroundStyle(block.tone == nil ? Color.white.opacity(0.72) : CardLook.tone(block.tone))
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel([title, block.subtitle].compactMap { $0 }.joined(separator: ", "))
+                .accessibilityValue(open ? "Expanded" : "Collapsed")
+                .accessibilityHint(open ? "Hides the steps" : "Shows the steps")
+                if open { Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1) }
+            } else if let title = block.title {
                 Text(title.uppercased())
                     .font(.system(size: 10.5, weight: .bold))
                     .tracking(0.5)
@@ -420,10 +468,12 @@ struct CardBlockView: View {
                     .accessibilityAddTraits(.isHeader)
                 Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
             }
-            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                CardItemRow(item: item, compact: false)
-                if index < items.count - 1 {
-                    Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1).padding(.leading, 14)
+            if open {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    CardItemRow(item: item, compact: false)
+                    if index < items.count - 1 {
+                        Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1).padding(.leading, 14)
+                    }
                 }
             }
         }

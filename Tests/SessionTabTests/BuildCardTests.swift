@@ -373,6 +373,8 @@ extension SessionTabTests {
                      && card.blocks[1].status == "running" && card.blocks[1].label == "Testing")
         let list = card.blocks[2]
         precondition(list.title == "Earlier steps" && list.items?.count == 2)
+        precondition(list.collapsed == true && list.subtitle == "2 steps · 1 failed" && list.tone == "negative",
+                     "earlier steps start collapsed to a summary that calls out failures: \(list)")
         let rows = list.items ?? []
         precondition(rows[0].title == "xcodebuild build · Hermes" && rows[0].note == "Succeeded" && rows[0].tone == "positive"
                      && rows[0].trailing == "2:21" && rows[0].symbol == nil && rows[0].subtitle == nil,
@@ -395,6 +397,7 @@ extension SessionTabTests {
         card = try require(BuildRun.card(for: [build, failed, finished, install]))
         precondition(card.blocks[0].title == "make install" && card.blocks[0].tone == "warning" && card.blocks[1].status == "stopped")
         precondition(card.blocks[2].items?.last?.subtitle == "CantripIOS", "a row from another folder than the lead's names it")
+        precondition(card.blocks[2].subtitle == "3 steps · 1 failed")
 
         // Builds running side by side keep live progress, labeled by command; the lead is the newest.
         let app = run("e", "make app", "Building", folder: "/w/Cantrip", at: 500)
@@ -403,6 +406,7 @@ extension SessionTabTests {
         precondition(card.blocks.map(\.type) == ["header", "progress", "progress", "list"])
         precondition(card.blocks[0].title == "make build" && card.blocks[2].label == "make app"
                      && card.blocks[2].status == "running" && card.blocks[3].items?.map(\.id) == ["a"])
+        precondition(card.blocks[3].subtitle == "1 step · succeeded" && card.blocks[3].tone == "positive")
         precondition(CardPanelView.sections(card.blocks).count == 4)
 
         // A long reply lists only its latest five earlier steps, and says how many there were.
@@ -410,6 +414,10 @@ extension SessionTabTests {
         card = try require(BuildRun.card(for: many))
         precondition(card.blocks[2].title == "Earlier steps · latest 5 of 7"
                      && card.blocks[2].items?.map(\.id) == ["m2", "m3", "m4", "m5", "m6"], "\(card.blocks[2])")
+        precondition(card.blocks[2].subtitle == "All succeeded", "the title already counts the steps")
+        var stopped = many[1]
+        stopped.state = .stopped
+        precondition(BuildRun.earlierSummary([many[0], stopped, rerun], counted: true) == ("3 steps · 1 stopped · 1 running", "warning"))
         precondition(card.blocks.count <= 12, "clients draw at most 12 blocks")
 
         // A reply's own cards still follow its builds' one card.
