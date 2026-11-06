@@ -69,6 +69,8 @@ struct ToolActivity: Identifiable, Equatable {
     var subagent: SubagentInfo?
     /// The newest `[n/m]` counter a running command printed (Copilot streams command output).
     var buildStep: BuildStep?
+    /// The command waits for a build slot, or just got one (`BuildQueue`'s lines in its output).
+    var buildQueue: BuildQueueState?
     /// The newest transfer progress (bytes or percent) a running command printed, kept at whole
     /// percents so a transfer's card moves at most a hundred times.
     var transfer: TransferProgress?

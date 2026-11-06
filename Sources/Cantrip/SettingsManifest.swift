@@ -273,6 +273,8 @@ enum SettingsManifest {
             "childTabsAutoFork": .bool(s.childTabsAutoFork),
             "childTabsPerParentLimit": .int(s.childTabsPerParentLimit),
             "childTabsOverallLimit": .int(s.childTabsOverallLimit),
+            "buildQueueEnabled": .bool(s.buildQueueEnabled),
+            "buildQueueSlots": .int(s.buildQueueSlots),
             "claudeWorkdir": .string(s.claudeWorkdir),
             "copilotIdleReleaseMinutes": .int(s.copilotIdleReleaseMinutes),
             "linkPreviewsEnabled": .bool(s.linkPreviewsEnabled),
@@ -519,6 +521,13 @@ enum SettingsManifest {
         var overall = field("childTabsOverallLimit", .integer, "Child tabs in all")
         overall.range = 1...Double(ChildTabCapacity.maximumOverall)
         overall.step = 1
+        let buildQueue = field("buildQueueEnabled", .toggle, "Heavy builds take turns",
+                               help: "Xcode and Swift builds and test runs that agents, their terminals and this Mac's GitHub runners start wait for a free slot. Your tabs go first, then child tabs and CI jobs, then Home's background runs.")
+        var buildSlots = field("buildQueueSlots", .integer, "Builds at once",
+                               help: "One at a time while the Mac is busy or short of memory.")
+        buildSlots.range = 1...Double(BuildQueue.maximumSlots)
+        buildSlots.step = 1
+        buildSlots.visibleWhen = on("buildQueueEnabled")
         var workdir = field("claudeWorkdir", .path, "Default working folder",
                             help: "Where new tabs start when they don't name a folder.")
         workdir.access = .atMac
@@ -686,6 +695,9 @@ enum SettingsManifest {
                                 footer: "Run in Child Tab stops at these limits. Auto-start also waits while the Mac is busy, disk is short or no simulator is free.",
                                 fields: [autoFork, perParent, overall]),
                 SettingsSection(id: "tabs", title: "Tabs", fields: [workdir, idle, previews]),
+                SettingsSection(id: "builds", title: "Builds on this Mac",
+                                footer: "Each build's card says when it's waiting for a slot. `cantrip build-queue` shows what runs and waits.",
+                                fields: [buildQueue, buildSlots]),
             ]),
             SettingsPageSpec(id: "memory", title: "Memory", sections: [
                 SettingsSection(id: "memory", title: "Memory", fields: memoryFields),

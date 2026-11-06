@@ -47,6 +47,11 @@ struct BuildRun: Codable, Equatable, Identifiable {
     /// A transfer's first and newest progress readings: its rate and time left come from these.
     var firstReading: TransferReading?
     var reading: TransferReading?
+    /// Waiting for a build slot (`BuildQueue`): what runs and its place in line. Its time starts
+    /// once it gets one, so estimates and history leave the wait out.
+    var queue: String?
+
+    var isWaiting: Bool { state == .running && queue != nil }
 
     var duration: TimeInterval? { finishedAt.map { max(0, $0.timeIntervalSince(startedAt)) } }
     var isTransfer: Bool { kind == .transfer }
@@ -72,9 +77,21 @@ struct BuildRun: Codable, Equatable, Identifiable {
 
     /// Takes a running command's newest step counter and, for a transfer, its newest progress.
     /// True when the card moved.
-    mutating func advance(step newStep: BuildStep?, transfer: TransferProgress?, at date: Date) -> Bool {
+    mutating func advance(step newStep: BuildStep?, transfer: TransferProgress?, queue queued: BuildQueueState? = nil,
+                          at date: Date) -> Bool {
         guard state == .running else { return false }
         var moved = false
+        switch queued {
+        case .waiting(let detail) where queue != detail:
+            queue = detail
+            moved = true
+        case .started where queue != nil:
+            queue = nil
+            startedAt = date
+            moved = true
+        default:
+            break
+        }
         if let newStep, newStep != step {
             step = newStep
             moved = true
@@ -168,7 +185,7 @@ extension BuildRun {
 
     private var stateSymbol: String {
         switch state {
-        case .running: runningSymbol
+        case .running: isWaiting ? "hourglass" : runningSymbol
         case .succeeded: "checkmark.circle.fill"
         case .failed: "xmark.circle.fill"
         case .stopped: "stop.circle"
@@ -192,7 +209,7 @@ extension BuildRun {
         item.title = title
         item.subtitle = project == leadProject ? nil : project
         item.note = switch state {
-        case .running: [verb, "still running"].joined(separator: " · ")
+        case .running: isWaiting ? "Waiting for a build slot" : [verb, "still running"].joined(separator: " · ")
         case .succeeded: [label, transferDetail].compactMap { $0 }.joined(separator: " · ")
         case .failed: label + " · " + detail
         case .stopped: transferDetail ?? label
@@ -212,7 +229,7 @@ extension BuildRun {
         progress.tone = tone
         progress.startedAt = Self.iso(startedAt)
         progress.finishedAt = finishedAt.map(Self.iso)
-        if state == .running {
+        if state == .running, !isWaiting {
             if let reading {
                 // The transfer's own numbers: its share done, and the time left at its rate so far.
                 progress.fraction = reading.progress.fraction
@@ -238,7 +255,7 @@ extension BuildRun {
 
     var label: String {
         switch state {
-        case .running: verb
+        case .running: isWaiting ? "Waiting" : verb
         case .succeeded: "Succeeded"
         case .failed: "Failed"
         case .stopped: "Stopped"
@@ -258,6 +275,9 @@ extension BuildRun {
 
     /// The line under the bar: where the numbers come from.
     var detail: String {
+        if isWaiting, let queue {
+            return "Waiting for a build slot" + (queue.isEmpty ? "" : " · " + queue)
+        }
         if let transfer = transferDetail { return transfer }
         let usual = expectedSeconds.map { seconds in
             "usually " + Self.durationText(seconds) + (timedRuns.map { $0 == 1 ? " (1 earlier run)" : " (\($0) earlier runs)" } ?? "")
@@ -1164,7 +1184,7 @@ enum BuildTracker {
                         run.finish(state, exitCode: code, at: now)
                         working.put(run, at: index, ended: true)
                     }
-                } else if run.advance(step: step.buildStep, transfer: step.transfer, at: now) {
+                } else if run.advance(step: step.buildStep, transfer: step.transfer, queue: step.buildQueue, at: now) {
                     working.put(run, at: index, ended: false)
                 }
                 continue
@@ -1172,7 +1192,8 @@ enum BuildTracker {
             if step.state == .running {
                 guard seen.starts.insert(step.id).inserted, let command = step.terminalCommand,
                       let detected = BuildDetector.detect(command, workdir: workdir) else { continue }
-                let run = BuildRun(id: step.id, command: detected, startedAt: now, estimate: history.estimate(for: detected.key))
+                var run = BuildRun(id: step.id, command: detected, startedAt: now, estimate: history.estimate(for: detected.key))
+                _ = run.advance(step: nil, transfer: nil, queue: step.buildQueue, at: now)
                 working.put(run, at: messageIndex, ended: false)
                 known.insert(step.id)
                 continue

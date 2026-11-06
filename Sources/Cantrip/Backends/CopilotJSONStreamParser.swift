@@ -305,11 +305,16 @@ struct CopilotJSONStreamParser {
                   let output = eventData?["partialOutput"] as? String else { return [] }
             let step = BuildStep.latest(in: output)
             let transfer = TransferProgress.latest(in: output)
-            guard step != nil || transfer != nil else { return [] }
+            let queue = BuildQueueState.latest(in: output)
+            guard step != nil || transfer != nil || queue != nil else { return [] }
             func advance(_ activity: inout ToolActivity) -> Bool {
                 var changed = false
                 if let step, activity.buildStep != step {
                     activity.buildStep = step
+                    changed = true
+                }
+                if let queue, activity.buildQueue != queue {
+                    activity.buildQueue = queue
                     changed = true
                 }
                 if TransferProgress.moves(activity.transfer, to: transfer) {

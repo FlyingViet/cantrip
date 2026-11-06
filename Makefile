@@ -72,7 +72,7 @@ test-maintenance:
 test-message-routing:
 	@BIN="/tmp/cantrip-message-routing-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/QueueGrouping.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc -parse-as-library Sources/Cantrip/MessageRouting.swift Sources/Cantrip/MessageRouter.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/QueueGrouping.swift Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/BuildQueueState.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/ISODate.swift Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Tests/MessageRoutingTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-mac-context:
 	@BIN="/tmp/cantrip-mac-context-tests-$$$$"; \
@@ -126,7 +126,7 @@ test-features:
 test-copilot-parser:
 	@BIN="/tmp/cantrip-copilot-parser-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/PromptUsage.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/ISODate.swift Tests/CopilotJSONStreamParserTests/*.swift -o "$$BIN"; \
+	swiftc Sources/Cantrip/ConversationContext.swift Sources/Cantrip/MCPApps.swift Sources/Cantrip/PromptUsage.swift Sources/Cantrip/Backends/Backend.swift Sources/Cantrip/BuildQueueState.swift Sources/Cantrip/Backends/CopilotJSONStreamParser.swift Sources/Cantrip/ISODate.swift Tests/CopilotJSONStreamParserTests/*.swift -o "$$BIN"; \
 	"$$BIN"
 
 test-package-tracking:

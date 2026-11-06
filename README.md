@@ -147,6 +147,7 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 | `cantrip env [list]` / `show [FOLDER]` / `set NAME …` / `run [--dir F] -- CMD` / `hook install` | Per-project environment profiles: the Xcode, Node, PATH and variables every backend, child tab and `!` command in a project gets | [Project toolchains](docs/backends.md#give-each-project-the-same-toolchain-on-every-backend) |
 | `cantrip api [--json]` / `api key new` / `api key clear` | Cantrip's OpenAI-compatible API for apps on this Mac: status, calls per consumer and the proxy key | [OpenAI-compatible API](docs/backends.md#serve-your-backends-to-other-apps-openai-compatible-api) |
 | `cantrip sim acquire --device NAME [--os VERSION] [--exact] [--wait SECONDS]` / `release` / `list` / `adopt UDID` / `tidy` | Lease a shared simulator to a tab (one iPhone for every iPhone request, a Duo per iOS version, at most 2 running at once) and give it back | [Shared simulators](docs/updating-and-troubleshooting.md#shared-simulators) |
+| `cantrip build-queue` | Builds running and waiting for a slot while heavy builds take turns | [Heavy builds take turns](docs/updating-and-troubleshooting.md#heavy-builds-take-turns) |
 | `cantrip help` | Show the usage of these host commands (`cantrip --help` shows the ask and `runs` examples) | [Headless](docs/headless.md#commands) |
 
 ## Permissions and privacy

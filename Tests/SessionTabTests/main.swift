@@ -8,6 +8,7 @@ struct SessionTabTests {
     @MainActor
     static func main() async throws {
         if CommandLine.arguments.dropFirst().first == "--cantrip-askpass" { exit(RemoteAskpass.runHelper()) }
+        if CommandLine.arguments.dropFirst().first == "--build-queue-run" { exit(runBuildQueueHelper(CommandLine.arguments)) }
         if CommandLine.arguments.dropFirst().first == AntigravityHook.helperArgument { exit(AntigravityHook.runHelper()) }
         if CommandLine.arguments.dropFirst().first == AgentPolicyBackstop.hookArgument {
             let client = CommandLine.arguments.dropFirst(2).first ?? "copilot"
@@ -105,6 +106,10 @@ struct SessionTabTests {
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "home-handoffs" {
             try await testCantripHomeNewTabs()
             try await testCantripHomeDoneWhen()
+            return
+        }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "build-queue" {
+            try testBuildQueue()
             return
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "build-cards" {
@@ -262,6 +267,7 @@ struct SessionTabTests {
         try await testCantripHomeHandoffResults()
         try await testCantripHomeDoneWhen()
         try await testCantripHomeNewTabs()
+        try testBuildQueue()
         try await testThreadTags()
         try testCantripHomeRunSummaries()
         try testSubagentPlacement()

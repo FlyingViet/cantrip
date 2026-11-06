@@ -503,6 +503,38 @@ one goes after the idle time. `cantrip sim list` also shows how many are
 booted and who waits in line. `cantrip sim tidy` runs the upkeep now and
 prints the space it freed (`--dry-run` to preview).
 
+## Heavy builds take turns
+
+Several tabs, child tabs, Home's background runs and GitHub Actions runners can
+all build on one Mac at once, and a 16 GB Mac swaps when they do. With
+**Settings › Home & tabs › Heavy builds take turns** on (off by default;
+`cantrip config set buildQueueEnabled true`), they wait for one of a few build
+slots instead:
+
+- **What waits:** `xcodebuild` builds, archives and test runs (not `-list`,
+  `-showBuildSettings` or other queries), `swift build`, `swift test` and
+  `swiftc` compiles. Cantrip puts small shims for these three commands first on
+  the PATH it gives agents and their terminals, so a script or `make` target
+  that runs them waits too. A tool called by its full path (`/usr/bin/xcodebuild`,
+  `./gradlew`) doesn't. Tools a build starts run in its slot.
+- **How many:** **Builds at once** (`buildQueueSlots`, 2 by default, at most 4),
+  and one at a time while macOS reports memory pressure or the Mac's load is
+  more than 1.5 per core.
+- **Who goes first:** your tabs (including Cantrip Home's chat), then child tabs
+  and CI jobs in the order they asked, then Home's background runs.
+- **Where it shows:** a waiting build's card says **Waiting for a build slot**
+  with what's running and its place in line (on Copilot and Codex, which stream
+  command output), and its time and estimate start once it gets a slot. The
+  command prints `cantrip build queue:` lines while it waits.
+- **CI:** a self-hosted runner on the Mac uses the queue when its `.path` file
+  starts with `~/.cache/Cantrip/build-queue/bin` (restart the runner after
+  editing it). Its jobs count as CI jobs.
+
+`cantrip build-queue` lists the builds running and waiting. Slots are file
+locks in `~/.cache/Cantrip/build-queue`, so a build that crashes or is killed
+never keeps one, and the queue works while Cantrip itself is closed. Turning
+the setting off removes the shims.
+
 ## Find diagnostics for a bug report
 
 On Mac:

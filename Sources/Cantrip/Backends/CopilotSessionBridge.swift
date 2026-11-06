@@ -208,11 +208,11 @@ enum CopilotSessionBridge {
     }
     function onEvent(event) {
       if (!runID || stopping) return;
-      // A running command's output so far: Cantrip only reads its newest [n/m] step counter or
+      // A running command's output so far: Cantrip only reads the build queue's lines, its newest [n/m] step counter or
       // transfer progress (sizes such as 1.2 GB/4.7 GB, a percentage, curl's meter).
       if (event.type === 'tool.execution_partial_result') {
         const tail = String(event.data?.partialOutput ?? '').slice(-2000);
-        if (/\[\d+\s?\/\s?\d+\]|\d\s?%|\d\s?(?:bytes|[kKMGTP]i?B?)?\s*(?:\/|\sof\s)\s*\d[\d,.]*\s?(?:bytes|[kKMGTP]i?B?|B)(?![A-Za-z])|(?:^|[\r\n])\s*\d{1,3}\s+\d+(?:\.\d+)?[kMGTP]?\s+\d{1,3}\s+\d+(?:\.\d+)?[kMGTP]?\s+\d{1,3}\s/.test(tail)) {
+        if (/cantrip build queue:|\[\d+\s?\/\s?\d+\]|\d\s?%|\d\s?(?:bytes|[kKMGTP]i?B?)?\s*(?:\/|\sof\s)\s*\d[\d,.]*\s?(?:bytes|[kKMGTP]i?B?|B)(?![A-Za-z])|(?:^|[\r\n])\s*\d{1,3}\s+\d+(?:\.\d+)?[kMGTP]?\s+\d{1,3}\s+\d+(?:\.\d+)?[kMGTP]?\s+\d{1,3}\s/.test(tail)) {
           emit({ kind: 'event', runID, event: { ...event, data: { ...event.data, partialOutput: tail } } });
         }
         return;

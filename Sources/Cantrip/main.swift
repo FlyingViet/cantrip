@@ -102,6 +102,9 @@ PendingUpdate.recordLaunchedExecutable()
 
 let recoveryReport = CrashRecovery.start()
 try? RunJournal.prune()
+HostMode.isHostProcess = true
+// The build queue's shims follow the setting, and point at this build's executable.
+BuildQueue.apply(enabled: AppSettings.shared.buildQueueEnabled)
 
 MainActor.assumeIsolated {
     if HostMode.isHeadless { HeadlessHost.run(recoveryReport: recoveryReport) }
