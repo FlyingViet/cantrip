@@ -985,13 +985,27 @@ struct CantripCardProgressView: View {
     }
 }
 
-/// A thin bar filled to `fraction`, or a segment gliding back and forth without one (still for
-/// Reduce Motion).
+/// A thin bar filled to `fraction`, or, without one, a segment that sweeps in from the left edge
+/// and out the right, over and over (a still, dim bar under Reduce Motion). The sweep's place
+/// comes from the clock rather than a running animation: a repeating animation started on appear
+/// also replayed the bar's position from before the card's layout settled, so its segment floated
+/// off the track. The track clips the segment as well.
 struct CantripCardProgressBar: View {
     let fraction: Double?
     let color: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var gliding = false
+
+    /// One pass, and the segment's share of the track (as the Mac, web and Windows draw it).
+    static let sweepSeconds: TimeInterval = 1.6
+    static let sweepWidth = 0.35
+
+    /// The segment's leading edge at `date`, as a share of the track: from −`sweepWidth`
+    /// (hidden past the left end) to 1 (gone past the right), easing in and out.
+    static func sweepOffset(at date: Date) -> Double {
+        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: sweepSeconds) / sweepSeconds
+        let eased = phase < 0.5 ? 2 * phase * phase : 1 - 2 * (1 - phase) * (1 - phase)
+        return -sweepWidth + eased * (1 + sweepWidth)
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -1002,13 +1016,14 @@ struct CantripCardProgressBar: View {
                 } else if reduceMotion {
                     Capsule().fill(color.opacity(0.35))
                 } else {
-                    Capsule().fill(color)
-                        .frame(width: proxy.size.width * 0.28)
-                        .offset(x: gliding ? proxy.size.width * 0.72 : 0)
-                        .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: gliding)
-                        .onAppear { gliding = true }
+                    TimelineView(.animation(minimumInterval: 1.0 / 60)) { context in
+                        Capsule().fill(color)
+                            .frame(width: proxy.size.width * Self.sweepWidth)
+                            .offset(x: proxy.size.width * Self.sweepOffset(at: context.date))
+                    }
                 }
             }
+            .clipShape(Capsule())
         }
         .accessibilityHidden(true)
     }

@@ -610,9 +610,13 @@ Gradle, npm/Expo/EAS builds, fastlane, App Store uploads…), the reply shows a 
 (docs/cards.md "Build cards"): the command and its folder, then a bar with the elapsed time,
 which the app counts itself once a second from the Mac's start time (only that card redraws).
 When the Mac has timed the same command before it shows the usual time and the time left; when
-the tool prints `[n/m]` steps the bar follows them; with neither, the bar is indeterminate.
-When the build ends the card shows Succeeded, Failed (with its exit code) or Stopped and the
-total time. Footer lines that don't fit side by side stack (iPhone, Duo folded).
+the tool prints `[n/m]` steps the bar follows them; with neither, a segment sweeps across the
+bar from left to right, timed from the clock so polls never restart it (a still bar under Reduce
+Motion). When the build ends the card shows Succeeded, Failed (with its exit code) or Stopped and
+the total time. Footer lines that don't fit side by side stack (iPhone, Duo folded). A reply
+that runs several builds keeps one card that changes in place: the newest running build leads,
+builds running beside it keep their own bar, and finished ones become rows under **Earlier
+steps** with their result and time (the latest five).
 Data transfers (rsync, downloads, device copies and installs, `push-…` scripts) get the same
 card (docs/cards.md "Transfer cards"): the bar follows the bytes the Mac read from the command,
 the line under it says how much is done and how fast (`27.0 GB of 29.1 GB · 34.5 MB/s`), and the

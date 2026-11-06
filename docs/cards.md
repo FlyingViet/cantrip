@@ -34,7 +34,8 @@ Cards are for answers whose core is real structured data that's easier to see th
 (places, forecasts, flights, packages, prices), never for prose.
 
 Build cards aren't a reply's main card: they report work the reply did, so they come first,
-before its main card and link cards, one per build.
+before its main card and link cards. A reply has one build card however many builds it runs
+(see [One card per reply](#one-card-per-reply)).
 
 ### The `card` block
 
@@ -85,6 +86,23 @@ Every number is real:
 
 A build card is a header (the command, such as `xcodebuild test · Hermes`, and its folder) and
 a `progress` block. Only Cantrip makes `progress` blocks: tool and model cards can't use them.
+
+#### One card per reply
+
+A reply that runs several builds, tests, uploads or transfers keeps one card (its `id` is the
+first build's, so clients update it in place) instead of a card per command:
+
+- The newest build still running leads, with its header and `progress` block; once none is
+  running, the newest build leads with its result.
+- Up to three other builds running at the same time follow with their own `progress` block,
+  labeled with their command.
+- Finished builds are a `list` titled **Earlier steps**, in the order they ran: the command, its
+  folder when it isn't the leading build's, the result as a note tinted by its tone
+  (`Succeeded`, `Failed · Exit code 65`, `Stopped at 27.0 GB of 29.1 GB`), and how long it took.
+  Only the latest five are listed; the title then says how many there were
+  (`Earlier steps · latest 5 of 8`).
+
+A reply with one build gets exactly the card above.
 
 #### Transfer cards
 
@@ -158,7 +176,7 @@ HTML views (`ui://` resources), which Cantrip already shows for Copilot.
 | `image` | `imageID`, `aspectRatio` | A hero image from `GET /api/v1/link-previews/image?id=`; only images the Mac cached |
 | `badges` | `badges: [{text, tone, symbol}]` | A wrapping row of pills |
 | `notice` | `symbol`, `title`, `text`, `tone` | A status message, such as "Forecast unavailable" and why |
-| `progress` | `status` (`running`, `succeeded`, `failed`, `stopped`, `ended`), `label`, `tone`, `startedAt`, `finishedAt` (ISO 8601), `expectedSeconds`, `fraction`, `detail` | The label (accent while running, else `tone`) with the elapsed time on the trailing side (`1:23`, `1:02:09`), a 5 pt bar, then `detail` and the time left. Running: the client counts from `startedAt` once a second; the bar fills to `fraction`, else to elapsed ÷ `expectedSeconds`, else (and past the estimate) a segment glides back and forth (still under Reduce Motion); "About 1:20 left" from `expectedSeconds`, "Longer than usual" past it. Finished: the time from `startedAt` to `finishedAt` and a full bar; `ended` has neither |
+| `progress` | `status` (`running`, `succeeded`, `failed`, `stopped`, `ended`), `label`, `tone`, `startedAt`, `finishedAt` (ISO 8601), `expectedSeconds`, `fraction`, `detail` | The label (accent while running, else `tone`) with the elapsed time on the trailing side (`1:23`, `1:02:09`), a 5 pt bar, then `detail` and the time left. Running: the client counts from `startedAt` once a second; the bar fills to `fraction`, else to elapsed ÷ `expectedSeconds`, else (and past the estimate) a segment 35% of the bar's width sweeps one way, in from past the left end and out past the right, every 1.6 s with ease-in-out, timed from the clock (a still, dim bar under Reduce Motion); "About 1:20 left" from `expectedSeconds`, "Longer than usual" past it. Finished: the time from `startedAt` to `finishedAt` and a full bar; `ended` has neither |
 
 A `list` with `mapLinked: true` right after a `map` is that map's legend: its items' `pinID`s
 are the map's pins. Where the card is at least 600 pt wide the list floats over the map,
