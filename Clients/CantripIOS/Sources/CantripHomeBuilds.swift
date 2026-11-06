@@ -4,7 +4,7 @@ import SwiftUI
 import UIKit
 
 /// Home's Builds tab: every build on the Mac's private over-the-air install page, one card per
-/// page entry (newest build first, older ones behind a disclosure). Read-only: Install hands the
+/// page entry (newest build first, older ones in a sheet). Read-only: Install hands the
 /// build's `itms-services` link to iOS, which shows its install prompt and downloads the app
 /// from the Mac over Tailscale. Publishing and removal stay on the Mac (`ota-publish.py`).
 struct CantripHomeBuildsView: View {
@@ -17,18 +17,19 @@ struct CantripHomeBuildsView: View {
     @State private var checkingID: String?
     @State private var problem: CantripOTAInstallProblem?
     @State private var confirming: CantripOTABuild?
+    /// The app whose older builds are showing, and a build picked there (installed once it closes).
+    @State private var olderBuildsOf: CantripOTAApp?
+    @State private var pendingInstall: CantripOTABuild?
     @Environment(\.chatDisplayTraits) private var displayTraits
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// The install page reachability check; injectable for tests.
     var checkInstallPage: @Sendable (URL) async -> CantripOTAInstallCheck = { await CantripOTAInstaller.check($0) }
 
-    private var columns: [GridItem] {
+    private var columns: CantripEqualHeightGrid.Columns {
         switch CantripHomeBuildsPresentation.gridLayout(unfoldedDuo: displayTraits.isUnfoldedDuo,
                                                          accessibilitySize: dynamicTypeSize.isAccessibilitySize) {
-        case .twoColumns:
-            Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 2)
-        case .adaptive:
-            [GridItem(.adaptive(minimum: 320, maximum: 640), spacing: 12, alignment: .top)]
+        case .twoColumns: .fixed(2)
+        case .adaptive: .adaptive(minimum: 320)
         }
     }
 
@@ -91,6 +92,18 @@ struct CantripHomeBuildsView: View {
         } message: { problem in
             Text(problem.message)
         }
+        .sheet(item: $olderBuildsOf, onDismiss: {
+            // After the sheet closes, so the install check's alerts and prompts can show.
+            if let build = pendingInstall {
+                pendingInstall = nil
+                install(build)
+            }
+        }) { app in
+            CantripOTAOlderBuildsSheet(app: app, isDisabled: checkingID != nil) { build in
+                pendingInstall = build
+                olderBuildsOf = nil
+            }
+        }
         .confirmationDialog(
             confirming.map { "Install \($0.title) \(CantripHomeBuildsPresentation.versionText($0))?" } ?? "",
             isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
@@ -150,11 +163,12 @@ struct CantripHomeBuildsView: View {
                     .accessibilityIdentifier("home.builds.staleError")
             }
             let shared = CantripHomeBuildsPresentation.sharedBundleTitles(snapshot.apps)
-            LazyVGrid(columns: columns, spacing: 12) {
+            // Accessibility sizes keep each card's own height: equal ones would mostly add scrolling.
+            CantripEqualHeightGrid(columns: columns, spacing: 12, equalHeights: !dynamicTypeSize.isAccessibilitySize) {
                 ForEach(snapshot.apps) { app in
                     CantripOTAAppCard(
                         app: app, remote: remote, sharesBundleWith: shared[app.id] ?? [],
-                        checkingID: checkingID
+                        checkingID: checkingID, showOlder: { olderBuildsOf = app }
                     ) { install($0) }
                 }
             }
@@ -219,21 +233,22 @@ struct CantripHomeBuildsView: View {
     }
 }
 
-/// One install-page entry: the newest build with Install, older builds behind a disclosure.
+/// One install-page entry: the newest build with Install, and a link to its older builds. Every card
+/// in the grid is as tall as the tallest (`CantripEqualHeightGrid`), with its actions at the bottom.
 struct CantripOTAAppCard: View {
     let app: CantripOTAApp
     let remote: CantripRemoteModel
     /// Other entries installing the same bundle id (Brane Controller and Crooner).
     let sharesBundleWith: [String]
     let checkingID: String?
+    let showOlder: () -> Void
     let install: (CantripOTABuild) -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .headline) private var iconSize: CGFloat = 60
-    @State private var showsOlder = false
 
     var body: some View {
         let primary = app.builds[0]
-        let older = Array(app.builds.dropFirst())
+        let olderCount = app.builds.count - 1
         VStack(alignment: .leading, spacing: 12) {
             let header = dynamicTypeSize.isAccessibilitySize
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
@@ -243,6 +258,7 @@ struct CantripOTAAppCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(app.title)
                         .font(.headline)
+                        .lineLimit(2)
                     Text("Version \(CantripHomeBuildsPresentation.versionText(primary))")
                         .font(.subheadline)
                     Text(CantripHomeBuildsPresentation.detailText(primary))
@@ -254,41 +270,68 @@ struct CantripOTAAppCard: View {
                 .accessibilityLabel(CantripHomeBuildsPresentation.accessibilityText(app.title, primary))
                 .accessibilityAddTraits(.isHeader)
             }
-            if let note = primary.note {
-                Text(note)
-                    .font(.footnote)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
             ForEach(CantripHomeBuildsPresentation.notices(primary, sharesBundleWith: sharesBundleWith), id: \.text) {
                 CantripOTANotice(text: $0.text, systemImage: $0.systemImage, compact: true)
+            }
+            // Actions at the bottom: every card is as tall as the tallest.
+            Spacer(minLength: 0)
+            if olderCount > 0 {
+                Button(action: showOlder) {
+                    HStack {
+                        Text(olderCount == 1 ? "1 older build" : "\(olderCount) older builds")
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right")
+                            .imageScale(.small)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .accessibilityHint("Shows them with Install.")
+                .accessibilityIdentifier("home.builds.older.\(app.id)")
             }
             CantripOTAInstallButton(
                 build: primary, title: app.title, prominent: true, isChecking: checkingID == primary.id,
                 isDisabled: checkingID != nil, install: install
             )
-            if !older.isEmpty {
-                DisclosureGroup(isExpanded: $showsOlder) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(older) { build in
-                            Divider()
-                            olderRow(build)
-                        }
-                    }
-                } label: {
-                    Text(older.count == 1 ? "1 older build" : "\(older.count) older builds")
-                        .font(.subheadline.weight(.semibold))
-                        .accessibilityIdentifier("home.builds.older.\(app.id)")
-                }
-            }
         }
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.builds.app.\(app.id)")
     }
+}
 
-    private func olderRow(_ build: CantripOTABuild) -> some View {
+/// An entry's older builds, each with Install. Picking one closes the sheet; the Builds tab then
+/// runs the install check, whose alerts can't show over a sheet.
+struct CantripOTAOlderBuildsSheet: View {
+    let app: CantripOTAApp
+    let isDisabled: Bool
+    let install: (CantripOTABuild) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Older builds") {
+                    ForEach(Array(app.builds.dropFirst())) { row($0) }
+                }
+            }
+            .navigationTitle(app.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .accessibilityIdentifier("home.builds.olderSheet")
+    }
+
+    private func row(_ build: CantripOTABuild) -> some View {
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
             : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
@@ -299,22 +342,71 @@ struct CantripOTAAppCard: View {
                 Text(CantripHomeBuildsPresentation.detailText(build))
                     .font(.footnote)
                     .foregroundStyle(CantripReasoningFormat.secondaryText)
-                if let note = build.note, note != app.builds[0].note {
-                    Text(note)
-                        .font(.footnote)
-                        .foregroundStyle(CantripReasoningFormat.secondaryText)
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(CantripHomeBuildsPresentation.accessibilityText(nil, build))
             CantripOTAInstallButton(
-                build: build, title: app.title, prominent: false, isChecking: checkingID == build.id,
-                isDisabled: checkingID != nil, install: install
+                build: build, title: app.title, prominent: false, isChecking: false,
+                isDisabled: isDisabled, install: install
             )
             .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: false)
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 4)
+    }
+}
+
+/// Cards in equal columns, every one as tall as the tallest, so rows line up and each card's Install
+/// sits at the same height. With `equalHeights` off, each row is as tall as its tallest card. Not
+/// lazy: an install page lists a few dozen apps at most.
+struct CantripEqualHeightGrid: Layout {
+    enum Columns: Equatable {
+        case fixed(Int)
+        /// As many columns at least `minimum` wide as fit.
+        case adaptive(minimum: CGFloat)
+    }
+
+    var columns: Columns
+    var spacing: CGFloat = 12
+    var equalHeights = true
+
+    func columnCount(width: CGFloat) -> Int {
+        switch columns {
+        case .fixed(let count): max(count, 1)
+        case .adaptive(let minimum): max(1, Int((width + spacing) / (minimum + spacing)))
+        }
+    }
+
+    private func metrics(width: CGFloat, subviews: Subviews) -> (count: Int, column: CGFloat, rows: [CGFloat]) {
+        let count = columnCount(width: width)
+        let column = max(0, (width - spacing * CGFloat(count - 1)) / CGFloat(count))
+        let heights = subviews.map { $0.sizeThatFits(ProposedViewSize(width: column, height: nil)).height }
+        var rows = stride(from: 0, to: heights.count, by: count).map { heights[$0..<min($0 + count, heights.count)].max() ?? 0 }
+        if equalHeights, let tallest = rows.max() { rows = rows.map { _ in tallest } }
+        return (count, column, rows)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 320
+        let rows = metrics(width: width, subviews: subviews).rows
+        return CGSize(width: width, height: rows.reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let metrics = metrics(width: bounds.width, subviews: subviews)
+        var y = bounds.minY
+        for (row, height) in metrics.rows.enumerated() {
+            for column in 0..<metrics.count {
+                let index = row * metrics.count + column
+                guard index < subviews.count else { break }
+                subviews[index].place(
+                    at: CGPoint(x: bounds.minX + CGFloat(column) * (metrics.column + spacing), y: y),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(width: metrics.column, height: height)
+                )
+            }
+            y += height + spacing
+        }
     }
 }
 

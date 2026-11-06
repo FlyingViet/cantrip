@@ -150,6 +150,28 @@ final class CantripHomeBuildsTests: XCTestCase {
                        "Folded, other iPhones and iPad keep the adaptive grid")
     }
 
+    /// Every card takes the tallest card's height, in every row.
+    func testEqualHeightGridSizesEveryRowToTheTallestCard() {
+        func height(_ columns: CantripEqualHeightGrid.Columns, width: CGFloat) -> CGFloat {
+            UIHostingController(rootView: CantripEqualHeightGrid(columns: columns, spacing: 12) {
+                Color.clear.frame(idealHeight: 20)
+                Color.clear.frame(idealHeight: 44)
+                Color.clear.frame(idealHeight: 10)
+            }).sizeThatFits(in: CGSize(width: width, height: 10_000)).height
+        }
+        XCTAssertEqual(height(.fixed(2), width: 400), 44 * 2 + 12, accuracy: 0.5, "two rows of the tallest card")
+        XCTAssertEqual(height(.adaptive(minimum: 320), width: 400), 44 * 3 + 24, accuracy: 0.5, "one column on a phone")
+        XCTAssertEqual(height(.adaptive(minimum: 150), width: 500), 44, accuracy: 0.5, "three columns fit in one row")
+        let natural = UIHostingController(rootView: CantripEqualHeightGrid(columns: .fixed(2), spacing: 12, equalHeights: false) {
+            Color.clear.frame(idealHeight: 20)
+            Color.clear.frame(idealHeight: 44)
+            Color.clear.frame(idealHeight: 10)
+        }).sizeThatFits(in: CGSize(width: 400, height: 10_000)).height
+        XCTAssertEqual(natural, 44 + 12 + 10, accuracy: 0.5, "without equal heights each row fits its own tallest card")
+        XCTAssertEqual(CantripEqualHeightGrid(columns: .adaptive(minimum: 320)).columnCount(width: 1_000), 3)
+        XCTAssertEqual(CantripEqualHeightGrid(columns: .fixed(2)).columnCount(width: 100), 2)
+    }
+
     func testBuildsTabFollowsArtifacts() {
         XCTAssertEqual(CantripHomeSection.allCases.suffix(2), [.artifacts, .builds])
         XCTAssertEqual(CantripHomeSection.builds.title, "Builds")

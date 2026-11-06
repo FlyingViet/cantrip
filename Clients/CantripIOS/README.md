@@ -765,10 +765,12 @@ delete the file from the paired Mac.
 **Builds** lists every app build on the Mac's private over-the-air install page
 (`~/Sites/ota`, published with `ota-publish.py`), read through the paired host's
 `GET /api/v1/home/builds` route. One card per page entry shows the app icon, title,
-version (build), publish time, size, profile type and note, with a prominent
-**Install**; older builds sit behind a disclosure, and pull to refresh reloads the
-list. An unfolded iPhone Duo shows two apps per row (one at accessibility text
-sizes); other iPhones show one and iPad as many as fit. Install first checks that the page answers (it is tailnet-only), then hands
+version (build), publish time, size and profile type, with a prominent **Install**;
+**N older builds** opens a sheet listing them, each with Install, and pull to
+refresh reloads the list. Every card is as tall as the tallest, with its actions at
+the bottom (at accessibility text sizes each keeps its own height). An unfolded
+iPhone Duo shows two apps per row (one at accessibility text sizes); other iPhones
+show one and iPad as many as fit. Install first checks that the page answers (it is tailnet-only), then hands
 the build's `itms-services` link to iOS, which shows its install prompt; if Tailscale
 is off, the build is gone, or iOS can't open the link, an alert says what to do.
 Installing Cantrip Agent itself asks first, and entries sharing a bundle ID say that

@@ -93,8 +93,9 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         save(app, "settings")
     }
 
-    /// Home's Builds shows two apps per row unfolded, with the sidebar open or closed. Needs a host
-    /// whose install page lists at least two apps.
+    /// Home's Builds shows two apps per row unfolded, with the sidebar open or closed, every card the
+    /// same height; older builds open in a sheet. Needs a host whose install page lists at least two
+    /// apps, one of them with older builds.
     func testBuildsShowTwoAppsPerRow() throws {
         let environment = ProcessInfo.processInfo.environment
         guard (environment["SIMULATOR_DEVICE_NAME"] ?? UIDevice.current.name).contains("Duo") else {
@@ -157,7 +158,19 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
                            "Two apps share the first row (sidebar \(sidebar.exists ? "open" : "closed")): \(first) \(second)")
             XCTAssertLessThan(first.maxX, second.minX, "Side by side, not overlapping")
             XCTAssertEqual(first.width, second.width, accuracy: 2, "Equal columns")
+            XCTAssertLessThan(frames.map(\.height).max()! - frames.map(\.height).min()!, 1, "Every card is the same height")
         }
+
+        let older = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'home.builds.older.'")).firstMatch
+        XCTAssertTrue(older.waitForExistence(timeout: 5), "An app with older builds links to them")
+        press(older)
+        let sheet = app.navigationBars.buttons["Done"].firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5), "Older builds open in a sheet")
+        sleep(1)
+        save(app, "builds-older-sheet")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'home.builds.install.'")).count >= 1)
+        press(sheet)
+        XCTAssertTrue(waitForAbsence(sheet), "Done closes it")
     }
 
     private func waitForAbsence(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
