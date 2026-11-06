@@ -7,8 +7,11 @@ import "./home.css";
 import { cardElement } from "./cards";
 import {
   appleDate,
+  buildDetail,
+  buildQueueNote,
   cardsOf,
   hasRecordCards,
+  listedBuilds,
   recordDetails,
   recordTitle,
   statusLabel,
@@ -17,6 +20,7 @@ import {
 import type {
   HomeBackgroundRun,
   HomeBackgroundSnapshot,
+  HomeBuild,
   HomeMessage,
   HomeRead,
   HomeSession,
@@ -239,6 +243,13 @@ function runItem(run: HomeBackgroundRun): HTMLElement {
   return item;
 }
 
+function buildItem(build: HomeBuild, place: number): HTMLElement {
+  const item = el("li", "home-item");
+  item.append(el("span", "item-title", build.title));
+  item.append(el("span", "item-meta", buildDetail(build, place, (date) => timeFormat.format(date))));
+  return item;
+}
+
 function renderBackground(): HTMLElement[] {
   if (state.detail?.kind === "log") {
     return [
@@ -259,6 +270,15 @@ function renderBackground(): HTMLElement[] {
   }
   const running = snapshot.runningCount ?? snapshot.runs.filter((run) => run.status === "running").length;
   nodes.push(note(running ? `${running} running` : "Nothing running right now."));
+  const builds = listedBuilds(snapshot);
+  if (builds) {
+    nodes.push(heading("Builds", "h3"));
+    const list = el("ol", "home-list compact");
+    list.setAttribute("aria-label", "Builds on your Mac");
+    builds.running.forEach((build) => list.append(buildItem(build, 0)));
+    builds.waiting.forEach((build, index) => list.append(buildItem(build, index + 1)));
+    nodes.push(list, note(buildQueueNote(builds)));
+  }
   if (snapshot.queued?.length) {
     nodes.push(heading("Waiting", "h3"));
     const queued = el("ul", "home-list compact");
@@ -271,6 +291,7 @@ function renderBackground(): HTMLElement[] {
     }
     nodes.push(queued);
   }
+  if (builds) nodes.push(heading("Scheduled and automated", "h3"));
   const runs = el("ol", "home-list");
   runs.setAttribute("aria-label", "Background runs");
   for (const run of snapshot.runs) runs.append(runItem(run));

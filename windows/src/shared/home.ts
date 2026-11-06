@@ -85,6 +85,31 @@ export interface HomeBackgroundSnapshot {
   queued: HomeBackgroundQueued[];
   maxParallel?: number;
   runningCount?: number;
+  /** The Mac's build queue ("Heavy builds take turns"); absent while it's off and empty. */
+  builds?: HomeBuildQueue;
+}
+
+/** One build in the Mac's build queue. `since` is Unix seconds: when it got its slot, or started waiting. */
+export interface HomeBuild {
+  pid: number;
+  title: string;
+  /** "tab", "child", "ci" or "background". */
+  source: string;
+  since: number;
+  tabID?: string;
+  tabTitle?: string;
+  /** A CI job's "repo · workflow". */
+  job?: string;
+}
+
+export interface HomeBuildQueue {
+  enabled: boolean;
+  slots: number;
+  /** Builds that may run now: 1 while the Mac is busy or short of memory. */
+  limit: number;
+  reason?: string;
+  running: HomeBuild[];
+  waiting: HomeBuild[];
 }
 
 export interface HomeTaskRun {
@@ -147,6 +172,45 @@ const APPLE_EPOCH = 978_307_200;
 
 export function appleDate(seconds: unknown): Date | null {
   return typeof seconds === "number" && Number.isFinite(seconds) ? new Date((seconds + APPLE_EPOCH) * 1000) : null;
+}
+
+// MARK: - Build queue (CantripBuildQueueFormat in Cantrip Agent)
+
+/** The build queue when it lists anything. */
+export function listedBuilds(snapshot: Pick<HomeBackgroundSnapshot, "builds"> | null | undefined): HomeBuildQueue | null {
+  const builds = snapshot?.builds;
+  return builds && (builds.running?.length || builds.waiting?.length) ? builds : null;
+}
+
+/** "Docs site", "Child tab · Docs", "CI · app · TestFlight", "Home background run". */
+export function buildOrigin(build: HomeBuild): string {
+  const tab = build.tabTitle?.trim() ?? "";
+  switch (build.source) {
+    case "ci": return build.job ? `CI · ${build.job}` : "CI job";
+    case "background": return "Home background run";
+    case "child": return tab ? `Child tab · ${tab}` : "Child tab";
+    default: return tab || "A tab";
+  }
+}
+
+export function ordinal(n: number): string {
+  const suffix = [11, 12, 13].includes(n % 100) ? "th" : ({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] ?? "th";
+  return `${n}${suffix}`;
+}
+
+/** Running (place 0): "Docs site · started 7:12 AM". Waiting: "Waiting · 2nd in line · CI job · since 7:12 AM". */
+export function buildDetail(build: HomeBuild, place: number, time: (date: Date) => string): string {
+  const at = time(new Date(build.since * 1000));
+  if (!place) return `${buildOrigin(build)} · started ${at}`;
+  return `Waiting · ${place === 1 ? "Next" : `${ordinal(place)} in line`} · ${buildOrigin(build)} · since ${at}`;
+}
+
+export function buildQueueNote(builds: HomeBuildQueue): string {
+  const order = "Your tabs go first, then child tabs and CI, then Home's background runs.";
+  if (builds.limit < builds.slots) {
+    return `1 build at a time while ${builds.reason || "the Mac is busy"} (normally ${builds.slots}). ${order}`;
+  }
+  return `Up to ${builds.slots === 1 ? "1 build" : `${builds.slots} builds`} at once on your Mac. ${order}`;
 }
 
 const STATUS_LABELS: Record<string, string> = {
