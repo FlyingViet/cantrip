@@ -18,7 +18,12 @@ import type { HostRequest, HostResponse } from "../src/main/home/transport";
 import type { Route } from "../src/main/home/router";
 import {
   appleDate,
+  buildDetail,
+  buildOrigin,
+  buildQueueNote,
   cardsOf,
+  listedBuilds,
+  ordinal,
   hasRecordCards,
   recordDetails,
   recordTitle,
@@ -305,6 +310,30 @@ describe("Home helpers", () => {
     expect(statusLabel("newState")).toBe("NewState");
     expect(statusTone("failed")).toBe("negative");
     expect(statusTone("running")).toBe("accent");
+  });
+
+  it("lists the Mac's build queue like Cantrip Agent", () => {
+    const builds = {
+      enabled: true, slots: 2, limit: 1, reason: "macOS reports memory pressure",
+      running: [{ pid: 101, title: "xcodebuild archive · App", source: "tab", since: 1_000_000, tabID: RECORD, tabTitle: "Docs site" }],
+      waiting: [
+        { pid: 102, title: "swift build · App", source: "ci", since: 1_000_030, job: "app · TestFlight" },
+        { pid: 103, title: "swift test · Docs", source: "child", since: 1_000_040, tabTitle: "Docs" },
+      ],
+    };
+    expect(listedBuilds({ builds })).toBe(builds);
+    expect(listedBuilds({ builds: { ...builds, running: [], waiting: [] } })).toBeNull();
+    expect(listedBuilds({})).toBeNull();
+    const time = (date: Date) => String(date.getTime() / 1000);
+    expect(buildDetail(builds.running[0], 0, time)).toBe("Docs site · started 1000000");
+    expect(buildDetail(builds.waiting[0], 1, time)).toBe("Waiting · Next · CI · app · TestFlight · since 1000030");
+    expect(buildDetail(builds.waiting[1], 2, time)).toBe("Waiting · 2nd in line · Child tab · Docs · since 1000040");
+    expect(buildOrigin({ pid: 1, title: "swift build", source: "background", since: 0 })).toBe("Home background run");
+    expect([1, 2, 3, 11, 12, 21, 103].map(ordinal)).toEqual(["1st", "2nd", "3rd", "11th", "12th", "21st", "103rd"]);
+    expect(buildQueueNote(builds)).toBe(
+      "1 build at a time while macOS reports memory pressure (normally 2). Your tabs go first, then child tabs and CI, then Home's background runs.");
+    expect(buildQueueNote({ ...builds, limit: 2 })).toBe(
+      "Up to 2 builds at once on your Mac. Your tabs go first, then child tabs and CI, then Home's background runs.");
   });
 
   it("keeps only card documents and finds record cards", () => {

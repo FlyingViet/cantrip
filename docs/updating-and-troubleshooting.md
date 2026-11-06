@@ -528,8 +528,8 @@ slots instead:
   command prints `cantrip build queue:` lines while it waits. In Cantrip Agent, the
   **Background jobs** row in the tab drawer and the Duo sidebar counts running
   builds and adds a line such as "2 building · 1 waiting". Home's
-  **Background** list (iPhone, Gateway Mac, Gateway for Windows and the browser
-  Remote) has a **Builds** section: each build, where it came from (a tab, a
+  **Background** list (iPhone, Gateway Mac, Gateway for Windows, Cantrip for
+  Windows' Home window and the browser Remote) has a **Builds** section: each build, where it came from (a tab, a
   child tab, a CI job's repo and workflow, or a Home background run), its place
   in line and how long it has run or waited. Tap a build from a tab to open it.
 - **CI:** a self-hosted runner on the Mac uses the queue when its `.path` file
