@@ -913,6 +913,10 @@ export interface RemoteSessionSummary {
   backgroundActiveCount?: Int;
   /** Home only: total pending input requests across live hidden runs. */
   backgroundInputCount?: Int;
+  /** Home only: builds holding a slot in the Mac's build queue; absent while the queue is off. */
+  buildsRunning?: Int;
+  /** Home only: builds waiting for a slot. */
+  buildsWaiting?: Int;
 }
 
 /** Session with transcript and queue (GET /sessions/<id>, actions, /home). */
@@ -1694,6 +1698,32 @@ export interface HomeBackgroundSnapshot {
   maxParallel: Int;
   runningCount: Int;
   supportsStop: true;
+  /** The Mac's build queue ("Heavy builds take turns"); absent while it's off and empty. */
+  builds?: BuildQueueSnapshot;
+}
+
+/** One build in the Mac's build queue. `since` is UnixSeconds: when it got its slot, or started waiting. */
+export interface BuildQueueBuild {
+  pid: Int;
+  title: string;
+  source: "tab" | "child" | "ci" | "background";
+  since: number;
+  tabID?: UUIDString;
+  tabTitle?: string;
+  /** A CI job's "repo · workflow". */
+  job?: string;
+}
+
+export interface BuildQueueSnapshot {
+  enabled: boolean;
+  /** The Builds at once setting. */
+  slots: Int;
+  /** Builds that may run now: 1 while the Mac is busy or short of memory. */
+  limit: Int;
+  /** Why `limit` is below `slots`. */
+  reason?: string;
+  running: BuildQueueBuild[];
+  waiting: BuildQueueBuild[];
 }
 
 // MARK: - Cantrip Home: OTA builds

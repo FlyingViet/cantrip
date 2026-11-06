@@ -202,7 +202,7 @@ resolved is skipped. Hidden runs follow the same handoff rules for change work
 they discover. Concurrent jobs refresh Apple Mail through
 `Scripts/mail-refresh`, which shares one refresh between them.
 
-Results appear in the Background list (with per-run Stop; the browser Remote's Background panel lists runs and opens the background log), task run summaries,
+Results appear in the Background list (with per-run Stop; the browser Remote's Background panel lists runs and opens the background log; both also list builds taking turns on the Mac, see [Heavy builds take turns](updating-and-troubleshooting.md#heavy-builds-take-turns)), task run summaries,
 workspaces and completion notifications (which open the run's report in Home's
 background log); finished sessions are removed and their transcripts kept in
 that log.

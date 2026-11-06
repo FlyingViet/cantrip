@@ -138,6 +138,7 @@ final class CantripHomeTabDrawerTests: XCTestCase {
             case ("GET", "/api/v1/home"): return (200, homePayload())
             case (_, "/api/v1/home/tasks"): return (200, Data(#"{"tasks":[]}"#.utf8))
             case (_, "/api/v1/home/artifacts"): return (200, Data(#"{"artifacts":[]}"#.utf8))
+            case ("GET", "/api/v1/home/background"): return (200, buildQueueBackgroundPayload())
             case ("GET", "/api/v1/sessions"):
                 return (200, Data("""
                 {"sessions":[
@@ -149,7 +150,8 @@ final class CantripHomeTabDrawerTests: XCTestCase {
                   "preview":"Resolved: ingestion dry-run incident","supportsTabReordering":true}],
                  "home":{"id":"\(homeID)","title":"Cantrip Home","workdir":"/tmp","isStreaming":false,
                   "canResume":false,"councilMode":false,"queuedCount":0,"isCantripHome":true,
-                  "pendingInputCount":1,"supportsBackgroundRuns":true,"backgroundActiveCount":3}}
+                  "pendingInputCount":1,"supportsBackgroundRuns":true,"backgroundActiveCount":3,
+                  "buildsRunning":2,"buildsWaiting":1}}
                 """.utf8))
             case ("POST", "/api/v1/sessions"):
                 created()
@@ -159,6 +161,7 @@ final class CantripHomeTabDrawerTests: XCTestCase {
                 """.utf8))
             case ("GET", let tab) where tab.hasPrefix("/api/v1/sessions/"):
                 let id = String(tab.dropFirst("/api/v1/sessions/".count))
+                if id == homeID { return (200, homePayload()) }
                 return (200, Data("""
                 {"session":{"id":"\(id)","title":"Tab","workdir":"/tmp","isStreaming":false,"canResume":false,
                 "councilMode":false,"queuedCount":0,"status":null,"messages":[],"queued":[]}}
@@ -187,7 +190,8 @@ final class CantripHomeTabDrawerTests: XCTestCase {
         Data("""
         {"session":{"id":"\(homeID)","title":"Cantrip Home","workdir":"/tmp","isStreaming":false,
         "canResume":false,"councilMode":false,"queuedCount":0,"status":null,"messages":[],"queued":[],
-        "isLocked":true,"isCantripHome":true,"supportsBackgroundRuns":true,"backgroundActiveCount":3}}
+        "isLocked":true,"isCantripHome":true,"supportsBackgroundRuns":true,"backgroundActiveCount":3,
+        "buildsRunning":2,"buildsWaiting":1}}
         """.utf8)
     }
 
@@ -203,6 +207,66 @@ final class CantripHomeTabDrawerTests: XCTestCase {
         XCTAssertEqual(model.homeSummary?.pendingInputCount, 1,
                        "Home's listed summary keeps its state current while a tab is open")
         XCTAssertEqual(model.selectedSession?.id, homeID)
+    }
+
+    /// The Mac's build queue in the tab lists' Background jobs row and Home's Background list.
+    func testBackgroundJobsRowAndListShowTheBuildQueue() async throws {
+        let model = try await configuredModel()
+        let summary = CantripBackgroundJobsSummary(runs: 3, inputs: 0, home: model.currentHomeSummary)
+        XCTAssertEqual(summary.status, "5 running", "Builds count as running jobs")
+        XCTAssertEqual(summary.builds, "2 building · 1 waiting")
+        XCTAssertEqual(summary.accessibilityValue, "5 running. Builds: 2 running, 1 waiting")
+        XCTAssertEqual(CantripBackgroundJobsSummary(buildsRunning: 1).builds, "1 building")
+        XCTAssertTrue(summary.isActive)
+        XCTAssertEqual(CantripBackgroundJobsSummary(runs: 0, inputs: 2, buildsRunning: 1).status, "2 need input")
+        let waitingOnly = CantripBackgroundJobsSummary(buildsWaiting: 1)
+        XCTAssertEqual(waitingOnly.status, "1 waiting")
+        XCTAssertEqual(waitingOnly.builds, "1 build waiting")
+        XCTAssertEqual(waitingOnly.accessibilityValue, "1 waiting. Builds: 1 waiting")
+        XCTAssertTrue(waitingOnly.isActive)
+        let idle = CantripBackgroundJobsSummary()
+        XCTAssertEqual(idle.status, "None running")
+        XCTAssertNil(idle.builds)
+        XCTAssertFalse(idle.isActive)
+        XCTAssertEqual(CantripDuoSidebarBackground(summary).accessibilityValue, summary.accessibilityValue)
+
+        // The row opens Home's Background list from a project tab too, so it loads there.
+        model.prepareToOpenTab(bassID)
+        await model.selectRegularSession()
+        XCTAssertFalse(model.isHomeSelected)
+        XCTAssertEqual(model.currentHomeSummary?.buildsRunning, 2, "Off Home, the counts come from Home's listed summary")
+        await model.refreshHomeBackground()
+        let builds = try XCTUnwrap(model.homeBackground?.builds)
+        XCTAssertEqual(builds.running.map(\.title), ["xcodebuild archive · App", "swift test · Server"])
+        XCTAssertEqual(builds.waiting.map(\.source), ["ci"])
+        XCTAssertEqual(builds.limit, 1)
+
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(CantripBuildQueueFormat.detail(builds.running[0], place: nil, now: now), "Docs site · 1m 15s")
+        XCTAssertEqual(CantripBuildQueueFormat.detail(builds.running[1], place: nil, now: now), "Child tab · Server · 40s")
+        XCTAssertEqual(CantripBuildQueueFormat.detail(builds.waiting[0], place: 1, now: now),
+                       "Waiting · Next · CI · app · TestFlight · 30s")
+        XCTAssertEqual(CantripBuildQueueFormat.detail(builds.waiting[0], place: 2, now: now),
+                       "Waiting · 2nd in line · CI · app · TestFlight · 30s")
+        let background = CantripBuildQueueSnapshot.Build(pid: 9, title: "swift build", source: "background", since: 0)
+        XCTAssertEqual(CantripBuildQueueFormat.origin(background), "Home background run")
+        XCTAssertEqual(CantripBuildQueueFormat.origin(.init(pid: 9, title: "swift build", source: "tab", since: 0)), "A tab")
+        XCTAssertEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 103].map(CantripBuildQueueFormat.ordinal),
+                       ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "103rd"])
+        XCTAssertEqual(CantripBuildQueueFormat.footnote(builds),
+                       "1 build at a time while macOS reports memory pressure (normally 2). Your tabs go first, then child tabs and CI, then Home's background runs.")
+    }
+
+    private func buildQueueBackgroundPayload() -> Data {
+        Data("""
+        {"sessionID":"\(UUID().uuidString)","revision":"q1","runs":[],"queued":[],"maxParallel":3,"runningCount":0,
+         "supportsStop":true,
+         "builds":{"enabled":true,"slots":2,"limit":1,"reason":"macOS reports memory pressure",
+          "running":[{"pid":101,"title":"xcodebuild archive · App","source":"tab","since":999925,
+                      "tabID":"\(plexID)","tabTitle":"Docs site"},
+                     {"pid":102,"title":"swift test · Server","source":"child","since":999960,"tabTitle":"Server"}],
+          "waiting":[{"pid":103,"title":"swift build · App","source":"ci","since":999970,"job":"app · TestFlight"}]}}
+        """.utf8)
     }
 
     func testDrawerCreatesAndOpensTabsWithoutReplacingHome() async throws {
@@ -272,7 +336,17 @@ final class CantripHomeTabDrawerTests: XCTestCase {
             onCreate: {}, onRename: { _ in }, onClose: { _ in }
         )
         .background(.regularMaterial)
+        // The unfolded Duo's sidebar: its Background jobs row with the build queue's line.
+        let sidebar = CantripDuoSidebar(
+            model: model, slashCommands: BackendSlashCommandStore(), isHomeShown: true, homeSection: .chat,
+            showsSkills: false, slashToken: nil, highlighted: nil, canOpenModelSettings: false,
+            backgroundStatus: .init(CantripBackgroundJobsSummary(runs: 3, inputs: 0, home: model.currentHomeSummary)),
+            isListening: false, isSpeaking: false, onSelectSection: { _ in }, onSelectTab: { _ in },
+            onCreateTab: {}, onRename: { _ in }, onClose: { _ in }, onOpenBackground: {},
+            onCustomizeMascot: {}, onChoose: { _ in }
+        )
         for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
+            try await capture(sidebar, "home-tabs-duo-sidebar-\(name)", style: style, width: CantripDuoSidebar.width)
             for width: CGFloat in [320, 393] {
                 try await capture(drawer.frame(width: CantripDrawerGesture.panelWidth(available: width)),
                                   "home-tabs-drawer-\(name)-\(Int(width))", style: style, width: width)
@@ -281,6 +355,8 @@ final class CantripHomeTabDrawerTests: XCTestCase {
             }
         }
         try await capture(drawer, "home-tabs-drawer-ax", style: .dark, width: 393, size: .accessibility3)
+        try await capture(sidebar, "home-tabs-duo-sidebar-ax", style: .dark, width: CantripDuoSidebar.width,
+                          size: .accessibility3)
         try await capture(tabHeader, "home-tabs-tab-header-ax", style: .dark, width: 393, height: 160,
                           size: .accessibility3)
         try await capture(tabHeader, "home-tabs-tab-header-ax-320", style: .dark, width: 320, height: 160,

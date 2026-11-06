@@ -809,6 +809,8 @@ struct CantripHomeBackgroundSnapshot: Encodable {
     var maxParallel = CantripHomeBackgroundRunner.defaultParallelRuns
     var runningCount = 0
     var supportsStop = true
+    /// The build queue on this Mac ("Heavy builds take turns"); nil while it's off and empty.
+    var builds: BuildQueue.Snapshot? = nil
 }
 
 struct CantripHomeError: LocalizedError {

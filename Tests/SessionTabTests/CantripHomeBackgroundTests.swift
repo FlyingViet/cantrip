@@ -213,6 +213,17 @@ extension SessionTabTests {
                      && listedQueue.first?["label"] as? String == "Parallel C"
                      && (listedQueue.first?["reason"] as? String)?.contains("free slot") == true,
                      "The Background API lists each live run, its activity and why work waits")
+        // The build queue rides along: nothing while it's off and empty; slots and Home's counts while it's on.
+        precondition(backgroundList.1["builds"] == nil, "no build queue while it's off and empty")
+        AppSettings.shared.buildQueueEnabled = true
+        let withBuilds = try await call("/api/v1/home/background")
+        let builds = try requireHome(withBuilds.1["builds"] as? [String: Any])
+        let homeWithBuilds = try requireHome(try await call("/api/v1/home").1["session"] as? [String: Any])
+        AppSettings.shared.buildQueueEnabled = false
+        precondition(builds["enabled"] as? Bool == true && builds["slots"] as? Int == AppSettings.shared.buildQueueSlots
+                     && (builds["running"] as? [Any])?.isEmpty == true && (builds["waiting"] as? [Any])?.isEmpty == true
+                     && homeWithBuilds["buildsRunning"] as? Int == 0 && homeWithBuilds["buildsWaiting"] as? Int == 0,
+                     "the Background API and Home's summary carry the build queue: \(builds)")
         let busyHome = try await call("/api/v1/home")
         precondition((busyHome.1["session"] as? [String: Any])?["backgroundActiveCount"] as? Int == 3,
                      "Home's badge counts running and queued background work")

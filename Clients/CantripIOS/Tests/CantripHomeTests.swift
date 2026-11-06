@@ -1500,6 +1500,11 @@ final class CantripHomeTests: XCTestCase {
         return Data("""
         {"sessionID":"\(backgroundID)","revision":"\(stopped ? "b3" : "b2")","maxParallel":3,
          "runningCount":\(stopped ? 1 : 2),"supportsStop":true,
+         "builds":{"enabled":true,"slots":2,"limit":2,
+          "running":[{"pid":101,"title":"xcodebuild archive · App","source":"tab","since":\(epoch - 75),
+                      "tabID":"\(bassTabID)","tabTitle":"Docs site"},
+                     {"pid":102,"title":"swift test · Server","source":"ci","since":\(epoch - 40),"job":"server · Tests"}],
+          "waiting":[{"pid":103,"title":"swift build · Docs","source":"child","since":\(epoch - 30),"tabTitle":"Docs"}]},
          "queued":[{"id":"30000000-0000-0000-0000-000000000013","kind":"task",
            "label":"Personal operations briefing",
            "reason":"Waiting for Bills and subscriptions monitor (until 8:30 AM)"}],

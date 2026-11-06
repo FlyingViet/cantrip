@@ -5,7 +5,9 @@ import "./activity.css";
 import { computed } from "@preact/signals";
 import type { ComponentChildren, JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { HomeBackgroundHandoff, HomeBackgroundQueuedRun, HomeBackgroundRun, InputDecision, InputRequest } from "../../api/types";
+import type {
+  BuildQueueBuild, HomeBackgroundHandoff, HomeBackgroundQueuedRun, HomeBackgroundRun, InputDecision, InputRequest,
+} from "../../api/types";
 import { backgroundLogID, FULL_LOG_HINT, FULL_LOG_LABEL } from "../../state/backgroundLog";
 import { now } from "../../state/clock";
 import * as nav from "../../state/nav";
@@ -17,7 +19,8 @@ import { HomeCardStack } from "../home/HomeCards";
 import { inline } from "../transcript/Markdown";
 import { InputCard } from "../transcript/Inputs";
 import {
-  answerResultText, backgroundPollDelay, backgroundSubagents, elapsedAccessibilityLabel, elapsedLabel, handoffIsActive,
+  answerResultText, backgroundPollDelay, backgroundSubagents, buildQueueDetail, buildQueueFootnote, elapsedAccessibilityLabel,
+  elapsedLabel, handoffIsActive, listedBuilds,
   handoffNeedsAnswer, handoffStatusText, handoffSummary, handoffTabTitle, isLabelledSummary, needsInputRuns, otherRuns,
   queuedRunDetail, remainingInputs, runCanExpand, runDetail, runIcon, runIsRunning, runNeedsInput, runResult, runShowsResult,
   summaryLabel, summaryLines, trimmed,
@@ -155,6 +158,35 @@ function QueuedRow(props: { item: HomeBackgroundQueuedRun; canSkip: boolean }): 
   );
 }
 
+/** A build in the Mac's build queue: running (place 0) or waiting its turn. */
+function BuildRow(props: { build: BuildQueueBuild; place: number }): JSX.Element {
+  const { build, place } = props;
+  const tabID = trimmed(build.tabID);
+  const tab = trimmed(build.tabTitle);
+  return (
+    <div class="act-card" data-build-pid={build.pid}>
+      <span class="act-card-icon">{place ? <Icon name="hourglass" size={16} class="muted" /> : <Spinner size="small" />}</span>
+      <div class="act-card-body">
+        <div class="act-run-summary-block">
+          <div class="act-run-label">{build.title}</div>
+          <div class="act-run-detail">{buildQueueDetail(build, place, now.value / 1000)}</div>
+        </div>
+        {tabID && tab ? (
+          <div class="act-run-actions">
+            <button type="button" class="btn plain small act-open-tab" aria-label={`Open ${tab} tab`}
+              onClick={() => {
+                if (!remote.sessions.value.some((item) => item.id === tabID)) { toast("That tab is no longer open."); return; }
+                nav.openTab(tabID);
+              }}>
+              <Icon name="arrow.up.forward.square" size={14} />Open tab
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function RunStatusIcon(props: { run: HomeBackgroundRun }): JSX.Element {
   switch (runIcon(props.run)) {
     case "needsInput": return <QuestionBubble size={18} label="Needs your input" />;
@@ -263,7 +295,8 @@ export function BackgroundSheet(props: { focusSessionID?: string; onClose: () =>
   const watchers = homeSessionID ? backgroundSubagents(homeDetail?.messages) : [];
   const supportsRuns = selected?.supportsBackgroundRuns === true;
   const snapshot = supportsRuns ? remote.homeBackground.value : null;
-  const hasRuns = Boolean(snapshot && (snapshot.runs.length || snapshot.queued.length));
+  const builds = listedBuilds(snapshot);
+  const hasRuns = Boolean(snapshot && (snapshot.runs.length || snapshot.queued.length || builds));
   const canStop = snapshot?.supportsStop === true;
   const error = remote.homeBackgroundError.value;
   const waiting = needsInputRuns(snapshot);
@@ -333,7 +366,9 @@ export function BackgroundSheet(props: { focusSessionID?: string; onClose: () =>
           <Icon name="gearshape.2" size={28} />
           <div class="title3">No background work</div>
           <p>{supportsRuns
-            ? "Scheduled tasks, incident investigations and background watchers appear here."
+            ? snapshot?.builds
+              ? "Scheduled tasks, incident investigations, background watchers and builds taking turns on your Mac appear here."
+              : "Scheduled tasks, incident investigations and background watchers appear here."
             : "Background watchers appear here. Update Cantrip on your Mac to also see scheduled task and incident runs."}</p>
         </div>
       );
@@ -348,6 +383,13 @@ export function BackgroundSheet(props: { focusSessionID?: string; onClose: () =>
         {homeSessionID && watchers.length ? (
           <Section title="In this chat">
             <SubagentStack sessionID={homeSessionID} subagents={watchers} />
+          </Section>
+        ) : null}
+        {builds ? (
+          <Section title="Builds">
+            {builds.running.map((build, index) => <BuildRow key={`r${index}-${build.pid}`} build={build} place={0} />)}
+            {builds.waiting.map((build, index) => <BuildRow key={`w${index}-${build.pid}`} build={build} place={index + 1} />)}
+            <p class="act-footnote">{buildQueueFootnote(builds)}</p>
           </Section>
         ) : null}
         {snapshot?.queued.length ? (

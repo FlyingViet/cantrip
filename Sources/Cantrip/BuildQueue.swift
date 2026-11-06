@@ -80,6 +80,16 @@ enum BuildQueue {
             }
         }
 
+        /// The name clients get (`Snapshot.Build.source`).
+        var name: String {
+            switch self {
+            case .tab: "tab"
+            case .child: "child"
+            case .ci: "ci"
+            case .background: "background"
+            }
+        }
+
         var label: String {
             switch self {
             case .tab: "a tab"
@@ -110,6 +120,23 @@ enum BuildQueue {
         return .tab
     }
 
+    /// Where a build comes from, for the queue's lists: its tab, or its CI job.
+    struct Origin: Equatable {
+        var tab: String?
+        var job: String?
+
+        /// The tab's ID from `CANTRIP_TAB_ID`; for a GitHub Actions job, "repo · workflow".
+        static func current(environment: [String: String] = ProcessInfo.processInfo.environment) -> Origin {
+            if environment["GITHUB_ACTIONS"] == "true" {
+                let repo = environment["GITHUB_REPOSITORY"].map { URL(fileURLWithPath: $0).lastPathComponent }
+                let parts = [repo, environment["GITHUB_WORKFLOW"]].compactMap { $0?.isEmpty == false ? $0 : nil }
+                return Origin(tab: nil, job: parts.isEmpty ? nil : parts.joined(separator: " · "))
+            }
+            let tab = environment[TabInsight.tabIDVariable].flatMap(UUID.init(uuidString:))?.uuidString
+            return Origin(tab: tab, job: nil)
+        }
+    }
+
     // MARK: Waiting and running
 
     /// A build waiting for a slot.
@@ -118,6 +145,8 @@ enum BuildQueue {
         var priority: Priority
         var enqueuedAt: Double
         var title: String
+        var tab: String? = nil
+        var job: String? = nil
 
         /// Turn order: priority, then who asked first.
         func goesBefore(_ other: Ticket) -> Bool {
@@ -133,6 +162,8 @@ enum BuildQueue {
         var priority: Priority
         var since: Double
         var title: String
+        var tab: String? = nil
+        var job: String? = nil
     }
 
     /// Whether `ticket` may take a slot now: it's first in line and fewer than `limit` builds run.
@@ -250,6 +281,7 @@ enum BuildQueue {
     /// status (128 + signal when a signal ended it). Prints `cantrip build queue:` lines while it waits.
     static func run(executable: String, arguments: [String], tool: String, policy: Policy,
                     store: Store = Store(directory: directory), priority: Priority = BuildQueue.priority(),
+                    origin: Origin = .current(),
                     resources: @escaping () -> Resources = Resources.current,
                     poll: TimeInterval = 1, reprint: TimeInterval = 30,
                     stderr: @escaping (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }) -> Int32 {
@@ -259,7 +291,8 @@ enum BuildQueue {
         }
         let pid = getpid()
         let title = Self.title(tool: tool, arguments: arguments, directory: FileManager.default.currentDirectoryPath)
-        let ticket = Ticket(pid: pid, priority: priority, enqueuedAt: Date().timeIntervalSince1970, title: title)
+        let ticket = Ticket(pid: pid, priority: priority, enqueuedAt: Date().timeIntervalSince1970, title: title,
+                            tab: origin.tab, job: origin.job)
         try? store.write(ticket)
         var waited = false
         var lastLine: String?
@@ -272,7 +305,8 @@ enum BuildQueue {
                 let waiting = store.tickets()
                 let running = store.holders()
                 if admits(ticket, waiting: waiting, running: running.count, limit: limit),
-                   let slot = store.take(as: Holder(pid: pid, priority: priority, since: Date().timeIntervalSince1970, title: title),
+                   let slot = store.take(as: Holder(pid: pid, priority: priority, since: Date().timeIntervalSince1970,
+                                                    title: title, tab: origin.tab, job: origin.job),
                                          limit: limit) {
                     store.removeTicket(pid: pid)
                     return (slot, nil)
@@ -420,6 +454,59 @@ enum BuildQueue {
     }
 
     // MARK: Status
+
+    /// What clients show (`/api/v1/home/background`'s `builds`): the builds running and waiting, in turn order.
+    struct Snapshot: Encodable, Equatable {
+        struct Build: Encodable, Equatable {
+            let pid: Int32
+            let title: String
+            /// "tab", "child", "ci" or "background".
+            let source: String
+            /// Seconds since 1970: when it got its slot, or when it started waiting.
+            let since: Double
+            var tabID: String? = nil
+            var tabTitle: String? = nil
+            /// A CI job's "repo · workflow".
+            var job: String? = nil
+        }
+
+        let enabled: Bool
+        /// The Builds at once setting.
+        let slots: Int
+        /// Builds that may run now: 1 while the Mac is busy or short of memory.
+        let limit: Int
+        /// Why `limit` is below `slots`.
+        var reason: String? = nil
+        let running: [Build]
+        let waiting: [Build]
+    }
+
+    /// Nil while the queue is off and holds nothing. `tabTitle` names a tab by its ID.
+    static func snapshot(store: Store = Store(directory: directory), policy: Policy, enabled: Bool,
+                         resources: Resources = .current(), tabTitle: (String) -> String? = { _ in nil }) -> Snapshot? {
+        let running = store.holders().sorted { $0.since < $1.since }
+        let waiting = store.tickets().sorted { $0.goesBefore($1) }
+        guard enabled || !running.isEmpty || !waiting.isEmpty else { return nil }
+        let limit = policy.limit(resources)
+        func build(pid: Int32, title: String, priority: Priority, since: Double, tab: String?, job: String?) -> Snapshot.Build {
+            Snapshot.Build(pid: pid, title: title, source: priority.name, since: since,
+                           tabID: tab, tabTitle: tab.flatMap(tabTitle), job: job)
+        }
+        return Snapshot(
+            enabled: enabled, slots: policy.slots, limit: limit,
+            reason: limit < policy.slots ? resources.reason : nil,
+            running: running.map { build(pid: $0.pid, title: $0.title, priority: $0.priority, since: $0.since, tab: $0.tab, job: $0.job) },
+            waiting: waiting.map { build(pid: $0.pid, title: $0.title, priority: $0.priority, since: $0.enqueuedAt, tab: $0.tab, job: $0.job) }
+        )
+    }
+
+    /// Builds running and waiting, for tab lists' Background jobs row; nil while the queue is off and holds nothing.
+    static func counts(store: Store = Store(directory: directory), enabled: Bool) -> (running: Int, waiting: Int)? {
+        let running = store.holders().count
+        let waiting = store.tickets().count
+        guard enabled || running > 0 || waiting > 0 else { return nil }
+        return (running, waiting)
+    }
 
     static func statusText(store: Store = Store(directory: directory), policy: Policy, enabled: Bool,
                            resources: Resources = .current()) -> String {
