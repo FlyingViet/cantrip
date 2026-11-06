@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import XCTest
 @testable import Hermes
 
@@ -116,13 +117,14 @@ final class CantripCardTests: XCTestCase {
 
     /// A reply's builds arrive as one card: the leading build's live progress, a build running
     /// beside it, and earlier steps as rows with their results.
+    @MainActor
     func testCombinedBuildCard() throws {
         let combined = #"""
         {"version":1,"id":"build-a","type":"build","accessibilityLabel":"xcodebuild test · Hermes, Testing, and 3 other steps",
          "blocks":[{"type":"header","title":"xcodebuild test · Hermes","subtitle":"CantripIOS","symbol":"hammer"},
                    {"type":"progress","status":"running","label":"Testing","tone":"accent","startedAt":"2026-11-04T20:00:00.000Z"},
                    {"type":"progress","status":"running","label":"make build","tone":"accent","startedAt":"2026-11-04T20:00:10.000Z"},
-                   {"type":"list","title":"Earlier steps","items":[
+                   {"type":"list","title":"Earlier steps","collapsed":true,"subtitle":"2 steps · 1 failed","tone":"negative","items":[
                      {"id":"a","title":"xcodebuild build · Hermes","note":"Succeeded","tone":"positive","trailing":"2:21"},
                      {"id":"b","title":"xcodebuild test · Hermes","note":"Failed · Exit code 65","tone":"negative","trailing":"1:37"}]}]}
         """#
@@ -134,6 +136,39 @@ final class CantripCardTests: XCTestCase {
         XCTAssertEqual(rows.map(\.note), ["Succeeded", "Failed · Exit code 65"])
         XCTAssertEqual(rows.map(\.tone), ["positive", "negative"])
         XCTAssertEqual(rows.map(\.trailing), ["2:21", "1:37"])
+        XCTAssertEqual(card.blocks[3].collapsed, true, "earlier steps start collapsed")
+        XCTAssertEqual(card.blocks[3].subtitle, "2 steps · 1 failed")
+        XCTAssertEqual(card.blocks[3].tone, "negative")
+        try renderCombinedBuildCard(card)
+    }
+
+    /// Renders the combined card collapsed and opened, in light and dark app themes. Set
+    /// TEST_RUNNER_CARDS_ARTIFACT_DIR (pass TEST_RUNNER_TEST_RUNNER_… to xcodebuild).
+    @MainActor
+    private func renderCombinedBuildCard(_ card: CantripCard) throws {
+        let disclosures = CantripCardDisclosures.shared
+        let key = "\(card.id):3"
+        XCTAssertFalse(disclosures.isOpen(key))
+        disclosures.toggle(key)
+        XCTAssertTrue(disclosures.isOpen(key), "the title opens it, and the app remembers that")
+        disclosures.toggle(key)
+        XCTAssertFalse(disclosures.isOpen(key))
+        guard let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_CARDS_ARTIFACT_DIR"], !directory.isEmpty else { return }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let remote = CantripRemoteModel()
+        for (name, open) in [("collapsed", false), ("open", true)] {
+            if disclosures.isOpen(key) != open { disclosures.toggle(key) }
+            let view = CantripCardPanel(card: card, remote: remote)
+                .padding(16)
+                .frame(width: 393)
+                .background(Color.black)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 3
+            let image = try XCTUnwrap(renderer.uiImage)
+            try XCTUnwrap(image.pngData()).write(to: output.appendingPathComponent("build-card-earlier-\(name).png"))
+        }
+        if disclosures.isOpen(key) { disclosures.toggle(key) }
     }
 
     /// Without a fraction the bar's segment sweeps one way, in from past the left end and out past

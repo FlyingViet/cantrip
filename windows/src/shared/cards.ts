@@ -106,6 +106,8 @@ export interface Block {
   longitudeDelta?: number;
   /** list: its items are the previous map block's pins (`pinID`), shown as its legend. */
   mapLinked?: boolean;
+  /** list: starts collapsed to its title and `subtitle` (tinted by `tone`); the title opens it. */
+  collapsed?: boolean;
   attribution?: string;
   imageID?: string;
   aspectRatio?: number;

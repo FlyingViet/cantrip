@@ -107,6 +107,8 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
         var latitudeDelta: Double?
         var longitudeDelta: Double?
         var mapLinked: Bool?
+        /// list: starts collapsed to its title and `subtitle` (tinted by `tone`); the title opens it.
+        var collapsed: Bool?
         var attribution: String?
         var imageID: String?
         var accessibilityLabel: String?
@@ -124,7 +126,7 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
 
         private enum Keys: String, CodingKey {
             case type, title, subtitle, subtitleSymbol, subtitleImageID, symbol, lines, stat, value, label, detail, text, tone, kind, rows, items
-            case badges, min, max, pins, latitude, longitude, latitudeDelta, longitudeDelta, mapLinked, attribution, imageID
+            case badges, min, max, pins, latitude, longitude, latitudeDelta, longitudeDelta, mapLinked, collapsed, attribution, imageID
             case accessibilityLabel, status, startedAt, finishedAt, expectedSeconds, fraction
         }
 
@@ -164,6 +166,7 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
             latitudeDelta = number(.latitudeDelta)
             longitudeDelta = number(.longitudeDelta)
             mapLinked = (try? c.decodeIfPresent(Bool.self, forKey: .mapLinked)) ?? nil
+            collapsed = (try? c.decodeIfPresent(Bool.self, forKey: .collapsed)) ?? nil
             attribution = text(.attribution)
             imageID = text(.imageID)
             accessibilityLabel = text(.accessibilityLabel)
@@ -533,7 +536,7 @@ struct CantripCardPanel: View {
                 case .map(let map, let legend):
                     CantripCardMapView(block: map, legend: legend)
                 case .block(let block):
-                    CantripCardBlockView(block: block, isFirst: index == 0, remote: remote)
+                    CantripCardBlockView(block: block, isFirst: index == 0, remote: remote, stateKey: "\(card.id):\(index)")
                 }
             }
             footer
@@ -586,10 +589,27 @@ struct CantripCardPanel: View {
 
 // MARK: - Blocks
 
+/// Collapsed lists the person opened, by card and block, while the app runs (a card that updates
+/// in place keeps its list open).
+@MainActor final class CantripCardDisclosures: ObservableObject {
+    static let shared = CantripCardDisclosures()
+    @Published private(set) var opened: Set<String> = []
+
+    func isOpen(_ key: String) -> Bool { opened.contains(key) }
+
+    func toggle(_ key: String) {
+        if opened.contains(key) { opened.remove(key) } else { opened.insert(key) }
+    }
+}
+
 struct CantripCardBlockView: View {
     let block: CantripCard.Block
     let isFirst: Bool
     @ObservedObject var remote: CantripRemoteModel
+    /// The card's ID and this block's place, for a collapsed list's open state.
+    var stateKey: String? = nil
+    @ObservedObject private var disclosures = CantripCardDisclosures.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         switch block.type {
@@ -797,8 +817,43 @@ struct CantripCardBlockView: View {
 
     private var list: some View {
         let items = block.items ?? []
+        let collapsible = block.collapsed == true && block.title != nil
+        let key = stateKey ?? block.title ?? ""
+        let open = !collapsible || disclosures.isOpen(key)
         return VStack(alignment: .leading, spacing: 0) {
-            if let title = block.title {
+            if collapsible, let title = block.title {
+                Button {
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { disclosures.toggle(key) }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.bold))
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                            .foregroundStyle(.white.opacity(0.62))
+                        Text(title.uppercased())
+                            .font(.caption2.weight(.bold))
+                            .tracking(0.5)
+                            .foregroundStyle(.white.opacity(0.62))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        if let subtitle = block.subtitle {
+                            Text(subtitle)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(block.tone == nil ? Color.white.opacity(0.75) : CantripCardStyle.tone(block.tone))
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel([title, block.subtitle].compactMap { $0 }.joined(separator: ", "))
+                .accessibilityValue(open ? "Expanded" : "Collapsed")
+                .accessibilityHint(open ? "Hides the steps" : "Shows the steps")
+                .accessibilityIdentifier("card.list.toggle")
+                if open { Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1) }
+            } else if let title = block.title {
                 Text(title.uppercased())
                     .font(.caption2.weight(.bold))
                     .tracking(0.5)
@@ -808,10 +863,12 @@ struct CantripCardBlockView: View {
                     .accessibilityAddTraits(.isHeader)
                 Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
             }
-            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                CantripCardItemRow(item: item, compact: false)
-                if index < items.count - 1 {
-                    Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1).padding(.leading, 14)
+            if open {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    CantripCardItemRow(item: item, compact: false)
+                    if index < items.count - 1 {
+                        Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1).padding(.leading, 14)
+                    }
                 }
             }
         }

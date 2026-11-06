@@ -332,15 +332,39 @@ function listItem(item: Item, icons: boolean, open: Open): HTMLElement {
   return row;
 }
 
-function listBlock(block: Block, open: Open): HTMLElement {
+/** Collapsed lists the user opened, by card and block, while the window is open (cards redraw in place). */
+const openedLists = new Set<string>();
+
+function listBlock(block: Block, open: Open, key?: string): HTMLElement {
   const items = entries(block.items);
   const icons = items.some((item) => iconMarkup(item.symbol) || item.glyph);
   const node = el("div", "card-block card-list");
-  if (block.title) node.append(el("div", "card-list-title", block.title));
   const list = el("div", "card-list-rows");
   list.setAttribute("role", "list");
   label(list, block.accessibilityLabel || block.title);
   for (const item of items) list.append(listItem(item, icons, open));
+  if (block.collapsed === true && block.title && key) {
+    // A build card's Earlier steps: its title and summary open the rows.
+    const toggle = el("button", "card-list-toggle") as HTMLButtonElement;
+    toggle.type = "button";
+    toggle.append(el("span", "card-list-chevron", "›"), el("span", "card-list-title", block.title));
+    if (block.subtitle) toggle.append(el("span", `card-list-summary ${toneClass(block.tone)}`.trim(), block.subtitle));
+    const show = (shown: boolean) => {
+      list.hidden = !shown;
+      toggle.setAttribute("aria-expanded", String(shown));
+    };
+    show(openedLists.has(key));
+    toggle.addEventListener("click", () => {
+      const opening = toggle.getAttribute("aria-expanded") !== "true";
+      if (opening) openedLists.add(key);
+      else openedLists.delete(key);
+      show(opening);
+    });
+    node.classList.add("card-list-collapsible");
+    node.append(toggle, list);
+    return node;
+  }
+  if (block.title) node.append(el("div", "card-list-title", block.title));
   node.append(list);
   return node;
 }
@@ -440,14 +464,14 @@ function progressBlock(block: Block): HTMLElement {
   return node;
 }
 
-function drawBlock(block: Block, open: Open): HTMLElement | null {
+function drawBlock(block: Block, open: Open, key?: string): HTMLElement | null {
   switch (block.type) {
     case "header": return headerBlock(block);
     case "stat": return statBlock(block);
     case "keyValue": return keyValueBlock(block);
     case "strip": return stripBlock(block);
     case "chart": return chartBlock(block);
-    case "list": return listBlock(block, open);
+    case "list": return listBlock(block, open, key);
     case "badges": return badgesBlock(block);
     case "notice": return noticeBlock(block);
     case "progress": return progressBlock(block);
@@ -485,10 +509,10 @@ export function cardElement(card: CardDocument, open: Open): HTMLElement | null 
   const isLink = card.style === "link";
   const wrap = el("section", isLink ? "card-panel card-link" : "card-panel");
   label(wrap, card.accessibilityLabel || fallback.split("\n")[0] || "Card");
-  for (const block of blocks) {
-    const node = drawBlock(block, open);
+  blocks.forEach((block, index) => {
+    const node = drawBlock(block, open, typeof card.id === "string" ? `${card.id}:${index}` : undefined);
     if (node) wrap.append(node);
-  }
+  });
   if (!blocks.length) wrap.append(el("div", "card-block card-fallback", fallback));
   const url = isLink ? safeUrl(card.action?.url) : null;
   if (url) {

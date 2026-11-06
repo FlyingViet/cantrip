@@ -135,6 +135,7 @@ describe("progress blocks (build cards)", () => {
     expect(builds.blocks[3].items?.map((item) => [item.note, item.tone, item.trailing])).toEqual([
       ["Succeeded", "positive", "2:21"], ["Failed · Exit code 65", "negative", "1:37"],
     ]);
+    expect(builds.blocks[3]).toMatchObject({ title: "Earlier steps", collapsed: true, subtitle: "2 steps · 1 failed", tone: "negative" });
     expect(builds.fallbackText).toContain("Earlier steps\n• xcodebuild build · Hermes — Succeeded — 2:21");
   });
 

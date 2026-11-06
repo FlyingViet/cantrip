@@ -103,6 +103,10 @@ first build's, so clients update it in place) instead of a card per command:
   (`Succeeded`, `Failed · Exit code 65`, `Stopped at 27.0 GB of 29.1 GB`), and how long it took.
   Only the latest five are listed; the title then says how many there were
   (`Earlier steps · latest 5 of 8`).
+- The list starts collapsed (`collapsed: true`) to its title and a summary in `subtitle`:
+  `4 steps · 1 failed` (red), `3 steps · 1 stopped` (amber), `2 steps · all succeeded` (green);
+  the step count is left out when the title already has it. Choosing the title shows the rows,
+  and each client keeps that card's list open while it runs, as the card updates in place.
 
 A reply with one build gets exactly the card above.
 
@@ -173,7 +177,7 @@ HTML views (`ui://` resources), which Cantrip already shows for Copilot.
 | `keyValue` | `rows: [{key, value, symbol}]` | Rows: muted key on the leading side, value on the trailing side |
 | `strip` | `items: [{label, symbol, value, note, accessibilityLabel}]` | A horizontally scrolling strip of 52 pt columns: label, icon, note (blue), value |
 | `chart` | `kind` (`range` or `bar`), `min`, `max`, `items: [{label, symbol, note, low, high, lowText, highText}]` | Rows with a bar from `low` to `high` on the `min`…`max` scale (blue to yellow), `lowText` and `highText` beside it |
-| `list` | `title`, `mapLinked`, `items: [{id, title, subtitle, detail, symbol, glyph, badges, note, tone, trailing, pinID, actions}]` | Rows: title, subtitle, badges, detail, note (tinted by `tone`), `trailing` on the trailing side, action buttons |
+| `list` | `title`, `mapLinked`, `collapsed`, `subtitle`, `tone`, `items: [{id, title, subtitle, detail, symbol, glyph, badges, note, tone, trailing, pinID, actions}]` | Rows: title, subtitle, badges, detail, note (tinted by `tone`), `trailing` on the trailing side, action buttons. With `collapsed: true` (and a `title`), only the title shows, as a button with a chevron and the list's `subtitle` on the trailing side tinted by its `tone`; choosing it shows the rows (VoiceOver and screen readers hear it as expanded or collapsed) |
 | `map` | `latitude`, `longitude`, `latitudeDelta`, `longitudeDelta`, `pins: [{id, title, latitude, longitude, glyph, symbol}]`, `attribution` | An interactive map with labeled pins, zoom buttons and the attribution |
 | `image` | `imageID`, `aspectRatio` | A hero image from `GET /api/v1/link-previews/image?id=`; only images the Mac cached |
 | `badges` | `badges: [{text, tone, symbol}]` | A wrapping row of pills |

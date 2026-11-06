@@ -27,6 +27,7 @@
       "type" : "progress"
     },
     {
+      "collapsed" : true,
       "items" : [
         {
           "accessibilityLabel" : "xcodebuild build · Hermes, Succeeded, took 2 minutes, 21 seconds",
@@ -45,7 +46,9 @@
           "trailing" : "1:37"
         }
       ],
+      "subtitle" : "2 steps · 1 failed",
       "title" : "Earlier steps",
+      "tone" : "negative",
       "type" : "list"
     }
   ],
