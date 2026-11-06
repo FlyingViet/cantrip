@@ -171,9 +171,16 @@ struct CantripDuoSidebar: View {
                     Image(systemName: "gearshape.2")
                         .foregroundStyle(backgroundStatus.isActive ? CantripHomeBackgroundStyle.activeTint : Color.secondary)
                         .frame(width: 24)
-                    Text("Background jobs")
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Background jobs")
+                            .foregroundStyle(.primary)
+                        if let builds = backgroundStatus.builds {
+                            Text(builds)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     Text(backgroundStatus.text)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(backgroundStatus.isActive ? CantripHomeBackgroundStyle.activeTint : Color.secondary)
@@ -181,7 +188,7 @@ struct CantripDuoSidebar: View {
                 .sidebarRow(selected: false)
             }
             .buttonStyle(.plain)
-            .accessibilityValue(backgroundStatus.text)
+            .accessibilityValue(backgroundStatus.accessibilityValue)
             .accessibilityHint("Shows background tasks and scheduled runs")
             .accessibilityIdentifier("duo.sidebar.background")
         }
@@ -570,6 +577,21 @@ struct CantripDuoSidebar: View {
 struct CantripDuoSidebarBackground: Equatable {
     let text: String
     let isActive: Bool
+    /// The build queue's line ("2 building · 1 waiting").
+    var builds: String? = nil
+    var accessibilityValue: String
+
+    init(text: String, isActive: Bool, builds: String? = nil, accessibilityValue: String? = nil) {
+        self.text = text
+        self.isActive = isActive
+        self.builds = builds
+        self.accessibilityValue = accessibilityValue ?? text
+    }
+
+    init(_ summary: CantripBackgroundJobsSummary) {
+        self.init(text: summary.status, isActive: summary.isActive, builds: summary.builds,
+                  accessibilityValue: summary.accessibilityValue)
+    }
 }
 
 private extension View {

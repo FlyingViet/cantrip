@@ -711,6 +711,10 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var backgroundActiveCount: Int? = nil
     /// Cantrip Home only: requests from background runs waiting on the user.
     var backgroundInputCount: Int? = nil
+    /// Cantrip Home only: builds holding a slot in the Mac's build queue. Nil while the queue is off.
+    var buildsRunning: Int? = nil
+    /// Cantrip Home only: builds waiting for a slot.
+    var buildsWaiting: Int? = nil
     var pendingInputs: [CantripInputRequest]? = nil
     /// Seconds since 1970 of the tab's latest run: when it started while working, else when it
     /// finished. Nil from older hosts and for tabs that have not run.
@@ -890,6 +894,35 @@ struct CantripHomeBackgroundSnapshot: Decodable, Equatable {
     var maxParallel: Int? = nil
     var runningCount: Int? = nil
     var supportsStop: Bool? = nil
+    /// The Mac's build queue ("Heavy builds take turns"); nil while it's off or from older Macs.
+    var builds: CantripBuildQueueSnapshot? = nil
+}
+
+/// Builds on the Mac taking turns for a few build slots.
+struct CantripBuildQueueSnapshot: Decodable, Equatable {
+    struct Build: Decodable, Equatable {
+        let pid: Int
+        let title: String
+        /// "tab", "child", "ci" or "background".
+        let source: String
+        /// When it got its slot, or when it started waiting.
+        let since: Double
+        var tabID: String? = nil
+        var tabTitle: String? = nil
+        /// A CI job's "repo · workflow".
+        var job: String? = nil
+    }
+
+    let enabled: Bool
+    /// The Builds at once setting.
+    let slots: Int
+    /// Builds that may run now: 1 while the Mac is busy or short of memory.
+    let limit: Int
+    var reason: String? = nil
+    let running: [Build]
+    let waiting: [Build]
+
+    var isEmpty: Bool { running.isEmpty && waiting.isEmpty }
 }
 
 struct CantripHomeTaskField: Decodable, Equatable, Identifiable {
@@ -3102,6 +3135,8 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var isHomeSelected = false
     /// Cantrip Home's latest listed summary, kept current while a project tab is open.
     @Published private(set) var homeSummary: CantripRemoteSession?
+    /// Cantrip Home's session: the open one while Home is selected, else its listed summary.
+    var currentHomeSummary: CantripRemoteSession? { isHomeSelected ? selectedSession : homeSummary }
     @Published private(set) var homeTasks: [CantripHomeTask] = []
     @Published private(set) var homeArtifacts: [CantripHomeArtifact] = []
     /// The Mac streams original artifact files and folder zips (Save / Share).
@@ -4086,20 +4121,22 @@ final class CantripRemoteModel: ObservableObject {
         return try await performHistoryRead { try await $0.homeBuildIcon(id: build.id) }
     }
 
+    /// Loads Home's background list, also from a project tab: the tab lists' Background jobs row opens it there.
     func refreshHomeBackground() async {
-        guard isHomeSelected, isConfigured, selectedSession?.supportsBackgroundRuns == true,
+        guard isConfigured, currentHomeSummary?.supportsBackgroundRuns == true,
               !homeBackgroundRefreshInFlight else { return }
         homeBackgroundRefreshInFlight = true
         defer { homeBackgroundRefreshInFlight = false }
+        let generation = configurationGeneration
         do {
             let snapshot = try await performHistoryRead { try await $0.homeBackground() }
-            guard isHomeSelected else { return }
+            guard generation == configurationGeneration else { return }
             if homeBackground != snapshot { homeBackground = snapshot }
             if homeBackgroundError != nil { homeBackgroundError = nil }
         } catch is CancellationError {
             return
         } catch {
-            guard isHomeSelected else { return }
+            guard generation == configurationGeneration else { return }
             let message = error.localizedDescription
             if homeBackgroundError != message { homeBackgroundError = message }
         }

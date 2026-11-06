@@ -4,7 +4,7 @@
 // CantripQueueView.swift / PromptTextView.swift. Dates: subagents and handoffs use UnixSeconds;
 // background runs and queued runs use AppleReferenceSeconds.
 import type {
-  HomeBackgroundHandoff, HomeBackgroundQueuedRun, HomeBackgroundRun, HomeBackgroundSnapshot, InputDecision, InputRequest,
+  BuildQueueBuild, BuildQueueSnapshot, HomeBackgroundHandoff, HomeBackgroundQueuedRun, HomeBackgroundRun, HomeBackgroundSnapshot, InputDecision, InputRequest,
   RemoteMessage, RemoteSubagent,
 } from "../../api/types";
 import { plainMentions } from "../../state/tabMentions";
@@ -360,6 +360,45 @@ export function runDetail(run: HomeBackgroundRun, now: number, locale?: string):
 export function queuedRunDetail(item: HomeBackgroundQueuedRun): string {
   const kind = item.kind === "incident" ? "Incident" : "Scheduled task";
   return `${kind} · ${trimmed(item.reason) || "Waiting"}${repeatsText(item.repeats)}`;
+}
+
+// MARK: Build queue (CantripBuildQueueFormat in CantripHomeBackground.swift)
+
+/** The build queue when it lists anything; dates are UnixSeconds. */
+export function listedBuilds(snapshot: HomeBackgroundSnapshot | null | undefined): BuildQueueSnapshot | null {
+  const builds = snapshot?.builds;
+  return builds && (builds.running?.length || builds.waiting?.length) ? builds : null;
+}
+
+/** "Docs site", "Child tab · Docs", "CI · app · TestFlight", "Home background run". */
+export function buildQueueOrigin(build: BuildQueueBuild): string {
+  const tab = trimmed(build.tabTitle);
+  switch (build.source) {
+    case "ci": return build.job ? `CI · ${build.job}` : "CI job";
+    case "background": return "Home background run";
+    case "child": return tab ? `Child tab · ${tab}` : "Child tab";
+    default: return tab || "A tab";
+  }
+}
+
+export function buildQueueOrdinal(n: number): string {
+  const suffix = [11, 12, 13].includes(n % 100) ? "th" : ({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] ?? "th";
+  return `${n}${suffix}`;
+}
+
+/** Running (place 0): "Docs site · 3m 12s". Waiting: "Waiting · 2nd in line · CI job · 45s". `now` in UnixSeconds. */
+export function buildQueueDetail(build: BuildQueueBuild, place: number, now: number): string {
+  const elapsed = elapsedLabel(build.since, undefined, now);
+  if (!place) return `${buildQueueOrigin(build)} · ${elapsed}`;
+  return `Waiting · ${place === 1 ? "Next" : `${buildQueueOrdinal(place)} in line`} · ${buildQueueOrigin(build)} · ${elapsed}`;
+}
+
+export function buildQueueFootnote(builds: BuildQueueSnapshot): string {
+  const order = "Your tabs go first, then child tabs and CI, then Home's background runs.";
+  if (builds.limit < builds.slots) {
+    return `1 build at a time while ${builds.reason || "the Mac is busy"} (normally ${builds.slots}). ${order}`;
+  }
+  return `Up to ${builds.slots === 1 ? "1 build" : `${builds.slots} builds`} at once on your Mac. ${order}`;
 }
 
 export type RunIcon = "needsInput" | "tabQueued" | "spinner" | "succeeded" | "failed" | "skipped" | "stopped";

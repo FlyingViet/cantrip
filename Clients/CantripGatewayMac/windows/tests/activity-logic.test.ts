@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { HomeBackgroundHandoff, HomeBackgroundRun, HomeBackgroundSnapshot, InputRequest, RemoteMessage, RemoteSubagent } from "../src/gateway/api/types";
+import type { BuildQueueSnapshot, HomeBackgroundHandoff, HomeBackgroundRun, HomeBackgroundSnapshot, InputRequest, RemoteMessage, RemoteSubagent } from "../src/gateway/api/types";
 import {
-  activeBackground, answerResultText, APPLE_EPOCH, backgroundPollDelay, backgroundSubagents, backgroundTaskAccessibilityLabel,
+  activeBackground, answerResultText, APPLE_EPOCH, backgroundPollDelay, buildQueueDetail, buildQueueFootnote, buildQueueOrdinal,
+  buildQueueOrigin, listedBuilds, backgroundSubagents, backgroundTaskAccessibilityLabel,
   backgroundTaskIcon, backgroundTaskSummary, backgroundTaskTitle, backgroundTasksStatusLine, canStopSubagent, capitalized,
   elapsedAccessibilityLabel, elapsedLabel, handoffNeedsAnswer, handoffStatusText, handoffSummary, handoffTabTitle,
   isLabelledSummary, isLive, liveBackgroundSubagents, liveForegroundSubagents, needsInputRuns, otherRuns, promptPages,
@@ -279,5 +280,39 @@ describe("queue", () => {
     expect(promptPages("")).toEqual([""]);
     expect(queuePositionLabel(0)).toBe("Next in queue");
     expect(queuePositionLabel(2)).toBe("Queue position 3");
+  });
+});
+
+describe("build queue", () => {
+  const builds: BuildQueueSnapshot = {
+    enabled: true, slots: 2, limit: 1, reason: "macOS reports memory pressure",
+    running: [
+      { pid: 101, title: "xcodebuild archive · App", source: "tab", since: 999925, tabID: "T1", tabTitle: "Docs site" },
+      { pid: 102, title: "swift test · Server", source: "child", since: 999960, tabTitle: "Server" },
+    ],
+    waiting: [{ pid: 103, title: "swift build · App", source: "ci", since: 999970, job: "app · TestFlight" }],
+  };
+  const snapshot = { runs: [], queued: [], builds } as unknown as HomeBackgroundSnapshot;
+
+  it("lists builds only when one runs or waits", () => {
+    expect(listedBuilds(snapshot)).toBe(builds);
+    expect(listedBuilds({ ...snapshot, builds: { ...builds, running: [], waiting: [] } })).toBeNull();
+    expect(listedBuilds({ ...snapshot, builds: undefined })).toBeNull();
+    expect(listedBuilds(null)).toBeNull();
+  });
+
+  it("matches the Mac and iOS wording", () => {
+    expect(buildQueueDetail(builds.running[0], 0, 1_000_000)).toBe("Docs site · 1m 15s");
+    expect(buildQueueDetail(builds.running[1], 0, 1_000_000)).toBe("Child tab · Server · 40s");
+    expect(buildQueueDetail(builds.waiting[0], 1, 1_000_000)).toBe("Waiting · Next · CI · app · TestFlight · 30s");
+    expect(buildQueueDetail(builds.waiting[0], 2, 1_000_000)).toBe("Waiting · 2nd in line · CI · app · TestFlight · 30s");
+    expect(buildQueueOrigin({ pid: 9, title: "swift build", source: "background", since: 0 })).toBe("Home background run");
+    expect(buildQueueOrigin({ pid: 9, title: "swift build", source: "tab", since: 0 })).toBe("A tab");
+    expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 103].map(buildQueueOrdinal))
+      .toEqual(["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "103rd"]);
+    expect(buildQueueFootnote(builds)).toBe(
+      "1 build at a time while macOS reports memory pressure (normally 2). Your tabs go first, then child tabs and CI, then Home's background runs.");
+    expect(buildQueueFootnote({ ...builds, limit: 2 })).toBe(
+      "Up to 2 builds at once on your Mac. Your tabs go first, then child tabs and CI, then Home's background runs.");
   });
 });

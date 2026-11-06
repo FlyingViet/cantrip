@@ -2549,12 +2549,18 @@ struct ChatView: View {
         if duoSidebarOverlays { withAnimation(.snappy) { duoOverlaySidebarOpen = false } }
     }
 
+    /// Home's runs and the Mac's build queue; in a project tab, from Home's listed summary (like the drawer).
     private var duoSidebarBackground: CantripDuoSidebarBackground? {
-        guard vm.activeLane == .home else { return nil }
-        let active = homeBackgroundCount, input = homeBackgroundInputCount
-        guard remote.selectedSession?.supportsBackgroundRuns == true || active > 0 || input > 0 else { return nil }
-        if input > 0 { return .init(text: input == 1 ? "Needs input" : "\(input) need input", isActive: true) }
-        return .init(text: active > 0 ? "\(active) running" : "None running", isActive: active > 0)
+        guard vm.activeLane.usesCantripRemote else { return nil }
+        let home = remote.currentHomeSummary
+        let onHome = remote.selectedSession?.isCantripHome == true
+        let summary = CantripBackgroundJobsSummary(
+            runs: onHome ? homeBackgroundCount : home?.backgroundActiveCount ?? 0,
+            inputs: onHome ? homeBackgroundInputCount : home?.backgroundInputCount ?? 0,
+            home: home
+        )
+        guard home?.supportsBackgroundRuns == true || summary.isActive else { return nil }
+        return .init(summary)
     }
 
     /// The typed "/" token while a Cantrip tab's or Home's backend suggestions can show.

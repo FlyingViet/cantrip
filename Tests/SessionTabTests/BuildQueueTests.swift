@@ -185,6 +185,38 @@ extension SessionTabTests {
         failing.waitUntilExit()
         precondition(failing.terminationStatus == 7, "the build's exit status comes back")
 
+        // What clients list: each build's tab or CI job, in turn order, and counts for tab lists.
+        let tabID = UUID()
+        precondition(BuildQueue.Origin.current(environment: ["CANTRIP_TAB_ID": tabID.uuidString]) == .init(tab: tabID.uuidString, job: nil))
+        precondition(BuildQueue.Origin.current(environment: ["CANTRIP_TAB_ID": "not-a-tab"]) == .init(tab: nil, job: nil))
+        precondition(BuildQueue.Origin.current(environment: ["GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "owner/app",
+                                                             "GITHUB_WORKFLOW": "TestFlight", "CANTRIP_TAB_ID": tabID.uuidString])
+                     == .init(tab: nil, job: "app · TestFlight"), "a CI job names its repo and workflow")
+        let listed = BuildQueue.Store(directory: root.appendingPathComponent("listed"))
+        try listed.prepare()
+        precondition(BuildQueue.snapshot(store: listed, policy: .init(slots: 2), enabled: false, resources: calm) == nil
+                     && BuildQueue.counts(store: listed, enabled: false) == nil, "off and empty: nothing to list")
+        let held = try requireHome(listed.take(as: .init(pid: getpid(), priority: .tab, since: 900, title: "xcodebuild archive · App",
+                                                         tab: tabID.uuidString), limit: 2))
+        defer { close(held.descriptor) }
+        try listed.write(.init(pid: getpid(), priority: .ci, enqueuedAt: 950, title: "swift build · App", job: "app · CI"))
+        let busy = BuildQueue.Resources(load: 30, cores: 10, memoryPressure: 1)
+        let snapshot = try requireHome(BuildQueue.snapshot(store: listed, policy: .init(slots: 2), enabled: false, resources: busy) {
+            $0 == tabID.uuidString ? "Docs site" : nil
+        })
+        precondition(snapshot.running == [.init(pid: getpid(), title: "xcodebuild archive · App", source: "tab", since: 900,
+                                                tabID: tabID.uuidString, tabTitle: "Docs site")]
+                     && snapshot.waiting == [.init(pid: getpid(), title: "swift build · App", source: "ci", since: 950, job: "app · CI")]
+                     && snapshot.limit == 1 && snapshot.slots == 2 && snapshot.reason?.hasPrefix("the Mac is busy") == true
+                     && !snapshot.enabled, "a queue turned off still lists what it holds: \(snapshot)")
+        let counted = try requireHome(BuildQueue.counts(store: listed, enabled: true))
+        precondition(counted.running == 1 && counted.waiting == 1)
+        let json = try requireHome(JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any])
+        let firstRunning = try requireHome((json["running"] as? [[String: Any]])?.first)
+        precondition(firstRunning["tabTitle"] as? String == "Docs site" && firstRunning["source"] as? String == "tab"
+                     && firstRunning["job"] == nil && json["limit"] as? Int == 1, "\(json)")
+        listed.removeTicket(pid: getpid())
+
         // The card while it waits, and its time from when it got a slot.
         let started = Date(timeIntervalSince1970: 1_000)
         let command = try requireHome(BuildDetector.detect("xcodebuild -scheme App archive", workdir: "/w/Mems"))
@@ -201,6 +233,6 @@ extension SessionTabTests {
         precondition(!run.isWaiting && run.label == command.verb && run.startedAt == started.addingTimeInterval(90)
                      && run.document.blocks.first { $0.type == "progress" }?.expectedSeconds == 120,
                      "its time and estimate start with the slot")
-        print("Build queue: policy, priority, turn order, shims, real waiting in priority order and waiting cards passed")
+        print("Build queue: policy, priority, turn order, shims, real waiting in priority order, client lists and waiting cards passed")
     }
 }

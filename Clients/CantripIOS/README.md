@@ -166,8 +166,8 @@ Cantrip Home is the front door: there is no separate Remote lane. Your Mac's pro
 live in Home's **tab drawer**: tap the top-left **Tabs** button (its badge counts working
 tabs, or shows **?** while a tab or background job waits for you) or swipe right from the
 left edge. The drawer has **+** for a new tab, **Search tabs**, a pinned **Cantrip Home**
-row, a **Background jobs** row (scheduled and automated runs), then every tab with a spinner
-while it works (its live status in orange), its latest outcome when idle, and how long ago
+row, a **Background jobs** row (scheduled and automated runs, plus builds taking turns on your Mac),
+then every tab with a spinner while it works (its live status in orange), its latest outcome when idle, and how long ago
 it last ran. Touch and hold a tab, then drag, to reorder it (no handles; not while searching);
 a still hold opens Rename, Lock, Move, Model Settings, Start Fresh, Tools for This Tab and Close. A connection line
 sits at the bottom.

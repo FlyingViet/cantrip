@@ -525,12 +525,23 @@ slots instead:
 - **Where it shows:** a waiting build's card says **Waiting for a build slot**
   with what's running and its place in line (on Copilot and Codex, which stream
   command output), and its time and estimate start once it gets a slot. The
-  command prints `cantrip build queue:` lines while it waits.
+  command prints `cantrip build queue:` lines while it waits. In Cantrip Agent, the
+  **Background jobs** row in the tab drawer and the Duo sidebar counts running
+  builds and adds a line such as "2 building · 1 waiting". Home's
+  **Background** list (iPhone, Gateway Mac, Gateway for Windows and the browser
+  Remote) has a **Builds** section: each build, where it came from (a tab, a
+  child tab, a CI job's repo and workflow, or a Home background run), its place
+  in line and how long it has run or waited. Tap a build from a tab to open it.
 - **CI:** a self-hosted runner on the Mac uses the queue when its `.path` file
   starts with `~/.cache/Cantrip/build-queue/bin` (restart the runner after
   editing it). Its jobs count as CI jobs.
 
-`cantrip build-queue` lists the builds running and waiting. Slots are file
+`cantrip build-queue` lists the builds running and waiting. Remote clients get
+the same list as `builds` in `GET /api/v1/home/background` (`enabled`, `slots`,
+`limit`, `reason`, and `running`/`waiting` entries with `title`, `source`,
+`since`, `tabID`, `tabTitle` and `job`), and Home's session summary carries
+`buildsRunning` and `buildsWaiting`; both are left out while the queue is off
+and empty. Slots are file
 locks in `~/.cache/Cantrip/build-queue`, so a build that crashes or is killed
 never keeps one, and the queue works while Cantrip itself is closed. Turning
 the setting off removes the shims.

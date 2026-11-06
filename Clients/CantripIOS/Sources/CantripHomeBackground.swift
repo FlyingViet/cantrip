@@ -12,6 +12,60 @@ enum CantripHomeBackgroundCount {
     }
 }
 
+/// The Background jobs row in tab lists (drawer, Duo sidebar): Home's background runs and the
+/// Mac's build queue. Builds count as running jobs and get a line of their own.
+struct CantripBackgroundJobsSummary: Equatable {
+    var runs = 0
+    var inputs = 0
+    var buildsRunning = 0
+    var buildsWaiting = 0
+
+    /// Counts from Home's session (open or listed); `runs` covers the open Home chat's watchers too.
+    init(runs: Int, inputs: Int, home: CantripRemoteSession?) {
+        self.runs = max(0, runs)
+        self.inputs = max(0, inputs)
+        buildsRunning = max(0, home?.buildsRunning ?? 0)
+        buildsWaiting = max(0, home?.buildsWaiting ?? 0)
+    }
+
+    init(runs: Int = 0, inputs: Int = 0, buildsRunning: Int = 0, buildsWaiting: Int = 0) {
+        self.runs = runs
+        self.inputs = inputs
+        self.buildsRunning = buildsRunning
+        self.buildsWaiting = buildsWaiting
+    }
+
+    var isActive: Bool { inputs > 0 || runs + buildsRunning + buildsWaiting > 0 }
+
+    var status: String {
+        if inputs > 0 { return inputs == 1 ? "Needs input" : "\(inputs) need input" }
+        let running = runs + buildsRunning
+        if running > 0 { return "\(running) running" }
+        return buildsWaiting > 0 ? "\(buildsWaiting) waiting" : "None running"
+    }
+
+    /// "2 building · 1 waiting" (short enough for the Duo sidebar); nil while no build runs or waits.
+    var builds: String? {
+        switch (buildsRunning, buildsWaiting) {
+        case (0, 0): return nil
+        case (let running, 0): return "\(running) building"
+        case (0, let waiting): return "\(waiting) \(waiting == 1 ? "build" : "builds") waiting"
+        case (let running, let waiting): return "\(running) building · \(waiting) waiting"
+        }
+    }
+
+    /// "Builds: 2 running, 1 waiting".
+    var buildsAccessibilityText: String? {
+        guard builds != nil else { return nil }
+        return "Builds: " + [buildsRunning > 0 ? "\(buildsRunning) running" : nil,
+                             buildsWaiting > 0 ? "\(buildsWaiting) waiting" : nil].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    var accessibilityValue: String {
+        [status, buildsAccessibilityText].compactMap { $0 }.joined(separator: ". ")
+    }
+}
+
 enum CantripHomeBackgroundStyle {
     /// systemOrange is under 3:1 on light glass; light mode uses a deeper orange.
     static let activeTint = Color(UIColor { traits in
@@ -101,9 +155,13 @@ struct CantripHomeBackgroundView: View {
         return CantripPinnedSubagents.background(in: remote.selectedSession?.transcript ?? [])
     }
 
-    private var supportsRuns: Bool { remote.selectedSession?.supportsBackgroundRuns == true }
+    // Home's listed summary while a project tab is open: the tab lists' Background jobs row opens this there too.
+    private var supportsRuns: Bool { remote.currentHomeSummary?.supportsBackgroundRuns == true }
     private var snapshot: CantripHomeBackgroundSnapshot? { supportsRuns ? remote.homeBackground : nil }
-    private var hasRuns: Bool { !(snapshot?.runs.isEmpty ?? true) || !(snapshot?.queued.isEmpty ?? true) }
+    private var builds: CantripBuildQueueSnapshot? { snapshot?.builds.flatMap { $0.isEmpty ? nil : $0 } }
+    private var hasRuns: Bool {
+        !(snapshot?.runs.isEmpty ?? true) || !(snapshot?.queued.isEmpty ?? true) || builds != nil
+    }
     private var canStop: Bool { snapshot?.supportsStop == true }
 
     var body: some View {
@@ -117,7 +175,9 @@ struct CantripHomeBackgroundView: View {
                             "No background work",
                             systemImage: "gearshape.2",
                             description: Text(supportsRuns
-                                ? "Scheduled tasks, incident investigations and background watchers appear here."
+                                ? (snapshot?.builds != nil
+                                    ? "Scheduled tasks, incident investigations, background watchers and builds taking turns on your Mac appear here."
+                                    : "Scheduled tasks, incident investigations and background watchers appear here.")
                                 : "Background watchers appear here. Update Cantrip on your Mac to also see scheduled task and incident runs.")
                         )
                     }
@@ -219,6 +279,11 @@ struct CantripHomeBackgroundView: View {
             if let homeSessionID, !watchers.isEmpty {
                 section("In this chat") {
                     CantripSubagentStack(remote: remote, sessionID: homeSessionID, subagents: watchers)
+                }
+            }
+            if let builds {
+                section("Builds") {
+                    CantripBuildQueueList(builds: builds, onOpenTab: openTab)
                 }
             }
             if let queued = snapshot?.queued, !queued.isEmpty {
@@ -350,6 +415,121 @@ private struct CantripHomeBackgroundStopButton: View {
                  ? "It won't run until its next scheduled time."
                  : "Other background work keeps running.")
         }
+    }
+}
+
+/// The Mac's build queue: builds holding a slot, then the ones waiting, in turn order.
+struct CantripBuildQueueList: View {
+    let builds: CantripBuildQueueSnapshot
+    /// Opens the tab a build came from.
+    var onOpenTab: ((String) -> Void)? = nil
+
+    var body: some View {
+        ForEach(Array(builds.running.enumerated()), id: \.offset) { _, build in
+            CantripBuildQueueRow(build: build, place: nil, onOpenTab: onOpenTab)
+        }
+        ForEach(Array(builds.waiting.enumerated()), id: \.offset) { index, build in
+            CantripBuildQueueRow(build: build, place: index + 1, onOpenTab: onOpenTab)
+        }
+        Text(CantripBuildQueueFormat.footnote(builds))
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+enum CantripBuildQueueFormat {
+    /// "Smart card loading", "Child tab · Docs", "CI · cantrip · iOS TestFlight", "Home background run".
+    static func origin(_ build: CantripBuildQueueSnapshot.Build) -> String {
+        let tab = build.tabTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        switch build.source {
+        case "ci": return build.job.map { "CI · \($0)" } ?? "CI job"
+        case "background": return "Home background run"
+        case "child": return tab.map { "Child tab · \($0)" } ?? "Child tab"
+        default: return tab ?? "A tab"
+        }
+    }
+
+    /// Running: "Smart card loading · 3m 12s". Waiting: "Waiting · 2nd in line · CI job · 45s".
+    static func detail(_ build: CantripBuildQueueSnapshot.Build, place: Int?, now: Date) -> String {
+        let elapsed = CantripSubagentFormat.elapsedLabel(startedAt: build.since, finishedAt: nil, now: now)
+        guard let place else { return "\(origin(build)) · \(elapsed)" }
+        let line = place == 1 ? "Next" : "\(ordinal(place)) in line"
+        return "Waiting · \(line) · \(origin(build)) · \(elapsed)"
+    }
+
+    static func ordinal(_ n: Int) -> String {
+        let suffix = (11...13).contains(n % 100) ? "th" : [1: "st", 2: "nd", 3: "rd"][n % 10] ?? "th"
+        return "\(n)\(suffix)"
+    }
+
+    static func footnote(_ builds: CantripBuildQueueSnapshot) -> String {
+        if builds.limit < builds.slots {
+            let reason = builds.reason.map { " while \($0)" } ?? " while the Mac is busy"
+            return "1 build at a time\(reason) (normally \(builds.slots)). Your tabs go first, then child tabs and CI, then Home's background runs."
+        }
+        let count = builds.slots == 1 ? "1 build" : "\(builds.slots) builds"
+        return "Up to \(count) at once on your Mac. Your tabs go first, then child tabs and CI, then Home's background runs."
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+struct CantripBuildQueueRow: View {
+    let build: CantripBuildQueueSnapshot.Build
+    /// Place in line while waiting; nil while it holds a slot.
+    let place: Int?
+    var onOpenTab: ((String) -> Void)? = nil
+
+    private var openTab: (() -> Void)? {
+        guard let id = build.tabID, build.tabTitle != nil, let onOpenTab else { return nil }
+        return { onOpenTab(id) }
+    }
+
+    var body: some View {
+        if let openTab {
+            Button(action: openTab) { card(chevron: true) }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens \(build.tabTitle ?? "its tab")")
+        } else {
+            card(chevron: false)
+        }
+    }
+
+    private func card(chevron: Bool) -> some View {
+        CantripHomeBackgroundCard {
+            if place == nil {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "hourglass").foregroundStyle(.secondary)
+            }
+        } content: {
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(build.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                        Text(CantripBuildQueueFormat.detail(build, place: place, now: timeline.date))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if chevron {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+            }
+            .accessibilityElement(children: .combine)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

@@ -457,10 +457,19 @@ struct CantripHomeTabDrawer: View {
                         .frame(width: 34, height: 34)
                         .background(CantripHomeBackgroundStyle.activeTint.opacity(0.14),
                                     in: RoundedRectangle(cornerRadius: 9))
-                    Text("Background jobs")
-                        .font(.body)
-                        .foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Background jobs")
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let builds = backgroundSummary.builds {
+                            Text(builds)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("drawer.background.builds")
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Text(backgroundStatus)
@@ -477,7 +486,7 @@ struct CantripHomeTabDrawer: View {
         .buttonStyle(.plain)
         .padding(.horizontal)
         .accessibilityLabel("Background jobs")
-        .accessibilityValue(backgroundStatus)
+        .accessibilityValue(backgroundSummary.accessibilityValue)
         .accessibilityHint("Shows background tasks and scheduled runs")
         .accessibilityIdentifier("drawer.background")
     }
@@ -620,17 +629,21 @@ struct CantripHomeTabDrawer: View {
     }
 
     private var showsBackgroundJobs: Bool {
-        homeSnapshot?.supportsBackgroundRuns == true || backgroundActiveCount > 0 || backgroundInputCount > 0
+        homeSnapshot?.supportsBackgroundRuns == true || backgroundSummary.isActive
     }
 
-    private var backgroundActive: Bool { backgroundActiveCount > 0 || backgroundInputCount > 0 }
-
-    private var backgroundStatus: String {
-        if backgroundInputCount > 0 {
-            return backgroundInputCount == 1 ? "Needs input" : "\(backgroundInputCount) need input"
-        }
-        return backgroundActiveCount > 0 ? "\(backgroundActiveCount) running" : "None running"
+    /// Home's runs and the Mac's build queue. Off Home, the counts come from Home's listed summary.
+    private var backgroundSummary: CantripBackgroundJobsSummary {
+        CantripBackgroundJobsSummary(
+            runs: homeSelected ? backgroundActiveCount : max(backgroundActiveCount, homeSnapshot?.backgroundActiveCount ?? 0),
+            inputs: homeSelected ? backgroundInputCount : max(backgroundInputCount, homeSnapshot?.backgroundInputCount ?? 0),
+            home: homeSnapshot
+        )
     }
+
+    private var backgroundActive: Bool { backgroundSummary.isActive }
+
+    private var backgroundStatus: String { backgroundSummary.status }
 
     private var serverName: String {
         let name = model.servers.selected?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

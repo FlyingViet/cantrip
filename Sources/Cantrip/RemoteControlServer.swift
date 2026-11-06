@@ -2260,6 +2260,11 @@ final class RemoteControlServer {
         }
         let store = CantripHomeStore.shared
         let parts = request.path.split(separator: "/", omittingEmptySubsequences: true)
+        func backgroundSnapshot() -> CantripHomeBackgroundSnapshot {
+            var value = store.backgroundSnapshot()
+            value.builds = Self.buildQueueSnapshot(manager: manager)
+            return value
+        }
         if parts.count == 3 {
             guard request.method == "GET" else {
                 sendError(405, "method not allowed", on: connection)
@@ -2563,7 +2568,7 @@ final class RemoteControlServer {
                 }
                 do {
                     try store.stopBackgroundRun(id: runID)
-                    let value = store.backgroundSnapshot()
+                    let value = backgroundSnapshot()
                     sendEncoded(on: connection) { try JSONEncoder().encode(value) }
                 } catch let error as CantripHomeError {
                     sendError(error.status, error.message, on: connection)
@@ -2580,10 +2585,19 @@ final class RemoteControlServer {
                 sendError(405, "method not allowed", on: connection)
                 return
             }
-            let value = store.backgroundSnapshot()
+            let value = backgroundSnapshot()
             sendEncoded(on: connection) { try JSONEncoder().encode(value) }
         default:
             sendError(404, "not found", on: connection)
+        }
+    }
+
+    /// The build queue for Home's Background list, naming each build's tab.
+    @MainActor
+    static func buildQueueSnapshot(manager: SessionManager) -> BuildQueue.Snapshot? {
+        let settings = AppSettings.shared
+        return BuildQueue.snapshot(policy: .init(slots: settings.buildQueueSlots), enabled: settings.buildQueueEnabled) { id in
+            manager.sessions.first { $0.id.uuidString == id }?.title
         }
     }
 
@@ -2848,6 +2862,11 @@ final class RemoteControlServer {
             result["backgroundActiveCount"] = CantripHomeStore.shared.runner.activeCount
             result["backgroundInputCount"] = CantripHomeStore.shared.runner.runsNeedingInput
                 .reduce(0) { $0 + $1.session.pendingInputs.count }
+            // The build queue's counts, for tab lists' Background jobs row.
+            if let builds = BuildQueue.counts(enabled: AppSettings.shared.buildQueueEnabled) {
+                result["buildsRunning"] = builds.running
+                result["buildsWaiting"] = builds.waiting
+            }
         }
         // Hash only small metadata and mutation tokens, never the full transcript.
         var hasher = SHA256()
@@ -5796,7 +5815,8 @@ private extension RemoteControlServer {
     function closeBackground(){if(backgroundState)clearInterval(backgroundState.timer);backgroundState=null}
     async function loadBackground(){const state=backgroundState;if(!state||state.loading)return;state.loading=true;
       try{const data=await api("/api/v1/home/background");if(state!==backgroundState)return;setText($("backgroundError"),"");
-        const next=JSON.stringify([data.runs,data.queued]);if(next!==state.last){state.last=next;state.runs=data.runs||[];state.queued=data.queued||[];state.sessionID=data.sessionID||null;state.loaded=true;if(state.view==="list")renderBackground()}
+        const builds=data.builds&&(data.builds.running?.length||data.builds.waiting?.length)?data.builds:null;
+        const next=JSON.stringify([data.runs,data.queued,builds]);if(next!==state.last||builds){state.last=next;state.runs=data.runs||[];state.queued=data.queued||[];state.builds=builds;state.sessionID=data.sessionID||null;state.loaded=true;if(state.view==="list")renderBackground()}
         else if(!state.loaded){state.loaded=true;renderBackground()}}
       catch(error){if(state===backgroundState){setText($("backgroundError"),`Couldn't load background runs: ${error.message}`);if(!state.loaded){state.loaded=true;renderBackground()}}}
       finally{state.loading=false}}
@@ -5805,6 +5825,11 @@ private extension RemoteControlServer {
       if(state.view==="log"){body.replaceChildren(state.logNode||homeNode("p","muted tasks-empty","Loading the log…"));return}
       const view=homeNode("div");
       if(!state.loaded){view.append(homeNode("p","muted tasks-empty","Loading background runs…"));body.replaceChildren(view);return}
+      if(state.builds){const builds=state.builds;view.append(homeNode("div","bg-head","Builds"));const list=homeNode("ul","bg-list");
+        const rows=[...(builds.running||[]).map((build)=>[build,0]),...(builds.waiting||[]).map((build,index)=>[build,index+1])];
+        for(const [build,place] of rows){const item=homeNode("li","bg-run"),detail=buildQueueDetail(build,place);item.setAttribute("aria-label",`${build.title}, ${detail}`);
+          item.append(homeNode("strong","task-title",build.title),homeNode("span","task-meta",detail));list.append(item)}
+        view.append(list,homeNode("p","muted",buildQueueFootnote(builds)))}
       if(state.queued.length){view.append(homeNode("div","bg-head","Waiting"));const list=homeNode("ul","bg-list");
         for(const job of state.queued){const item=homeNode("li","bg-run");item.append(homeNode("strong","task-title",job.label),homeNode("span","task-meta",job.reason||"Queued"));list.append(item)}view.append(list)}
       view.append(homeNode("div","bg-head","Scheduled and automated"));
@@ -5816,6 +5841,16 @@ private extension RemoteControlServer {
           if(run.status!=="running"&&Array.isArray(run.cards)&&run.cards.length)appendCards(item,run.cards,`bg:${run.id}`);list.append(item)}
         view.append(list)}
       body.replaceChildren(view);panel.scrollTop=scroll}
+    // The Mac's build queue (CantripBuildQueueFormat on iOS): where a build comes from, its place in line and time.
+    function buildQueueOrigin(build){const tab=(build.tabTitle||"").trim();
+      if(build.source==="ci")return build.job?`CI · ${build.job}`:"CI job";if(build.source==="background")return "Home background run";
+      if(build.source==="child")return tab?`Child tab · ${tab}`:"Child tab";return tab||"A tab"}
+    function buildQueueOrdinal(n){const suffix=[11,12,13].includes(n%100)?"th":({1:"st",2:"nd",3:"rd"})[n%10]||"th";return `${n}${suffix}`}
+    function buildQueueDetail(build,place){const elapsed=subagentElapsed({startedAt:build.since});
+      return place?`Waiting · ${place===1?"Next":`${buildQueueOrdinal(place)} in line`} · ${buildQueueOrigin(build)} · ${elapsed}`:`${buildQueueOrigin(build)} · ${elapsed}`}
+    function buildQueueFootnote(builds){const order="Your tabs go first, then child tabs and CI, then Home's background runs.";
+      if(builds.limit<builds.slots)return `1 build at a time while ${builds.reason||"the Mac is busy"} (normally ${builds.slots}). ${order}`;
+      return `Up to ${builds.slots===1?"1 build":`${builds.slots} builds`} at once on your Mac. ${order}`}
     async function openBackgroundLog(){const state=backgroundState;if(!state?.sessionID)return;state.view="log";state.logNode=null;renderBackground();
       try{const data=await api(`/api/v1/sessions/${encodeURIComponent(state.sessionID)}?history=recent`);if(state!==backgroundState||state.view!=="log")return;
         const session=data.session||{},log=homeNode("div","bg-log"),messages=(session.messages||[]).slice(-24);
