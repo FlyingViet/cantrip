@@ -114,6 +114,48 @@ final class CantripCardTests: XCTestCase {
         XCTAssertEqual(restored.cards, [card], "a saved turn keeps its build card")
     }
 
+    /// A reply's builds arrive as one card: the leading build's live progress, a build running
+    /// beside it, and earlier steps as rows with their results.
+    func testCombinedBuildCard() throws {
+        let combined = #"""
+        {"version":1,"id":"build-a","type":"build","accessibilityLabel":"xcodebuild test · Hermes, Testing, and 3 other steps",
+         "blocks":[{"type":"header","title":"xcodebuild test · Hermes","subtitle":"CantripIOS","symbol":"hammer"},
+                   {"type":"progress","status":"running","label":"Testing","tone":"accent","startedAt":"2026-11-04T20:00:00.000Z"},
+                   {"type":"progress","status":"running","label":"make build","tone":"accent","startedAt":"2026-11-04T20:00:10.000Z"},
+                   {"type":"list","title":"Earlier steps","items":[
+                     {"id":"a","title":"xcodebuild build · Hermes","note":"Succeeded","tone":"positive","trailing":"2:21"},
+                     {"id":"b","title":"xcodebuild test · Hermes","note":"Failed · Exit code 65","tone":"negative","trailing":"1:37"}]}]}
+        """#
+        let card = try XCTUnwrap(try message(#","cards":[\#(combined)]"#).cards?.first)
+        XCTAssertEqual(card.blocks.map(\.type), ["header", "progress", "progress", "list"])
+        XCTAssertEqual(CantripCardPanel.sections(card.blocks).count, 4)
+        XCTAssertEqual(card.blocks[2].label, "make build")
+        let rows = try XCTUnwrap(card.blocks[3].items)
+        XCTAssertEqual(rows.map(\.note), ["Succeeded", "Failed · Exit code 65"])
+        XCTAssertEqual(rows.map(\.tone), ["positive", "negative"])
+        XCTAssertEqual(rows.map(\.trailing), ["2:21", "1:37"])
+    }
+
+    /// Without a fraction the bar's segment sweeps one way, in from past the left end and out past
+    /// the right, from the clock: the same moment always draws the same place.
+    func testIndeterminateBarSweepsOneWay() {
+        let period = CantripCardProgressBar.sweepSeconds
+        let width = CantripCardProgressBar.sweepWidth
+        let start = Date(timeIntervalSinceReferenceDate: 0)
+        XCTAssertEqual(CantripCardProgressBar.sweepOffset(at: start), -width, accuracy: 0.0001, "starts hidden past the left end")
+        XCTAssertEqual(CantripCardProgressBar.sweepOffset(at: start.addingTimeInterval(period / 2)), (1 - width) / 2, accuracy: 0.0001)
+        XCTAssertEqual(CantripCardProgressBar.sweepOffset(at: start.addingTimeInterval(period * 0.9999)), 1, accuracy: 0.001,
+                       "ends gone past the right end")
+        var previous = -Double.infinity
+        for step in 0..<100 {
+            let offset = CantripCardProgressBar.sweepOffset(at: start.addingTimeInterval(period * Double(step) / 100))
+            XCTAssertGreaterThan(offset, previous, "never turns back within a pass")
+            previous = offset
+        }
+        XCTAssertEqual(CantripCardProgressBar.sweepOffset(at: start.addingTimeInterval(period)), -width, accuracy: 0.0001,
+                       "the next pass starts from the left again")
+    }
+
     func testMalformedCardsNeverFailTheMessage() throws {
         let reply = try message(#"""
         ,"cards":[{"id":"x","blocks":[{"type":"chart","items":[{"label":"Mon","low":"cold","high":50},{"label":"Tue","low":40,"high":55}]},

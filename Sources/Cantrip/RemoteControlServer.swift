@@ -3722,8 +3722,8 @@ private extension RemoteControlServer {
     .cd-progress-time{font-size:15px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
     .cd-progress-bar{position:relative;height:5px;margin:7px 0;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden}
     .cd-progress-bar>span{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:currentColor}
-    .cd-progress-bar.indeterminate>span{width:28%;animation:cd-glide 1.1s ease-in-out infinite alternate}
-    @keyframes cd-glide{from{left:0}to{left:72%}}
+    .cd-progress-bar.indeterminate>span{width:35%;animation:cd-sweep 1.6s ease-in-out infinite}
+    @keyframes cd-sweep{from{left:-35%}to{left:100%}}
     @media(prefers-reduced-motion:reduce){.cd-progress-bar.indeterminate>span{animation:none;width:100%;opacity:.35}}
     .cd-progress-foot{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:rgba(255,255,255,.78)}.cd-progress-left{white-space:nowrap;font-variant-numeric:tabular-nums}
     .cd-foot{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;padding:8px 16px;font-size:11px;color:#b9c0ca}.cd-attr{margin-left:auto;color:#b9c0ca;text-decoration:underline}
