@@ -115,3 +115,15 @@ enum RemoteHistory {
         }
     }
 }
+
+extension ChatSession {
+    /// How many recent messages are searched for running background agents: an agent a turn
+    /// started keeps running through the next few turns, never across dozens.
+    static let backgroundAgentWindow = 40
+
+    /// Background agents still running in this tab (watchers, `side-` requests…), oldest first.
+    var liveBackgroundAgents: [ToolActivity] {
+        messages.suffix(Self.backgroundAgentWindow).flatMap(\.activities).flatMap(\.subagentActivities)
+            .filter { $0.subagent?.background == true && $0.subagent?.isActive == true }
+    }
+}

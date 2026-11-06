@@ -380,11 +380,13 @@ struct CantripTabList<Actions: View>: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         CantripTabAgeText(date: session.lastActivityDate)
                     }
-                    if let detail {
-                        Text(detail.text)
-                            .font(.subheadline)
-                            .foregroundStyle(detail.isActive ? CantripHomeBackgroundStyle.activeTint : Color.secondary)
-                            .lineLimit(1)
+                    let background = session.backgroundTaskCount ?? 0
+                    if detail != nil || background > 0 {
+                        // "2 in background" when it fits beside the status, else "⚙ 2" so the status keeps its room.
+                        ViewThatFits(in: .horizontal) {
+                            detailLine(detail, background: background, compact: false)
+                            detailLine(detail, background: background, compact: true)
+                        }
                     }
                 }
             }
@@ -403,6 +405,20 @@ struct CantripTabList<Actions: View>: View {
         .accessibilityHint("Opens this tab. Touch and hold for tab actions.")
         .accessibilityAddTraits(selected ? [.isSelected] : [])
         .contextMenu { actions(session) }
+    }
+
+    private func detailLine(_ detail: CantripTabRowText.Detail?, background: Int, compact: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if let detail {
+                Text(detail.text)
+                    .font(.subheadline)
+                    .foregroundStyle(detail.isActive ? CantripHomeBackgroundStyle.activeTint : Color.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: compact ? .infinity : nil, alignment: .leading)
+            }
+            if !compact { Spacer(minLength: 0) }
+            CantripTabBackgroundNote(count: background, compact: compact)
+        }
     }
 
     /// The tabs as shown: grouped by section, leaving out the idle tabs of collapsed sections.

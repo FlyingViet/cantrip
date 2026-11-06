@@ -8,6 +8,12 @@
 .act-primary { color: var(--text); }
 .act-footnote { margin: 0; font-size: 11.5px; color: var(--secondary); line-height: 1.4; }
 .act-content.act-background > .act-tight { margin-top: -12px; }
+.act-tab-tasks { display: flex; flex-direction: column; gap: 6px; }
+.act-tab-tasks + .act-tab-tasks { margin-top: 6px; }
+.act-tab-tasks-head { display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 2px 4px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.act-tab-tasks-head:hover { background: var(--hover, rgba(127, 127, 127, 0.12)); }
+.act-tab-tasks-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.act-tab-tasks-title { font-weight: 600; min-width: 0; }
 .act-warning { margin: 0; color: var(--orange); font-size: 12.5px; }
 .act-warning-row { display: flex; align-items: flex-start; gap: 6px; font-size: 11.5px; color: var(--secondary); }
 .act-warning-row .icon { margin-top: 1px; }

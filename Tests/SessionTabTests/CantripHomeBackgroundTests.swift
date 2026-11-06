@@ -224,6 +224,31 @@ extension SessionTabTests {
                      && (builds["running"] as? [Any])?.isEmpty == true && (builds["waiting"] as? [Any])?.isEmpty == true
                      && homeWithBuilds["buildsRunning"] as? Int == 0 && homeWithBuilds["buildsWaiting"] as? Int == 0,
                      "the Background API and Home's summary carry the build queue: \(builds)")
+        // A tab's running background agents: listed under its name in the Background API, counted in the tab list.
+        precondition(backgroundList.1["tabTasks"] == nil, "no tab tasks while no tab has background work")
+        var watcher = ToolActivityFactory.start(id: "task-tab-watch", toolName: "task", arguments: [:])
+        watcher.subagent = SubagentInfo(agentID: "agent-tab-watch", name: "watch-testflight", agentType: "task",
+                                        summary: "Wait for TestFlight", background: true, startedAt: Date())
+        var foreground = ToolActivityFactory.start(id: "task-tab-explore", toolName: "task", arguments: [:])
+        foreground.subagent = SubagentInfo(agentID: "agent-tab-explore", name: "Explore", agentType: "explore", summary: "")
+        var finished = ToolActivityFactory.start(id: "task-tab-done", toolName: "task", arguments: [:])
+        finished.subagent = SubagentInfo(agentID: "agent-tab-done", name: "watch-build", agentType: "task",
+                                         summary: "", background: true, status: .completed, startedAt: Date())
+        var watching = ChatMessage(role: .assistant, text: "Watching TestFlight.")
+        watching.activities = [watcher, foreground, finished]
+        let bassMessages = bassSession.messages
+        bassSession.messages.append(watching)
+        let withTabTasks = try await call("/api/v1/home/background")
+        let listing = try await call("/api/v1/sessions")
+        bassSession.messages = bassMessages
+        let tabTasks = try requireHome(withTabTasks.1["tabTasks"] as? [[String: Any]])
+        let bassListed = (listing.1["sessions"] as? [[String: Any]])?.first { $0["id"] as? String == bassSession.id.uuidString }
+        precondition(tabTasks.count == 1 && tabTasks[0]["tabID"] as? String == bassSession.id.uuidString
+                     && tabTasks[0]["tabTitle"] as? String == bassSession.title
+                     && (tabTasks[0]["tasks"] as? [[String: Any]])?.map { $0["agentID"] as? String } == ["agent-tab-watch"]
+                     && bassListed?["backgroundTaskCount"] as? Int == 1
+                     && (listing.1["home"] as? [String: Any])?["backgroundTaskCount"] == nil,
+                     "only a tab's running background agents are listed and counted: \(tabTasks), \(String(describing: bassListed))")
         let busyHome = try await call("/api/v1/home")
         precondition((busyHome.1["session"] as? [String: Any])?["backgroundActiveCount"] as? Int == 3,
                      "Home's badge counts running and queued background work")

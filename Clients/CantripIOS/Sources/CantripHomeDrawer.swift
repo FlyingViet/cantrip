@@ -130,6 +130,9 @@ extension CantripRemoteSession {
         var parts: [String] = []
         if isLocalPrivate == true { parts.append("Self-hosted, saved") } else if isLocked == true { parts.append("Locked") }
         if let detail = CantripTabRowText.detail(for: self) { parts.append(detail.text) }
+        if let background = backgroundTaskCount, background > 0 {
+            parts.append(CantripTabBackgroundNote.accessibilityText(background))
+        }
         if let date = lastActivityDate { parts.append(CantripRelativeTime.spoken(date)) }
         return parts.joined(separator: ", ")
     }
@@ -462,12 +465,11 @@ struct CantripHomeTabDrawer: View {
                             .font(.body)
                             .foregroundStyle(.primary)
                             .fixedSize(horizontal: false, vertical: true)
-                        if let builds = backgroundSummary.builds {
-                            Text(builds)
+                        ForEach(backgroundSummary.details, id: \.self) { line in
+                            Text(line)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
-                                .accessibilityIdentifier("drawer.background.builds")
                         }
                     }
                 }
@@ -637,7 +639,8 @@ struct CantripHomeTabDrawer: View {
         CantripBackgroundJobsSummary(
             runs: homeSelected ? backgroundActiveCount : max(backgroundActiveCount, homeSnapshot?.backgroundActiveCount ?? 0),
             inputs: homeSelected ? backgroundInputCount : max(backgroundInputCount, homeSnapshot?.backgroundInputCount ?? 0),
-            home: homeSnapshot
+            home: homeSnapshot,
+            tabs: model.sessions
         )
     }
 

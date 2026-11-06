@@ -378,6 +378,7 @@ struct MacHomeTabRow: View {
                     .truncationMode(.tail)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            CantripTabBackgroundNote(count: session.backgroundTaskCount ?? 0, compact: true)
             CantripTabAgeText(date: session.lastActivityDate)
         }
         .cantripChildTabIndent(session, by: 14)

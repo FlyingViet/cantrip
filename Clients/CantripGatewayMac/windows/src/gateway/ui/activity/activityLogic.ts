@@ -4,7 +4,7 @@
 // CantripQueueView.swift / PromptTextView.swift. Dates: subagents and handoffs use UnixSeconds;
 // background runs and queued runs use AppleReferenceSeconds.
 import type {
-  BuildQueueBuild, BuildQueueSnapshot, HomeBackgroundHandoff, HomeBackgroundQueuedRun, HomeBackgroundRun, HomeBackgroundSnapshot, InputDecision, InputRequest,
+  BuildQueueBuild, BuildQueueSnapshot, HomeBackgroundHandoff, HomeBackgroundQueuedRun, TabBackgroundTasks, HomeBackgroundRun, HomeBackgroundSnapshot, InputDecision, InputRequest,
   RemoteMessage, RemoteSubagent,
 } from "../../api/types";
 import { plainMentions } from "../../state/tabMentions";
@@ -360,6 +360,18 @@ export function runDetail(run: HomeBackgroundRun, now: number, locale?: string):
 export function queuedRunDetail(item: HomeBackgroundQueuedRun): string {
   const kind = item.kind === "incident" ? "Incident" : "Scheduled task";
   return `${kind} · ${trimmed(item.reason) || "Waiting"}${repeatsText(item.repeats)}`;
+}
+
+// MARK: Tabs' background tasks (CantripTabBackgroundGroup in CantripHomeBackground.swift)
+
+/** Tabs with running background agents, as the Mac listed them. */
+export function listedTabTasks(snapshot: HomeBackgroundSnapshot | null | undefined): TabBackgroundTasks[] {
+  return (snapshot?.tabTasks ?? []).filter((tab) => Array.isArray(tab.tasks) && tab.tasks.length > 0);
+}
+
+/** "1 background task running", for tab rows read aloud. */
+export function tabBackgroundLabel(count: number): string {
+  return `${count} background ${count === 1 ? "task" : "tasks"} running`;
 }
 
 // MARK: Build queue (CantripBuildQueueFormat in CantripHomeBackground.swift)

@@ -364,6 +364,21 @@ extension SessionTabTests {
         task.subagent?.status = .failed
         message.activities[0] = task
         precondition(message.subagentTextBlock("task-a") == 4, "\(message.subagentEnds)")
+        MainActor.assumeIsolated {
+            // A tab's live background agents: running background ones in its recent messages only.
+            let tab = ChatSession()
+            var bg = ToolActivityFactory.start(id: "task-bg", toolName: "task", arguments: [:])
+            bg.subagent = SubagentInfo(agentID: "bg", name: "watch-build", agentType: "task", summary: "", background: true)
+            var old = ChatMessage(role: .assistant, text: "Long ago.")
+            old.activities = [bg]
+            var recent = ChatMessage(role: .assistant, text: "Watching.")
+            recent.activities = [bg]
+            tab.messages = [old] + Array(repeating: ChatMessage(role: .user, text: "next"), count: ChatSession.backgroundAgentWindow - 1) + [recent]
+            precondition(tab.liveBackgroundAgents.map(\.id) == ["task-bg"], "agents older than the window aren't listed")
+            bg.subagent?.status = .completed
+            tab.messages[tab.messages.count - 1].activities = [bg]
+            precondition(tab.liveBackgroundAgents.isEmpty, "finished agents aren't listed")
+        }
         print("Subagent placement: cards follow the reply block that was streaming when each agent ended")
     }
 

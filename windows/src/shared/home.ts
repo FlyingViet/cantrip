@@ -87,6 +87,26 @@ export interface HomeBackgroundSnapshot {
   runningCount?: number;
   /** The Mac's build queue ("Heavy builds take turns"); absent while it's off and empty. */
   builds?: HomeBuildQueue;
+  /** Tabs with background agents still running (watchers, parallel requests); absent when none. */
+  tabTasks?: HomeTabTasks[];
+}
+
+/** A running background agent, as a reply lists it (the fields this window reads). `startedAt` is Unix seconds. */
+export interface HomeTabTask {
+  id: string;
+  name: string;
+  agentType?: string;
+  summary?: string;
+  status: string;
+  startedAt?: number;
+  latestMessage?: string;
+  currentStep?: string;
+}
+
+export interface HomeTabTasks {
+  tabID: string;
+  tabTitle: string;
+  tasks: HomeTabTask[];
 }
 
 /** One build in the Mac's build queue. `since` is Unix seconds: when it got its slot, or started waiting. */
@@ -172,6 +192,20 @@ const APPLE_EPOCH = 978_307_200;
 
 export function appleDate(seconds: unknown): Date | null {
   return typeof seconds === "number" && Number.isFinite(seconds) ? new Date((seconds + APPLE_EPOCH) * 1000) : null;
+}
+
+// MARK: - Tabs' background tasks (CantripTabBackgroundGroup in Cantrip Agent)
+
+/** Tabs with running background agents. */
+export function listedTabTasks(snapshot: Pick<HomeBackgroundSnapshot, "tabTasks"> | null | undefined): HomeTabTasks[] {
+  return (snapshot?.tabTasks ?? []).filter((tab) => Array.isArray(tab?.tasks) && tab.tasks.length > 0);
+}
+
+/** "watch-testflight · Running · since 7:12 AM", then what it's doing now when it says. */
+export function tabTaskDetail(task: HomeTabTask, time: (date: Date) => string): string {
+  const status = task.status === "queued" ? "Queued" : task.status === "idle" ? "Waiting" : "Running";
+  const since = typeof task.startedAt === "number" ? `since ${time(new Date(task.startedAt * 1000))}` : "";
+  return [status, since].filter(Boolean).join(" · ");
 }
 
 // MARK: - Build queue (CantripBuildQueueFormat in Cantrip Agent)

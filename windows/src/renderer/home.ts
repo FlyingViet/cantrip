@@ -12,6 +12,8 @@ import {
   cardsOf,
   hasRecordCards,
   listedBuilds,
+  listedTabTasks,
+  tabTaskDetail,
   recordDetails,
   recordTitle,
   statusLabel,
@@ -270,6 +272,24 @@ function renderBackground(): HTMLElement[] {
   }
   const running = snapshot.runningCount ?? snapshot.runs.filter((run) => run.status === "running").length;
   nodes.push(note(running ? `${running} running` : "Nothing running right now."));
+  const tabTasks = listedTabTasks(snapshot);
+  if (tabTasks.length) {
+    nodes.push(heading("In tabs", "h3"));
+    for (const tab of tabTasks) {
+      const group = el("ul", "home-list compact");
+      group.setAttribute("aria-label", `${tab.tabTitle || "A tab"}: background tasks`);
+      for (const task of tab.tasks) {
+        const item = el("li", "home-item");
+        item.append(el("span", "item-title", task.name || task.agentType || "Background task"));
+        const meta = [tab.tabTitle || "A tab", tabTaskDetail(task, (date) => timeFormat.format(date))].join(" · ");
+        item.append(el("span", "item-meta", meta));
+        const now = (task.currentStep || task.latestMessage || task.summary || "").trim();
+        if (now) item.append(el("span", "item-meta", now));
+        group.append(item);
+      }
+      nodes.push(group);
+    }
+  }
   const builds = listedBuilds(snapshot);
   if (builds) {
     nodes.push(heading("Builds", "h3"));
@@ -291,7 +311,7 @@ function renderBackground(): HTMLElement[] {
     }
     nodes.push(queued);
   }
-  if (builds) nodes.push(heading("Scheduled and automated", "h3"));
+  if (builds || tabTasks.length) nodes.push(heading("Scheduled and automated", "h3"));
   const runs = el("ol", "home-list");
   runs.setAttribute("aria-label", "Background runs");
   for (const run of snapshot.runs) runs.append(runItem(run));

@@ -209,6 +209,7 @@ a:hover { text-decoration: underline; }
 .sidebar-row[aria-current="true"]:focus-visible .count, .sidebar-row[aria-current="true"]:focus-visible .age { color: rgba(255, 255, 255, 0.8); }
 .sidebar-row .row-icon { color: var(--accent); }
 .sidebar-row .age { font-size: 11px; color: var(--secondary); font-variant-numeric: tabular-nums; }
+.sidebar-row .tab-background { display: inline-flex; align-items: center; gap: 2px; flex: none; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .sidebar-row.dragging { opacity: 0.45; }
 /* A child tab sits under its parent with a guide line and can't be dragged away. */
 .sidebar-row.child-tab { width: calc(100% - 14px); margin-left: 14px; }
@@ -350,6 +351,7 @@ textarea.text-field { resize: vertical; line-height: 1.4; }
 .sidebar-row[aria-current="true"] { background: var(--row-selected-focus); color: #fff; }
 .sidebar-row[aria-current="true"] .row-icon { color: #fff; }
 .sidebar-row[aria-current="true"] .count, .sidebar-row[aria-current="true"] .age { color: rgba(255, 255, 255, 0.82); }
+.sidebar-row[aria-current="true"] .tab-background { color: rgba(255, 255, 255, 0.92); }
 body.inactive .sidebar-row[aria-current="true"] { background: var(--row-selected); color: var(--text); }
 body.inactive .sidebar-row[aria-current="true"] .row-icon { color: var(--accent); }
 .sidebar-row[aria-current="true"]:focus-visible { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.55) inset; }

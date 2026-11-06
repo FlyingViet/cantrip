@@ -6,7 +6,7 @@ import { computed } from "@preact/signals";
 import type { ComponentChildren, JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type {
-  BuildQueueBuild, HomeBackgroundHandoff, HomeBackgroundQueuedRun, HomeBackgroundRun, InputDecision, InputRequest,
+  BuildQueueBuild, TabBackgroundTasks, HomeBackgroundHandoff, HomeBackgroundQueuedRun, HomeBackgroundRun, InputDecision, InputRequest,
 } from "../../api/types";
 import { backgroundLogID, FULL_LOG_HINT, FULL_LOG_LABEL } from "../../state/backgroundLog";
 import { now } from "../../state/clock";
@@ -20,7 +20,7 @@ import { inline } from "../transcript/Markdown";
 import { InputCard } from "../transcript/Inputs";
 import {
   answerResultText, backgroundPollDelay, backgroundSubagents, buildQueueDetail, buildQueueFootnote, elapsedAccessibilityLabel,
-  elapsedLabel, handoffIsActive, listedBuilds,
+  elapsedLabel, handoffIsActive, listedBuilds, listedTabTasks,
   handoffNeedsAnswer, handoffStatusText, handoffSummary, handoffTabTitle, isLabelledSummary, needsInputRuns, otherRuns,
   queuedRunDetail, remainingInputs, runCanExpand, runDetail, runIcon, runIsRunning, runNeedsInput, runResult, runShowsResult,
   summaryLabel, summaryLines, trimmed,
@@ -154,6 +154,29 @@ function QueuedRow(props: { item: HomeBackgroundQueuedRun; canSkip: boolean }): 
         </div>
         {props.canSkip ? <div class="act-run-actions"><StopButton title="Skip" label={item.label} action={() => stopRun(item.id)} /></div> : null}
       </div>
+    </div>
+  );
+}
+
+/** One tab's running background tasks: the tab (opens it), then each task as in the tab itself, with its own Stop. */
+function TabTasksGroup(props: { tab: TabBackgroundTasks }): JSX.Element {
+  const { tab } = props;
+  const title = trimmed(tab.tabTitle) || "A tab";
+  const count = `${tab.tasks.length} ${tab.tasks.length === 1 ? "task" : "tasks"}`;
+  return (
+    <div class="act-tab-tasks" data-tab-id={tab.tabID}>
+      <button type="button" class="act-tab-tasks-head" aria-label={`${title}, ${count}. Open tab`}
+        onClick={() => {
+          if (!remote.sessions.value.some((item) => item.id === tab.tabID)) { toast("That tab is no longer open."); return; }
+          nav.openTab(tab.tabID);
+        }}>
+        <Icon name="rectangle.stack" size={14} class="muted" />
+        <span class="act-tab-tasks-title truncate">{title}</span>
+        <span class="muted">· {count}</span>
+        <span class="grow" />
+        <Icon name="chevron.right" size={12} class="muted" />
+      </button>
+      <SubagentStack sessionID={tab.tabID} subagents={tab.tasks} />
     </div>
   );
 }
@@ -296,7 +319,8 @@ export function BackgroundSheet(props: { focusSessionID?: string; onClose: () =>
   const supportsRuns = selected?.supportsBackgroundRuns === true;
   const snapshot = supportsRuns ? remote.homeBackground.value : null;
   const builds = listedBuilds(snapshot);
-  const hasRuns = Boolean(snapshot && (snapshot.runs.length || snapshot.queued.length || builds));
+  const tabTasks = listedTabTasks(snapshot);
+  const hasRuns = Boolean(snapshot && (snapshot.runs.length || snapshot.queued.length || builds || tabTasks.length));
   const canStop = snapshot?.supportsStop === true;
   const error = remote.homeBackgroundError.value;
   const waiting = needsInputRuns(snapshot);
@@ -367,7 +391,7 @@ export function BackgroundSheet(props: { focusSessionID?: string; onClose: () =>
           <div class="title3">No background work</div>
           <p>{supportsRuns
             ? snapshot?.builds
-              ? "Scheduled tasks, incident investigations, background watchers and builds taking turns on your Mac appear here."
+              ? "Scheduled tasks, incident investigations, background tasks in your tabs and builds taking turns on your Mac appear here."
               : "Scheduled tasks, incident investigations and background watchers appear here."
             : "Background watchers appear here. Update Cantrip on your Mac to also see scheduled task and incident runs."}</p>
         </div>
@@ -383,6 +407,11 @@ export function BackgroundSheet(props: { focusSessionID?: string; onClose: () =>
         {homeSessionID && watchers.length ? (
           <Section title="In this chat">
             <SubagentStack sessionID={homeSessionID} subagents={watchers} />
+          </Section>
+        ) : null}
+        {tabTasks.length ? (
+          <Section title="In tabs">
+            {tabTasks.map((tab) => <TabTasksGroup key={tab.tabID} tab={tab} />)}
           </Section>
         ) : null}
         {builds ? (

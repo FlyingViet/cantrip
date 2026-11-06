@@ -1500,6 +1500,10 @@ final class CantripHomeTests: XCTestCase {
         return Data("""
         {"sessionID":"\(backgroundID)","revision":"\(stopped ? "b3" : "b2")","maxParallel":3,
          "runningCount":\(stopped ? 1 : 2),"supportsStop":true,
+         "tabTasks":[{"tabID":"\(bassTabID)","tabTitle":"Bass Compass","tasks":[
+           {"id":"call_t1","agentID":"t1","name":"watch-testflight","agentType":"task",
+            "summary":"Wait for TestFlight processing","background":true,"status":"running",
+            "startedAt":\(epoch - 240),"canCancel":true,"latestMessage":"Processing on App Store Connect."}]}],
          "builds":{"enabled":true,"slots":2,"limit":2,
           "running":[{"pid":101,"title":"xcodebuild archive · App","source":"tab","since":\(epoch - 75),
                       "tabID":"\(bassTabID)","tabTitle":"Docs site"},
