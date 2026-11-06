@@ -93,6 +93,73 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         save(app, "settings")
     }
 
+    /// Home's Builds shows two apps per row unfolded, with the sidebar open or closed. Needs a host
+    /// whose install page lists at least two apps.
+    func testBuildsShowTwoAppsPerRow() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard (environment["SIMULATOR_DEVICE_NAME"] ?? UIDevice.current.name).contains("Duo") else {
+            throw XCTSkip("Needs an iPhone Duo simulator")
+        }
+        guard let host = environment["CANTRIP_UITEST_HOME_URL"] else {
+            throw XCTSkip("Start a fixture Home host and set CANTRIP_UITEST_HOME_URL")
+        }
+        shots = environment["CANTRIP_UITEST_SHOTS"]
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-CantripUITestRemoteURL", host,
+                               "-CantripUITestRemoteToken", environment["CANTRIP_UITEST_HOME_TOKEN"] ?? "duo-qa-token",
+                               "-CantripUITestLane", "home"]
+        app.launch()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for _ in 0..<3 {
+            let deny = springboard.buttons["Don’t Allow"]
+            guard deny.waitForExistence(timeout: 4) else { break }
+            deny.tap()
+        }
+        let toggle = app.buttons["duo.rail.sidebar"].firstMatch
+        guard toggle.waitForExistence(timeout: 15) else {
+            throw XCTSkip("Unfold the Duo: the rail's sidebar toggle shows only unfolded")
+        }
+        let window = app.windows.firstMatch
+        // Home's sections in the right-side rail (the sidebar lists them too, on the left).
+        func rail(_ label: String) throws -> XCUIElement {
+            try XCTUnwrap(app.buttons.matching(NSPredicate(format: "label == %@", label)).allElementsBoundByIndex
+                .first { $0.frame.midX > window.frame.width * 0.85 }, "\(label) is in the rail")
+        }
+        // Element taps can land offset on the inner display; a window coordinate doesn't.
+        func press(_ element: XCUIElement) {
+            let frame = element.frame, origin = window.frame.origin
+            window.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: frame.midX - origin.x, dy: frame.midY - origin.y)).tap()
+        }
+        let sidebar = app.descendants(matching: .any)["duo.sidebar"]
+        let cards = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'home.builds.app.'"))
+        for open in [true, false] {
+            // The sidebar toggle is in Chat's rail.
+            press(try rail("Chat"))
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+            if sidebar.exists != open {
+                press(toggle)
+                XCTAssertTrue(open ? sidebar.waitForExistence(timeout: 5) : waitForAbsence(sidebar))
+            }
+            press(try rail("Builds"))
+            // Upright the sidebar overlays the chat, and the first tap outside it only closes it.
+            if !cards.firstMatch.waitForExistence(timeout: 3), !sidebar.exists { press(try rail("Builds")) }
+            XCTAssertTrue(cards.firstMatch.waitForExistence(timeout: 15), "The install page's apps load")
+            sleep(1)
+            let posture = window.frame.width > window.frame.height ? "landscape" : "upright"
+            save(app, "builds-\(posture)-sidebar-\(sidebar.exists ? "open" : "closed")")
+            let frames = cards.allElementsBoundByIndex.map(\.frame).filter { !$0.isEmpty }
+                .sorted { ($0.minY, $0.minX) < ($1.minY, $1.minX) }
+            XCTAssertGreaterThanOrEqual(frames.count, 2, "The host lists two apps or more")
+            let first = frames[0], second = frames[1]
+            XCTAssertEqual(first.minY, second.minY, accuracy: 2,
+                           "Two apps share the first row (sidebar \(sidebar.exists ? "open" : "closed")): \(first) \(second)")
+            XCTAssertLessThan(first.maxX, second.minX, "Side by side, not overlapping")
+            XCTAssertEqual(first.width, second.width, accuracy: 2, "Equal columns")
+        }
+    }
+
     private func waitForAbsence(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
         let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: element)
         return XCTWaiter.wait(for: [gone], timeout: timeout) == .completed
@@ -104,8 +171,9 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
     private func save(_ app: XCUIApplication, _ name: String) {
         guard let shots else { return }
         let folder = URL(fileURLWithPath: shots)
-        try? Data().write(to: folder.appendingPathComponent("\(name).request"))
         let picture = folder.appendingPathComponent("\(name).png").path
+        try? FileManager.default.removeItem(atPath: picture)
+        try? Data().write(to: folder.appendingPathComponent("\(name).request"))
         for _ in 0..<40 where !FileManager.default.fileExists(atPath: picture) { usleep(250_000) }
     }
 }

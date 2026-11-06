@@ -17,10 +17,20 @@ struct CantripHomeBuildsView: View {
     @State private var checkingID: String?
     @State private var problem: CantripOTAInstallProblem?
     @State private var confirming: CantripOTABuild?
+    @Environment(\.chatDisplayTraits) private var displayTraits
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// The install page reachability check; injectable for tests.
     var checkInstallPage: @Sendable (URL) async -> CantripOTAInstallCheck = { await CantripOTAInstaller.check($0) }
 
-    private let columns = [GridItem(.adaptive(minimum: 320, maximum: 640), spacing: 12, alignment: .top)]
+    private var columns: [GridItem] {
+        switch CantripHomeBuildsPresentation.gridLayout(unfoldedDuo: displayTraits.isUnfoldedDuo,
+                                                         accessibilitySize: dynamicTypeSize.isAccessibilitySize) {
+        case .twoColumns:
+            Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 2)
+        case .adaptive:
+            [GridItem(.adaptive(minimum: 320, maximum: 640), spacing: 12, alignment: .top)]
+        }
+    }
 
     init(remote: CantripRemoteModel) {
         self.remote = remote
@@ -555,6 +565,19 @@ enum CantripHomeBuildsPresentation {
     struct Notice: Equatable {
         let text: String
         let systemImage: String
+    }
+
+    enum GridLayout: Equatable {
+        /// As many 320-point columns as fit: one on a phone, more on iPad.
+        case adaptive
+        /// Two apps side by side.
+        case twoColumns
+    }
+
+    /// An unfolded iPhone Duo shows two apps per row; its content area is a little too narrow for
+    /// two 320-point columns. Accessibility text sizes keep one, since their cards stack vertically.
+    static func gridLayout(unfoldedDuo: Bool, accessibilitySize: Bool) -> GridLayout {
+        unfoldedDuo && !accessibilitySize ? .twoColumns : .adaptive
     }
 
     static func versionText(_ build: CantripOTABuild) -> String {
