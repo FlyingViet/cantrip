@@ -23,7 +23,9 @@ import {
   buildQueueNote,
   cardsOf,
   listedBuilds,
+  listedTabTasks,
   ordinal,
+  tabTaskDetail,
   hasRecordCards,
   recordDetails,
   recordTitle,
@@ -334,6 +336,18 @@ describe("Home helpers", () => {
       "1 build at a time while macOS reports memory pressure (normally 2). Your tabs go first, then child tabs and CI, then Home's background runs.");
     expect(buildQueueNote({ ...builds, limit: 2 })).toBe(
       "Up to 2 builds at once on your Mac. Your tabs go first, then child tabs and CI, then Home's background runs.");
+  });
+
+  it("lists tabs' running background tasks", () => {
+    const tabTasks = [
+      { tabID: RECORD, tabTitle: "Docs site", tasks: [{ id: "w", name: "watch-testflight", status: "running", startedAt: 1_000_000 }] },
+      { tabID: "x", tabTitle: "Empty", tasks: [] },
+    ];
+    expect(listedTabTasks({ tabTasks }).map((tab) => tab.tabTitle)).toEqual(["Docs site"]);
+    expect(listedTabTasks({})).toEqual([]);
+    const time = (date: Date) => String(date.getTime() / 1000);
+    expect(tabTaskDetail(tabTasks[0].tasks[0], time)).toBe("Running · since 1000000");
+    expect(tabTaskDetail({ id: "q", name: "side-docs", status: "queued" }, time)).toBe("Queued");
   });
 
   it("keeps only card documents and finds record cards", () => {

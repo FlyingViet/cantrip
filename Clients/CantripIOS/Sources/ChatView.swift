@@ -2557,7 +2557,8 @@ struct ChatView: View {
         let summary = CantripBackgroundJobsSummary(
             runs: onHome ? homeBackgroundCount : home?.backgroundActiveCount ?? 0,
             inputs: onHome ? homeBackgroundInputCount : home?.backgroundInputCount ?? 0,
-            home: home
+            home: home,
+            tabs: remote.sessions
         )
         guard home?.supportsBackgroundRuns == true || summary.isActive else { return nil }
         return .init(summary)

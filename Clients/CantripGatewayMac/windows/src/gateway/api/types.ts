@@ -915,6 +915,8 @@ export interface RemoteSessionSummary {
   backgroundActiveCount?: Int;
   /** Home only: total pending input requests across live hidden runs. */
   backgroundInputCount?: Int;
+  /** Background agents (watchers, parallel requests) still running in this tab; absent when none. */
+  backgroundTaskCount?: Int;
   /** Home only: builds holding a slot in the Mac's build queue; absent while the queue is off. */
   buildsRunning?: Int;
   /** Home only: builds waiting for a slot. */
@@ -1702,6 +1704,15 @@ export interface HomeBackgroundSnapshot {
   supportsStop: true;
   /** The Mac's build queue ("Heavy builds take turns"); absent while it's off and empty. */
   builds?: BuildQueueSnapshot;
+  /** Tabs with background agents still running, in tab order; absent when none. */
+  tabTasks?: TabBackgroundTasks[];
+}
+
+/** A tab's running background agents, each as its replies list them. */
+export interface TabBackgroundTasks {
+  tabID: UUIDString;
+  tabTitle: string;
+  tasks: RemoteSubagent[];
 }
 
 /** One build in the Mac's build queue. `since` is UnixSeconds: when it got its slot, or started waiting. */

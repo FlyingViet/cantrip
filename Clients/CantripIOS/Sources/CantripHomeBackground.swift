@@ -12,37 +12,55 @@ enum CantripHomeBackgroundCount {
     }
 }
 
-/// The Background jobs row in tab lists (drawer, Duo sidebar): Home's background runs and the
-/// Mac's build queue. Builds count as running jobs and get a line of their own.
+/// The Background jobs row in tab lists (drawer, Duo sidebar): Home's background runs, every
+/// tab's background tasks and the Mac's build queue. Tab tasks and builds count as running jobs
+/// and each get a line of their own.
 struct CantripBackgroundJobsSummary: Equatable {
     var runs = 0
     var inputs = 0
+    /// Background agents running in project tabs.
+    var tabTasks = 0
     var buildsRunning = 0
     var buildsWaiting = 0
 
-    /// Counts from Home's session (open or listed); `runs` covers the open Home chat's watchers too.
-    init(runs: Int, inputs: Int, home: CantripRemoteSession?) {
+    /// Counts from Home's session (open or listed) and the tab list; `runs` covers the open Home
+    /// chat's watchers too.
+    init(runs: Int, inputs: Int, home: CantripRemoteSession?, tabs: [CantripRemoteSession] = []) {
         self.runs = max(0, runs)
         self.inputs = max(0, inputs)
+        tabTasks = Self.tabTaskCount(in: tabs)
         buildsRunning = max(0, home?.buildsRunning ?? 0)
         buildsWaiting = max(0, home?.buildsWaiting ?? 0)
     }
 
-    init(runs: Int = 0, inputs: Int = 0, buildsRunning: Int = 0, buildsWaiting: Int = 0) {
+    init(runs: Int = 0, inputs: Int = 0, tabTasks: Int = 0, buildsRunning: Int = 0, buildsWaiting: Int = 0) {
         self.runs = runs
         self.inputs = inputs
+        self.tabTasks = tabTasks
         self.buildsRunning = buildsRunning
         self.buildsWaiting = buildsWaiting
     }
 
-    var isActive: Bool { inputs > 0 || runs + buildsRunning + buildsWaiting > 0 }
+    static func tabTaskCount(in tabs: [CantripRemoteSession]) -> Int {
+        tabs.filter { $0.isCantripHome != true }.reduce(0) { $0 + max(0, $1.backgroundTaskCount ?? 0) }
+    }
+
+    var isActive: Bool { inputs > 0 || runs + tabTasks + buildsRunning + buildsWaiting > 0 }
 
     var status: String {
         if inputs > 0 { return inputs == 1 ? "Needs input" : "\(inputs) need input" }
-        let running = runs + buildsRunning
+        let running = runs + tabTasks + buildsRunning
         if running > 0 { return "\(running) running" }
         return buildsWaiting > 0 ? "\(buildsWaiting) waiting" : "None running"
     }
+
+    /// "3 in tabs"; nil while no tab has background work.
+    var tabs: String? {
+        tabTasks > 0 ? "\(tabTasks) in \(tabTasks == 1 ? "a tab" : "tabs")" : nil
+    }
+
+    /// The row's lines under its title: tab tasks, then builds.
+    var details: [String] { [tabs, builds].compactMap { $0 } }
 
     /// "2 building · 1 waiting" (short enough for the Duo sidebar); nil while no build runs or waits.
     var builds: String? {
@@ -62,7 +80,36 @@ struct CantripBackgroundJobsSummary: Equatable {
     }
 
     var accessibilityValue: String {
-        [status, buildsAccessibilityText].compactMap { $0 }.joined(separator: ". ")
+        [status, tabTasks > 0 ? "Background tasks in tabs: \(tabTasks)" : nil, buildsAccessibilityText]
+            .compactMap { $0 }.joined(separator: ". ")
+    }
+}
+
+/// A tab's running background tasks in tab lists: "⚙ 2 in background" on two-line rows, "⚙ 2"
+/// where the row is one line.
+struct CantripTabBackgroundNote: View {
+    let count: Int
+    var compact = false
+
+    static func accessibilityText(_ count: Int) -> String {
+        "\(count) background \(count == 1 ? "task" : "tasks") running"
+    }
+
+    var body: some View {
+        if count > 0 {
+            HStack(spacing: 3) {
+                Image(systemName: "gearshape.2")
+                    .imageScale(.small)
+                Text(compact ? "\(count)" : "\(count) in background")
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(CantripHomeBackgroundStyle.activeTint)
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Self.accessibilityText(count))
+        }
     }
 }
 
@@ -159,8 +206,9 @@ struct CantripHomeBackgroundView: View {
     private var supportsRuns: Bool { remote.currentHomeSummary?.supportsBackgroundRuns == true }
     private var snapshot: CantripHomeBackgroundSnapshot? { supportsRuns ? remote.homeBackground : nil }
     private var builds: CantripBuildQueueSnapshot? { snapshot?.builds.flatMap { $0.isEmpty ? nil : $0 } }
+    private var tabTasks: [CantripTabBackgroundTasks] { (snapshot?.tabTasks ?? []).filter { !$0.tasks.isEmpty } }
     private var hasRuns: Bool {
-        !(snapshot?.runs.isEmpty ?? true) || !(snapshot?.queued.isEmpty ?? true) || builds != nil
+        !(snapshot?.runs.isEmpty ?? true) || !(snapshot?.queued.isEmpty ?? true) || builds != nil || !tabTasks.isEmpty
     }
     private var canStop: Bool { snapshot?.supportsStop == true }
 
@@ -176,7 +224,7 @@ struct CantripHomeBackgroundView: View {
                             systemImage: "gearshape.2",
                             description: Text(supportsRuns
                                 ? (snapshot?.builds != nil
-                                    ? "Scheduled tasks, incident investigations, background watchers and builds taking turns on your Mac appear here."
+                                    ? "Scheduled tasks, incident investigations, background tasks in your tabs and builds taking turns on your Mac appear here."
                                     : "Scheduled tasks, incident investigations and background watchers appear here.")
                                 : "Background watchers appear here. Update Cantrip on your Mac to also see scheduled task and incident runs.")
                         )
@@ -279,6 +327,13 @@ struct CantripHomeBackgroundView: View {
             if let homeSessionID, !watchers.isEmpty {
                 section("In this chat") {
                     CantripSubagentStack(remote: remote, sessionID: homeSessionID, subagents: watchers)
+                }
+            }
+            if !tabTasks.isEmpty {
+                section("In tabs") {
+                    ForEach(tabTasks) { tab in
+                        CantripTabBackgroundGroup(remote: remote, tab: tab, onOpenTab: openTab)
+                    }
                 }
             }
             if let builds {
@@ -415,6 +470,59 @@ private struct CantripHomeBackgroundStopButton: View {
                  ? "It won't run until its next scheduled time."
                  : "Other background work keeps running.")
         }
+    }
+}
+
+/// One tab's running background tasks: the tab (opens it), then each task as in the tab itself,
+/// with its own Stop.
+struct CantripTabBackgroundGroup: View {
+    @ObservedObject var remote: CantripRemoteModel
+    let tab: CantripTabBackgroundTasks
+    var onOpenTab: ((String) -> Void)? = nil
+
+    private var title: String {
+        let trimmed = tab.tabTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "A tab" : trimmed
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let onOpenTab {
+                Button { onOpenTab(tab.tabID) } label: { heading(chevron: true) }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens \(title)")
+            } else {
+                heading(chevron: false)
+            }
+            CantripSubagentStack(remote: remote, sessionID: tab.tabID, subagents: tab.tasks)
+        }
+    }
+
+    private func heading(chevron: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "rectangle.stack")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.leading)
+            Text("· \(tab.tasks.count) \(tab.tasks.count == 1 ? "task" : "tasks")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            if chevron {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(minHeight: 32)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 }
 

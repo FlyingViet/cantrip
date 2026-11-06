@@ -174,8 +174,8 @@ struct CantripDuoSidebar: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Background jobs")
                             .foregroundStyle(.primary)
-                        if let builds = backgroundStatus.builds {
-                            Text(builds)
+                        ForEach(backgroundStatus.details, id: \.self) { line in
+                            Text(line)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -317,6 +317,7 @@ struct CantripDuoSidebar: View {
                 }
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                CantripTabBackgroundNote(count: session.backgroundTaskCount ?? 0, compact: true)
                 CantripTabAgeText(date: session.lastActivityDate)
             }
             .sidebarRow(selected: selected)
@@ -577,19 +578,19 @@ struct CantripDuoSidebar: View {
 struct CantripDuoSidebarBackground: Equatable {
     let text: String
     let isActive: Bool
-    /// The build queue's line ("2 building · 1 waiting").
-    var builds: String? = nil
+    /// Lines under the title: tabs' background tasks ("3 in tabs") and builds ("2 building · 1 waiting").
+    var details: [String] = []
     var accessibilityValue: String
 
-    init(text: String, isActive: Bool, builds: String? = nil, accessibilityValue: String? = nil) {
+    init(text: String, isActive: Bool, details: [String] = [], accessibilityValue: String? = nil) {
         self.text = text
         self.isActive = isActive
-        self.builds = builds
+        self.details = details
         self.accessibilityValue = accessibilityValue ?? text
     }
 
     init(_ summary: CantripBackgroundJobsSummary) {
-        self.init(text: summary.status, isActive: summary.isActive, builds: summary.builds,
+        self.init(text: summary.status, isActive: summary.isActive, details: summary.details,
                   accessibilityValue: summary.accessibilityValue)
     }
 }

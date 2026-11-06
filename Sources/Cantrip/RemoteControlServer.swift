@@ -2265,6 +2265,18 @@ final class RemoteControlServer {
             value.builds = Self.buildQueueSnapshot(manager: manager)
             return value
         }
+        // The Background list, with each tab's running background agents (`tabTasks`) beside Home's runs.
+        func sendBackground(_ value: CantripHomeBackgroundSnapshot) {
+            let tabTasks = Self.tabBackgroundTasks(manager: manager)
+            sendEncoded(on: connection) {
+                let data = try JSONEncoder().encode(value)
+                guard !tabTasks.isEmpty, var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return data
+                }
+                object["tabTasks"] = tabTasks
+                return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            }
+        }
         if parts.count == 3 {
             guard request.method == "GET" else {
                 sendError(405, "method not allowed", on: connection)
@@ -2568,8 +2580,7 @@ final class RemoteControlServer {
                 }
                 do {
                     try store.stopBackgroundRun(id: runID)
-                    let value = backgroundSnapshot()
-                    sendEncoded(on: connection) { try JSONEncoder().encode(value) }
+                    sendBackground(backgroundSnapshot())
                 } catch let error as CantripHomeError {
                     sendError(error.status, error.message, on: connection)
                 } catch {
@@ -2585,10 +2596,23 @@ final class RemoteControlServer {
                 sendError(405, "method not allowed", on: connection)
                 return
             }
-            let value = backgroundSnapshot()
-            sendEncoded(on: connection) { try JSONEncoder().encode(value) }
+            sendBackground(backgroundSnapshot())
         default:
             sendError(404, "not found", on: connection)
+        }
+    }
+
+    /// Tabs with background agents still running (watchers, parallel requests), in tab order:
+    /// `{tabID, tabTitle, tasks}` with each agent as a reply's `subagents` entry, so clients draw and
+    /// stop it the same way. Home's own and its hidden runs are listed elsewhere.
+    @MainActor
+    static func tabBackgroundTasks(manager: SessionManager) -> [[String: Any]] {
+        manager.sessions.compactMap { session -> [String: Any]? in
+            // Private tabs stay out of remote lists, like the tab list itself.
+            guard !SessionManager.isCantripHomeReserved(session), !session.isPrivate else { return nil }
+            let tasks = session.liveBackgroundAgents.compactMap { RemoteHistory.subagent($0) }
+            guard !tasks.isEmpty else { return nil }
+            return ["tabID": session.id.uuidString, "tabTitle": session.title, "tasks": tasks]
         }
     }
 
@@ -2855,6 +2879,11 @@ final class RemoteControlServer {
         result["supportsClientLocation"] = !session.isLocalPrivate
         if !session.deletedMessageIDs.isEmpty {
             result["deletedMessageIDs"] = session.deletedMessageIDs.map(\.uuidString)
+        }
+        // A tab's running background agents, for tab lists' "2 in background" (Home lists its own).
+        if !SessionManager.isCantripHomeReserved(session) {
+            let background = session.liveBackgroundAgents.count
+            if background > 0 { result["backgroundTaskCount"] = background }
         }
         if session.isCantripHome {
             // Drives the Background button badge without fetching the run list.
@@ -3659,7 +3688,7 @@ private extension RemoteControlServer {
     #backgroundPanel{width:min(calc(100% - 24px),760px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
     #backgroundPanel .control{min-height:44px;padding:4px 14px}#backgroundTitle{font-size:16px}#backgroundTitle:focus{outline:0}#backgroundPanel button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}#backgroundBody{padding:12px 14px 16px}#backgroundError:not(:empty){padding:8px 14px;color:#f87171}
     .bg-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}.bg-run{display:grid;gap:4px;padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface)}
-    .bg-run .run-summary{white-space:pre-wrap}.bg-head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--secondary);margin:4px 0 8px}
+    .bg-run .run-summary{white-space:pre-wrap}.bg-tab-tasks{display:grid;gap:6px;margin:0 0 10px}.bg-tab-head{display:flex;align-items:baseline;gap:4px;min-height:32px;padding:4px 6px;border:0;border-radius:8px;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.bg-tab-head:hover{background:var(--surface)}.bg-tab-head:focus-visible{outline:2px solid var(--accent);outline-offset:1px}.bg-tab-open{margin-left:auto;color:var(--accent);font-size:12px}.session-bg{display:inline-flex;align-items:center;margin-left:5px;color:var(--orange,#c2410c);font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}.bg-head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--secondary);margin:4px 0 8px}
     .bg-log{display:grid;gap:12px}.bg-log .message{margin:0}.tasks-bar{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:Canvas}
     #tasksPanel .control{min-height:44px;padding:4px 14px}#tasksPanel button:focus-visible,#tasksPanel summary:focus-visible,#tasksSearch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     #artifactsPanel{width:min(calc(100% - 24px),860px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#artifactsPanel::backdrop{background:rgba(0,0,0,.35)}
@@ -4173,6 +4202,11 @@ private extension RemoteControlServer {
         tab.onkeydown=event=>{if(!event.altKey||!item.supportsTabReordering)return;const earlier=sidebarLayout?"ArrowUp":"ArrowLeft",later=sidebarLayout?"ArrowDown":"ArrowRight";
           if(event.key===earlier||event.key===later){event.preventDefault();moveTabBy(item.id,event.key===earlier?-1:1)}};
         const button=tab.children[0];if(sidebarLayout){setText(button.querySelector(".session-name"),item.title);tab.dataset.streaming=String(Boolean(item.isStreaming));button.dataset.title=item.title;button.dataset.status=progressSummary(item);button.dataset.locked=String(Boolean(item.isLocked))}else{button.textContent=item.title;button.title=item.title}
+        // A tab's running background agents: "⚙ 2" beside its name.
+        const backgroundCount=Math.max(0,Number(item.backgroundTaskCount)||0);let backgroundBadge=button.querySelector(".session-bg");
+        if(backgroundCount){if(!backgroundBadge){backgroundBadge=document.createElement("span");backgroundBadge.className="session-bg";backgroundBadge.setAttribute("role","img")}
+          setText(backgroundBadge,`⚙︎${backgroundCount}`);backgroundBadge.setAttribute("aria-label",`, ${backgroundCount} background ${backgroundCount===1?"task":"tasks"} running`);backgroundBadge.title=`${backgroundCount} background ${backgroundCount===1?"task":"tasks"} running`;
+          if(button.lastElementChild!==backgroundBadge)button.append(backgroundBadge)}else if(backgroundBadge)backgroundBadge.remove();
         const childNote=item.parentID?`, child tab of ${item.child?.parentTitle||"another tab"}`:"";let note=button.querySelector(".child-note");if(childNote){if(!note){note=document.createElement("span");note.className="sr-only child-note";button.append(note)}setText(note,childNote)}else if(note)note.remove();
         button.setAttribute("aria-current",item.id===selected?"true":"false");button.onclick=()=>{selectTab(item.id);renderedPayload="";renderProgress(item);refresh()};
         const close=tab.children[1];close.textContent=item.isLocked?"🔒":"×";close.disabled=Boolean(item.isLocked);close.title=item.isLocked?"Locked - unlock in tab settings":`Close ${item.title}`;close.setAttribute("aria-label",close.title);close.hidden=Boolean(item.isCantripHome);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};
@@ -5823,8 +5857,8 @@ private extension RemoteControlServer {
     function closeBackground(){if(backgroundState)clearInterval(backgroundState.timer);backgroundState=null}
     async function loadBackground(){const state=backgroundState;if(!state||state.loading)return;state.loading=true;
       try{const data=await api("/api/v1/home/background");if(state!==backgroundState)return;setText($("backgroundError"),"");
-        const builds=data.builds&&(data.builds.running?.length||data.builds.waiting?.length)?data.builds:null;
-        const next=JSON.stringify([data.runs,data.queued,builds]);if(next!==state.last||builds){state.last=next;state.runs=data.runs||[];state.queued=data.queued||[];state.builds=builds;state.sessionID=data.sessionID||null;state.loaded=true;if(state.view==="list")renderBackground()}
+        const builds=data.builds&&(data.builds.running?.length||data.builds.waiting?.length)?data.builds:null,tabTasks=(Array.isArray(data.tabTasks)?data.tabTasks:[]).filter(tab=>Array.isArray(tab?.tasks)&&tab.tasks.length);
+        const next=JSON.stringify([data.runs,data.queued,builds,tabTasks]);if(next!==state.last||builds||tabTasks.length){state.last=next;state.runs=data.runs||[];state.queued=data.queued||[];state.builds=builds;state.tabTasks=tabTasks;state.sessionID=data.sessionID||null;state.loaded=true;if(state.view==="list")renderBackground()}
         else if(!state.loaded){state.loaded=true;renderBackground()}}
       catch(error){if(state===backgroundState){setText($("backgroundError"),`Couldn't load background runs: ${error.message}`);if(!state.loaded){state.loaded=true;renderBackground()}}}
       finally{state.loading=false}}
@@ -5833,6 +5867,12 @@ private extension RemoteControlServer {
       if(state.view==="log"){body.replaceChildren(state.logNode||homeNode("p","muted tasks-empty","Loading the log…"));return}
       const view=homeNode("div");
       if(!state.loaded){view.append(homeNode("p","muted tasks-empty","Loading background runs…"));body.replaceChildren(view);return}
+      // Each tab's running background agents (watchers, parallel requests), stoppable here; the tab's name opens it.
+      if(state.tabTasks?.length){view.append(homeNode("div","bg-head","In tabs"));
+        for(const tab of state.tabTasks){const group=homeNode("div","bg-tab-tasks"),count=`${tab.tasks.length} ${tab.tasks.length===1?"task":"tasks"}`,head=homeNode("button","bg-tab-head");head.type="button";
+          head.append(homeNode("strong","",tab.tabTitle||"A tab"),homeNode("span","muted",` · ${count}`),homeNode("span","bg-tab-open","Open ›"));head.setAttribute("aria-label",`${tab.tabTitle||"A tab"}, ${count}. Open tab`);
+          head.onclick=()=>{if(!sessionItems.some(item=>item.id===tab.tabID)){setText($("backgroundError"),"That tab is no longer open.");return}$("backgroundPanel").close();selectTab(tab.tabID);renderedPayload="";refresh()};
+          group.append(head);for(const agent of tab.tasks)group.append(subagentCard(tab.tabID,agent,`bg:${tab.tabID}`));view.append(group)}}
       if(state.builds){const builds=state.builds;view.append(homeNode("div","bg-head","Builds"));const list=homeNode("ul","bg-list");
         const rows=[...(builds.running||[]).map((build)=>[build,0]),...(builds.waiting||[]).map((build,index)=>[build,index+1])];
         for(const [build,place] of rows){const item=homeNode("li","bg-run"),detail=buildQueueDetail(build,place);item.setAttribute("aria-label",`${build.title}, ${detail}`);

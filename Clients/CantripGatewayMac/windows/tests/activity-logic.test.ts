@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BuildQueueSnapshot, HomeBackgroundHandoff, HomeBackgroundRun, HomeBackgroundSnapshot, InputRequest, RemoteMessage, RemoteSubagent } from "../src/gateway/api/types";
 import {
   activeBackground, answerResultText, APPLE_EPOCH, backgroundPollDelay, buildQueueDetail, buildQueueFootnote, buildQueueOrdinal,
-  buildQueueOrigin, listedBuilds, backgroundSubagents, backgroundTaskAccessibilityLabel,
+  buildQueueOrigin, listedBuilds, listedTabTasks, tabBackgroundLabel, backgroundSubagents, backgroundTaskAccessibilityLabel,
   backgroundTaskIcon, backgroundTaskSummary, backgroundTaskTitle, backgroundTasksStatusLine, canStopSubagent, capitalized,
   elapsedAccessibilityLabel, elapsedLabel, handoffNeedsAnswer, handoffStatusText, handoffSummary, handoffTabTitle,
   isLabelledSummary, isLive, liveBackgroundSubagents, liveForegroundSubagents, needsInputRuns, otherRuns, promptPages,
@@ -314,5 +314,22 @@ describe("build queue", () => {
       "1 build at a time while macOS reports memory pressure (normally 2). Your tabs go first, then child tabs and CI, then Home's background runs.");
     expect(buildQueueFootnote({ ...builds, limit: 2 })).toBe(
       "Up to 2 builds at once on your Mac. Your tabs go first, then child tabs and CI, then Home's background runs.");
+  });
+});
+
+describe("tabs' background tasks", () => {
+  it("lists only tabs with running tasks and reads counts aloud", () => {
+    const snapshot = {
+      runs: [], queued: [],
+      tabTasks: [
+        { tabID: "T1", tabTitle: "Docs site", tasks: [agent({ id: "w1", name: "watch-testflight", background: true })] },
+        { tabID: "T2", tabTitle: "Empty", tasks: [] },
+      ],
+    } as unknown as HomeBackgroundSnapshot;
+    expect(listedTabTasks(snapshot).map((tab) => tab.tabTitle)).toEqual(["Docs site"]);
+    expect(listedTabTasks({ ...snapshot, tabTasks: undefined })).toEqual([]);
+    expect(listedTabTasks(null)).toEqual([]);
+    expect(tabBackgroundLabel(1)).toBe("1 background task running");
+    expect(tabBackgroundLabel(3)).toBe("3 background tasks running");
   });
 });

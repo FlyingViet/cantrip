@@ -144,7 +144,7 @@ final class CantripHomeTabDrawerTests: XCTestCase {
                 {"sessions":[
                  {"id":"\(plexID)","title":"Plexible","workdir":"/tmp","isStreaming":true,"canResume":false,
                   "councilMode":false,"queuedCount":0,"status":"Running the cold-launch baseline",
-                  "lastActivityAt":\(Date().timeIntervalSince1970 - 30),"supportsTabReordering":true},
+                  "lastActivityAt":\(Date().timeIntervalSince1970 - 30),"supportsTabReordering":true,"backgroundTaskCount":2},
                  {"id":"\(bassID)","title":"Bass Compass","workdir":"/tmp","isStreaming":false,"canResume":false,
                   "councilMode":false,"queuedCount":0,"lastActivityAt":\(finished),
                   "preview":"Resolved: ingestion dry-run incident","supportsTabReordering":true}],
@@ -230,6 +230,20 @@ final class CantripHomeTabDrawerTests: XCTestCase {
         XCTAssertFalse(idle.isActive)
         XCTAssertEqual(CantripDuoSidebarBackground(summary).accessibilityValue, summary.accessibilityValue)
 
+        // Every tab's background tasks count too, with a line of their own above the builds'.
+        let withTabs = CantripBackgroundJobsSummary(runs: 3, inputs: 0, home: model.currentHomeSummary, tabs: model.sessions)
+        XCTAssertEqual(withTabs.tabTasks, 2)
+        XCTAssertEqual(withTabs.status, "7 running")
+        XCTAssertEqual(withTabs.details, ["2 in tabs", "2 building · 1 waiting"])
+        XCTAssertEqual(withTabs.accessibilityValue, "7 running. Background tasks in tabs: 2. Builds: 2 running, 1 waiting")
+        XCTAssertEqual(CantripBackgroundJobsSummary(tabTasks: 1).details, ["1 in a tab"])
+        XCTAssertEqual(CantripBackgroundJobsSummary(tabTasks: 1).status, "1 running")
+        XCTAssertEqual(CantripDuoSidebarBackground(withTabs).details, withTabs.details)
+        let plexible = try XCTUnwrap(model.sessions.first)
+        XCTAssertEqual(plexible.backgroundTaskCount, 2)
+        XCTAssertTrue(plexible.tabRowAccessibilityValue.contains("2 background tasks running"), plexible.tabRowAccessibilityValue)
+        XCTAssertEqual(CantripTabBackgroundNote.accessibilityText(1), "1 background task running")
+
         // The row opens Home's Background list from a project tab too, so it loads there.
         model.prepareToOpenTab(bassID)
         await model.selectRegularSession()
@@ -240,6 +254,10 @@ final class CantripHomeTabDrawerTests: XCTestCase {
         XCTAssertEqual(builds.running.map(\.title), ["xcodebuild archive · App", "swift test · Server"])
         XCTAssertEqual(builds.waiting.map(\.source), ["ci"])
         XCTAssertEqual(builds.limit, 1)
+        let tabTasks = try XCTUnwrap(model.homeBackground?.tabTasks)
+        XCTAssertEqual(tabTasks.map(\.tabTitle), ["Docs site"])
+        XCTAssertEqual(tabTasks.first?.tasks.map(\.name), ["watch-testflight"])
+        XCTAssertEqual(tabTasks.first?.tasks.first?.background, true)
 
         let now = Date(timeIntervalSince1970: 1_000_000)
         XCTAssertEqual(CantripBuildQueueFormat.detail(builds.running[0], place: nil, now: now), "Docs site · 1m 15s")
@@ -261,6 +279,9 @@ final class CantripHomeTabDrawerTests: XCTestCase {
         Data("""
         {"sessionID":"\(UUID().uuidString)","revision":"q1","runs":[],"queued":[],"maxParallel":3,"runningCount":0,
          "supportsStop":true,
+         "tabTasks":[{"tabID":"\(plexID)","tabTitle":"Docs site","tasks":[{"id":"call_w","agentID":"a1",
+           "name":"watch-testflight","agentType":"task","summary":"Wait for TestFlight","background":true,
+           "status":"running","startedAt":999900,"canCancel":true}]}],
          "builds":{"enabled":true,"slots":2,"limit":1,"reason":"macOS reports memory pressure",
           "running":[{"pid":101,"title":"xcodebuild archive · App","source":"tab","since":999925,
                       "tabID":"\(plexID)","tabTitle":"Docs site"},
@@ -340,7 +361,8 @@ final class CantripHomeTabDrawerTests: XCTestCase {
         let sidebar = CantripDuoSidebar(
             model: model, slashCommands: BackendSlashCommandStore(), isHomeShown: true, homeSection: .chat,
             showsSkills: false, slashToken: nil, highlighted: nil, canOpenModelSettings: false,
-            backgroundStatus: .init(CantripBackgroundJobsSummary(runs: 3, inputs: 0, home: model.currentHomeSummary)),
+            backgroundStatus: .init(CantripBackgroundJobsSummary(runs: 3, inputs: 0, home: model.currentHomeSummary,
+                                                                 tabs: model.sessions)),
             isListening: false, isSpeaking: false, onSelectSection: { _ in }, onSelectTab: { _ in },
             onCreateTab: {}, onRename: { _ in }, onClose: { _ in }, onOpenBackground: {},
             onCustomizeMascot: {}, onChoose: { _ in }

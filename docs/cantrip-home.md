@@ -186,6 +186,24 @@ The tasks snapshot carries each workspace's list cards in `workspaceCards`
 (by task ID). Home edits only the cards by sending `id` and the complete
 `cards` (`[]` removes them); a `task-edits/` file can carry `"cards":[…]` too.
 
+## Tabs' background tasks
+
+Background agents a tab starts (watchers such as `watch-testflight`, parallel
+`side-` requests) keep running after its reply ends. The Background list's
+**In tabs** section shows each tab that has one running, by name (which opens
+the tab), with each task's card as the tab shows it: status, what it's doing
+and its time, and **Stop**. Clients' tab lists mark those tabs ("2 in
+background", or ⚙ 2 where the row is one line), and the **Background jobs**
+row counts them with a line such as "3 in tabs". This is on Cantrip Agent
+(iPhone and Duo), Gateway Mac, Gateway for Windows, the browser Remote and
+Cantrip for Windows' read-only Home window (which lists them without Stop).
+
+`GET /api/v1/home/background` carries them as `tabTasks`: `[{tabID, tabTitle,
+tasks}]` in tab order, each task in the same shape as a reply's `subagents`.
+Each tab in `GET /api/v1/sessions` carries `backgroundTaskCount` while it has
+one running. Both are left out when no tab has one, and Home's own background
+conversations are never listed. A tab's last 40 messages are searched.
+
 ## Background runs
 
 Each due run and local ingestion incident runs in its own hidden, single-use
@@ -202,7 +220,7 @@ resolved is skipped. Hidden runs follow the same handoff rules for change work
 they discover. Concurrent jobs refresh Apple Mail through
 `Scripts/mail-refresh`, which shares one refresh between them.
 
-Results appear in the Background list (with per-run Stop; the browser Remote's Background panel lists runs and opens the background log; both also list builds taking turns on the Mac, see [Heavy builds take turns](updating-and-troubleshooting.md#heavy-builds-take-turns)), task run summaries,
+Results appear in the Background list (with per-run Stop; the browser Remote's Background panel lists runs and opens the background log; both also list builds taking turns on the Mac, see [Heavy builds take turns](updating-and-troubleshooting.md#heavy-builds-take-turns), and each tab's running background tasks, see [Tabs' background tasks](#tabs-background-tasks)), task run summaries,
 workspaces and completion notifications (which open the run's report in Home's
 background log); finished sessions are removed and their transcripts kept in
 that log.

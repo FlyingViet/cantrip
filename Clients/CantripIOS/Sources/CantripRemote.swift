@@ -711,6 +711,8 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var backgroundActiveCount: Int? = nil
     /// Cantrip Home only: requests from background runs waiting on the user.
     var backgroundInputCount: Int? = nil
+    /// Background agents (watchers, parallel requests) still running in this tab; nil when none.
+    var backgroundTaskCount: Int? = nil
     /// Cantrip Home only: builds holding a slot in the Mac's build queue. Nil while the queue is off.
     var buildsRunning: Int? = nil
     /// Cantrip Home only: builds waiting for a slot.
@@ -896,6 +898,17 @@ struct CantripHomeBackgroundSnapshot: Decodable, Equatable {
     var supportsStop: Bool? = nil
     /// The Mac's build queue ("Heavy builds take turns"); nil while it's off or from older Macs.
     var builds: CantripBuildQueueSnapshot? = nil
+    /// Tabs with background agents still running, in tab order; nil when none or from older Macs.
+    var tabTasks: [CantripTabBackgroundTasks]? = nil
+}
+
+/// A tab's running background agents, as its replies list them.
+struct CantripTabBackgroundTasks: Decodable, Equatable, Identifiable {
+    let tabID: String
+    let tabTitle: String
+    let tasks: [CantripRemoteSubagent]
+
+    var id: String { tabID }
 }
 
 /// Builds on the Mac taking turns for a few build slots.

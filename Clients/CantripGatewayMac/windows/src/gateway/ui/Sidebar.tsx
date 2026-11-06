@@ -6,6 +6,7 @@ import type { RemoteSessionSummary } from "../api/types";
 import { bridge, shortcut } from "../bridge";
 import { now } from "../state/clock";
 import { relativeShort, runningTasks, tabRowDetail, workingTabs } from "../state/format";
+import { tabBackgroundLabel } from "./activity/activityLogic";
 import * as nav from "../state/nav";
 import * as remote from "../state/remote";
 import { collapsedSections, LOOSE_ID, sectionDropPosition, tabGroups, toggleCollapsed, visibleTabs, type TabGroup } from "../state/sections";
@@ -304,7 +305,9 @@ function TabRow(props: {
     : session.isStreaming ? <Spinner size="small" tint="tint" /> : <span class="dot gray" />;
   const lock = session.isLocalPrivate ? <Icon name="lock.shield.fill" size={12} /> : session.isLocked ? <Icon name="lock.fill" size={12} /> : null;
   const parent = session.parentID ? `child tab of ${session.child?.parentTitle || "another tab"}` : null;
-  const label = [title, parent, session.isLocalPrivate ? "Self-hosted, saved" : session.isLocked ? "Locked" : null, detail?.text, age && age !== "now" ? `${age} ago` : age ? "just now" : null]
+  const background = Math.max(0, session.backgroundTaskCount ?? 0);
+  const label = [title, parent, session.isLocalPrivate ? "Self-hosted, saved" : session.isLocked ? "Locked" : null, detail?.text,
+    background ? tabBackgroundLabel(background) : null, age && age !== "now" ? `${age} ago` : age ? "just now" : null]
     .filter(Boolean).join(", ");
   const hover = session.child ? `Child tab of ${session.child.parentTitle} · ${session.child.statusLine}` : detail?.text ?? title;
   return (
@@ -331,6 +334,11 @@ function TabRow(props: {
         {session.parentID ? <Icon name="arrow.triangle.branch" size={12} class="child-glyph" /> : null}
         {lock}<span class="truncate">{title}</span>
       </span>
+      {background ? (
+        <span class="tab-background tint-active" aria-hidden="true" title={tabBackgroundLabel(background)}>
+          <Icon name="gearshape.2" size={12} />{background}
+        </span>
+      ) : null}
       {age ? <span class="age" aria-hidden="true">{age}</span> : null}
     </button>
   );
