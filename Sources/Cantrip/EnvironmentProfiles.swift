@@ -106,6 +106,8 @@ struct ResolvedEnvironment: Equatable {
         for (name, value) in variables.sorted(by: { $0.key < $1.key }) where SecretNames.isVariableName(name) {
             lines.append("export \(name)=\(value.shellQuoted)")
         }
+        // The build queue's shims go first again too: startup files may have moved them back.
+        let pathPrefix = ToolPath.leadingFolders + pathPrefix
         if !pathPrefix.isEmpty {
             lines.append("for __cantrip_dir in \(pathPrefix.reversed().map(\.shellQuoted).joined(separator: " ")); do")
             lines.append("  __cantrip_path=\":$PATH:\"; __cantrip_path=\"${__cantrip_path//:\"$__cantrip_dir\":/:}\"")
@@ -320,7 +322,8 @@ enum EnvironmentProfiles {
 
     static func apply(_ resolved: ResolvedEnvironment, to environment: inout [String: String]) {
         for (name, value) in resolved.variables { environment[name] = value }
-        environment["PATH"] = prepend(resolved.pathPrefix, to: environment["PATH"])
+        // The build queue's shims stay ahead of the profile's folders (`BuildQueue`).
+        environment["PATH"] = prepend(ToolPath.leadingFolders + resolved.pathPrefix, to: environment["PATH"])
         if let script = try? writeScript(resolved) {
             environment[fileVariable] = script.path
             // Non-interactive bash reads BASH_ENV; keep one the user set.

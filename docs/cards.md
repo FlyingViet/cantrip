@@ -66,7 +66,9 @@ are looked through, and so are interpreters: `python -u build-x.py`, `node scrip
 Every number is real:
 
 - **Elapsed time** counts from when the step started; clients tick it themselves once a
-  second, redrawing only the card's progress block.
+  second, redrawing only the card's progress block. A build that waits for a build slot
+  ([Heavy builds take turns](updating-and-troubleshooting.md#heavy-builds-take-turns)) shows
+  **Waiting for a build slot** with what's running instead, and its time starts with the slot.
 - **Estimate**: the median of the last five successful runs of the same command in the same
   folder (simulator IDs, temporary folders and long numbers don't make it a different command),
   kept in `~/.cache/Cantrip/build-history.json` on the Mac. The first run has none: the bar is

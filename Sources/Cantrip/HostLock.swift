@@ -6,6 +6,9 @@ import Foundation
 enum HostMode {
     nonisolated(unsafe) static var isHeadless = false
     nonisolated(unsafe) static var isEngine = false
+    /// This process holds the host lock and runs tabs (the menu bar app, headless or the engine),
+    /// not a `cantrip` command, the engine's window app or a test.
+    nonisolated(unsafe) static var isHostProcess = false
 }
 
 /// One Cantrip host per user: the menu bar app and `--headless` share sessions, ports and the

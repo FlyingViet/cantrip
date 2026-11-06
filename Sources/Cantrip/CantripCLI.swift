@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "weather", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "weather", "build-queue", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 
@@ -26,6 +26,7 @@ enum CantripCLI {
             case "secret", "secrets": return SecretCLI.main(Array(arguments.dropFirst()))
             case "env": return EnvironmentCLI.main(Array(arguments.dropFirst()))
             case "weather": try weather(Array(arguments.dropFirst()))
+            case "build-queue": return try buildQueue(Array(arguments.dropFirst()))
             default: print(usage)
             }
             return 0
@@ -85,6 +86,7 @@ enum CantripCLI {
                                   The pool's upkeep now (Cantrip runs it every 5 minutes): shut down simulators idle
                                   for simulatorPoolIdleMinutes, delete members the pool no longer keeps once free,
                                   and old temporary copies; prints the space freed
+      cantrip build-queue         Builds running and waiting for a slot (buildQueueEnabled, buildQueueSlots)
       cantrip api [--json]        The OpenAI-compatible API: where it listens, its backends and calls per consumer
       cantrip api key new         Make a key for requests that come through a proxy (printed once)
       cantrip api key clear       Remove it: proxied requests are refused again
@@ -447,6 +449,33 @@ enum CantripCLI {
             default:
                 throw Failure(message: usage, code: 2)
             }
+        }
+    }
+
+    /// `cantrip build-queue`: what runs and waits. `run --tool NAME -- EXECUTABLE ARGS…` is what
+    /// the queue's shims call: wait for a slot, run, free it (`BuildQueue`).
+    static func buildQueue(_ arguments: [String]) throws -> Int32 {
+        let settings = AppSettings.shared
+        let policy = BuildQueue.Policy(slots: settings.buildQueueSlots)
+        switch arguments.first {
+        case nil, "status", "list":
+            print(BuildQueue.statusText(policy: policy, enabled: settings.buildQueueEnabled))
+            return 0
+        case "run":
+            guard let separator = arguments.firstIndex(of: "--"), separator + 1 < arguments.count else {
+                throw Failure(message: "Usage: cantrip build-queue run [--tool NAME] -- EXECUTABLE [ARGS…]", code: 64)
+            }
+            let options = Array(arguments[1..<separator])
+            let tool = options.firstIndex(of: "--tool").flatMap { options.indices.contains($0 + 1) ? options[$0 + 1] : nil }
+            let executable = arguments[separator + 1]
+            let rest = Array(arguments[(separator + 2)...])
+            let name = tool ?? URL(fileURLWithPath: executable).lastPathComponent
+            guard settings.buildQueueEnabled else {
+                return BuildQueue.runWithoutWaiting(executable: executable, arguments: rest)
+            }
+            return BuildQueue.run(executable: executable, arguments: rest, tool: name, policy: policy)
+        default:
+            throw Failure(message: "Usage: cantrip build-queue [status] | run [--tool NAME] -- EXECUTABLE [ARGS…]", code: 64)
         }
     }
 

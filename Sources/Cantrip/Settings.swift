@@ -376,6 +376,21 @@ final class AppSettings: ObservableObject {
             d.set(childTabsOverallLimit, forKey: "childTabsOverallLimit")
         }
     }
+    /// Heavy builds on this Mac take turns for a few slots (`BuildQueue`); off by default.
+    @Published var buildQueueEnabled: Bool {
+        didSet {
+            d.set(buildQueueEnabled, forKey: "buildQueueEnabled")
+            if HostMode.isHostProcess { BuildQueue.apply(enabled: buildQueueEnabled) }
+        }
+    }
+    /// Builds at once while the queue is on; one while the Mac is busy or short of memory.
+    @Published var buildQueueSlots: Int {
+        didSet {
+            let clamped = min(max(buildQueueSlots, 1), BuildQueue.maximumSlots)
+            if clamped != buildQueueSlots { buildQueueSlots = clamped }
+            d.set(buildQueueSlots, forKey: "buildQueueSlots")
+        }
+    }
     @Published var copilotAllowSubagents: Bool {
         didSet { d.set(copilotAllowSubagents, forKey: "copilotAllowSubagents") }
     }
@@ -856,6 +871,8 @@ final class AppSettings: ObservableObject {
             "childTabsAutoFork": childTabsAutoFork,
             "childTabsPerParentLimit": childTabsPerParentLimit,
             "childTabsOverallLimit": childTabsOverallLimit,
+            "buildQueueEnabled": buildQueueEnabled,
+            "buildQueueSlots": buildQueueSlots,
             "linkPreviewsEnabled": linkPreviewsEnabled,
             "watchInternetRouteEnabled": watchInternetRouteEnabled,
             "copilotIdleReleaseMinutes": copilotIdleReleaseMinutes,
@@ -997,6 +1014,8 @@ final class AppSettings: ObservableObject {
         bool("childTabsAutoFork") { self.childTabsAutoFork = $0 }
         int("childTabsPerParentLimit", 1...ChildTabCapacity.maximumPerParent) { self.childTabsPerParentLimit = $0 }
         int("childTabsOverallLimit", 1...ChildTabCapacity.maximumOverall) { self.childTabsOverallLimit = $0 }
+        bool("buildQueueEnabled") { self.buildQueueEnabled = $0 }
+        int("buildQueueSlots", 1...BuildQueue.maximumSlots) { self.buildQueueSlots = $0 }
         bool("linkPreviewsEnabled") { self.linkPreviewsEnabled = $0 }
         bool("watchInternetRouteEnabled") { self.watchInternetRouteEnabled = $0 }
         int("cantripHomeParallelRuns", 1...CantripHomeBackgroundRunner.maximumParallelLimit) {
@@ -1207,6 +1226,9 @@ final class AppSettings: ObservableObject {
         let storedOverall = d.integer(forKey: "childTabsOverallLimit")
         childTabsOverallLimit = storedOverall == 0
             ? ChildTabCapacity.defaultOverall : min(max(storedOverall, 1), ChildTabCapacity.maximumOverall)
+        buildQueueEnabled = d.bool(forKey: "buildQueueEnabled")
+        let storedSlots = d.integer(forKey: "buildQueueSlots")
+        buildQueueSlots = storedSlots == 0 ? BuildQueue.defaultSlots : min(max(storedSlots, 1), BuildQueue.maximumSlots)
         copilotMCPApps = d.object(forKey: "copilotMCPApps") == nil
             ? true : d.bool(forKey: "copilotMCPApps")
         linkPreviewsEnabled = d.object(forKey: "linkPreviewsEnabled") == nil
