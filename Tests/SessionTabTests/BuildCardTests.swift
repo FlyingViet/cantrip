@@ -23,6 +23,7 @@ extension SessionTabTests {
         try testBuildHistory()
         try await testBuildCardsThroughSession()
         try testBuildCardDocuments()
+        try testCombinedBuildCard()
         try await testTransferCardsThroughSession()
         testTransferCardDocuments()
         try writeBuildCardSnapshots()
@@ -285,13 +286,20 @@ extension SessionTabTests {
         precondition(BuildHistory.shared.runs(for: message.builds[4].key).count == 2, "a stopped build isn't timed")
         precondition(BuildHistory.shared.runs(for: message.builds[3].key).count == recorded)
 
-        // Clients get every build as a card, before the reply's own cards.
+        // Clients get the reply's builds as one card, before the reply's own cards: the newest
+        // leads, the four before it are rows with their results.
         let snapshot = RemoteHistory.message(message)
         let cards = snapshot["cards"] as? [[String: Any]] ?? []
-        precondition(cards.count == 5 && cards.allSatisfy { $0["type"] as? String == "build" }, "\(cards.count)")
-        let progress = (cards[0]["blocks"] as? [[String: Any]])?.last
-        precondition(progress?["type"] as? String == "progress" && progress?["status"] as? String == "succeeded"
-                     && progress?["startedAt"] is String && progress?["finishedAt"] is String)
+        precondition(cards.count == 1 && cards[0]["type"] as? String == "build"
+                     && cards[0]["id"] as? String == "build-" + message.builds[0].id, "\(cards.count)")
+        let blocks = cards[0]["blocks"] as? [[String: Any]] ?? []
+        precondition(blocks.map { $0["type"] as? String } == ["header", "progress", "list"])
+        let progress = blocks[1]
+        precondition(progress["status"] as? String == "stopped" && progress["startedAt"] is String
+                     && progress["finishedAt"] is String)
+        let rows = blocks[2]["items"] as? [[String: Any]] ?? []
+        precondition(rows.map { $0["tone"] as? String } == ["positive", "negative", "negative", "positive"]
+                     && rows[2]["note"] as? String == "Failed · Exit code 65", "\(rows)")
 
         // Saved and reloaded: a build cut off mid-run reads as ended, never running forever.
         var running = message
@@ -338,6 +346,81 @@ extension SessionTabTests {
         tool.blocks.append(document.blocks[0])
         precondition(CardValidation.sanitized(tool, allowMaps: false)?.blocks.map(\.type) == ["header"])
         precondition(CardPanelView.sections(document.blocks).count == 2)
+    }
+
+    /// A reply's builds share one card that changes in place: the newest running build leads,
+    /// builds running beside it keep live progress, finished ones become rows.
+    static func testCombinedBuildCard() throws {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        func run(_ id: String, _ title: String, _ verb: String, folder: String = "/w/CantripIOS", at offset: TimeInterval,
+                 end: (BuildRun.State, TimeInterval, Int?)? = nil) -> BuildRun {
+            var run = BuildRun(id: id, command: BuildCommand(title: title, verb: verb, directory: folder, key: title),
+                               startedAt: start.addingTimeInterval(offset), estimate: nil)
+            if let end { run.finish(end.0, exitCode: end.2, at: run.startedAt.addingTimeInterval(end.1)) }
+            return run
+        }
+        precondition(BuildRun.card(for: []) == nil)
+        let build = run("a", "xcodebuild build · Hermes", "Building", at: 0, end: (.succeeded, 141, 0))
+        precondition(BuildRun.card(for: [build]) == build.document, "one build keeps its own card")
+
+        // Build, a failed test, then the test again: one card, led by the running test.
+        let failed = run("b", "xcodebuild test · Hermes", "Testing", at: 150, end: (.failed, 97, 65))
+        let rerun = run("c", "xcodebuild test · Hermes", "Testing", at: 260)
+        var card = try require(BuildRun.card(for: [build, failed, rerun]))
+        precondition(card.id == "build-a" && card.type == "build", "the card keeps the first build's id as it grows")
+        precondition(card.blocks.map(\.type) == ["header", "progress", "list"])
+        precondition(card.blocks[0].title == "xcodebuild test · Hermes" && card.blocks[0].symbol == "hammer"
+                     && card.blocks[1].status == "running" && card.blocks[1].label == "Testing")
+        let list = card.blocks[2]
+        precondition(list.title == "Earlier steps" && list.items?.count == 2)
+        let rows = list.items ?? []
+        precondition(rows[0].title == "xcodebuild build · Hermes" && rows[0].note == "Succeeded" && rows[0].tone == "positive"
+                     && rows[0].trailing == "2:21" && rows[0].symbol == nil && rows[0].subtitle == nil,
+                     "a row's result is its tinted note; clients tint row icons with the accent")
+        precondition(rows[1].note == "Failed · Exit code 65" && rows[1].tone == "negative" && rows[1].trailing == "1:37"
+                     && rows[1].accessibilityLabel == "xcodebuild test · Hermes, Failed · Exit code 65, took 1 minute, 37 seconds",
+                     "\(rows[1])")
+        precondition(card.accessibilityLabel == "xcodebuild test · Hermes, Testing, and 2 other steps")
+        precondition(card.fallbackText?.hasSuffix("Earlier steps\n• xcodebuild build · Hermes — Succeeded — 2:21\n"
+                                                  + "• xcodebuild test · Hermes — Failed · Exit code 65 — 1:37") == true
+                     && card.fallbackText?.hasPrefix("xcodebuild test · Hermes — CantripIOS\nTesting · since ") == true,
+                     card.fallbackText ?? "")
+        let decoded = try CardDocument.decoder.decode(CardDocument.self, from: JSONSerialization.data(withJSONObject: card.snapshot))
+        precondition(decoded == card, "combined build cards round-trip")
+
+        // Once everything is done the newest build leads with its result; another folder is named.
+        var finished = rerun
+        finished.finish(.succeeded, exitCode: 0, at: rerun.startedAt.addingTimeInterval(118))
+        let install = run("d", "make install", "Building", folder: "/w/CantripGatewayMac", at: 400, end: (.stopped, 20, nil))
+        card = try require(BuildRun.card(for: [build, failed, finished, install]))
+        precondition(card.blocks[0].title == "make install" && card.blocks[0].tone == "warning" && card.blocks[1].status == "stopped")
+        precondition(card.blocks[2].items?.last?.subtitle == "CantripIOS", "a row from another folder than the lead's names it")
+
+        // Builds running side by side keep live progress, labeled by command; the lead is the newest.
+        let app = run("e", "make app", "Building", folder: "/w/Cantrip", at: 500)
+        let gateway = run("f", "make build", "Building", folder: "/w/CantripGatewayMac", at: 510)
+        card = try require(BuildRun.card(for: [build, app, gateway]))
+        precondition(card.blocks.map(\.type) == ["header", "progress", "progress", "list"])
+        precondition(card.blocks[0].title == "make build" && card.blocks[2].label == "make app"
+                     && card.blocks[2].status == "running" && card.blocks[3].items?.map(\.id) == ["a"])
+        precondition(CardPanelView.sections(card.blocks).count == 4)
+
+        // A long reply lists only its latest five earlier steps, and says how many there were.
+        let many = (0..<8).map { run("m\($0)", "swift test", "Testing", at: Double($0) * 60, end: (.succeeded, 30, 0)) }
+        card = try require(BuildRun.card(for: many))
+        precondition(card.blocks[2].title == "Earlier steps · latest 5 of 7"
+                     && card.blocks[2].items?.map(\.id) == ["m2", "m3", "m4", "m5", "m6"], "\(card.blocks[2])")
+        precondition(card.blocks.count <= 12, "clients draw at most 12 blocks")
+
+        // A reply's own cards still follow its builds' one card.
+        var reply = ChatMessage(role: .assistant, text: "Done")
+        reply.builds = [build, failed, finished]
+        precondition(reply.cardDocuments(linkPreviews: false).map(\.id) == ["build-a"])
+    }
+
+    private static func require<T>(_ value: T?) throws -> T {
+        guard let value else { throw CocoaError(.coderValueNotFound) }
+        return value
     }
 
     /// A transfer through a tab: the card follows the bytes the command prints, keeps going in a
@@ -487,12 +570,27 @@ extension SessionTabTests {
             transfer("rsync · Roms", "Copying", started: 300, total: 23_052_122_595, readings: [(10, 0.01), (180, 0.26)],
                      end: (.failed, 183, 12)),
         ]
+        // A reply's builds as its one card: a build, a failed test, the test again, and a Gateway
+        // build running beside it.
+        func step(_ title: String, _ verb: String, folder: String = "/w/CantripIOS", started: TimeInterval, estimate: Double? = nil,
+                  end: (BuildRun.State, TimeInterval, Int?)? = nil) -> BuildRun {
+            var run = BuildRun(id: "call-\(Int(started))", command: BuildCommand(title: title, verb: verb, directory: folder, key: title),
+                               startedAt: now.addingTimeInterval(-started), estimate: estimate.map { .init(seconds: $0, runs: 3) })
+            if let end { run.finish(end.0, exitCode: end.2, at: run.startedAt.addingTimeInterval(end.1)) }
+            return run
+        }
+        let combined = try require(BuildRun.card(for: [
+            step("xcodebuild build · Hermes", "Building", started: 420, end: (.succeeded, 141, 0)),
+            step("xcodebuild test · Hermes", "Testing", started: 270, estimate: 190, end: (.failed, 97, 65)),
+            step("make build", "Building", folder: "/w/CantripGatewayMac", started: 150),
+            step("xcodebuild test · Hermes", "Testing", started: 95, estimate: 190),
+        ]))
         // The host's JSON for the Windows clients' fixtures (tests/…/cards/build*.json, transfer.json).
-        for (name, card) in [("build", cards[2]), ("build-failed", cards[4]), ("transfer", transfers[0])] {
+        for (name, card) in [("build", cards[2]), ("build-failed", cards[4]), ("transfer", transfers[0]), ("builds", combined)] {
             let data = try JSONSerialization.data(withJSONObject: card.snapshot, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).json"))
         }
-        let content = CardDocumentStack(cards: cards + transfers, links: [])
+        let content = CardDocumentStack(cards: [combined] + cards + transfers, links: [])
             .padding(16)
             .frame(width: 560)
             .background(Color(white: 0.08))

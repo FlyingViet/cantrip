@@ -11,7 +11,7 @@ import { fitZoom, initialZoomForDelta, tileSpan, weatherRanges } from "../src/ga
 // Real host output (CardDocument.snapshot) from the Cantrip Mac.
 const fixture = (name: string): RemoteCardDocument =>
   JSON.parse(readFileSync(new URL(`./fixtures/cards/${name}.json`, import.meta.url), "utf8")) as RemoteCardDocument;
-const NAMES = ["weather", "weather-unavailable", "places", "link", "flights", "tool-card", "build", "build-failed", "transfer"];
+const NAMES = ["weather", "weather-unavailable", "places", "link", "flights", "tool-card", "build", "build-failed", "transfer", "builds"];
 const card = (blocks: RemoteCardBlock[], extra: Partial<RemoteCardDocument> = {}): RemoteCardDocument =>
   ({ version: 1, id: "c", type: "custom", blocks, ...extra });
 
@@ -262,6 +262,17 @@ describe("progress blocks (build cards)", () => {
     const failed = fixture("build-failed");
     expect(failed.blocks[0]).toMatchObject({ symbol: "xmark.circle.fill", tone: "negative" });
     expect(progressState(failed.blocks[1], Date.now())).toMatchObject({ running: false, label: "Failed", elapsed: "0:47", fraction: 1 });
+  });
+
+  it("draws a reply's builds as one card: the leading build, one beside it, then earlier steps", () => {
+    const builds = fixture("builds");
+    const parts = cardParts(builds);
+    expect(parts.map((part) => part.kind === "block" ? part.block.type : part.kind)).toEqual(["header", "progress", "progress", "list"]);
+    expect(parts[3].divided).toBe(true);
+    expect(progressState(builds.blocks[2], Date.now())).toMatchObject({ running: true, label: "make build", fraction: undefined });
+    expect(builds.blocks[3].items?.map((item) => [item.note, item.tone, item.trailing])).toEqual([
+      ["Succeeded", "positive", "2:21"], ["Failed · Exit code 65", "negative", "1:37"],
+    ]);
   });
 
   it("follows a transfer's own progress, with icons for every direction", () => {

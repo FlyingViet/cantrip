@@ -613,13 +613,14 @@ button.card-attribution {
 }
 
 .card-progress-bar.indeterminate > span {
-  width: 28%;
-  animation: card-progress-glide 1.1s ease-in-out infinite alternate;
+  width: 35%;
+  animation: card-progress-sweep 1.6s ease-in-out infinite;
 }
 
-@keyframes card-progress-glide {
-  from { left: 0; }
-  to { left: 72%; }
+/* One way, in from the left edge and out the right (the track clips it), as on Apple clients. */
+@keyframes card-progress-sweep {
+  from { left: -35%; }
+  to { left: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
