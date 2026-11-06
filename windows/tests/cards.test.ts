@@ -128,6 +128,16 @@ describe("progress blocks (build cards)", () => {
     expect(cardPlainText(failed)).toContain("Failed · Exit code 65");
   });
 
+  it("draws a reply's builds as one card: the leading build, one beside it, then earlier steps", () => {
+    const builds = read("./cards/builds.json") as CardDocument;
+    expect(drawableBlocks(builds).map((block) => block.type)).toEqual(["header", "progress", "progress", "list"]);
+    expect(progressState(builds.blocks[2], Date.now())).toMatchObject({ running: true, label: "make build", fraction: undefined });
+    expect(builds.blocks[3].items?.map((item) => [item.note, item.tone, item.trailing])).toEqual([
+      ["Succeeded", "positive", "2:21"], ["Failed · Exit code 65", "negative", "1:37"],
+    ]);
+    expect(builds.fallbackText).toContain("Earlier steps\n• xcodebuild build · Hermes — Succeeded — 2:21");
+  });
+
   it("follows a transfer's own progress", () => {
     expect(transfer.type).toBe("transfer");
     expect(progressState(transfer.blocks[1], Date.now())).toMatchObject({ running: true, label: "Transferring", fraction: 0.66 });

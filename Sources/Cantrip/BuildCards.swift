@@ -114,21 +114,98 @@ struct BuildRun: Codable, Equatable, Identifiable {
 }
 
 extension BuildRun {
+    /// Finished builds listed under a reply's card; older ones are counted in the list's title.
+    static let listedEarlier = 5
+    /// Builds still running beside the leading one that get their own live progress block.
+    static let parallelProgress = 3
+
+    /// A reply's builds as one card that changes in place as the work moves on, instead of a
+    /// card per command: the newest build still running (else the newest) leads with its header
+    /// and live progress, other running builds follow with their own progress, and finished ones
+    /// are rows under "Earlier steps" with their result and time.
+    static func card(for runs: [BuildRun]) -> CardDocument? {
+        guard let first = runs.first else { return nil }
+        guard runs.count > 1 else { return first.document }
+        let lead = runs.last { $0.state == .running } ?? runs[runs.count - 1]
+        var blocks = [lead.headerBlock, lead.progressBlock]
+        let parallel = runs.filter { $0.state == .running && $0.id != lead.id }
+        for run in parallel.suffix(parallelProgress) {
+            var progress = run.progressBlock
+            progress.label = run.title
+            progress.accessibilityLabel = [run.title, run.label, run.detail].joined(separator: ", ")
+            blocks.append(progress)
+        }
+        let listed = Set(parallel.suffix(parallelProgress).map(\.id)).union([lead.id])
+        let earlier = runs.filter { !listed.contains($0.id) }
+        if !earlier.isEmpty {
+            let shown = earlier.suffix(listedEarlier)
+            var list = CardDocument.Block(type: "list")
+            list.title = shown.count < earlier.count ? "Earlier steps · latest \(shown.count) of \(earlier.count)" : "Earlier steps"
+            list.items = shown.map { $0.row(leadProject: lead.project) }
+            blocks.append(list)
+        }
+        let steps = earlier.count + parallel.count
+        var card = CardDocument(id: "build-" + first.id, type: lead.isTransfer ? "transfer" : "build",
+                                accessibilityLabel: "\(lead.title), \(lead.label), and \(steps) other \(steps == 1 ? "step" : "steps")",
+                                source: .init(kind: "build", name: lead.title), blocks: blocks)
+        // A list's plain text leaves out notes, and here they hold each earlier step's result.
+        let live = CardDocument(id: card.id, type: card.type, blocks: blocks.filter { $0.type != "list" }).plainText
+        let rows = blocks.last { $0.type == "list" }.map { list in
+            [list.title ?? ""] + (list.items ?? []).map { item in
+                "• " + [item.title, item.subtitle, item.note, item.trailing].compactMap { $0 }.joined(separator: " — ")
+            }
+        } ?? []
+        card.fallbackText = ([live] + rows).joined(separator: "\n")
+        return card
+    }
+
     /// The card: a header naming the command and its folder, then a `progress` block that
     /// clients tick locally from `startedAt` (no update from the Mac every second).
     var document: CardDocument {
-        var header = CardDocument.Block(type: "header")
-        header.symbol = switch state {
+        CardDocument(id: "build-" + id, type: isTransfer ? "transfer" : "build", accessibilityLabel: "\(title), \(label)",
+                     source: .init(kind: "build", name: title), blocks: [headerBlock, progressBlock]).withFallbackText()
+    }
+
+    private var stateSymbol: String {
+        switch state {
         case .running: runningSymbol
         case .succeeded: "checkmark.circle.fill"
         case .failed: "xmark.circle.fill"
         case .stopped: "stop.circle"
         case .ended: "questionmark.circle"
         }
+    }
+
+    private var headerBlock: CardDocument.Block {
+        var header = CardDocument.Block(type: "header")
+        header.symbol = stateSymbol
         header.title = title
         header.subtitle = project
         header.tone = state == .running ? nil : tone
+        return header
+    }
 
+    /// A finished build as a row of a reply's card: its result (tinted) and how long it took.
+    private func row(leadProject: String?) -> CardDocument.Item {
+        var item = CardDocument.Item()
+        item.id = id
+        item.title = title
+        item.subtitle = project == leadProject ? nil : project
+        item.note = switch state {
+        case .running: [verb, "still running"].joined(separator: " · ")
+        case .succeeded: [label, transferDetail].compactMap { $0 }.joined(separator: " · ")
+        case .failed: label + " · " + detail
+        case .stopped: transferDetail ?? label
+        case .ended: detail
+        }
+        item.tone = tone
+        item.trailing = duration.map(CardProgress.clock)
+        item.accessibilityLabel = [title, item.subtitle, item.note,
+                                   duration.map { "took " + CardProgress.spoken($0) }].compactMap { $0 }.joined(separator: ", ")
+        return item
+    }
+
+    private var progressBlock: CardDocument.Block {
         var progress = CardDocument.Block(type: "progress")
         progress.status = state.rawValue
         progress.label = label
@@ -147,8 +224,7 @@ extension BuildRun {
         }
         progress.detail = detail
         progress.accessibilityLabel = [label, detail].compactMap { $0 }.joined(separator: ", ")
-        return CardDocument(id: "build-" + id, type: isTransfer ? "transfer" : "build", accessibilityLabel: "\(title), \(label)",
-                            source: .init(kind: "build", name: title), blocks: [header, progress]).withFallbackText()
+        return progress
     }
 
     private var runningSymbol: String {

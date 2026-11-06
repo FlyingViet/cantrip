@@ -1,0 +1,60 @@
+{
+  "accessibilityLabel" : "xcodebuild test · Hermes, Testing, and 3 other steps",
+  "blocks" : [
+    {
+      "subtitle" : "CantripIOS",
+      "symbol" : "hammer",
+      "title" : "xcodebuild test · Hermes",
+      "type" : "header"
+    },
+    {
+      "accessibilityLabel" : "Testing, Usually 3m 10s (3 earlier runs)",
+      "detail" : "Usually 3m 10s (3 earlier runs)",
+      "expectedSeconds" : 190,
+      "label" : "Testing",
+      "startedAt" : "2026-11-06T00:57:09.891Z",
+      "status" : "running",
+      "tone" : "accent",
+      "type" : "progress"
+    },
+    {
+      "accessibilityLabel" : "make build, Building, First timed run here, so no estimate yet",
+      "detail" : "First timed run here, so no estimate yet",
+      "label" : "make build",
+      "startedAt" : "2026-11-06T00:56:14.891Z",
+      "status" : "running",
+      "tone" : "accent",
+      "type" : "progress"
+    },
+    {
+      "items" : [
+        {
+          "accessibilityLabel" : "xcodebuild build · Hermes, Succeeded, took 2 minutes, 21 seconds",
+          "id" : "call-420",
+          "note" : "Succeeded",
+          "title" : "xcodebuild build · Hermes",
+          "tone" : "positive",
+          "trailing" : "2:21"
+        },
+        {
+          "accessibilityLabel" : "xcodebuild test · Hermes, Failed · Exit code 65, took 1 minute, 37 seconds",
+          "id" : "call-270",
+          "note" : "Failed · Exit code 65",
+          "title" : "xcodebuild test · Hermes",
+          "tone" : "negative",
+          "trailing" : "1:37"
+        }
+      ],
+      "title" : "Earlier steps",
+      "type" : "list"
+    }
+  ],
+  "fallbackText" : "xcodebuild test · Hermes — CantripIOS\nTesting · since 4:57 PM · Usually 3m 10s (3 earlier runs)\nmake build · since 4:56 PM · First timed run here, so no estimate yet\nEarlier steps\n• xcodebuild build · Hermes — Succeeded — 2:21\n• xcodebuild test · Hermes — Failed · Exit code 65 — 1:37",
+  "id" : "build-call-420",
+  "source" : {
+    "kind" : "build",
+    "name" : "xcodebuild test · Hermes"
+  },
+  "type" : "build",
+  "version" : 1
+}

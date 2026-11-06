@@ -77,8 +77,8 @@ extension ChatMessage {
     func cardDocuments(linkPreviews showsLinks: Bool) -> [CardDocument] {
         let extra = weatherCard == nil && placeCard == nil ? Array(cards.dropFirst()) : []
         let documents = CardComposer.documents(main: mainCard, links: showsLinks ? visibleLinkPreviews : [])
-        // Build cards report what ran while the reply was written, so they come before its answer's cards.
-        return builds.map(\.document) + Array(documents.prefix(1)) + extra + documents.dropFirst()
+        // A reply's builds are one card that reports what ran while it was written, so it comes before its answer's cards.
+        return (BuildRun.card(for: builds).map { [$0] } ?? []) + Array(documents.prefix(1)) + extra + documents.dropFirst()
     }
 
     /// Appends streamed reasoning. Reasoning after a new tool call or answer text is a new block.
