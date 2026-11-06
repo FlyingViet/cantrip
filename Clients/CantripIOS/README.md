@@ -767,7 +767,8 @@ delete the file from the paired Mac.
 `GET /api/v1/home/builds` route. One card per page entry shows the app icon, title,
 version (build), publish time, size, profile type and note, with a prominent
 **Install**; older builds sit behind a disclosure, and pull to refresh reloads the
-list. Install first checks that the page answers (it is tailnet-only), then hands
+list. An unfolded iPhone Duo shows two apps per row (one at accessibility text
+sizes); other iPhones show one and iPad as many as fit. Install first checks that the page answers (it is tailnet-only), then hands
 the build's `itms-services` link to iOS, which shows its install prompt; if Tailscale
 is off, the build is gone, or iOS can't open the link, an alert says what to do.
 Installing Cantrip Agent itself asks first, and entries sharing a bundle ID say that

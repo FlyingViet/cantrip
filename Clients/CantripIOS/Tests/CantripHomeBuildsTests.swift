@@ -142,6 +142,14 @@ final class CantripHomeBuildsTests: XCTestCase {
         return (model, client)
     }
 
+    func testUnfoldedDuoShowsTwoAppsPerRow() {
+        XCTAssertEqual(CantripHomeBuildsPresentation.gridLayout(unfoldedDuo: true, accessibilitySize: false), .twoColumns)
+        XCTAssertEqual(CantripHomeBuildsPresentation.gridLayout(unfoldedDuo: true, accessibilitySize: true), .adaptive,
+                       "Accessibility sizes stack each card, so one app per row")
+        XCTAssertEqual(CantripHomeBuildsPresentation.gridLayout(unfoldedDuo: false, accessibilitySize: false), .adaptive,
+                       "Folded, other iPhones and iPad keep the adaptive grid")
+    }
+
     func testBuildsTabFollowsArtifacts() {
         XCTAssertEqual(CantripHomeSection.allCases.suffix(2), [.artifacts, .builds])
         XCTAssertEqual(CantripHomeSection.builds.title, "Builds")
