@@ -385,6 +385,84 @@ final class CantripHomeTabDrawerTests: XCTestCase {
                           size: .accessibility3)
     }
 
+    /// The iPhone Duo open upright (669 x 951 pt, an 81 pt status band with the clock and camera ring
+    /// at its trailing end): a tab's header below the band (before) and in it (after), beside the
+    /// app-drawn rail. Set TEST_RUNNER_HOME_TABS_ARTIFACT_DIR.
+    func testDuoUprightTabHeaderScreenshots() async throws {
+        XCTAssertEqual(ChatHeaderMetrics.minimumStatusBand, 44)
+        let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_TABS_ARTIFACT_DIR"]
+        guard let directory, !directory.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_HOME_TABS_ARTIFACT_DIR to render the upright Duo header.")
+        }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let band: CGFloat = 81
+        let tab = session(plexID, "Mario Kart World cache-prepared update for first launch stutters", streaming: true,
+                          status: "Building the cache")
+        func header(inBand: Bool) -> some View {
+            ChatHeader(style: .tab, hidesLeadingInRail: true, actionsInRail: true, statusBand: inBand ? band : nil) {
+                CantripTabHeaderTitle(session: tab, connectionState: .connected)
+            } connection: { EmptyView() } lane: { EmptyView() } usage: { EmptyView() }
+            delivery: { EmptyView() } settings: { EmptyView() }
+            leading: { EmptyView() } trailing: { ChatMenuIcon(systemName: "ellipsis") }
+        }
+        func screen(inBand: Bool) -> some View {
+            HStack(spacing: 0) {
+                VStack(alignment: .trailing, spacing: 12) {
+                    Text("Status of the cache build?")
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Color.accentColor, in: Capsule()).foregroundStyle(.white)
+                    Text("It's compiling the shaders, about two minutes left.")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Spacer()
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(.systemBackground))
+                // As ChatView: below the band in its safe-area inset, or over the band.
+                .safeAreaInset(edge: .top, spacing: 0) { if !inBand { header(inBand: false) } }
+                .overlay(alignment: .top) { if inBand { header(inBand: true).ignoresSafeArea(edges: .top) } }
+                CantripDuoAppRail(dividerTop: inBand ? band : 0) {
+                    Image(systemName: "sidebar.left").frame(width: 44, height: 44)
+                    Image(systemName: "gearshape").frame(width: 44, height: 44)
+                    Image(systemName: "ellipsis").frame(width: 44, height: 44)
+                } bottom: { EmptyView() }
+            }
+            .overlay(alignment: .topTrailing) {
+                // Where the clock and camera ring sit on the device.
+                HStack(spacing: 10) {
+                    Text("12:28").font(.subheadline.weight(.semibold))
+                    Circle().strokeBorder(.secondary, lineWidth: 2).frame(width: 40, height: 40)
+                }
+                .padding(.trailing, 20).padding(.top, 28)
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+            }
+        }
+        for (name, inBand) in [("before", false), ("after", true)] {
+            for (styleName, style) in [("dark", UIUserInterfaceStyle.dark), ("light", .light)] {
+                let controller = UIHostingController(rootView: screen(inBand: inBand))
+                controller.overrideUserInterfaceStyle = style
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(origin: .zero, size: CGSize(width: 669, height: 951))
+                window.rootViewController = controller
+                window.makeKeyAndVisible()
+                defer { window.isHidden = true }
+                // Only the measured status band, whatever the screen this test runs on adds.
+                let extra = controller.view.safeAreaInsets
+                controller.additionalSafeAreaInsets = UIEdgeInsets(top: band - extra.top + controller.additionalSafeAreaInsets.top,
+                                                                   left: -extra.left, bottom: -extra.bottom, right: -extra.right)
+                try await Task.sleep(for: .milliseconds(400))
+                controller.view.layoutIfNeeded()
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                try XCTUnwrap(image.pngData()).write(to: output.appendingPathComponent("duo-upright-tab-\(name)-\(styleName).png"))
+            }
+        }
+    }
+
     private var tabHeader: some View {
         let plexible = session(plexID, "Plexible", streaming: true)
         return VStack(spacing: 24) {
