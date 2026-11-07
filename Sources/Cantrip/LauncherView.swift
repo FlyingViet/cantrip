@@ -39,6 +39,7 @@ struct LauncherView: View {
     @ObservedObject private var metrics = PanelMetrics.shared
     @State private var showUsage = false
     @State private var showHistory = false
+    @State private var showArtifacts = false
     @State private var historySearch = ""
     @State private var historyEntries: [HistoryEntry] = []
     @State private var archivedSessions: [SessionManager.ArchivedSession] = []
@@ -462,6 +463,9 @@ struct LauncherView: View {
             } else if showHistory {
                 Divider().opacity(0.3)
                 historyView
+            } else if artifactsVisible {
+                Divider().opacity(0.3)
+                PanelArtifactsView(store: CantripHomeStore.shared, maxHeight: lowerSectionMaxHeight)
             } else if !session.messages.isEmpty || session.statusText != nil {
                 Divider().opacity(0.3)
                 conversationView
@@ -665,6 +669,17 @@ struct LauncherView: View {
             .hoverHint(terminalBusy ? "Terminal — command running in background"
                                     : "Terminal — shell with persistent state (cd, env)",
                        $toolbarHint)
+
+            if settings.cantripHomeEnabled {
+                Button(action: toggleArtifacts) {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.system(size: 14))
+                        .foregroundStyle(artifactsVisible ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Artifacts — documents and media Cantrip Home saved")
+                .hoverHint("Artifacts — open, find or save Home's files", $toolbarHint)
+            }
 
             Button(action: toggleHistory) {
                 Image(systemName: "clock.arrow.circlepath")
@@ -1218,6 +1233,7 @@ struct LauncherView: View {
         showTerminal = false
         showUsage = false
         showHistory = false
+        showArtifacts = false
         activePluginPanelID = ""
     }
 
@@ -1936,7 +1952,7 @@ struct LauncherView: View {
     /// history, or usage) — i.e. there is content for suggestions to
     /// float over.
     private var lowerSectionVisible: Bool {
-        showTerminal || showUsage || showHistory
+        showTerminal || showUsage || showHistory || artifactsVisible
             || !session.messages.isEmpty || session.statusText != nil
     }
 
@@ -1944,7 +1960,7 @@ struct LauncherView: View {
         !session.isLocalPrivate && (appSuggestion != nil
             || slashToken != nil
             || showsMentionSuggestions
-            || (!fileSearch.results.isEmpty && !showHistory))
+            || (!fileSearch.results.isEmpty && !browsingList))
     }
 
     /// The suggestion rows themselves, shared between the inline layout
@@ -1959,7 +1975,7 @@ struct LauncherView: View {
             if slashToken != nil {
                 commandSuggestionRows
             }
-            if !fileSearch.results.isEmpty && !showHistory {
+            if !fileSearch.results.isEmpty && !browsingList {
                 fileResultsRows
             }
         }
@@ -2131,7 +2147,7 @@ struct LauncherView: View {
 
     /// The command name being typed, unless the suggestions were dismissed for this text.
     private var slashToken: String? {
-        guard !session.isLocalPrivate, !showHistory, dismissedSlashText != query else { return nil }
+        guard !session.isLocalPrivate, !browsingList, dismissedSlashText != query else { return nil }
         return BackendCommandFilter.slashToken(query)
     }
 
@@ -2254,7 +2270,7 @@ struct LauncherView: View {
 
     /// The "@query" being typed, unless its list was dismissed.
     private var mentionToken: (at: String.Index, query: String)? {
-        guard !manager.showingRemote, !showHistory, TabMentions.supportsMentions(session),
+        guard !manager.showingRemote, !browsingList, TabMentions.supportsMentions(session),
               let found = TabMentions.query(in: query, caret: composerCaret),
               dismissedMention != mentionPlace(found.at, in: query),
               !TabMentions.isPicked(at: found.at, in: query, picks: currentMentions) else { return nil }
@@ -2457,7 +2473,7 @@ struct LauncherView: View {
 
     /// Top app hit for the current query (Spotlight-style).
     private var appSuggestion: AppMatch? {
-        guard !session.isLocalPrivate, !showHistory, !session.isStreaming,
+        guard !session.isLocalPrivate, !browsingList, !session.isStreaming,
               !query.contains(where: \.isNewline), mentionToken == nil else { return nil }
         return AppCatalog.shared.match(query: query)
     }
@@ -2540,10 +2556,25 @@ struct LauncherView: View {
         }
     }
 
+    /// Home's artifacts, shown only while Cantrip Home is on.
+    private var artifactsVisible: Bool { showArtifacts && settings.cantripHomeEnabled }
+
+    /// History or Artifacts is open: a list with its own search field, so suggestions stay hidden.
+    private var browsingList: Bool { showHistory || artifactsVisible }
+
+    private func toggleArtifacts() {
+        withAnimation(.easeOut(duration: 0.15)) {
+            showArtifacts.toggle()
+            if showArtifacts { showHistory = false; showUsage = false; showTerminal = false }
+        }
+        // Picks up files saved into the artifacts folder outside a Home reply.
+        if showArtifacts { try? CantripHomeStore.shared.recoverUnregisteredArtifacts() }
+    }
+
     private func toggleHistory() {
         withAnimation(.easeOut(duration: 0.15)) {
             showHistory.toggle()
-            if showHistory { showUsage = false; showTerminal = false }
+            if showHistory { showUsage = false; showTerminal = false; showArtifacts = false }
         }
         if showHistory {
             historyEntries = HistoryStore.load()
@@ -2554,7 +2585,7 @@ struct LauncherView: View {
     private func toggleUsage() {
         withAnimation(.easeOut(duration: 0.15)) {
             showUsage.toggle()
-            if showUsage { showHistory = false; showTerminal = false }
+            if showUsage { showHistory = false; showTerminal = false; showArtifacts = false }
         }
         if showUsage { usage.refreshQuotas() }
     }
@@ -2599,7 +2630,7 @@ struct LauncherView: View {
     /// resize feedback glitch).
     private var councilActive: Bool {
         !manager.showingRemote && session.councilMode && settings.councilMembers.count >= 2
-            && !showUsage && !showHistory
+            && !showUsage && !showHistory && !artifactsVisible
             && (!session.messages.isEmpty || session.statusText != nil)
     }
 
@@ -2650,7 +2681,7 @@ struct LauncherView: View {
         }
         withAnimation(.easeOut(duration: 0.15)) {
             showTerminal.toggle()
-            if showTerminal { showHistory = false; showUsage = false }
+            if showTerminal { showHistory = false; showUsage = false; showArtifacts = false }
         }
     }
 

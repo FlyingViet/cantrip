@@ -89,8 +89,9 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
 - **Cantrip Home:** one permanent conversation that answers questions, hands
   project changes to the right tab or opens a new one, and runs scheduled
   (interval, weekday or monthly) tasks, trackers and incident investigations,
-  with cards on their results. In Cantrip Agent, Home's **Builds** section
-  lists your over-the-air install page. [Cantrip Home](docs/cantrip-home.md)
+  with cards on their results. Files it saves collect in **Artifacts**, which
+  the ⌥Space panel's toolbar also opens. In Cantrip Agent, Home's **Builds**
+  section lists your over-the-air install page. [Cantrip Home](docs/cantrip-home.md)
 - **Shared Mac resources:** tabs lease simulators from a small shared pool, and
   with **Heavy builds take turns** on, `xcodebuild` and `swift` builds from
   tabs, child tabs, self-hosted CI runners and Home wait for a few build slots, listed in

@@ -294,7 +294,8 @@ extension CantripHomeStore {
         )
     }
 
-    private static func downloadURL(_ artifact: CantripHomeArtifact, root: URL) throws -> URL {
+    /// The artifact's regular file below `root` (symlinks resolved), or `unavailable`.
+    nonisolated static func downloadURL(_ artifact: CantripHomeArtifact, root: URL) throws -> URL {
         let url = root.appendingPathComponent(artifact.relativePath)
             .standardizedFileURL.resolvingSymlinksInPath()
         guard url.path.hasPrefix(root.path + "/"),
