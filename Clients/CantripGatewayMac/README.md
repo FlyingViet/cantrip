@@ -112,7 +112,8 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
 - **Sidebar:** Pip shows Home's mood. Below Pip are Chat, Tasks and Artifacts, with
   badges for questions waiting and running tasks, then **Tabs · N**: every project tab on
   the Mac with a spinner while it works (or a question mark while it waits for you), an idle
-  dot otherwise, and how long ago it last ran. **+** (⌘T) starts a tab; drag to reorder;
+  dot otherwise, a gear and count while it has background tasks running, and how long ago it
+  last ran. **+** (⌘T) starts a tab; drag to reorder;
   right-click for Model Settings, Start Fresh, Tools for This Tab, Rename, Lock, Move to
   Section, Move Up/Down and Close. With sections (made on any device), tabs show under collapsible headers, each
   with its own **+** and a right-click menu (Rename, New Tab Here, Move Up/Down, Delete, Edit
@@ -165,7 +166,9 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   The button turns orange while a command runs with the pane hidden. Line-based, so full-screen
   programs such as `vim` or `top` don't work. Not in Private Local. Needs a Cantrip host with
   `supportsTerminal`.
-- **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS),
+- **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS; its list
+  also has every tab's running background tasks under **In tabs** and builds taking turns on
+  the Mac under **Builds**),
   delivery mode and one **More** menu everywhere: the open tab's actions (or
   Home's Model Settings and Start Fresh, or the local model's settings), then Back to Home and
   Settings. Voice Mode opens from the composer's microphone (double-click it) or ⇧⌘V.
