@@ -349,6 +349,18 @@ artifact folder, every folder opened without following symlinks, 20 MB and
 limit. Thumbnails are cached in `~/.cache/Cantrip/home/thumbnails/` until the
 file changes or is deleted.
 
+### Artifacts in the ⌥Space panel
+
+On the Mac itself, the panel's toolbar has an **Artifacts** button (four squares)
+while Cantrip Home is on. It lists every artifact newest first, with the same
+thumbnails, and a search field that matches title, file name, folder and kind.
+Click a row to open the file, the magnifying glass to show it in Finder, or **…**
+(or right-click) for **Save As…** (a Save dialog opened in Downloads) and **Copy
+Path**. **Open Folder** shows the whole artifacts folder. Opening the list also
+picks up files saved straight into the top of the artifacts folder. A row whose
+file was deleted outside Cantrip is dimmed and marked **File missing**. Only
+regular files inside the artifacts folder open, never a link pointing out of it.
+
 ### Saving artifacts on a client
 
 Every client can save the original file, not just preview it: **Save to Files…**

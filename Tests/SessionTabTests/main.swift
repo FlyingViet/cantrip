@@ -113,6 +113,12 @@ struct SessionTabTests {
             try await testAgentPolicyRemote()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "artifacts" {
+            try await testCantripHomeArtifactThumbnails()
+            try await testPanelArtifacts()
+            print("Artifacts tests passed")
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "build-queue" {
             try testBuildQueue()
             return
@@ -263,6 +269,7 @@ struct SessionTabTests {
         try testCantripHomeMonthlySchedules()
         try await testCantripHome()
         try await testCantripHomeArtifactThumbnails()
+        try await testPanelArtifacts()
         try await testCantripHomeBuilds()
         try await testCantripHomeGuardrails()
         try await testAgentPolicyGate()
