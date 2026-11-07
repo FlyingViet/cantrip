@@ -2542,6 +2542,7 @@ final class ChatSession: ObservableObject {
                                completion: @escaping (String) -> Void) {
         let memoryEnabled = settings.memoryEnabled && !isLocalPrivate && includeMemory
         let path = settings.memoryPath
+        let searchIndex = settings.memorySearchIndex
         let privacy = isPrivate
         let directory = workdir
         let configuredBackend = settings.backend
@@ -2558,10 +2559,11 @@ final class ChatSession: ObservableObject {
             var block = ""
             var parts = (stable: "", retrieved: "")
             if memoryEnabled, taskHead != nil {
-                parts = await MemoryStore.contextParts(query: query, path: path)
+                parts = await MemoryStore.contextParts(query: query, path: path, searchIndex: searchIndex)
             } else if memoryEnabled {
                 block = await MemoryStore.contextBlock(
-                    query: query, path: path, isPrivate: privacy, isLocal: backendKind == .localModel
+                    query: query, path: path, isPrivate: privacy, isLocal: backendKind == .localModel,
+                    searchIndex: searchIndex
                 )
             }
             guard !Task.isCancelled, self.streamGeneration == generation,
@@ -4695,6 +4697,8 @@ final class ChatSession: ObservableObject {
         }
         if !exchange.prompt.isEmpty || !exchange.replies.isEmpty {
             SessionLogScrubber.remove(exchanges, in: MemoryStore.shared.sessionsURL)
+            // The deleted text leaves the search index now, not at the next message.
+            if settings.memorySearchIndex { MemoryStore.searchIndexFilesChanged(path: settings.memoryPath) }
         }
         if let prompt = prompt?.text.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
             Log.redact(Set([prompt.prefix(80), prompt.prefix(60)]).map { "\"\($0)\"" },

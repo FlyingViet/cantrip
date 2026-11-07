@@ -4352,6 +4352,10 @@ struct SettingsView: View {
                 .toggleStyle(.checkbox)
             if settings.memoryEnabled {
                 labeledField("Memory vault folder", text: $settings.memoryPath, prompt: "\(NSHomeDirectory())/Cantrip Memory")
+                Toggle("Search memory with a local index (SQLite on this Mac, rebuilt from the notes)",
+                       isOn: $settings.memorySearchIndex)
+                    .font(.caption)
+                    .toggleStyle(.checkbox)
             }
             if AntigravityBackend.isInstalled(customPath: settings.agyPath) {
                 // Opt-ins: both send content to Google through Antigravity; off by default.

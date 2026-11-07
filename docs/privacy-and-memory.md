@@ -115,6 +115,7 @@ Open Settings and review these switches before asking about sensitive work:
 | Setting | Fresh-install default | What it does |
 |---|---|---|
 | Memory vault | On | Adds core notes and relevant saved context |
+| Search memory with a local index | Off | Picks that saved context with a full-text index on this Mac instead of counting words |
 | Search my documents' contents as context | On | Adds matching excerpts from Spotlight-indexed documents |
 | Share my calendar as context | On | Adds available calendar context for the next 48 hours |
 | Share my location as context | On | Adds available location context |
@@ -205,6 +206,41 @@ never transmitted.
 
 To stop using the vault, turn **Memory vault** off. This does not delete it.
 Back up notes before manually removing or rewriting them.
+
+## Search memory with a local index
+
+Each message gets up to three **RETRIEVED** snippets from your notes and session
+logs, about 2,400 characters in all. By default Cantrip picks them by counting
+how often the message's words appear in each file, so a long file can win just
+by being long, and a pasted log that repeats a word can be picked again and
+again.
+
+Turn on **Search memory with a local index** (under **Memory vault**, in
+Settings › Memory on every client) to pick them with a full-text index instead:
+
+- **What's indexed:** your notes and `sessions/` logs, split into chunks by heading
+  and paragraph. `MEMORY.md` and `USER.md` are always loaded anyway, so they're
+  left out. So are fenced code blocks, timestamped log lines, lines repeated three
+  or more times in a file, and long unbroken strings such as hashes. A chunk
+  that's already in the same file is indexed once.
+- **How snippets are ranked:** SQLite's BM25 ranking with English stemming
+  ("restarting" matches "restart"), so the chunk that best fits the message wins
+  regardless of file size. Recent session entries get a boost that halves every
+  7 days. Curated notes beat a session entry of equal relevance once it's more than
+  about 9 days old.
+  You get at most one chunk per file, and a near-copy of a chunk already chosen
+  is skipped.
+- **Where it lives:** `~/Library/Application Support/Cantrip/memory-index.sqlite`,
+  owner-only and outside the vault. The Markdown files stay the source of truth.
+  The index is derived from them, built in the background when you turn it on,
+  and kept current before each message by re-reading only files whose date or
+  size changed. A message you delete from a tab leaves the index right away.
+- **Turning it off** deletes the index. If the index can't be opened or read,
+  Cantrip deletes it, uses word counting for 10 minutes, then rebuilds it.
+
+It runs entirely on the Mac, using the SQLite that ships with macOS. It makes no
+network calls and never stores your messages: it only holds text from the vault.
+The index is updated even in private mode, but only with vault text.
 
 ## Keep memory in one place
 
