@@ -32,7 +32,7 @@ import {
   type ThreadLine,
 } from "../src/gateway/state/threads";
 import { mascotName } from "../src/gateway/ui/pip/prefs";
-import { MessageRow } from "../src/gateway/ui/transcript/Message";
+import { handoffResultStatus, MessageRow } from "../src/gateway/ui/transcript/Message";
 import { ThreadBody, ThreadLaneRow, ThreadQuote, ThreadRepliesButton } from "../src/gateway/ui/transcript/ThreadTags";
 
 // MARK: A small VNode walker (no DOM): components are called with their props, like a shallow render.
@@ -341,5 +341,15 @@ describe("thread tags", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(threadLoad(PROMPT_ID)).toBeUndefined();
     expect(openThread.value).toBeNull();
+  });
+});
+
+describe("tab ask cards", () => {
+  it("read as a question to the tab, not work handed to it", () => {
+    expect(handoffResultStatus({ state: "working", kind: "ask" })).toBe("Asked tab");
+    expect(handoffResultStatus({ state: "completed", kind: "ask" })).toBe("Answer from tab");
+    expect(handoffResultStatus({ state: "needsInput", kind: "ask" })).toBe("Needs your answer first");
+    expect(handoffResultStatus({ state: "working" })).toBe("Working in tab");
+    expect(handoffResultStatus({ state: "failed" })).toBe("Failed in tab");
   });
 });

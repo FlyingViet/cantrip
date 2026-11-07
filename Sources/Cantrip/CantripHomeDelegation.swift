@@ -954,7 +954,7 @@ final class CantripHomeDelegations {
                target.queued.contains(where: { $0.text == next.prompt }) {
                 next.status = .queued
                 next.latestStatus = target.deliveryStatus
-                    ?? "Waiting for the tab's current work to finish."
+                    ?? "Waiting for the tab to be free."
             } else {
                 finish(.cancelled, error: next.tabMessageID == nil
                        ? "The tab removed this request before it ran."

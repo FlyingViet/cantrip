@@ -175,7 +175,7 @@ function messageItem(message: HomeMessage): HTMLElement | null {
   const result = message.handoffResult;
   const author =
     message.role === "user" ? "You"
-      : message.role === "handoff" ? `Handoff · ${result?.tabTitle || "tab"}`
+      : message.role === "handoff" ? `${result?.kind === "ask" ? "Question" : "Handoff"} · ${result?.tabTitle || "tab"}`
         : message.role === "error" ? "Error"
           : "Cantrip Home";
   item.append(el("h3", "message-author", author));

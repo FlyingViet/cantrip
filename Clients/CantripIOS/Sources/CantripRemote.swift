@@ -353,9 +353,13 @@ struct CantripRemoteHandoffResult: Decodable, Equatable {
     let startedAt: TimeInterval?
     let finishedAt: TimeInterval?
     let updatedAt: TimeInterval?
+    /// "ask": the card for a `tab ask` question another tab answers (`summary` is the question).
+    var kind: String? = nil
+
+    var isAsk: Bool { kind == "ask" }
 
     private enum CodingKeys: String, CodingKey {
-        case delegationID, tabID, tabTitle, summary, state, detail, startedAt, finishedAt, updatedAt
+        case delegationID, tabID, tabTitle, summary, state, detail, startedAt, finishedAt, updatedAt, kind
     }
 
     init(
@@ -394,6 +398,7 @@ struct CantripRemoteHandoffResult: Decodable, Equatable {
             finishedAt: container.decodeLenient(TimeInterval.self, forKey: .finishedAt),
             updatedAt: container.decodeLenient(TimeInterval.self, forKey: .updatedAt)
         )
+        kind = container.decodeLenient(String.self, forKey: .kind)
     }
 }
 
