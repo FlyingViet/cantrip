@@ -153,6 +153,7 @@ final class CantripCardTests: XCTestCase {
         XCTAssertTrue(disclosures.isOpen(key), "the title opens it, and the app remembers that")
         disclosures.toggle(key)
         XCTAssertFalse(disclosures.isOpen(key))
+        #if canImport(UIKit)
         guard let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_CARDS_ARTIFACT_DIR"], !directory.isEmpty else { return }
         let output = URL(fileURLWithPath: directory, isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -168,6 +169,7 @@ final class CantripCardTests: XCTestCase {
             let image = try XCTUnwrap(renderer.uiImage)
             try XCTUnwrap(image.pngData()).write(to: output.appendingPathComponent("build-card-earlier-\(name).png"))
         }
+        #endif
         if disclosures.isOpen(key) { disclosures.toggle(key) }
     }
 
