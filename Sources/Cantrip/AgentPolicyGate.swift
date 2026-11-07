@@ -43,9 +43,26 @@ enum AgentPolicyGate {
             Log.write("home policy: denied \(request.kind.rawValue): \(request.command.prefix(160))")
             return .deny(reason: home.reason, by: "Cantrip Home policy")
         }
+        let context = context ?? .current(workdir: workdir)
         var user = AgentPolicyDecision()
         if document.enabled {
-            user = document.evaluate(request, context: context ?? .current(workdir: workdir))
+            user = document.evaluate(request, context: context)
+        }
+        // An ask rule with a privacy scan (pushes to public repositories) settles the push itself:
+        // a clean scan of every outgoing commit lets it run, logged with the scan for the record,
+        // and the call is checked again without that rule; findings or a scan that can't finish ask.
+        var cleared: [String] = []
+        while user.verdict == .ask, user.rule?.privacyScan == true, let folder = user.directory {
+            let scan = AgentPolicyPrivacyScan.scan(folder: folder, push: user.words, privateTerms: document.privateTerms)
+            guard scan.isClean else {
+                Log.write("policy: \(user.ruleID) privacy scan isn't clean (\(scan.logLine)); asking before \(user.action)")
+                return .ask(title: "\(label) wants to \(user.action)",
+                            detail: detail(user, request: request, privateTerms: document.privateTerms, scan: scan),
+                            scope: user.scope, source: "Cantrip policy", action: user.action)
+            }
+            Log.write("policy: \(user.ruleID) auto-approved \(user.action) after a clean privacy scan: \(scan.summary)")
+            cleared.append(user.ruleID)
+            user = document.evaluate(request, context: context, excluding: Set(cleared))
         }
         if user.verdict == .deny {
             Log.write("policy: \(user.ruleID) denied \(request.kind.rawValue): \(user.matched.prefix(160))")
@@ -60,6 +77,7 @@ enum AgentPolicyGate {
                         source: "Cantrip Home", action: home.action)
         }
         if user.verdict == .allow { return .allow(by: "Cantrip policy (\(user.ruleID))") }
+        if let rule = cleared.last { return .allow(by: "Cantrip policy (\(rule), privacy scan clean)") }
         guard approval.runsWithoutAsking(request) else { return .prompt }
         if home?.automatic == true {
             Log.write("home policy: approved \(home?.action ?? "") automatically (Act on my behalf)")
@@ -68,8 +86,9 @@ enum AgentPolicyGate {
     }
 
     /// The approval card's text: which rule asks and why, what would run, and for a push to a
-    /// public repository, what the privacy scan found in the outgoing commits.
-    static func detail(_ decision: AgentPolicyDecision, request: CantripHomeActionRequest, privateTerms: [String]) -> String {
+    /// public repository, what the privacy scan found in the outgoing commits (`scan`, when it ran).
+    static func detail(_ decision: AgentPolicyDecision, request: CantripHomeActionRequest, privateTerms: [String],
+                       scan: AgentPolicyPrivacyScan.Result? = nil) -> String {
         let what: String
         switch request.kind {
         case .shell: what = request.command
@@ -77,8 +96,10 @@ enum AgentPolicyGate {
         default: what = (request.paths + [request.url, request.tool].compactMap { $0 }).joined(separator: "\n")
         }
         var text = "Cantrip's policy asks first (rule \(decision.ruleID)): \(decision.reason)\n\n\(what.prefix(2_000))"
-        if decision.rule?.privacyScan == true, let folder = decision.directory {
-            text += "\n\n" + AgentPolicyPrivacyScan.scan(folder: folder, privateTerms: privateTerms).summary
+        if let scan {
+            text += "\n\n" + scan.summary
+        } else if decision.rule?.privacyScan == true, let folder = decision.directory {
+            text += "\n\n" + AgentPolicyPrivacyScan.scan(folder: folder, push: decision.words, privateTerms: privateTerms).summary
         }
         return text
     }
@@ -105,27 +126,130 @@ enum AgentPolicyGate {
 /// Before a push to a public repository: the outgoing commits' authors and added lines, checked
 /// for email addresses, private network addresses, tailnet names and the user's own private terms.
 enum AgentPolicyPrivacyScan {
+    /// Commits one scan reads; a push with more can't be cleared by the scan alone.
+    static let commitLimit = 50
+    /// `git log` text one scan reads.
+    static let textLimit = 4_000_000
+
     struct Result: Equatable {
         var commits = 0
         var findings: [String] = []
         var failure: String?
+        /// The push has more outgoing commits (or text) than one scan reads.
+        var truncated = false
+
+        /// Every outgoing commit was read and nothing private turned up: the push may run.
+        var isClean: Bool { failure == nil && !truncated && findings.isEmpty }
 
         var summary: String {
             if let failure { return "Privacy scan: couldn't run (\(failure)). Check the outgoing commits yourself before approving." }
+            if !findings.isEmpty {
+                return "Privacy scan found \(findings.count) possible private detail(s) in \(commits) outgoing commit(s)"
+                    + (truncated ? " (only the latest \(commitLimit) were checked)" : "") + ":\n"
+                    + findings.prefix(12).map { "- \($0)" }.joined(separator: "\n")
+            }
+            if truncated {
+                return "Privacy scan: more than \(commitLimit) outgoing commits, and only the latest \(commitLimit) were checked "
+                    + "(nothing private in those). Check the rest yourself before approving."
+            }
             if commits == 0 { return "Privacy scan: no outgoing commits found." }
-            if findings.isEmpty { return "Privacy scan: \(commits) outgoing commit(s), nothing private found." }
-            return "Privacy scan found \(findings.count) possible private detail(s) in \(commits) outgoing commit(s):\n"
-                + findings.prefix(12).map { "- \($0)" }.joined(separator: "\n")
+            return "Privacy scan: \(commits) outgoing commit(s), nothing private found."
+        }
+
+        /// For Cantrip's log: counts only, never the private details themselves.
+        var logLine: String {
+            if let failure { return "couldn't run: \(failure)" }
+            return "\(findings.count) finding(s) in \(commits) commit(s)" + (truncated ? ", more commits than one scan reads" : "")
         }
     }
 
-    static func scan(folder: String, privateTerms: [String]) -> Result {
-        let upstream = AgentPolicyGit.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], in: folder)
-        let range = upstream.map { "\($0)..HEAD" } ?? "HEAD"
-        guard let log = AgentPolicyGit.git(["log", range, "--format=%x00%H%x01%an <%ae>", "-p", "--no-color", "--unified=0", "-n", "50"], in: folder) else {
+    /// What a `git push` sends: the revisions to read, and the remote whose branches already have
+    /// what's on them (nil for a URL or path, whose commits can't be told apart).
+    struct PushRange: Equatable {
+        var revisions: [String]
+        var remote: String?
+    }
+
+    /// Reads a `git push` command's words (`git [-C dir] push [options] [remote] [refspecs]`).
+    static func pushRange(_ words: [String]) -> PushRange {
+        guard let push = words.firstIndex(of: "push") else { return PushRange(revisions: ["HEAD"], remote: nil) }
+        let valued: Set<String> = ["-o", "--push-option", "--repo", "--receive-pack", "--exec"]
+        var positional: [String] = []
+        var repo: String?
+        var all = false, mirror = false, tags = false, delete = false
+        var index = words.index(after: push)
+        while index < words.endIndex {
+            let word = words[index]
+            index += 1
+            if word == "--" {
+                positional += words[index...]
+                break
+            }
+            guard word.hasPrefix("-"), word.count > 1 else {
+                positional.append(word)
+                continue
+            }
+            if valued.contains(word) {
+                if word == "--repo", index < words.endIndex { repo = words[index] }
+                index += 1
+                continue
+            }
+            if word.hasPrefix("--repo=") { repo = String(word.dropFirst("--repo=".count)) }
+            switch word {
+            case "--all", "--branches": all = true
+            case "--mirror": mirror = true
+            case "--tags": tags = true
+            case "-d", "--delete": delete = true
+            default: break
+            }
+        }
+        let remote = positional.first ?? repo
+        var revisions: [String] = []
+        if mirror { revisions.append("--all") }
+        if all { revisions.append("--branches") }
+        if tags { revisions.append("--tags") }
+        let refspecs = Array(positional.dropFirst())
+        if !delete {
+            var position = 0
+            while position < refspecs.count {
+                var spec = refspecs[position]
+                position += 1
+                if spec == "tag", position < refspecs.count {
+                    revisions.append("refs/tags/" + refspecs[position])
+                    position += 1
+                    continue
+                }
+                if spec.hasPrefix("+") { spec.removeFirst() }
+                let source = String(spec.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+                // A source that reads as an option is never handed to `git log`.
+                if !source.isEmpty, !source.hasPrefix("-") { revisions.append(source) }
+            }
+            if refspecs.isEmpty, revisions.isEmpty { revisions.append("HEAD") }
+        }
+        return PushRange(revisions: revisions, remote: remote)
+    }
+
+    /// Scans the commits `push` (a `git push` command's words; empty: a plain `git push`) would
+    /// send from `folder`: those reachable from what it pushes and not yet on the remote's branches.
+    static func scan(folder: String, push: [String] = [], privateTerms: [String]) -> Result {
+        let range = pushRange(push)
+        guard !range.revisions.isEmpty else { return Result() }
+        var remote = range.remote
+        if remote == nil {
+            let upstream = AgentPolicyGit.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], in: folder)
+            remote = upstream?.split(separator: "/").first.map(String.init) ?? "origin"
+        }
+        var arguments = ["log", "--format=%x00%H%x01%an <%ae>", "-p", "--no-color", "--unified=0", "-n", String(commitLimit + 1)]
+            + range.revisions
+        if let remote, !remote.isEmpty, !remote.contains("/"), !remote.contains(":"), !remote.hasPrefix("-") {
+            arguments += ["--not", "--remotes=\(remote)"]
+        }
+        guard let log = AgentPolicyGit.git(arguments, in: folder) else {
             return Result(failure: "git log failed")
         }
-        return scan(log: String(log.prefix(4_000_000)), privateTerms: privateTerms)
+        var result = scan(log: String(log.prefix(textLimit)), privateTerms: privateTerms)
+        if result.commits > commitLimit || log.count > textLimit { result.truncated = true }
+        return result
     }
 
     /// `log` is `git log --format=%x00%H%x01%an <%ae> -p` output.

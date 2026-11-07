@@ -183,8 +183,114 @@ extension SessionTabTests {
         precondition(AgentPolicyPrivacyScan.scan(log: "\u{0}abc\u{1}Bot <b@example.com>\n+clean line\n", privateTerms: [])
                         .summary.contains("nothing private found"), "A clean push says so")
 
+        try testPrivacyScanPushes(folder)
         try await testAgentPolicyClaudeTab(folder)
-        print("Agent policy gate: decisions, Home layer, privacy scan and a Claude tab on Act on my behalf passed")
+        print("Agent policy gate: decisions, Home layer, privacy scan, scanned pushes and a Claude tab on Act on my behalf passed")
+    }
+
+    /// A push under an ask rule with `privacyScan` runs when the scan of what it sends is clean
+    /// (logged with the scan), and asks with the scan when it finds something, can't run, or can't
+    /// read every outgoing commit. Other rules that match the push still decide.
+    private static func testPrivacyScanPushes(_ base: String) throws {
+        let root = URL(fileURLWithPath: base).appendingPathComponent("scan-\(UUID().uuidString)")
+        let remote = root.appendingPathComponent("public.git").path
+        let work = root.appendingPathComponent("public").path
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        @discardableResult
+        func sh(_ script: String, in folder: String? = nil) throws -> String {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", script]
+            process.currentDirectoryURL = URL(fileURLWithPath: folder ?? work)
+            var environment = ProcessInfo.processInfo.environment
+            for key in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] { environment[key] = nil }
+            environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
+            environment["GIT_CONFIG_NOSYSTEM"] = "1"
+            process.environment = environment
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = output
+            try process.run()
+            process.waitUntilExit()
+            let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            precondition(process.terminationStatus == 0, "\(script): \(text)")
+            return text
+        }
+        let commit = "git -c user.name=Bot -c user.email=bot@users.noreply.github.com commit -q"
+        try sh("git -c init.defaultBranch=main init -q --bare public.git && git -c init.defaultBranch=main clone -q public.git public 2>/dev/null",
+               in: root.path)
+        try sh("echo first > a.txt && git add a.txt && \(commit) -m first && git push -q origin HEAD:main 2>/dev/null")
+        try sh("git branch -q --set-upstream-to=origin/main 2>/dev/null || true")
+
+        var context = AgentPolicyContext.current(workdir: work)
+        context.repository = { _ in nil }
+        var policy = AgentPolicyDocument.starter
+        policy.privateTerms = ["Fixture Person"]
+        policy.rules.append(.init(id: "public-push", effect: .ask, reason: "Public repo: check the privacy scan first.",
+                                  commands: ["git push"], privacyScan: true))
+        func gate(_ command: String, _ approval: CantripHomeApproval = .ask,
+                  document: AgentPolicyDocument? = nil) -> AgentPolicyOutcome {
+            AgentPolicyGate.decide(.shell(command), guardrail: nil, approval: approval, label: "Public tab", workdir: work,
+                                   policy: document ?? policy, context: context)
+        }
+        func askDetail(_ outcome: AgentPolicyOutcome) -> String? {
+            if case .ask(_, let detail, _, _, _) = outcome { return detail }
+            return nil
+        }
+
+        // Nothing new to send, then clean commits: the push runs, even with Act on my behalf off.
+        let clearedBy = AgentPolicyOutcome.allow(by: "Cantrip policy (public-push, privacy scan clean)")
+        precondition(gate("git push -q origin HEAD:main") == clearedBy, "nothing outgoing is a clean scan")
+        try sh("echo second > b.txt && git add b.txt && \(commit) -m second")
+        let clean = gate("git push -q origin HEAD:main")
+        precondition(clean == clearedBy && clean.explicitlyAllowed, "a clean scan lets the push run: \(clean)")
+        precondition(gate("git push").explicitlyAllowed && gate("cd \(work) && git push origin main").explicitlyAllowed,
+                     "a plain push and a named branch scan the same commits")
+        let scanned = AgentPolicyPrivacyScan.scan(folder: work, push: ["git", "push", "origin", "HEAD:main"], privateTerms: [])
+        precondition(scanned.commits == 1 && scanned.isClean
+                     && scanned.summary == "Privacy scan: 1 outgoing commit(s), nothing private found.", scanned.summary)
+
+        // Another rule that asks about the push still asks once the scan is clean.
+        var stricter = policy
+        stricter.rules.append(.init(id: "push-review", effect: .ask, reason: "Review pushes.", commands: ["git push"]))
+        precondition(askDetail(gate("git push -q origin HEAD:main", .automatic, document: stricter))?.contains("rule push-review") == true,
+                     "a clean scan settles only its own rule")
+
+        // Findings: the card shows them, and the push waits. (The address is built here so this file
+        // has none for the repository's own scan.)
+        let email = "someone" + "@example.org"
+        try sh("printf 'contact: \(email)\\nsays Fixture Person\\n' > c.txt && git add c.txt && \(commit) -m third")
+        let found = askDetail(gate("git push -q origin HEAD:main", .automatic))
+        precondition(found?.contains("rule public-push") == true && found?.contains("Privacy scan found 2 possible private detail(s) in 2 outgoing commit(s)") == true
+                     && found?.contains("email address: \(email)") == true, found ?? "no ask")
+
+        // Only what the push sends is read: a clean branch goes, a tag on the commit with findings asks.
+        try sh("git branch -q clean-branch HEAD~1 && git tag v1")
+        precondition(gate("git push origin clean-branch") == clearedBy, "a branch without the findings runs")
+        precondition(askDetail(gate("git push origin v1"))?.contains(email) == true, "the tag's commits are read")
+        precondition(askDetail(gate("git push origin tag v1"))?.contains(email) == true, "`tag <name>` too")
+        precondition(gate("git push origin --delete old-branch") == clearedBy, "deleting a branch sends no commits")
+
+        // A scan that can't run, or can't read every outgoing commit, asks.
+        let failed = askDetail(gate("git push origin no-such-branch"))
+        precondition(failed?.contains("Privacy scan: couldn't run (git log failed)") == true, failed ?? "no ask")
+        try sh("git reset -q --hard HEAD~1 && i=0; while [ $i -le \(AgentPolicyPrivacyScan.commitLimit) ]; do \(commit) --allow-empty -m c$i; i=$((i+1)); done")
+        let many = askDetail(gate("git push -q origin HEAD:main"))
+        precondition(many?.contains("more than \(AgentPolicyPrivacyScan.commitLimit) outgoing commits") == true, many ?? "no ask")
+
+        // Reading pushes: options, sources and remotes.
+        let range = AgentPolicyPrivacyScan.pushRange
+        precondition(range(["git", "push"]) == .init(revisions: ["HEAD"], remote: nil))
+        precondition(range(["git", "-C", "x", "push", "-q", "-u", "origin", "+feature:main", "v2"]) == .init(revisions: ["feature", "v2"], remote: "origin"))
+        precondition(range(["git", "push", "-o", "ci.skip", "--tags", "origin"]) == .init(revisions: ["--tags"], remote: "origin"))
+        precondition(range(["git", "push", "origin", "+--output=x:main"]) == .init(revisions: [], remote: "origin"),
+                     "a source that reads as an option is never passed on")
+        precondition(range(["git", "push", "origin", ":old"]).revisions.isEmpty && range(["git", "push", "-d", "origin", "x"]).revisions.isEmpty)
+
+        // Rule lists say what the scan does.
+        precondition(policy.rules.last?.summary == "commands: git push; runs without asking when the privacy scan of the outgoing commits is clean",
+                     policy.rules.last?.summary ?? "")
+        try? FileManager.default.removeItem(at: root)
     }
 
     /// A regular Claude tab with Act on my behalf still launches bypassPermissions, but registers
