@@ -199,6 +199,16 @@ final class HostServices {
         }
         .store(in: &cancellables)
 
+        // The optional memory search index: built in the background while on, deleted when off.
+        Publishers.CombineLatest3(
+            AppSettings.shared.$memoryEnabled, AppSettings.shared.$memorySearchIndex, AppSettings.shared.$memoryPath
+        )
+        .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+        .sink { enabled, indexed, path in
+            if enabled && indexed { MemoryStore.prepareSearchIndex(path: path) } else { MemoryStore.removeSearchIndex() }
+        }
+        .store(in: &cancellables)
+
         // Daily memory consolidation, off the launch path; failed runs retry with backoff.
         Consolidator.start()
         // Daily cleanup of agent session folders and worktrees nothing uses anymore.

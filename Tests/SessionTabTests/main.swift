@@ -113,6 +113,10 @@ struct SessionTabTests {
             try await testAgentPolicyRemote()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "memory-index" {
+            try await testMemorySearchIndexRetrieval()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "artifacts" {
             try await testCantripHomeArtifactThumbnails()
             try await testPanelArtifacts()
@@ -270,6 +274,7 @@ struct SessionTabTests {
         try await testCantripHome()
         try await testCantripHomeArtifactThumbnails()
         try await testPanelArtifacts()
+        try await testMemorySearchIndexRetrieval()
         try await testCantripHomeBuilds()
         try await testCantripHomeGuardrails()
         try await testAgentPolicyGate()

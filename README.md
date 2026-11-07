@@ -100,7 +100,8 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
 - **Private Local:** a saved tab that only talks to your self-hosted Ollama
   server, with no tools or cloud fallback.
   [Setup](docs/remote-control.md#persistent-private-local-tab)
-- **Memory and council:** editable Markdown memory and multi-model answers.
+- **Memory and council:** editable Markdown memory, with an optional local
+  search index for picking the notes each message gets, and multi-model answers.
   [Privacy and memory](docs/privacy-and-memory.md)
 - **Usage and context:** Copilot AI-credit usage and a per-prompt context
   window breakdown.

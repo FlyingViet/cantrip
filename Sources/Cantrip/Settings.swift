@@ -703,6 +703,11 @@ final class AppSettings: ObservableObject {
     @Published var memoryPath: String {
         didSet { d.set(memoryPath, forKey: "memoryPath") }
     }
+    /// Pick RETRIEVED memory snippets with a local SQLite full-text index (`MemorySearchIndex`)
+    /// instead of counting words. Off by default; the index is derived from the vault.
+    @Published var memorySearchIndex: Bool {
+        didSet { d.set(memorySearchIndex, forKey: "memorySearchIndex") }
+    }
     /// A build disk (a NAS, say) exported to every agent as `CANTRIP_BUILD_ROOT`: build scripts
     /// put large output there and build locally whenever it isn't mounted. Empty: build locally.
     @Published var buildRoot: String {
@@ -856,7 +861,8 @@ final class AppSettings: ObservableObject {
             "allowActions": allowActions, "shareLocation": shareLocation,
             "shareCalendar": shareCalendar, "attachScreen": attachScreen,
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
-            "memoryPath": memoryPath, "buildRoot": buildRoot, "fileRAGEnabled": fileRAGEnabled,
+            "memoryPath": memoryPath, "memorySearchIndex": memorySearchIndex,
+            "buildRoot": buildRoot, "fileRAGEnabled": fileRAGEnabled,
             "panelOpacity": panelOpacity,
             "remoteControlEnabled": remoteControlEnabled,
             "remoteControlPort": remoteControlPort,
@@ -999,6 +1005,7 @@ final class AppSettings: ObservableObject {
         bool("voiceMode") { self.voiceMode = $0 }
         bool("memoryEnabled") { self.memoryEnabled = $0 }
         str("memoryPath") { self.memoryPath = $0 }
+        bool("memorySearchIndex") { self.memorySearchIndex = $0 }
         str("buildRoot") { self.buildRoot = $0 }
         bool("fileRAGEnabled") { self.fileRAGEnabled = $0 }
         bool("remoteControlEnabled") { self.remoteControlEnabled = $0 }
@@ -1292,6 +1299,7 @@ final class AppSettings: ObservableObject {
         panelOpacity = storedOpacity == 0 ? 1.0 : min(max(storedOpacity, 0.5), 1.0)
         memoryEnabled = d.object(forKey: "memoryEnabled") == nil ? true : d.bool(forKey: "memoryEnabled")
         memoryPath = d.string(forKey: "memoryPath") ?? "\(NSHomeDirectory())/Cantrip Memory"
+        memorySearchIndex = d.bool(forKey: "memorySearchIndex")
         buildRoot = d.string(forKey: "buildRoot") ?? ""
     }
 }

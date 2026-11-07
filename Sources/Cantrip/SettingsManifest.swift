@@ -280,6 +280,7 @@ enum SettingsManifest {
             "linkPreviewsEnabled": .bool(s.linkPreviewsEnabled),
             "memoryEnabled": .bool(s.memoryEnabled),
             "memoryPath": .string(s.memoryPath),
+            "memorySearchIndex": .bool(s.memorySearchIndex),
             "agyMemoryConsolidation": .bool(s.agyMemoryConsolidation),
             "fileRAGEnabled": .bool(s.fileRAGEnabled),
             "shareCalendar": .bool(s.shareCalendar),
@@ -547,7 +548,10 @@ enum SettingsManifest {
         memoryPath.access = .atMac
         memoryPath.placeholder = "\(NSHomeDirectory())/Cantrip Memory"
         memoryPath.visibleWhen = on("memoryEnabled")
-        var memoryFields = [memoryOn, memoryPath]
+        var searchIndex = field("memorySearchIndex", .toggle, "Search memory with a local index",
+                                help: "Picks the notes and session entries closest to each message with a full-text index on this Mac (SQLite), instead of counting words. Built from the vault and rebuilt when notes change; turning it off deletes it.")
+        searchIndex.visibleWhen = on("memoryEnabled")
+        var memoryFields = [memoryOn, memoryPath, searchIndex]
         if agyInstalled {
             var consolidation = field("agyMemoryConsolidation", .toggle, "Consolidate memory with Gemini Flash",
                                       help: "Sends your memory notes to Google through Antigravity.")

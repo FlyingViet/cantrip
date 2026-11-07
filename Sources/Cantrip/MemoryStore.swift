@@ -16,12 +16,13 @@ final class MemoryStore {
     private var dirURL: URL { directory ?? URL(fileURLWithPath: AppSettings.shared.memoryPath) }
     var sessionsURL: URL { dirURL.appendingPathComponent("sessions") }
 
-    static func contextBlock(query: String, path: String, isPrivate: Bool, isLocal: Bool) async -> String {
+    static func contextBlock(query: String, path: String, isPrivate: Bool, isLocal: Bool,
+                             searchIndex: Bool = false) async -> String {
         await withCheckedContinuation { continuation in
             preparationQueue.async {
                 let store = MemoryStore(directory: URL(fileURLWithPath: path))
                 if !isPrivate { store.ensureVault() }
-                let retrieved = store.retrieve(for: query, recordsUsage: !isPrivate).map {
+                let retrieved = store.retrieve(for: query, recordsUsage: !isPrivate, searchIndex: searchIndex).map {
                     "\n\nRETRIEVED — memory snippets auto-matched to this query (verify before relying on them):\n\($0)"
                 } ?? ""
                 let result: String
@@ -53,12 +54,13 @@ final class MemoryStore {
     /// The same memory protocol split for prompts that keep a cacheable prefix: `stable` (core
     /// files, notes list, sessions pointer, maintenance rule) changes only when memory does;
     /// `retrieved` depends on the query, so it goes last.
-    static func contextParts(query: String, path: String) async -> (stable: String, retrieved: String) {
+    static func contextParts(query: String, path: String,
+                             searchIndex: Bool = false) async -> (stable: String, retrieved: String) {
         await withCheckedContinuation { continuation in
             preparationQueue.async {
                 let store = MemoryStore(directory: URL(fileURLWithPath: path))
                 store.ensureVault()
-                let retrieved = store.retrieve(for: query).map {
+                let retrieved = store.retrieve(for: query, searchIndex: searchIndex).map {
                     "\n\n(RETRIEVED — memory snippets auto-matched to this task (verify before relying on them):\n\($0))"
                 } ?? ""
                 let stable = """
@@ -215,10 +217,22 @@ final class MemoryStore {
     }
 
     /// Find the most relevant note/session snippets for a query and
-    /// return them ready for injection. Nil when nothing matches.
-    func retrieve(for query: String, maxChars: Int = 2400, recordsUsage: Bool = true) -> String? {
+    /// return them ready for injection. Nil when nothing matches. With `searchIndex`, the
+    /// local full-text index picks them; if it can't, the keyword counting below does.
+    func retrieve(for query: String, maxChars: Int = 2400, recordsUsage: Bool = true,
+                  searchIndex: Bool = false) -> String? {
         let terms = Self.terms(from: query)
         guard !terms.isEmpty else { return nil }
+        if searchIndex, let hits = Self.indexedHits(terms: terms, vault: dirURL) {
+            var out = ""
+            for hit in hits {
+                let entry = "— from \(hit.file):\n\(hit.snippet(limit: 800))\n"
+                if out.count + entry.count > maxChars { break }
+                out += entry
+                if !hit.isSession && recordsUsage { noteUsed(hit.file) }
+            }
+            return out.isEmpty ? nil : out
+        }
 
         var candidates = noteFiles()
         let sessionFiles = ((try? FileManager.default.contentsOfDirectory(
@@ -251,6 +265,83 @@ final class MemoryStore {
             if hit.isNote && recordsUsage { noteUsed(hit.name) }
         }
         return out.isEmpty ? nil : out
+    }
+
+    // MARK: - Search index (opt-in)
+
+    private static let indexLock = NSLock()
+    private static var openIndex: MemorySearchIndex?
+    /// After a failure the index rests, so a broken database isn't reopened on every message.
+    private static var indexRetryAfter = Date.distantPast
+
+    /// Up to three hits from the search index, refreshed first; nil when the index can't be
+    /// used (it's then deleted, logged, and rebuilt on a later try).
+    static func indexedHits(terms: [String], vault: URL, now: Date = Date()) -> [MemorySearchIndex.Hit]? {
+        indexLock.lock(); defer { indexLock.unlock() }
+        guard now >= indexRetryAfter else { return nil }
+        let started = Date()
+        do {
+            let index = try openIndex ?? MemorySearchIndex()
+            openIndex = index
+            let refreshed = try index.refresh(vault: vault)
+            let hits = try index.search(terms: terms, limit: 3, now: now)
+            if refreshed.indexed > 0 || refreshed.removed > 0 {
+                Log.write("memory: search index refreshed \(refreshed.indexed) file(s), \(refreshed.chunks) chunk(s), "
+                          + "removed \(refreshed.removed), with search in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+            }
+            return hits
+        } catch {
+            Log.write("memory: search index unavailable (\(error)); using keyword search for 10 minutes")
+            openIndex?.close()
+            openIndex = nil
+            MemorySearchIndex.remove()
+            indexRetryAfter = now.addingTimeInterval(600)
+            return nil
+        }
+    }
+
+    /// Builds or updates the index in the background (setting turned on, or launch while on).
+    static func prepareSearchIndex(path: String) {
+        preparationQueue.async {
+            indexLock.lock(); defer { indexLock.unlock() }
+            let started = Date()
+            do {
+                let index = try openIndex ?? MemorySearchIndex()
+                openIndex = index
+                let refreshed = try index.refresh(vault: URL(fileURLWithPath: path))
+                if refreshed.indexed > 0 || refreshed.removed > 0 {
+                    Log.write("memory: search index built \(refreshed.indexed) file(s), \(refreshed.chunks) chunk(s) "
+                              + "in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+                }
+            } catch {
+                Log.write("memory: search index couldn't be built (\(error)); keyword search stays in use")
+            }
+        }
+    }
+
+    /// Setting (or memory) turned off: close and delete the derived index. The vault is untouched.
+    static func removeSearchIndex() {
+        preparationQueue.async {
+            indexLock.lock(); defer { indexLock.unlock() }
+            let existed = openIndex != nil || FileManager.default.fileExists(atPath: MemorySearchIndex.defaultURL.path)
+            openIndex?.close()
+            openIndex = nil
+            MemorySearchIndex.remove()
+            indexRetryAfter = .distantPast
+            if existed { Log.write("memory: search index deleted") }
+        }
+    }
+
+    /// A vault file changed outside a message (a deleted message scrubbed from a session log):
+    /// refresh now so its old text leaves the index.
+    static func searchIndexFilesChanged(path: String) {
+        preparationQueue.async {
+            indexLock.lock(); defer { indexLock.unlock() }
+            guard openIndex != nil || FileManager.default.fileExists(atPath: MemorySearchIndex.defaultURL.path),
+                  let index = openIndex ?? (try? MemorySearchIndex()) else { return }
+            openIndex = index
+            _ = try? index.refresh(vault: URL(fileURLWithPath: path))
+        }
     }
 
     /// Full note contents, capped — for backends without file access
