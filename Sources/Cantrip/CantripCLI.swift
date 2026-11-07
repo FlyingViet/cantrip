@@ -459,7 +459,8 @@ enum CantripCLI {
         let policy = BuildQueue.Policy(slots: settings.buildQueueSlots)
         switch arguments.first {
         case nil, "status", "list":
-            print(BuildQueue.statusText(policy: policy, enabled: settings.buildQueueEnabled))
+            let jobs = MachineJobs.makeScanner().scan(queued: BuildQueue.queuedProcessIDs())
+            print(BuildQueue.statusText(policy: policy, enabled: settings.buildQueueEnabled, jobs: jobs))
             return 0
         case "run":
             guard let separator = arguments.firstIndex(of: "--"), separator + 1 < arguments.count else {

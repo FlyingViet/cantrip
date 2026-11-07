@@ -578,7 +578,7 @@ struct CantripDuoSidebar: View {
 struct CantripDuoSidebarBackground: Equatable {
     let text: String
     let isActive: Bool
-    /// Lines under the title: tabs' background tasks ("3 in tabs") and builds ("2 building · 1 waiting").
+    /// Lines under the title: tabs' background tasks ("3 in tabs") and the Mac's jobs ("2 jobs running · 1 waiting").
     var details: [String] = []
     var accessibilityValue: String
 

@@ -13,8 +13,8 @@ enum CantripHomeBackgroundCount {
 }
 
 /// The Background jobs row in tab lists (drawer, Duo sidebar): Home's background runs, every
-/// tab's background tasks and the Mac's build queue. Tab tasks and builds count as running jobs
-/// and each get a line of their own.
+/// tab's background tasks and the Mac's long jobs (builds and other long work). Tab tasks and jobs
+/// count as running and each get a line of their own.
 struct CantripBackgroundJobsSummary: Equatable {
     var runs = 0
     var inputs = 0
@@ -59,23 +59,24 @@ struct CantripBackgroundJobsSummary: Equatable {
         tabTasks > 0 ? "\(tabTasks) in \(tabTasks == 1 ? "a tab" : "tabs")" : nil
     }
 
-    /// The row's lines under its title: tab tasks, then builds.
+    /// The row's lines under its title: tab tasks, then the Mac's jobs.
     var details: [String] { [tabs, builds].compactMap { $0 } }
 
-    /// "2 building · 1 waiting" (short enough for the Duo sidebar); nil while no build runs or waits.
+    /// "2 jobs running · 1 waiting" (short enough for the Duo sidebar); nil while no job runs or waits.
     var builds: String? {
+        func jobs(_ n: Int) -> String { "\(n) \(n == 1 ? "job" : "jobs")" }
         switch (buildsRunning, buildsWaiting) {
         case (0, 0): return nil
-        case (let running, 0): return "\(running) building"
-        case (0, let waiting): return "\(waiting) \(waiting == 1 ? "build" : "builds") waiting"
-        case (let running, let waiting): return "\(running) building · \(waiting) waiting"
+        case (let running, 0): return "\(jobs(running)) running"
+        case (0, let waiting): return "\(jobs(waiting)) waiting"
+        case (let running, let waiting): return "\(jobs(running)) running · \(waiting) waiting"
         }
     }
 
-    /// "Builds: 2 running, 1 waiting".
+    /// "Jobs on the Mac: 2 running, 1 waiting".
     var buildsAccessibilityText: String? {
         guard builds != nil else { return nil }
-        return "Builds: " + [buildsRunning > 0 ? "\(buildsRunning) running" : nil,
+        return "Jobs on the Mac: " + [buildsRunning > 0 ? "\(buildsRunning) running" : nil,
                              buildsWaiting > 0 ? "\(buildsWaiting) waiting" : nil].compactMap { $0 }.joined(separator: ", ")
     }
 
@@ -337,7 +338,7 @@ struct CantripHomeBackgroundView: View {
                 }
             }
             if let builds {
-                section("Builds") {
+                section("Jobs") {
                     CantripBuildQueueList(builds: builds, onOpenTab: openTab)
                 }
             }
@@ -526,7 +527,8 @@ struct CantripTabBackgroundGroup: View {
     }
 }
 
-/// The Mac's build queue: builds holding a slot, then the ones waiting, in turn order.
+/// The Mac's long jobs: builds holding a slot and other long work, then builds waiting (in turn
+/// order) and paused jobs.
 struct CantripBuildQueueList: View {
     let builds: CantripBuildQueueSnapshot
     /// Opens the tab a build came from.
@@ -547,23 +549,40 @@ struct CantripBuildQueueList: View {
 }
 
 enum CantripBuildQueueFormat {
-    /// "Smart card loading", "Child tab · Docs", "CI · cantrip · iOS TestFlight", "Home background run".
+    /// "Smart card loading", "Child tab · Docs", "CI · cantrip · iOS TestFlight", "Home background run",
+    /// "Started outside Cantrip".
     static func origin(_ build: CantripBuildQueueSnapshot.Build) -> String {
         let tab = build.tabTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         switch build.source {
         case "ci": return build.job.map { "CI · \($0)" } ?? "CI job"
         case "background": return "Home background run"
         case "child": return tab.map { "Child tab · \($0)" } ?? "Child tab"
+        case "other": return "Started outside Cantrip"
         default: return tab ?? "A tab"
         }
     }
 
-    /// Running: "Smart card loading · 3m 12s". Waiting: "Waiting · 2nd in line · CI job · 45s".
+    /// "Waiting on disk", "Idle" or "Paused"; nil while it simply runs.
+    static func state(_ build: CantripBuildQueueSnapshot.Build) -> String? {
+        ["waitingOnDisk": "Waiting on disk", "idle": "Idle", "paused": "Paused"][build.state ?? ""]
+    }
+
+    /// Running: "Smart card loading · 3m 12s", "Waiting on disk · A tab · Atlas · 2h 05m".
+    /// Waiting for a slot: "Waiting · 2nd in line · CI job · 45s". Paused: "Paused · A tab · 1h".
     static func detail(_ build: CantripBuildQueueSnapshot.Build, place: Int?, now: Date) -> String {
         let elapsed = CantripSubagentFormat.elapsedLabel(startedAt: build.since, finishedAt: nil, now: now)
-        guard let place else { return "\(origin(build)) · \(elapsed)" }
+        guard let place, build.state != "paused" else {
+            return [state(build), origin(build), build.project, elapsed].compactMap { $0 }.joined(separator: " · ")
+        }
         let line = place == 1 ? "Next" : "\(ordinal(place)) in line"
         return "Waiting · \(line) · \(origin(build)) · \(elapsed)"
+    }
+
+    /// "Now: compile_shaders.py" and the last line of its log; nil when neither is known.
+    static func extra(_ build: CantripBuildQueueSnapshot.Build) -> String? {
+        let lines = [build.step.map { "Now: \($0)" },
+                     build.logLine.map { "\(build.logFile ?? "Log"): \($0)" }].compactMap { $0 }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
     static func ordinal(_ n: Int) -> String {
@@ -572,6 +591,7 @@ enum CantripBuildQueueFormat {
     }
 
     static func footnote(_ builds: CantripBuildQueueSnapshot) -> String {
+        if !builds.enabled { return "Long jobs running on your Mac. The build queue is off, so builds don't take turns." }
         if builds.limit < builds.slots {
             let reason = builds.reason.map { " while \($0)" } ?? " while the Mac is busy"
             return "1 build at a time\(reason) (normally \(builds.slots)). Your tabs go first, then child tabs and CI, then Home's background runs."
@@ -608,7 +628,9 @@ struct CantripBuildQueueRow: View {
 
     private func card(chevron: Bool) -> some View {
         CantripHomeBackgroundCard {
-            if place == nil {
+            if build.state == "paused" {
+                Image(systemName: "pause.circle").foregroundStyle(.secondary)
+            } else if place == nil {
                 ProgressView().controlSize(.small)
             } else {
                 Image(systemName: "hourglass").foregroundStyle(.secondary)
@@ -625,6 +647,13 @@ struct CantripBuildQueueRow: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let extra = CantripBuildQueueFormat.extra(build) {
+                        Text(extra)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(4)
+                            .multilineTextAlignment(.leading)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

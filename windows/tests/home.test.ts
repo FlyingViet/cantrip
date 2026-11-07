@@ -21,6 +21,7 @@ import {
   buildDetail,
   buildOrigin,
   buildQueueNote,
+  buildExtra,
   cardsOf,
   listedBuilds,
   listedTabTasks,
@@ -336,6 +337,16 @@ describe("Home helpers", () => {
       "1 build at a time while macOS reports memory pressure (normally 2). Your tabs go first, then child tabs and CI, then Home's background runs.");
     expect(buildQueueNote({ ...builds, limit: 2 })).toBe(
       "Up to 2 builds at once on your Mac. Your tabs go first, then child tabs and CI, then Home's background runs.");
+    expect(buildQueueNote({ ...builds, enabled: false })).toBe(
+      "Long jobs running on your Mac. The build queue is off, so builds don't take turns.");
+    // Other long work on the Mac
+    const job = { pid: 104, title: "build-atlas.py", source: "other", since: 1_000_000, kind: "job", state: "waitingOnDisk",
+      project: "atlas", step: "compile_shaders.py", logFile: "b.log", logLine: "[5/6] shaders 99%" };
+    expect(buildDetail(job, 0, time)).toBe("Waiting on disk · Started outside Cantrip · atlas · started 1000000");
+    expect(buildExtra(job)).toBe("Now: compile_shaders.py\nb.log: [5/6] shaders 99%");
+    expect(buildExtra(builds.running[0])).toBeNull();
+    expect(buildDetail({ ...job, source: "tab", tabTitle: "Docs", state: "paused", project: undefined }, 2, time))
+      .toBe("Paused · Docs · started 1000000");
   });
 
   it("lists tabs' running background tasks", () => {

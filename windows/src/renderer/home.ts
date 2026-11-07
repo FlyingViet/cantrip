@@ -9,6 +9,7 @@ import {
   appleDate,
   buildDetail,
   buildQueueNote,
+  buildExtra,
   cardsOf,
   hasRecordCards,
   listedBuilds,
@@ -249,6 +250,8 @@ function buildItem(build: HomeBuild, place: number): HTMLElement {
   const item = el("li", "home-item");
   item.append(el("span", "item-title", build.title));
   item.append(el("span", "item-meta", buildDetail(build, place, (date) => timeFormat.format(date))));
+  const extra = buildExtra(build);
+  if (extra) item.append(el("span", "item-meta mono", extra));
   return item;
 }
 
@@ -292,9 +295,9 @@ function renderBackground(): HTMLElement[] {
   }
   const builds = listedBuilds(snapshot);
   if (builds) {
-    nodes.push(heading("Builds", "h3"));
+    nodes.push(heading("Jobs", "h3"));
     const list = el("ol", "home-list compact");
-    list.setAttribute("aria-label", "Builds on your Mac");
+    list.setAttribute("aria-label", "Jobs on your Mac");
     builds.running.forEach((build) => list.append(buildItem(build, 0)));
     builds.waiting.forEach((build, index) => list.append(buildItem(build, index + 1)));
     nodes.push(list, note(buildQueueNote(builds)));

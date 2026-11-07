@@ -526,3 +526,10 @@ code {
   padding: 4px 8px;
   border: 1px solid #3a3a3d;
 }
+
+/* A long job's current step and the last line of its log. */
+.item-meta.mono {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

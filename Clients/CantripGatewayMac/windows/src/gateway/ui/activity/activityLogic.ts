@@ -382,15 +382,29 @@ export function listedBuilds(snapshot: HomeBackgroundSnapshot | null | undefined
   return builds && (builds.running?.length || builds.waiting?.length) ? builds : null;
 }
 
-/** "Docs site", "Child tab · Docs", "CI · app · TestFlight", "Home background run". */
+/** "Docs site", "Child tab · Docs", "CI · app · TestFlight", "Home background run", "Started outside Cantrip". */
 export function buildQueueOrigin(build: BuildQueueBuild): string {
   const tab = trimmed(build.tabTitle);
   switch (build.source) {
     case "ci": return build.job ? `CI · ${build.job}` : "CI job";
     case "background": return "Home background run";
     case "child": return tab ? `Child tab · ${tab}` : "Child tab";
+    case "other": return "Started outside Cantrip";
     default: return tab || "A tab";
   }
+}
+
+const BUILD_STATES: Record<string, string> = { waitingOnDisk: "Waiting on disk", idle: "Idle", paused: "Paused" };
+
+/** "Waiting on disk", "Idle" or "Paused"; null while it simply runs. */
+export function buildQueueState(build: BuildQueueBuild): string | null {
+  return BUILD_STATES[build.state ?? ""] ?? null;
+}
+
+/** "Now: compile_shaders.py" and the last line of its log; null when neither is known. */
+export function buildQueueExtra(build: BuildQueueBuild): string | null {
+  const lines = [build.step ? `Now: ${build.step}` : "", build.logLine ? `${build.logFile || "Log"}: ${build.logLine}` : ""].filter(Boolean);
+  return lines.length ? lines.join("\n") : null;
 }
 
 export function buildQueueOrdinal(n: number): string {
@@ -398,15 +412,19 @@ export function buildQueueOrdinal(n: number): string {
   return `${n}${suffix}`;
 }
 
-/** Running (place 0): "Docs site · 3m 12s". Waiting: "Waiting · 2nd in line · CI job · 45s". `now` in UnixSeconds. */
+/** Running (place 0): "Docs site · 3m 12s", "Waiting on disk · A tab · atlas · 2h 00m". Waiting for a slot:
+ * "Waiting · 2nd in line · CI job · 45s". Paused: "Paused · A tab · 1h 00m". `now` in UnixSeconds. */
 export function buildQueueDetail(build: BuildQueueBuild, place: number, now: number): string {
   const elapsed = elapsedLabel(build.since, undefined, now);
-  if (!place) return `${buildQueueOrigin(build)} · ${elapsed}`;
+  if (!place || build.state === "paused") {
+    return [buildQueueState(build), buildQueueOrigin(build), build.project, elapsed].filter(Boolean).join(" · ");
+  }
   return `Waiting · ${place === 1 ? "Next" : `${buildQueueOrdinal(place)} in line`} · ${buildQueueOrigin(build)} · ${elapsed}`;
 }
 
 export function buildQueueFootnote(builds: BuildQueueSnapshot): string {
   const order = "Your tabs go first, then child tabs and CI, then Home's background runs.";
+  if (!builds.enabled) return "Long jobs running on your Mac. The build queue is off, so builds don't take turns.";
   if (builds.limit < builds.slots) {
     return `1 build at a time while ${builds.reason || "the Mac is busy"} (normally ${builds.slots}). ${order}`;
   }

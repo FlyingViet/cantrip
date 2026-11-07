@@ -929,6 +929,20 @@ struct CantripBuildQueueSnapshot: Decodable, Equatable {
         var tabTitle: String? = nil
         /// A CI job's "repo · workflow".
         var job: String? = nil
+        /// "job" for other long work on the Mac (not a build-queue build); source "other" when no tab started it.
+        var kind: String? = nil
+        /// "running", "waitingOnDisk", "idle" or "paused".
+        var state: String? = nil
+        var project: String? = nil
+        /// What it's doing now.
+        var step: String? = nil
+        var logFile: String? = nil
+        var logLine: String? = nil
+        var logUpdatedAt: Double? = nil
+        /// Percent of the whole Mac, memory in bytes, processes in its group.
+        var cpu: Double? = nil
+        var memory: Int64? = nil
+        var processes: Int? = nil
     }
 
     let enabled: Bool

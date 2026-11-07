@@ -2620,7 +2620,9 @@ final class RemoteControlServer {
     @MainActor
     static func buildQueueSnapshot(manager: SessionManager) -> BuildQueue.Snapshot? {
         let settings = AppSettings.shared
-        return BuildQueue.snapshot(policy: .init(slots: settings.buildQueueSlots), enabled: settings.buildQueueEnabled) { id in
+        let jobs = MachineJobs.Live.shared.current(queued: BuildQueue.queuedProcessIDs())
+        return BuildQueue.snapshot(policy: .init(slots: settings.buildQueueSlots), enabled: settings.buildQueueEnabled,
+                                   jobs: jobs) { id in
             manager.sessions.first { $0.id.uuidString == id }?.title
         }
     }
@@ -2891,8 +2893,9 @@ final class RemoteControlServer {
             result["backgroundActiveCount"] = CantripHomeStore.shared.runner.activeCount
             result["backgroundInputCount"] = CantripHomeStore.shared.runner.runsNeedingInput
                 .reduce(0) { $0 + $1.session.pendingInputs.count }
-            // The build queue's counts, for tab lists' Background jobs row.
-            if let builds = BuildQueue.counts(enabled: AppSettings.shared.buildQueueEnabled) {
+            // The build queue's and other long jobs' counts, for tab lists' Background jobs row.
+            if let builds = BuildQueue.counts(enabled: AppSettings.shared.buildQueueEnabled,
+                                              jobs: MachineJobs.Live.shared.current(queued: BuildQueue.queuedProcessIDs())) {
                 result["buildsRunning"] = builds.running
                 result["buildsWaiting"] = builds.waiting
             }
@@ -3688,7 +3691,7 @@ private extension RemoteControlServer {
     #backgroundPanel{width:min(calc(100% - 24px),760px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
     #backgroundPanel .control{min-height:44px;padding:4px 14px}#backgroundTitle{font-size:16px}#backgroundTitle:focus{outline:0}#backgroundPanel button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}#backgroundBody{padding:12px 14px 16px}#backgroundError:not(:empty){padding:8px 14px;color:#f87171}
     .bg-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}.bg-run{display:grid;gap:4px;padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface)}
-    .bg-run .run-summary{white-space:pre-wrap}.bg-tab-tasks{display:grid;gap:6px;margin:0 0 10px}.bg-tab-head{display:flex;align-items:baseline;gap:4px;min-height:32px;padding:4px 6px;border:0;border-radius:8px;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.bg-tab-head:hover{background:var(--surface)}.bg-tab-head:focus-visible{outline:2px solid var(--accent);outline-offset:1px}.bg-tab-open{margin-left:auto;color:var(--accent);font-size:12px}.session-bg{display:inline-flex;align-items:center;margin-left:5px;color:var(--orange,#c2410c);font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}.bg-head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--secondary);margin:4px 0 8px}
+    .bg-run .run-summary{white-space:pre-wrap}.bg-job-log{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.bg-tab-tasks{display:grid;gap:6px;margin:0 0 10px}.bg-tab-head{display:flex;align-items:baseline;gap:4px;min-height:32px;padding:4px 6px;border:0;border-radius:8px;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.bg-tab-head:hover{background:var(--surface)}.bg-tab-head:focus-visible{outline:2px solid var(--accent);outline-offset:1px}.bg-tab-open{margin-left:auto;color:var(--accent);font-size:12px}.session-bg{display:inline-flex;align-items:center;margin-left:5px;color:var(--orange,#c2410c);font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}.bg-head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--secondary);margin:4px 0 8px}
     .bg-log{display:grid;gap:12px}.bg-log .message{margin:0}.tasks-bar{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:Canvas}
     #tasksPanel .control{min-height:44px;padding:4px 14px}#tasksPanel button:focus-visible,#tasksPanel summary:focus-visible,#tasksSearch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     #artifactsPanel{width:min(calc(100% - 24px),860px);max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#artifactsPanel::backdrop{background:rgba(0,0,0,.35)}
@@ -5873,10 +5876,11 @@ private extension RemoteControlServer {
           head.append(homeNode("strong","",tab.tabTitle||"A tab"),homeNode("span","muted",` · ${count}`),homeNode("span","bg-tab-open","Open ›"));head.setAttribute("aria-label",`${tab.tabTitle||"A tab"}, ${count}. Open tab`);
           head.onclick=()=>{if(!sessionItems.some(item=>item.id===tab.tabID)){setText($("backgroundError"),"That tab is no longer open.");return}$("backgroundPanel").close();selectTab(tab.tabID);renderedPayload="";refresh()};
           group.append(head);for(const agent of tab.tasks)group.append(subagentCard(tab.tabID,agent,`bg:${tab.tabID}`));view.append(group)}}
-      if(state.builds){const builds=state.builds;view.append(homeNode("div","bg-head","Builds"));const list=homeNode("ul","bg-list");
+      if(state.builds){const builds=state.builds;view.append(homeNode("div","bg-head","Jobs"));const list=homeNode("ul","bg-list");
         const rows=[...(builds.running||[]).map((build)=>[build,0]),...(builds.waiting||[]).map((build,index)=>[build,index+1])];
-        for(const [build,place] of rows){const item=homeNode("li","bg-run"),detail=buildQueueDetail(build,place);item.setAttribute("aria-label",`${build.title}, ${detail}`);
-          item.append(homeNode("strong","task-title",build.title),homeNode("span","task-meta",detail));list.append(item)}
+        for(const [build,place] of rows){const item=homeNode("li","bg-run"),detail=buildQueueDetail(build,place),extra=buildQueueExtra(build);
+          item.setAttribute("aria-label",[build.title,detail,extra].filter(Boolean).join(", "));
+          item.append(homeNode("strong","task-title",build.title),homeNode("span","task-meta",detail));if(extra)item.append(homeNode("span","run-summary bg-job-log",extra));list.append(item)}
         view.append(list,homeNode("p","muted",buildQueueFootnote(builds)))}
       if(state.queued.length){view.append(homeNode("div","bg-head","Waiting"));const list=homeNode("ul","bg-list");
         for(const job of state.queued){const item=homeNode("li","bg-run");item.append(homeNode("strong","task-title",job.label),homeNode("span","task-meta",job.reason||"Queued"));list.append(item)}view.append(list)}
@@ -5890,13 +5894,18 @@ private extension RemoteControlServer {
         view.append(list)}
       body.replaceChildren(view);panel.scrollTop=scroll}
     // The Mac's build queue (CantripBuildQueueFormat on iOS): where a build comes from, its place in line and time.
+    // Other long jobs (kind "job") come from MachineJobs: state, project, current step and their log's last line.
     function buildQueueOrigin(build){const tab=(build.tabTitle||"").trim();
       if(build.source==="ci")return build.job?`CI · ${build.job}`:"CI job";if(build.source==="background")return "Home background run";
-      if(build.source==="child")return tab?`Child tab · ${tab}`:"Child tab";return tab||"A tab"}
+      if(build.source==="child")return tab?`Child tab · ${tab}`:"Child tab";if(build.source==="other")return "Started outside Cantrip";return tab||"A tab"}
+    const buildQueueStates={waitingOnDisk:"Waiting on disk",idle:"Idle",paused:"Paused"};
+    function buildQueueExtra(build){return [build.step?`Now: ${build.step}`:"",build.logLine?`${build.logFile||"Log"}: ${build.logLine}`:""].filter(Boolean).join("\\n")}
     function buildQueueOrdinal(n){const suffix=[11,12,13].includes(n%100)?"th":({1:"st",2:"nd",3:"rd"})[n%10]||"th";return `${n}${suffix}`}
     function buildQueueDetail(build,place){const elapsed=subagentElapsed({startedAt:build.since});
-      return place?`Waiting · ${place===1?"Next":`${buildQueueOrdinal(place)} in line`} · ${buildQueueOrigin(build)} · ${elapsed}`:`${buildQueueOrigin(build)} · ${elapsed}`}
+      if(place&&build.state!=="paused")return `Waiting · ${place===1?"Next":`${buildQueueOrdinal(place)} in line`} · ${buildQueueOrigin(build)} · ${elapsed}`;
+      return [buildQueueStates[build.state]||"",buildQueueOrigin(build),build.project||"",elapsed].filter(Boolean).join(" · ")}
     function buildQueueFootnote(builds){const order="Your tabs go first, then child tabs and CI, then Home's background runs.";
+      if(!builds.enabled)return "Long jobs running on your Mac. The build queue is off, so builds don't take turns.";
       if(builds.limit<builds.slots)return `1 build at a time while ${builds.reason||"the Mac is busy"} (normally ${builds.slots}). ${order}`;
       return `Up to ${builds.slots===1?"1 build":`${builds.slots} builds`} at once on your Mac. ${order}`}
     async function openBackgroundLog(){const state=backgroundState;if(!state?.sessionID)return;state.view="log";state.logNode=null;renderBackground();

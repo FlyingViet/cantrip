@@ -209,20 +209,20 @@ final class CantripHomeTabDrawerTests: XCTestCase {
         XCTAssertEqual(model.selectedSession?.id, homeID)
     }
 
-    /// The Mac's build queue in the tab lists' Background jobs row and Home's Background list.
+    /// The Mac's jobs (build queue and other long work) in the tab lists' Background jobs row and Home's Background list.
     func testBackgroundJobsRowAndListShowTheBuildQueue() async throws {
         let model = try await configuredModel()
         let summary = CantripBackgroundJobsSummary(runs: 3, inputs: 0, home: model.currentHomeSummary)
         XCTAssertEqual(summary.status, "5 running", "Builds count as running jobs")
-        XCTAssertEqual(summary.builds, "2 building · 1 waiting")
-        XCTAssertEqual(summary.accessibilityValue, "5 running. Builds: 2 running, 1 waiting")
-        XCTAssertEqual(CantripBackgroundJobsSummary(buildsRunning: 1).builds, "1 building")
+        XCTAssertEqual(summary.builds, "2 jobs running · 1 waiting")
+        XCTAssertEqual(summary.accessibilityValue, "5 running. Jobs on the Mac: 2 running, 1 waiting")
+        XCTAssertEqual(CantripBackgroundJobsSummary(buildsRunning: 1).builds, "1 job running")
         XCTAssertTrue(summary.isActive)
         XCTAssertEqual(CantripBackgroundJobsSummary(runs: 0, inputs: 2, buildsRunning: 1).status, "2 need input")
         let waitingOnly = CantripBackgroundJobsSummary(buildsWaiting: 1)
         XCTAssertEqual(waitingOnly.status, "1 waiting")
-        XCTAssertEqual(waitingOnly.builds, "1 build waiting")
-        XCTAssertEqual(waitingOnly.accessibilityValue, "1 waiting. Builds: 1 waiting")
+        XCTAssertEqual(waitingOnly.builds, "1 job waiting")
+        XCTAssertEqual(waitingOnly.accessibilityValue, "1 waiting. Jobs on the Mac: 1 waiting")
         XCTAssertTrue(waitingOnly.isActive)
         let idle = CantripBackgroundJobsSummary()
         XCTAssertEqual(idle.status, "None running")
@@ -234,8 +234,8 @@ final class CantripHomeTabDrawerTests: XCTestCase {
         let withTabs = CantripBackgroundJobsSummary(runs: 3, inputs: 0, home: model.currentHomeSummary, tabs: model.sessions)
         XCTAssertEqual(withTabs.tabTasks, 2)
         XCTAssertEqual(withTabs.status, "7 running")
-        XCTAssertEqual(withTabs.details, ["2 in tabs", "2 building · 1 waiting"])
-        XCTAssertEqual(withTabs.accessibilityValue, "7 running. Background tasks in tabs: 2. Builds: 2 running, 1 waiting")
+        XCTAssertEqual(withTabs.details, ["2 in tabs", "2 jobs running · 1 waiting"])
+        XCTAssertEqual(withTabs.accessibilityValue, "7 running. Background tasks in tabs: 2. Jobs on the Mac: 2 running, 1 waiting")
         XCTAssertEqual(CantripBackgroundJobsSummary(tabTasks: 1).details, ["1 in a tab"])
         XCTAssertEqual(CantripBackgroundJobsSummary(tabTasks: 1).status, "1 running")
         XCTAssertEqual(CantripDuoSidebarBackground(withTabs).details, withTabs.details)
@@ -251,8 +251,8 @@ final class CantripHomeTabDrawerTests: XCTestCase {
         XCTAssertEqual(model.currentHomeSummary?.buildsRunning, 2, "Off Home, the counts come from Home's listed summary")
         await model.refreshHomeBackground()
         let builds = try XCTUnwrap(model.homeBackground?.builds)
-        XCTAssertEqual(builds.running.map(\.title), ["xcodebuild archive · App", "swift test · Server"])
-        XCTAssertEqual(builds.waiting.map(\.source), ["ci"])
+        XCTAssertEqual(builds.running.map(\.title), ["xcodebuild archive · App", "swift test · Server", "build-atlas.py"])
+        XCTAssertEqual(builds.waiting.map(\.source), ["ci", "tab"])
         XCTAssertEqual(builds.limit, 1)
         let tabTasks = try XCTUnwrap(model.homeBackground?.tabTasks)
         XCTAssertEqual(tabTasks.map(\.tabTitle), ["Docs site"])
@@ -266,6 +266,19 @@ final class CantripHomeTabDrawerTests: XCTestCase {
                        "Waiting · Next · CI · app · TestFlight · 30s")
         XCTAssertEqual(CantripBuildQueueFormat.detail(builds.waiting[0], place: 2, now: now),
                        "Waiting · 2nd in line · CI · app · TestFlight · 30s")
+        // Other long work on the Mac: its state, project, current step and the last line of its log.
+        let job = builds.running[2]
+        XCTAssertEqual(job.kind, "job")
+        XCTAssertEqual(CantripBuildQueueFormat.detail(job, place: nil, now: now),
+                       "Waiting on disk · Started outside Cantrip · atlas · "
+                       + CantripSubagentFormat.elapsedLabel(startedAt: 992_800, finishedAt: nil, now: now))
+        XCTAssertEqual(CantripBuildQueueFormat.extra(job), "Now: compile_shaders.py\nb.log: [5/6] shaders 99%")
+        XCTAssertNil(CantripBuildQueueFormat.extra(builds.running[0]))
+        XCTAssertEqual(CantripBuildQueueFormat.detail(builds.waiting[1], place: 2, now: now),
+                       "Paused · Docs site · " + CantripSubagentFormat.elapsedLabel(startedAt: 996_400, finishedAt: nil, now: now),
+                       "A paused job has no place in line")
+        XCTAssertEqual(CantripBuildQueueFormat.footnote(.init(enabled: false, slots: 2, limit: 2, running: [], waiting: [])),
+                       "Long jobs running on your Mac. The build queue is off, so builds don't take turns.")
         let background = CantripBuildQueueSnapshot.Build(pid: 9, title: "swift build", source: "background", since: 0)
         XCTAssertEqual(CantripBuildQueueFormat.origin(background), "Home background run")
         XCTAssertEqual(CantripBuildQueueFormat.origin(.init(pid: 9, title: "swift build", source: "tab", since: 0)), "A tab")
@@ -285,8 +298,12 @@ final class CantripHomeTabDrawerTests: XCTestCase {
          "builds":{"enabled":true,"slots":2,"limit":1,"reason":"macOS reports memory pressure",
           "running":[{"pid":101,"title":"xcodebuild archive · App","source":"tab","since":999925,
                       "tabID":"\(plexID)","tabTitle":"Docs site"},
-                     {"pid":102,"title":"swift test · Server","source":"child","since":999960,"tabTitle":"Server"}],
-          "waiting":[{"pid":103,"title":"swift build · App","source":"ci","since":999970,"job":"app · TestFlight"}]}}
+                     {"pid":102,"title":"swift test · Server","source":"child","since":999960,"tabTitle":"Server"},
+                     {"pid":104,"title":"build-atlas.py","source":"other","since":992800,"kind":"job","state":"waitingOnDisk",
+                      "project":"atlas","step":"compile_shaders.py","logFile":"b.log","logLine":"[5/6] shaders 99%",
+                      "logUpdatedAt":999990,"cpu":0.1,"memory":17000000,"processes":6}],
+          "waiting":[{"pid":103,"title":"swift build · App","source":"ci","since":999970,"job":"app · TestFlight"},
+                     {"pid":105,"title":"export.py","source":"tab","since":996400,"tabTitle":"Docs site","kind":"job","state":"paused"}]}}
         """.utf8)
     }
 

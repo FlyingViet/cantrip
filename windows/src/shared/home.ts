@@ -110,17 +110,26 @@ export interface HomeTabTasks {
   tasks: HomeTabTask[];
 }
 
-/** One build in the Mac's build queue. `since` is Unix seconds: when it got its slot, or started waiting. */
+/** One of the Mac's long jobs: a build in the build queue, or other long work (`kind` "job"). `since` is
+ * Unix seconds: when it got its slot, started waiting or started. */
 export interface HomeBuild {
   pid: number;
   title: string;
-  /** "tab", "child", "ci" or "background". */
+  /** "tab", "child", "ci", "background", or "other" when no tab started it. */
   source: string;
   since: number;
   tabID?: string;
   tabTitle?: string;
   /** A CI job's "repo · workflow". */
   job?: string;
+  kind?: string;
+  /** "running", "waitingOnDisk", "idle" or "paused". */
+  state?: string;
+  project?: string;
+  /** What it's doing now. */
+  step?: string;
+  logFile?: string;
+  logLine?: string;
 }
 
 export interface HomeBuildQueue {
@@ -209,7 +218,7 @@ export function tabTaskDetail(task: HomeTabTask, time: (date: Date) => string): 
   return [status, since].filter(Boolean).join(" · ");
 }
 
-// MARK: - Build queue (CantripBuildQueueFormat in Cantrip Agent)
+// MARK: - The Mac's long jobs: build queue and other long work (CantripBuildQueueFormat in Cantrip Agent)
 
 /** The build queue when it lists anything. */
 export function listedBuilds(snapshot: Pick<HomeBackgroundSnapshot, "builds"> | null | undefined): HomeBuildQueue | null {
@@ -217,15 +226,24 @@ export function listedBuilds(snapshot: Pick<HomeBackgroundSnapshot, "builds"> | 
   return builds && (builds.running?.length || builds.waiting?.length) ? builds : null;
 }
 
-/** "Docs site", "Child tab · Docs", "CI · app · TestFlight", "Home background run". */
+/** "Docs site", "Child tab · Docs", "CI · app · TestFlight", "Home background run", "Started outside Cantrip". */
 export function buildOrigin(build: HomeBuild): string {
   const tab = build.tabTitle?.trim() ?? "";
   switch (build.source) {
     case "ci": return build.job ? `CI · ${build.job}` : "CI job";
     case "background": return "Home background run";
     case "child": return tab ? `Child tab · ${tab}` : "Child tab";
+    case "other": return "Started outside Cantrip";
     default: return tab || "A tab";
   }
+}
+
+const BUILD_STATES: Record<string, string> = { waitingOnDisk: "Waiting on disk", idle: "Idle", paused: "Paused" };
+
+/** "Now: compile_shaders.py" and the last line of its log; null when neither is known. */
+export function buildExtra(build: HomeBuild): string | null {
+  const lines = [build.step ? `Now: ${build.step}` : "", build.logLine ? `${build.logFile || "Log"}: ${build.logLine}` : ""].filter(Boolean);
+  return lines.length ? lines.join("\n") : null;
 }
 
 export function ordinal(n: number): string {
@@ -233,15 +251,19 @@ export function ordinal(n: number): string {
   return `${n}${suffix}`;
 }
 
-/** Running (place 0): "Docs site · started 7:12 AM". Waiting: "Waiting · 2nd in line · CI job · since 7:12 AM". */
+/** Running (place 0): "Docs site · started 7:12 AM", "Waiting on disk · A tab · atlas · started 7:12 AM".
+ * Waiting for a slot: "Waiting · 2nd in line · CI job · since 7:12 AM". Paused: "Paused · A tab · started 7:12 AM". */
 export function buildDetail(build: HomeBuild, place: number, time: (date: Date) => string): string {
   const at = time(new Date(build.since * 1000));
-  if (!place) return `${buildOrigin(build)} · started ${at}`;
+  if (!place || build.state === "paused") {
+    return [BUILD_STATES[build.state ?? ""], buildOrigin(build), build.project, `started ${at}`].filter(Boolean).join(" · ");
+  }
   return `Waiting · ${place === 1 ? "Next" : `${ordinal(place)} in line`} · ${buildOrigin(build)} · since ${at}`;
 }
 
 export function buildQueueNote(builds: HomeBuildQueue): string {
   const order = "Your tabs go first, then child tabs and CI, then Home's background runs.";
+  if (!builds.enabled) return "Long jobs running on your Mac. The build queue is off, so builds don't take turns.";
   if (builds.limit < builds.slots) {
     return `1 build at a time while ${builds.reason || "the Mac is busy"} (normally ${builds.slots}). ${order}`;
   }

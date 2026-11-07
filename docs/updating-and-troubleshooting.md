@@ -526,22 +526,41 @@ slots instead:
   with what's running and its place in line (on Copilot and Codex, which stream
   command output), and its time and estimate start once it gets a slot. The
   command prints `cantrip build queue:` lines while it waits. In Cantrip Agent, the
-  **Background jobs** row in the tab drawer and the Duo sidebar counts running
-  builds and adds a line such as "2 building · 1 waiting". Home's
+  **Background jobs** row in the tab drawer and the Duo sidebar counts the Mac's
+  running jobs and adds a line such as "2 jobs running · 1 waiting". Home's
   **Background** list (iPhone, Gateway Mac, Gateway for Windows, Cantrip for
-  Windows' Home window and the browser Remote) has a **Builds** section: each build, where it came from (a tab, a
+  Windows' Home window and the browser Remote) has a **Jobs** section: each build, where it came from (a tab, a
   child tab, a CI job's repo and workflow, or a Home background run), its place
-  in line and how long it has run or waited. Tap a build from a tab to open it.
+  in line and how long it has run or waited, followed by the Mac's other long jobs
+  (below). Tap a job from a tab to open it.
+- **Other long jobs:** the **Jobs** section also lists long work that doesn't go
+  through the queue, whether or not the queue is on: shader compiles, exports,
+  packaging, big copies, backups, a script left running. Any process group of
+  yours counts once it runs under `caffeinate`, runs a build, compile or copy tool
+  (`make`, `xcodebuild`, `swift-frontend`, `clang`, `metal`, `ffmpeg`, `rsync`,
+  `restic` and similar), or keeps about a core busy for two looks in a row; it
+  stays listed until it exits. Agents, apps and system processes never count,
+  and a launchd service only while it runs one of those tools. Each shows the
+  tab that started it (from the `CANTRIP_TAB_ID` Cantrip gives every command,
+  else "Started outside Cantrip"), the project folder, **Waiting on disk**,
+  **Idle** or **Paused** when it isn't simply running, what it's doing now and the
+  last line of the log it writes. A build holding or waiting for a slot gets the
+  same details from its own process group. Cantrip only reads `ps`, `lsof` and
+  that one environment variable.
 - **CI:** a self-hosted runner on the Mac uses the queue when its `.path` file
   starts with `~/.cache/Cantrip/build-queue/bin` (restart the runner after
   editing it). Its jobs count as CI jobs.
 
-`cantrip build-queue` lists the builds running and waiting. Remote clients get
-the same list as `builds` in `GET /api/v1/home/background` (`enabled`, `slots`,
-`limit`, `reason`, and `running`/`waiting` entries with `title`, `source`,
-`since`, `tabID`, `tabTitle` and `job`), and Home's session summary carries
-`buildsRunning` and `buildsWaiting`; both are left out while the queue is off
-and empty. Slots are file
+`cantrip build-queue` lists the builds running and waiting, then other long jobs.
+Remote clients get the same list as `builds` in `GET /api/v1/home/background`
+(`enabled`, `slots`, `limit`, `reason`, and `running`/`waiting` entries with
+`title`, `source`, `since`, `tabID`, `tabTitle` and `job`; other long jobs have
+`kind` "job", `source` "other" when no tab started them, and paused ones are
+listed with the waiting; any entry may add `state` (`running`, `waitingOnDisk`,
+`idle`, `paused`), `project`, `step`, `logFile`, `logLine`, `logUpdatedAt`,
+`cpu` (percent of the Mac), `memory` (bytes) and `processes`), and Home's session
+summary carries `buildsRunning` and `buildsWaiting`, which count other long jobs
+too; both are left out while the queue is off and nothing runs. Slots are file
 locks in `~/.cache/Cantrip/build-queue`, so a build that crashes or is killed
 never keeps one, and the queue works while Cantrip itself is closed. Turning
 the setting off removes the shims.

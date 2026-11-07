@@ -468,6 +468,35 @@ enum BuildQueue {
             var tabTitle: String? = nil
             /// A CI job's "repo · workflow".
             var job: String? = nil
+            /// "job" for other long work on the Mac (MachineJobs) that isn't in the queue; nil for builds.
+            var kind: String? = nil
+            /// MachineJobs.State: "running", "waitingOnDisk", "idle" or "paused"; nil when unknown.
+            var state: String? = nil
+            /// The folder it works in (a ~/Coding project or worktree).
+            var project: String? = nil
+            /// What it's doing now, when that differs from the title.
+            var step: String? = nil
+            /// The log it writes (file name only), its last line and when it last changed.
+            var logFile: String? = nil
+            var logLine: String? = nil
+            var logUpdatedAt: Double? = nil
+            /// Percent of the whole Mac, memory in bytes, processes in its group.
+            var cpu: Double? = nil
+            var memory: Int64? = nil
+            var processes: Int? = nil
+
+            /// Copies what MachineJobs saw about this build's process group.
+            mutating func describe(_ job: MachineJobs.Job, includingState: Bool = true) {
+                if includingState { state = job.state.rawValue }
+                project = job.project
+                step = job.step == title ? nil : job.step
+                logFile = job.logFile
+                logLine = job.logLine
+                logUpdatedAt = job.logUpdatedAt
+                cpu = job.cpu
+                memory = job.memory
+                processes = job.processes
+            }
         }
 
         let enabled: Bool
@@ -481,35 +510,82 @@ enum BuildQueue {
         let waiting: [Build]
     }
 
-    /// Nil while the queue is off and holds nothing. `tabTitle` names a tab by its ID.
+    /// Nil while the queue is off and nothing runs. `tabTitle` names a tab by its ID. `jobs` is the
+    /// Mac's other long work (MachineJobs): a build's own group adds its details to the build, the
+    /// rest are listed after the builds (paused ones with the waiting).
     static func snapshot(store: Store = Store(directory: directory), policy: Policy, enabled: Bool,
-                         resources: Resources = .current(), tabTitle: (String) -> String? = { _ in nil }) -> Snapshot? {
+                         resources: Resources = .current(), jobs: [MachineJobs.Job] = [],
+                         tabTitle: (String) -> String? = { _ in nil }) -> Snapshot? {
         let running = store.holders().sorted { $0.since < $1.since }
         let waiting = store.tickets().sorted { $0.goesBefore($1) }
-        guard enabled || !running.isEmpty || !waiting.isEmpty else { return nil }
+        guard enabled || !running.isEmpty || !waiting.isEmpty || !jobs.isEmpty else { return nil }
         let limit = policy.limit(resources)
         func build(pid: Int32, title: String, priority: Priority, since: Double, tab: String?, job: String?) -> Snapshot.Build {
             Snapshot.Build(pid: pid, title: title, source: priority.name, since: since,
                            tabID: tab, tabTitle: tab.flatMap(tabTitle), job: job)
         }
+        let (allRunning, allWaiting) = merge(
+            jobs,
+            running: running.map { build(pid: $0.pid, title: $0.title, priority: $0.priority, since: $0.since, tab: $0.tab, job: $0.job) },
+            waiting: waiting.map { build(pid: $0.pid, title: $0.title, priority: $0.priority, since: $0.enqueuedAt, tab: $0.tab, job: $0.job) },
+            tabTitle: tabTitle)
         return Snapshot(
             enabled: enabled, slots: policy.slots, limit: limit,
             reason: limit < policy.slots ? resources.reason : nil,
-            running: running.map { build(pid: $0.pid, title: $0.title, priority: $0.priority, since: $0.since, tab: $0.tab, job: $0.job) },
-            waiting: waiting.map { build(pid: $0.pid, title: $0.title, priority: $0.priority, since: $0.enqueuedAt, tab: $0.tab, job: $0.job) }
+            running: allRunning, waiting: allWaiting
         )
     }
 
-    /// Builds running and waiting, for tab lists' Background jobs row; nil while the queue is off and holds nothing.
-    static func counts(store: Store = Store(directory: directory), enabled: Bool) -> (running: Int, waiting: Int)? {
-        let running = store.holders().count
-        let waiting = store.tickets().count
+    /// Builds borrow their process group's details; other jobs follow them ("tab", "child" or
+    /// "background" by the tab that started them, "other" when no tab did).
+    static func merge(_ jobs: [MachineJobs.Job], running: [Snapshot.Build], waiting: [Snapshot.Build],
+                      tabTitle: (String) -> String?,
+                      source: (String) -> String = { BuildQueue.priority(environment: [MachineJobs.tabIDVariable: $0]).name })
+        -> (running: [Snapshot.Build], waiting: [Snapshot.Build]) {
+        var running = running, waiting = waiting
+        var matched: Set<String> = []
+        for index in running.indices {
+            if let job = jobs.first(where: { $0.processIDs.contains(running[index].pid) }) {
+                matched.insert(job.key)
+                running[index].describe(job)
+            }
+        }
+        for index in waiting.indices {
+            if let job = jobs.first(where: { $0.processIDs.contains(waiting[index].pid) }) {
+                matched.insert(job.key)
+                waiting[index].describe(job, includingState: false)
+            }
+        }
+        for job in jobs where !matched.contains(job.key) {
+            var entry = Snapshot.Build(pid: job.group, title: job.title, source: job.tabID.map(source) ?? "other",
+                                       since: job.since, tabID: job.tabID, tabTitle: job.tabID.flatMap(tabTitle))
+            entry.kind = "job"
+            entry.describe(job)
+            if job.state == .paused { waiting.append(entry) } else { running.append(entry) }
+        }
+        return (running, waiting)
+    }
+
+    /// Builds and other long jobs running and waiting, for tab lists' Background jobs row; nil while
+    /// the queue is off and nothing runs.
+    static func counts(store: Store = Store(directory: directory), enabled: Bool,
+                       jobs: [MachineJobs.Job] = []) -> (running: Int, waiting: Int)? {
+        let holders = store.holders(), tickets = store.tickets()
+        let queued = Set(holders.map(\.pid) + tickets.map(\.pid))
+        let others = jobs.filter { $0.processIDs.allSatisfy { !queued.contains($0) } }
+        let running = holders.count + others.filter { $0.state != .paused }.count
+        let waiting = tickets.count + others.filter { $0.state == .paused }.count
         guard enabled || running > 0 || waiting > 0 else { return nil }
         return (running, waiting)
     }
 
+    /// The queue's processes, for MachineJobs to match builds to their groups.
+    static func queuedProcessIDs(store: Store = Store(directory: directory)) -> Set<Int32> {
+        Set(store.holders().map(\.pid) + store.tickets().map(\.pid)).subtracting([0])
+    }
+
     static func statusText(store: Store = Store(directory: directory), policy: Policy, enabled: Bool,
-                           resources: Resources = .current()) -> String {
+                           resources: Resources = .current(), jobs: [MachineJobs.Job] = []) -> String {
         let running = store.holders()
         let waiting = store.tickets().sorted { $0.goesBefore($1) }
         let limit = policy.limit(resources)
@@ -526,6 +602,17 @@ enum BuildQueue {
         for (place, ticket) in waiting.enumerated() {
             lines.append("  \(place + 1). \(ticket.title) — \(ticket.priority.label), "
                          + "\(SubagentInfo.elapsedLabel(max(0, now - ticket.enqueuedAt))), pid \(ticket.pid)")
+        }
+        let queued = Set(running.map(\.pid) + waiting.map(\.pid))
+        let others = jobs.filter { $0.processIDs.allSatisfy { !queued.contains($0) } }
+        if !others.isEmpty {
+            lines.append("Other long jobs:")
+            for job in others {
+                let state = job.state == .running ? "" : " (\(job.state == .waitingOnDisk ? "waiting on disk" : job.state.rawValue))"
+                lines.append("  \(job.title)\(job.project.map { " · \($0)" } ?? "")\(state) — "
+                             + "\(SubagentInfo.elapsedLabel(max(0, now - job.since))), process group \(job.group)")
+                if let line = job.logLine { lines.append("    \(job.logFile ?? "log"): \(line)") }
+            }
         }
         return lines.joined(separator: "\n")
     }
