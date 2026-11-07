@@ -77,9 +77,15 @@ A rule matches any of these, limited by optional `hours` (`"21:45-22:50"`),
 - `mcp` (`server/tool` globs), optionally only tools whose names contain one of
   `verbs` (`send`, `delete`); `tools` (such as `WebFetch`); `kinds` (`shell`,
   `write`, `read`, `url`, `mcp`).
-- `privacyScan` on a `git push` rule adds a scan of the outgoing commits (email
-  addresses, private network addresses, tailnet names and your `privateTerms`)
-  to the approval card.
+- `privacyScan` on an ask rule for `git push` scans the commits the push would
+  send (those not yet on that remote's branches) for email addresses, private
+  network addresses, tailnet names and your `privateTerms`. When the scan reads
+  every outgoing commit and finds nothing (or there's nothing to send), the push
+  runs without asking, and `~/Library/Logs/Cantrip.log` records it with the
+  scan's summary ("policy: … auto-approved … after a clean privacy scan").
+  When it finds something, can't run, or there are more than 50 outgoing
+  commits, the approval card asks and shows what it found. Any other rule that
+  matches the push still applies.
 
 `projects` holds per-folder overrides (extra rules, and Mac-wide rules turned
 off there) in the same file, so nothing is written into your repositories. A

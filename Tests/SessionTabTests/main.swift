@@ -108,6 +108,11 @@ struct SessionTabTests {
             try await testCantripHomeDoneWhen()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "policy" {
+            try await testAgentPolicyGate()
+            try await testAgentPolicyRemote()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "build-queue" {
             try testBuildQueue()
             return

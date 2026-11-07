@@ -152,7 +152,9 @@ struct AgentPolicyRule: Codable, Equatable, Identifiable {
     var repos: [String]?
     /// With `git commit`: applies unless the commit's author name or email contains this.
     var unlessGitAuthor: String?
-    /// With `git push`: the approval card shows a scan of the outgoing commits for private details.
+    /// With `git push` on an ask rule: Cantrip scans the outgoing commits for private details and
+    /// lets the push run when the scan is clean; it asks, with the scan's findings, only when the
+    /// scan finds something or can't check every outgoing commit.
     var privacyScan: Bool?
 
     init(id: String, effect: Effect, reason: String, enabled: Bool = true, source: String? = nil,
@@ -218,6 +220,11 @@ struct AgentPolicyRule: Codable, Equatable, Identifiable {
         if let hours, !hours.isEmpty { parts.append("during " + hours.joined(separator: ", ")) }
         if let repos, !repos.isEmpty { parts.append("in " + repos.joined(separator: ", ")) }
         if let unlessGitAuthor { parts.append("unless authored by \(unlessGitAuthor)") }
+        if privacyScan == true {
+            parts.append(effect == .ask
+                         ? "runs without asking when the privacy scan of the outgoing commits is clean"
+                         : "privacy scan of the outgoing commits")
+        }
         return parts.joined(separator: "; ")
     }
 
@@ -333,6 +340,8 @@ struct AgentPolicyDecision: Equatable {
     var action = ""
     /// Where the matched command runs, for the privacy scan.
     var directory: String?
+    /// The matched command's words, for the privacy scan (which refs a push sends).
+    var words: [String] = []
 
     var ruleID: String { rule?.id ?? "" }
     var reason: String { rule?.reason ?? "" }
@@ -362,14 +371,16 @@ extension AgentPolicyDocument {
 
     /// The rule that decides `request`: the first deny that matches, else the first ask, else the
     /// first allow; `.none` when no rule matches.
-    func evaluate(_ request: CantripHomeActionRequest, context: AgentPolicyContext) -> AgentPolicyDecision {
+    /// `excluding`: rules already settled for this call (an ask rule whose privacy scan came back clean).
+    func evaluate(_ request: CantripHomeActionRequest, context: AgentPolicyContext,
+                  excluding: Set<String> = []) -> AgentPolicyDecision {
         let matcher = AgentPolicyMatcher(request: request, context: context)
         var found: [AgentPolicyRule.Effect: AgentPolicyDecision] = [:]
-        for rule in effectiveRules(context) where found[rule.effect] == nil {
+        for rule in effectiveRules(context) where found[rule.effect] == nil && !excluding.contains(rule.id) {
             guard let hit = matcher.match(rule) else { continue }
             found[rule.effect] = AgentPolicyDecision(
                 verdict: AgentPolicyDecision.Verdict(rawValue: rule.effect.rawValue) ?? .none,
-                rule: rule, matched: hit.matched, action: hit.action, directory: hit.directory)
+                rule: rule, matched: hit.matched, action: hit.action, directory: hit.directory, words: hit.words)
             if rule.effect == .deny { break }
         }
         return found[.deny] ?? found[.ask] ?? found[.allow] ?? AgentPolicyDecision()
@@ -384,6 +395,8 @@ struct AgentPolicyMatcher {
         var matched: String
         var action: String
         var directory: String?
+        /// A matched command's words.
+        var words: [String] = []
     }
 
     /// One command a shell line runs.
@@ -445,7 +458,8 @@ struct AgentPolicyMatcher {
                     let line = variant.joined(separator: " ")
                     if patterns.contains(where: { Self.commandMatches($0, line: line.lowercased()) }) {
                         hits.append(Hit(matched: line, action: "run `\(line.prefix(80))`",
-                                        directory: Self.gitDirectory(run.words, base: run.directory, context: context)))
+                                        directory: Self.gitDirectory(run.words, base: run.directory, context: context),
+                                        words: variant))
                         break
                     }
                 }
