@@ -218,6 +218,17 @@ struct CantripHandoffResultCard: View {
     }
 
     var statusText: String {
+        // A question another tab answers, like the Mac's and the browser's cards.
+        if result.isAsk {
+            switch result.state {
+            case .working: return "Asked tab"
+            case .needsInput: return "Needs your answer first"
+            case .completed: return "Answer from tab"
+            case .failed: return "Couldn't answer"
+            case .cancelled: return "Question stopped"
+            case .other: return "Question update"
+            }
+        }
         switch result.state {
         case .working: return "Working in tab"
         case .needsInput: return "Needs your answer"
@@ -305,7 +316,7 @@ struct CantripHandoffResultCard: View {
 
     private var headerAccessibilityLabel: String {
         let label = summary.isEmpty ? "" : ": \(summary)"
-        return "Handoff. \(statusText), \(tabTitle)\(label)"
+        return "\(result.isAsk ? "Question" : "Handoff"). \(statusText), \(tabTitle)\(label)"
     }
 
     private func timeAccessibilityLabel(now: Date) -> String {

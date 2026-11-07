@@ -376,9 +376,18 @@ const RESULT_TEXT: Record<string, string> = {
   working: "Working in tab", needsInput: "Needs your answer", completed: "Done in tab", failed: "Failed in tab", cancelled: "Stopped",
 };
 
+/** A `tab ask` question's card (CantripHomeHandoffResult.headline on the Mac). */
+const ASK_TEXT: Record<string, string> = {
+  working: "Asked tab", needsInput: "Needs your answer first", completed: "Answer from tab", failed: "Couldn't answer", cancelled: "Question stopped",
+};
+
+export function handoffResultStatus(result: Pick<RemoteHandoffResult, "state" | "kind">): string {
+  return result.kind === "ask" ? ASK_TEXT[result.state] ?? "Question update" : RESULT_TEXT[result.state] ?? "Handoff update";
+}
+
 function HandoffResultCard(props: { result: RemoteHandoffResult }): JSX.Element {
   const { result } = props;
-  const statusText = RESULT_TEXT[result.state] ?? "Handoff update";
+  const statusText = handoffResultStatus(result);
   const tab = trimmed(result.tabTitle) || "Project tab";
   const summary = plainMentions(trimmed(result.summary));
   const detail = plainMentions(trimmed(result.detail));
@@ -389,7 +398,7 @@ function HandoffResultCard(props: { result: RemoteHandoffResult }): JSX.Element 
     time = result.startedAt ? `Finished ${clock} · took ${elapsed(result.startedAt, result.finishedAt)}` : `Finished ${clock}`;
   } else if (result.updatedAt) time = `Updated ${clockTime(new Date(result.updatedAt * 1000))}`;
   return (
-    <section class={`handoff-card result ${result.state}`} aria-label={`Handoff. ${statusText}, ${tab}${summary ? `: ${summary}` : ""}`}>
+    <section class={`handoff-card result ${result.state}`} aria-label={`${result.kind === "ask" ? "Question" : "Handoff"}. ${statusText}, ${tab}${summary ? `: ${summary}` : ""}`}>
       <div class="handoff-tint" aria-hidden="true" />
       <div class="handoff-content">
         <div class="handoff-head">

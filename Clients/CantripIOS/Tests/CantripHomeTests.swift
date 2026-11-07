@@ -812,6 +812,19 @@ final class CantripHomeTests: XCTestCase {
         for (state, text) in states {
             XCTAssertEqual(CantripHandoffResultCard(result: .init(tabID: "t", state: state)).statusText, text)
         }
+        // A `tab ask` question reads as a question to the tab, like the Mac's and the browser's cards.
+        let ask = try JSONDecoder().decode(CantripRemoteHandoffResult.self, from: Data(#"""
+        {"delegationID":"q","tabID":"t","tabTitle":"Docs site","summary":"Is the build still running?",
+         "state":"working","detail":"Waiting for the tab to be free.","kind":"ask"}
+        """#.utf8))
+        XCTAssertTrue(ask.isAsk)
+        XCTAssertEqual(CantripHandoffResultCard(result: ask).statusText, "Asked tab")
+        for (state, text) in [(CantripRemoteHandoffResult.State.completed, "Answer from tab"), (.needsInput, "Needs your answer first"),
+                              (.failed, "Couldn't answer"), (.cancelled, "Question stopped")] {
+            var result = CantripRemoteHandoffResult(tabID: "t", state: state)
+            result.kind = "ask"
+            XCTAssertEqual(CantripHandoffResultCard(result: result).statusText, text)
+        }
         let finished = CantripHandoffResultCard(result: .init(
             tabID: "t", state: .completed, startedAt: now - 240, finishedAt: now - 60
         ))
@@ -938,6 +951,51 @@ final class CantripHomeTests: XCTestCase {
                        "Running tabs that wait on the user say so, including older Macs")
         XCTAssertEqual(cards.map(\.statusText),
                        ["Needs your answer", "Needs your answer", "Working in tab", "Done in tab"])
+    }
+
+    /// Renders a `tab ask` card waiting its turn and answered. Set TEST_RUNNER_HOME_ARTIFACT_DIR.
+    func testAskCardScreenshots() async throws {
+        let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_ARTIFACT_DIR"]
+        guard let directory, !directory.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_HOME_ARTIFACT_DIR to render tab ask cards.")
+        }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let now = Date().timeIntervalSince1970
+        var waiting = CantripRemoteHandoffResult(
+            tabID: "t", tabTitle: "Docs site", summary: "The user approved building and publishing the cache update after first-launch stutters.",
+            state: .working, detail: "Waiting for the tab to be free.", startedAt: now - 16)
+        waiting.kind = "ask"
+        var answered = CantripRemoteHandoffResult(
+            tabID: "t", tabTitle: "Docs site", summary: "Is the docs build still running?", state: .completed,
+            detail: "No. Nothing is building, and I'll hold shared changes until yours finishes.",
+            startedAt: now - 140, finishedAt: now - 20)
+        answered.kind = "ask"
+        for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
+            let controller = UIHostingController(rootView:
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        CantripHandoffResultCard(result: waiting, onOpenTab: { _ in })
+                        CantripHandoffResultCard(result: answered, onOpenTab: { _ in })
+                    }
+                    .padding(16)
+                }
+                .background(Color(.systemBackground))
+            )
+            controller.overrideUserInterfaceStyle = style
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: CGSize(width: 393, height: 420))
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(250))
+            controller.view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            try XCTUnwrap(image.pngData()).write(to: output.appendingPathComponent("cantrip-ask-cards-\(name).png"))
+        }
     }
 
     func testHomeHandoffCardScreenshots() async throws {
@@ -1523,7 +1581,7 @@ final class CantripHomeTests: XCTestCase {
            "handoffs":[{"id":"60000000-0000-0000-0000-000000000001","tabID":"\(bassTabID)",
              "tabTitle":"Bass Compass","summary":"Automated Bass Compass Ingestion Incident",
              "prompt":"AUTOMATED BASS COMPASS INGESTION INCIDENT","status":"queued",
-             "startedAt":\(epoch - 200),"latestStatus":"Waiting for the tab's current work to finish."}]},
+             "startedAt":\(epoch - 200),"latestStatus":"Waiting for the tab to be free."}]},
           {"id":"30000000-0000-0000-0000-000000000014","kind":"incident",
            "label":"Automated Bass Compass Ingestion Incident","startedAt":\(now - 900),
            "finishedAt":\(now - 900),"status":"skipped","route":"hidden","canStop":false,

@@ -24,6 +24,7 @@ extension SessionTabTests {
     static func testTabInsight() async throws {
         testChildStatusLines()
         testTabTranscriptText()
+        testAskLabels()
         try testTabCommandParsing()
         testTabCommandGuardrails()
         try await testTabInsightFlow()
@@ -79,6 +80,22 @@ extension SessionTabTests {
         record.contextDelivered = false
         record.state = .requeued
         precondition(!record.needsReport, "a request moved back to the parent isn't an outcome")
+    }
+
+    /// An ask card's headline is the question's first sentence, short and cut at a word.
+    static func testAskLabels() {
+        precondition(TabInsight.askLabel("Is the docs build still running? I need to build the app next.")
+                     == "Is the docs build still running?")
+        precondition(TabInsight.askLabel("Which port?") == "Which port?", "a short question stays whole")
+        precondition(TabInsight.askLabel("Ok. Is the build done?") == "Ok. Is the build done?",
+                     "a very short first sentence keeps the next one")
+        let long = TabInsight.askLabel("The user approved building and publishing the cache-prepared update after "
+                                       + "first-launch stutters on the phone, so please hold shared edits until it finishes")
+        precondition(long.count <= 100 && long.hasSuffix("…") && !long.dropLast().hasSuffix(" ")
+                     && long.hasPrefix("The user approved building and publishing"), long)
+        precondition(TabInsight.askLabel("Line one\nline two is here. More.") == "Line one line two is here.",
+                     "newlines become spaces")
+        precondition(TabInsight.askStyle.contains("normal spacing"))
     }
 
     static func testTabTranscriptText() {

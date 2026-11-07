@@ -44,7 +44,8 @@ export interface HomeMessage {
   /** Shown instead of `text` when present. */
   displayText?: string;
   /** role "handoff": a tab's result for Home (plain text, never Markdown). */
-  handoffResult?: { tabTitle: string; summary: string; state: string; detail: string };
+  /** `kind` "ask": a `tab ask` question another tab answers (`summary` is the question). */
+  handoffResult?: { tabTitle: string; summary: string; state: string; detail: string; kind?: string };
   /** Every card under the reply, resolved on the Mac. */
   cards?: CardDocument[];
 }

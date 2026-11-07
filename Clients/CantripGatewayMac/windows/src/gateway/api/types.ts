@@ -331,6 +331,8 @@ export interface RemoteHandoffResult {
   finishedAt?: UnixSeconds;
   /** UnixSeconds. */
   updatedAt: UnixSeconds;
+  /** "ask": a `tab ask` question another tab answers (`summary` is the question, `detail` the reply). */
+  kind?: string;
 }
 
 // MARK: - Child tabs
