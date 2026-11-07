@@ -616,7 +616,9 @@ Motion). When the build ends the card shows Succeeded, Failed (with its exit cod
 the total time. Footer lines that don't fit side by side stack (iPhone, Duo folded). A reply
 that runs several builds keeps one card that changes in place: the newest running build leads,
 builds running beside it keep their own bar, and finished ones become rows under **Earlier
-steps** with their result and time (the latest five).
+steps** with their result and time (the latest five). That list starts collapsed to one line
+with a summary such as "2 steps · 1 failed" (red for a failure, amber for a stop, green when all
+succeeded); tapping it shows the rows, and it stays open while the card updates.
 Data transfers (rsync, downloads, device copies and installs, `push-…` scripts) get the same
 card (docs/cards.md "Transfer cards"): the bar follows the bytes the Mac read from the command,
 the line under it says how much is done and how fast (`27.0 GB of 29.1 GB · 34.5 MB/s`), and the
@@ -736,6 +738,9 @@ references to a project are answered right in Home. When you ask for changes to
 a project that has an open Cantrip tab, Home hands the work to that tab
 and shows a nested task card under its reply: live status while the tab works,
 the tab's result when it finishes, and **Open tab** to jump straight to it.
+A question one tab asks another (`cantrip tab ask`) gets the same card labeled
+**Asked tab**, headed by the question's first sentence, then **Answer from tab**
+with the reply.
 
 Create automations or structured trackers conversationally in Chat. Automations
 can use one-time, interval, weekday, or monthly schedules (a day of the month or
@@ -1402,7 +1407,10 @@ vertical bar, Home's sections use the bottom of Apple's native adaptive toolbar 
 the hamburger menu at the top; in a project tab the back pill uses the bottom and a separate
 Settings gear and the hamburger menu stay at the top, instead of duplicating controls
 above the conversation. The title, connection/usage row,
-and composer remain with the chat. In other display configurations the familiar
+and composer remain with the chat. Unfolded upright, where the status bar is an empty band across
+the top with the clock and camera ring at its end, the app draws the rail itself and a tab's
+header sits in that band (its title level with the clock, clear of it), so the header and rail
+read as one bar. In other display configurations the familiar
 header returns; regular-width iPad windows retain their session sidebar.
 
 All iPhones use one navigation stack and the session drawer, including landscape;

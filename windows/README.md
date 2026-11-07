@@ -22,8 +22,9 @@ capture, updates, and platform limitations.
 - Opt-in location context, so weather and "near me" answers are for where the PC is
 - Weather cards: an Open-Meteo forecast under replies about the weather, drawn from Cantrip's generic card blocks
 - A read-only **Cantrip Home** window, paired with your Mac through a `cantrip pair` link:
-  Home's conversation, Background runs with their cards and full log, and Tasks with
-  their latest runs, workspaces and record cards
+  Home's conversation, Background runs with their cards and full log (plus each tab's running
+  background tasks and builds taking turns on the Mac), and Tasks with their latest runs,
+  workspaces and record cards
 - Hash-approved plugins with sandboxed dashboards, bounded data sources, MCP
   injection, and live reload
 - Safe-by-default plan mode with an explicit **Allow agent actions** switch
