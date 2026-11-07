@@ -72,7 +72,7 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   seconds while it stays open (the last cards stay through a failed refresh, retried a minute
   later) and never once it closes. Older Macs that send no cards show runs and records as before.
 - **Sheets.** Background runs (answer a waiting run in place; every tab's running background
-  tasks under **In tabs**, with Stop; builds taking turns on the Mac under **Builds**; **Full Log**
+  tasks under **In tabs**, with Stop; the Mac's long jobs (builds taking turns and other long work) under **Jobs**; **Full Log**
   opens Cantrip Home's background log, every run's report with its cards, read-only with no
   composer, and **Background** in the toolbar goes back), a tab's background tasks and
   queue (each message's suggested plan, **Run in child tab**, Send now, Remove), Model Settings (with the Mac-wide usage limit fallbacks: add, reorder and remove backups, pick each one's model and effort, and list a backend again, the Mac's own included, with another model; and Private Local), Rename, Usage Limits (Claude Code, Antigravity, Codex and Copilot, with each model's own limits), Cantrip Memory (formatted

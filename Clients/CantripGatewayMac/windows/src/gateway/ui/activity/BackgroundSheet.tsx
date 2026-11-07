@@ -19,7 +19,7 @@ import { HomeCardStack } from "../home/HomeCards";
 import { inline } from "../transcript/Markdown";
 import { InputCard } from "../transcript/Inputs";
 import {
-  answerResultText, backgroundPollDelay, backgroundSubagents, buildQueueDetail, buildQueueFootnote, elapsedAccessibilityLabel,
+  answerResultText, backgroundPollDelay, backgroundSubagents, buildQueueDetail, buildQueueExtra, buildQueueFootnote, elapsedAccessibilityLabel,
   elapsedLabel, handoffIsActive, listedBuilds, listedTabTasks,
   handoffNeedsAnswer, handoffStatusText, handoffSummary, handoffTabTitle, isLabelledSummary, needsInputRuns, otherRuns,
   queuedRunDetail, remainingInputs, runCanExpand, runDetail, runIcon, runIsRunning, runNeedsInput, runResult, runShowsResult,
@@ -181,18 +181,22 @@ function TabTasksGroup(props: { tab: TabBackgroundTasks }): JSX.Element {
   );
 }
 
-/** A build in the Mac's build queue: running (place 0) or waiting its turn. */
+/** One of the Mac's long jobs: a build running (place 0) or waiting its turn, or other long work (maybe paused). */
 function BuildRow(props: { build: BuildQueueBuild; place: number }): JSX.Element {
   const { build, place } = props;
   const tabID = trimmed(build.tabID);
   const tab = trimmed(build.tabTitle);
+  const extra = buildQueueExtra(build);
+  const icon = build.state === "paused" ? <Icon name="pause.circle" size={16} class="muted" />
+    : place ? <Icon name="hourglass" size={16} class="muted" /> : <Spinner size="small" />;
   return (
     <div class="act-card" data-build-pid={build.pid}>
-      <span class="act-card-icon">{place ? <Icon name="hourglass" size={16} class="muted" /> : <Spinner size="small" />}</span>
+      <span class="act-card-icon">{icon}</span>
       <div class="act-card-body">
         <div class="act-run-summary-block">
           <div class="act-run-label">{build.title}</div>
           <div class="act-run-detail">{buildQueueDetail(build, place, now.value / 1000)}</div>
+          {extra ? <div class="act-run-detail act-job-log">{extra}</div> : null}
         </div>
         {tabID && tab ? (
           <div class="act-run-actions">
@@ -415,7 +419,7 @@ export function BackgroundSheet(props: { focusSessionID?: string; onClose: () =>
           </Section>
         ) : null}
         {builds ? (
-          <Section title="Builds">
+          <Section title="Jobs">
             {builds.running.map((build, index) => <BuildRow key={`r${index}-${build.pid}`} build={build} place={0} />)}
             {builds.waiting.map((build, index) => <BuildRow key={`w${index}-${build.pid}`} build={build} place={index + 1} />)}
             <p class="act-footnote">{buildQueueFootnote(builds)}</p>

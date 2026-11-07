@@ -209,3 +209,5 @@ button.act-step-row:hover { background: rgba(255, 255, 255, 0.08); }
   color: var(--secondary); font-size: 11.5px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 .plan-chip.fork { color: var(--child-lane); background: rgba(100, 210, 255, 0.13); }
+/* A long job's current step and the last line of its log. */
+.act-job-log { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }

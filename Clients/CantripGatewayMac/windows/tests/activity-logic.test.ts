@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BuildQueueSnapshot, HomeBackgroundHandoff, HomeBackgroundRun, HomeBackgroundSnapshot, InputRequest, RemoteMessage, RemoteSubagent } from "../src/gateway/api/types";
 import {
   activeBackground, answerResultText, APPLE_EPOCH, backgroundPollDelay, buildQueueDetail, buildQueueFootnote, buildQueueOrdinal,
-  buildQueueOrigin, listedBuilds, listedTabTasks, tabBackgroundLabel, backgroundSubagents, backgroundTaskAccessibilityLabel,
+  buildQueueOrigin, buildQueueExtra, buildQueueState, listedBuilds, listedTabTasks, tabBackgroundLabel, backgroundSubagents, backgroundTaskAccessibilityLabel,
   backgroundTaskIcon, backgroundTaskSummary, backgroundTaskTitle, backgroundTasksStatusLine, canStopSubagent, capitalized,
   elapsedAccessibilityLabel, elapsedLabel, handoffNeedsAnswer, handoffStatusText, handoffSummary, handoffTabTitle,
   isLabelledSummary, isLive, liveBackgroundSubagents, liveForegroundSubagents, needsInputRuns, otherRuns, promptPages,
@@ -314,6 +314,19 @@ describe("build queue", () => {
       "1 build at a time while macOS reports memory pressure (normally 2). Your tabs go first, then child tabs and CI, then Home's background runs.");
     expect(buildQueueFootnote({ ...builds, limit: 2 })).toBe(
       "Up to 2 builds at once on your Mac. Your tabs go first, then child tabs and CI, then Home's background runs.");
+    expect(buildQueueFootnote({ ...builds, enabled: false })).toBe(
+      "Long jobs running on your Mac. The build queue is off, so builds don't take turns.");
+  });
+
+  it("describes other long jobs on the Mac", () => {
+    const job = { pid: 104, title: "build-atlas.py", source: "other" as const, since: 992800, kind: "job" as const,
+      state: "waitingOnDisk" as const, project: "atlas", step: "compile_shaders.py", logFile: "b.log", logLine: "[5/6] shaders 99%" };
+    expect(buildQueueDetail(job, 0, 1_000_000)).toBe("Waiting on disk · Started outside Cantrip · atlas · 2h 00m");
+    expect(buildQueueExtra(job)).toBe("Now: compile_shaders.py\nb.log: [5/6] shaders 99%");
+    expect(buildQueueExtra(builds.running[0])).toBeNull();
+    const paused = { pid: 105, title: "export.py", source: "tab" as const, since: 996400, tabTitle: "Docs site", kind: "job" as const, state: "paused" as const };
+    expect(buildQueueDetail(paused, 2, 1_000_000)).toBe("Paused · Docs site · 1h 00m");
+    expect(buildQueueState(builds.running[0])).toBeNull();
   });
 });
 

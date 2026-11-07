@@ -215,6 +215,38 @@ extension SessionTabTests {
         let firstRunning = try requireHome((json["running"] as? [[String: Any]])?.first)
         precondition(firstRunning["tabTitle"] as? String == "Docs site" && firstRunning["source"] as? String == "tab"
                      && firstRunning["job"] == nil && json["limit"] as? Int == 1, "\(json)")
+
+        // Other long work on the Mac (MachineJobs): a build borrows its own group's details, other
+        // jobs follow the builds (paused ones with the waiting), and counts and status include them.
+        func job(_ group: Int32, _ pids: [Int32], _ title: String, _ state: MachineJobs.State, tab: String? = nil) -> MachineJobs.Job {
+            .init(key: "\(group)-1", group: group, processIDs: pids, title: title, project: "atlas", step: "compile_shaders.py",
+                  state: state, since: 100, cpu: 1.5, memory: 4096, processes: pids.count, tabID: tab,
+                  logFile: "b.log", logLine: "[5/6] 99%", logUpdatedAt: 120)
+        }
+        let jobs = [job(70, [70, getpid()], "make app", .running),
+                    job(80, [80, 81], "build-atlas.py", .waitingOnDisk, tab: tabID.uuidString),
+                    job(90, [90], "export.py", .paused)]
+        let withJobs = try requireHome(BuildQueue.snapshot(store: listed, policy: .init(slots: 2), enabled: true, resources: calm,
+                                                           jobs: jobs) { $0 == tabID.uuidString ? "Docs site" : nil })
+        precondition(withJobs.running.map(\.title) == ["xcodebuild archive · App", "build-atlas.py"]
+                     && withJobs.waiting.map(\.title) == ["swift build · App", "export.py"], "\(withJobs)")
+        let borrowed = withJobs.running[0], atlas = withJobs.running[1], paused = withJobs.waiting[1]
+        precondition(borrowed.kind == nil && borrowed.state == "running" && borrowed.project == "atlas" && borrowed.logLine == "[5/6] 99%",
+                     "the build carries its group's details: \(borrowed)")
+        precondition(withJobs.waiting[0].state == nil && withJobs.waiting[0].step == "compile_shaders.py", "a queued build keeps its own state")
+        precondition(atlas.kind == "job" && atlas.source == "tab" && atlas.tabTitle == "Docs site" && atlas.pid == 80
+                     && atlas.state == "waitingOnDisk" && atlas.cpu == 1.5 && atlas.memory == 4096, "\(atlas)")
+        precondition(paused.kind == "job" && paused.source == "other" && paused.state == "paused", "\(paused)")
+        let jobCounts = try requireHome(BuildQueue.counts(store: listed, enabled: false, jobs: jobs))
+        precondition(jobCounts.running == 2 && jobCounts.waiting == 2, "the build's own group isn't counted twice: \(jobCounts)")
+        precondition(BuildQueue.counts(store: BuildQueue.Store(directory: root.appendingPathComponent("none")), enabled: false,
+                                       jobs: [jobs[1]])?.running == 1, "a job alone shows even with the queue off")
+        let jobStatus = BuildQueue.statusText(store: listed, policy: .init(slots: 2), enabled: true, resources: calm, jobs: jobs)
+        precondition(jobStatus.contains("Other long jobs:\n  build-atlas.py · atlas (waiting on disk)")
+                     && jobStatus.contains("    b.log: [5/6] 99%") && !jobStatus.contains("make app"), jobStatus)
+        let jobJSON = try requireHome(JSONSerialization.jsonObject(with: JSONEncoder().encode(atlas)) as? [String: Any])
+        precondition(jobJSON["kind"] as? String == "job" && jobJSON["logFile"] as? String == "b.log" && jobJSON["job"] == nil, "\(jobJSON)")
+        precondition(MachineJobs.tabIDVariable == TabInsight.tabIDVariable)
         listed.removeTicket(pid: getpid())
 
         // The card while it waits, and its time from when it got a slot.

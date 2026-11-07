@@ -1704,7 +1704,7 @@ export interface HomeBackgroundSnapshot {
   maxParallel: Int;
   runningCount: Int;
   supportsStop: true;
-  /** The Mac's build queue ("Heavy builds take turns"); absent while it's off and empty. */
+  /** The Mac's long jobs: the build queue ("Heavy builds take turns") and other long work; absent while the queue is off and nothing runs. */
   builds?: BuildQueueSnapshot;
   /** Tabs with background agents still running, in tab order; absent when none. */
   tabTasks?: TabBackgroundTasks[];
@@ -1717,16 +1717,29 @@ export interface TabBackgroundTasks {
   tasks: RemoteSubagent[];
 }
 
-/** One build in the Mac's build queue. `since` is UnixSeconds: when it got its slot, or started waiting. */
+/** One of the Mac's long jobs: a build in the build queue, or other long work (`kind` "job", source
+ * "other" when no tab started it). `since` is UnixSeconds: when it got its slot, started waiting or started. */
 export interface BuildQueueBuild {
   pid: Int;
   title: string;
-  source: "tab" | "child" | "ci" | "background";
+  source: "tab" | "child" | "ci" | "background" | "other";
   since: number;
   tabID?: UUIDString;
   tabTitle?: string;
   /** A CI job's "repo · workflow". */
   job?: string;
+  kind?: "job";
+  state?: "running" | "waitingOnDisk" | "idle" | "paused";
+  project?: string;
+  /** What it's doing now. */
+  step?: string;
+  logFile?: string;
+  logLine?: string;
+  logUpdatedAt?: number;
+  /** Percent of the whole Mac, memory in bytes, processes in its group. */
+  cpu?: number;
+  memory?: number;
+  processes?: Int;
 }
 
 export interface BuildQueueSnapshot {

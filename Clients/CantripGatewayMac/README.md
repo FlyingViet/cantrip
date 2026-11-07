@@ -167,8 +167,8 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   programs such as `vim` or `top` don't work. Not in Private Local. Needs a Cantrip host with
   `supportsTerminal`.
 - **Toolbar:** Background (⌘B, with the same running and needs-input badges as iOS; its list
-  also has every tab's running background tasks under **In tabs** and builds taking turns on
-  the Mac under **Builds**),
+  also has every tab's running background tasks under **In tabs** and the Mac's long jobs,
+  builds taking turns and other long work, under **Jobs**),
   delivery mode and one **More** menu everywhere: the open tab's actions (or
   Home's Model Settings and Start Fresh, or the local model's settings), then Back to Home and
   Settings. Voice Mode opens from the composer's microphone (double-click it) or ⇧⌘V.
