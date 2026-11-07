@@ -1159,6 +1159,8 @@ struct ChatView: View {
     /// Reported by `ChatDisplayObserver`; drives the iPhone Duo sidebar layout.
     @State private var displayTraits = ChatDisplayTraits()
     @State private var chatHeaderHeight: CGFloat = 0
+    /// The window's top safe area (the status bar) without the header's inset.
+    @State private var windowTopInset: CGFloat = 0
     @State private var showSettings = false
     /// The unfolded iPhone Duo's sidebar, opened and closed from its rail. Saved, so folding,
     /// unfolding, rotating and the keyboard never change it.
@@ -1295,13 +1297,21 @@ struct ChatView: View {
             }
             .onChange(of: visibleTabID, initial: true) { _, id in remote.setVisibleTab(id) }
             .safeAreaInset(edge: .top, spacing: 0) {
-                if vm.activeLane != .home || homeSection == .chat {
-                    chatHeader
+                if (vm.activeLane != .home || homeSection == .chat) && !headerInStatusBand {
+                    chatHeader()
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                             chatHeaderHeight = $0
                         }
                 }
             }
+            .overlay(alignment: .top) {
+                if headerInStatusBand {
+                    chatHeader(statusBand: windowTopInset)
+                        .ignoresSafeArea(edges: .top)
+                }
+            }
+            // The system's own top inset (the status bar), outside the header's.
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { windowTopInset = $0 }
             // Full screen: as a sheet it was a small card on an unfolded Duo and iPad.
             .fullScreenCover(
                 isPresented: $showSettings,
@@ -1640,7 +1650,13 @@ struct ChatView: View {
         }
     }
 
-    private var chatHeader: some View {
+    /// Unfolded upright, the status bar's band across the top is empty but for the clock and camera
+    /// ring at its trailing end: a tab's header sits in it instead of below it, as tall as the band.
+    private var headerInStatusBand: Bool {
+        showsDuoAppRail && vm.activeLane == .cantrip && windowTopInset >= ChatHeaderMetrics.minimumStatusBand
+    }
+
+    private func chatHeader(statusBand: CGFloat? = nil) -> some View {
         ChatHeader(
             style: showsDuoSidebar ? .sidebar
                 : vm.activeLane == .home ? .mascot
@@ -1651,6 +1667,7 @@ struct ChatView: View {
             hidesLeadingInRail: showsDuoSidebar
                 || (displayTraits.isUnfoldedDuo && vm.activeLane.usesCantripRemote),
             actionsInRail: showsDuoAppRail,
+            statusBand: statusBand,
             mac: viewMacButton
         ) {
             if vm.activeLane == .cantrip {
@@ -2462,7 +2479,8 @@ struct ChatView: View {
     /// the system's vertical bar holds on its side.
     @ViewBuilder private var duoAppRail: some View {
         if showsDuoAppRail {
-            CantripDuoAppRail {
+            // Beside a header in the status band the rail's edge starts below it: one bar across the top.
+            CantripDuoAppRail(dividerTop: headerInStatusBand ? windowTopInset : 0) {
                 duoSidebarToggle
                 ChatSettingsButton { showSettings = true }
                     .disabled(vm.sending || importingImages || submittingRemote)
@@ -3173,6 +3191,8 @@ struct ChatMenuIcon: View {
 /// material beside the chat. Its actions sit low, within reach of the thumb; Home's sections (when
 /// shown) are the bottom-most group.
 struct CantripDuoAppRail<Top: View, Bottom: View>: View {
+    /// Where the rail's leading edge line starts, from the top of the screen.
+    var dividerTop: CGFloat = 0
     @ViewBuilder var top: () -> Top
     @ViewBuilder var bottom: () -> Bottom
 
@@ -3188,7 +3208,9 @@ struct CantripDuoAppRail<Top: View, Bottom: View>: View {
         .frame(width: 64)
         .frame(maxHeight: .infinity)
         .background(.bar, ignoresSafeAreaEdges: .all)
-        .overlay(alignment: .leading) { Divider().ignoresSafeArea() }
+        .overlay(alignment: .leading) {
+            Divider().padding(.top, dividerTop).ignoresSafeArea()
+        }
         .ignoresSafeArea(.keyboard)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Navigation")
@@ -3295,6 +3317,15 @@ struct CantripViewMacButton: View {
     }
 }
 
+enum ChatHeaderMetrics {
+    /// A status band shorter than this keeps the header below it.
+    static let minimumStatusBand: CGFloat = 44
+    /// Room kept free at each end of a header in the status band: the clock and camera ring sit at
+    /// the trailing end (the title stays centered, so the leading end matches).
+    static let statusBandReserve: CGFloat = 76
+    static let statusBandNudge: CGFloat = 12
+}
+
 enum ChatHeaderStyle {
     /// Title row plus a connection, usage and delivery row on an opaque bar.
     case standard
@@ -3320,6 +3351,9 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
     var hidesLeadingInRail = false
     /// The unfolded iPhone Duo's app-drawn rail (upright) holds the actions instead of the header.
     var actionsInRail = false
+    /// The status bar's height when the header sits in its band (unfolded upright): the header is
+    /// that tall, its row centered, and clear of the clock and camera ring at the trailing end.
+    var statusBand: CGFloat? = nil
     /// View Mac, beside the menu (in the vertical bar or the rail when those hold the actions).
     var mac: AnyView? = nil
     @ViewBuilder var title: () -> Title
@@ -3354,6 +3388,7 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
                         trailing().frame(width: 44, height: 44)
                     }
                 }
+                .padding(.trailing, statusBand == nil ? 0 : ChatHeaderMetrics.statusBandReserve - 12)
                 .frame(minHeight: 48)
             case .compact:
                 HStack(spacing: 8) {
@@ -3389,8 +3424,10 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
         .buttonStyle(.plain)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .padding(.horizontal, 12)
-        .padding(.top, style == .standard ? 8 : 2)
-        .padding(.bottom, style == .mascot ? 6 : style == .compact || style == .tab ? 2 : 4)
+        // In the status band the row sits a little low, level with the clock beside the camera ring.
+        .padding(.top, statusBand != nil ? ChatHeaderMetrics.statusBandNudge : style == .standard ? 8 : 2)
+        .padding(.bottom, statusBand != nil ? 0 : style == .mascot ? 6 : style == .compact || style == .tab ? 2 : 4)
+        .frame(height: statusBand)
         .frame(maxWidth: .infinity)
         .background(style == .mascot ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.bar))
         .background { if style == .mascot { CantripMascotHeaderFade() } }
@@ -3408,7 +3445,8 @@ struct ChatHeader<Title: View, Connection: View, Lane: View, Usage: View, Delive
 
     /// The title stays centered on the screen and clear of the wider of the two side controls.
     private var tabRow: some View {
-        let inset = actionsElsewhere ? 0 : max(tabLeadingWidth, tabTrailingWidth, 44) + 8
+        let inset = statusBand != nil ? ChatHeaderMetrics.statusBandReserve - 12
+            : actionsElsewhere ? 0 : max(tabLeadingWidth, tabTrailingWidth, 44) + 8
         return ZStack {
             title()
                 .frame(maxWidth: .infinity, minHeight: 44)
