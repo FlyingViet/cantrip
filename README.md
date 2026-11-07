@@ -24,12 +24,14 @@ live sessions.
 |---|---|---|
 | **Cantrip** (host) | macOS 14+, Universal | [`Sources/Cantrip/`](Sources/Cantrip/) |
 | **Cantrip for Windows** | Windows 10/11 x64 | [`windows/`](windows/) |
-| **Cantrip Agent** | iPhone, iPad (iOS 26+) | [`Clients/CantripIOS/`](Clients/CantripIOS/) |
+| **Cantrip Agent** | iPhone, iPhone Duo, iPad (iOS 26+), Apple Watch | [`Clients/CantripIOS/`](Clients/CantripIOS/) |
 | **Cantrip Gateway Mac** | macOS 26+ | [`Clients/CantripGatewayMac/`](Clients/CantripGatewayMac/) |
 | **Cantrip Gateway for Windows** | Windows 10/11 x64 | [`Clients/CantripGatewayMac/windows/`](Clients/CantripGatewayMac/windows/) |
 | Browser remote | Any modern browser | Served by the Mac host |
 
-Cantrip Agent (formerly AgentGateway) is the native iPhone/iPad client.
+Cantrip Agent (formerly AgentGateway) is the native iPhone and iPad client; an
+unfolded iPhone Duo gets a navigation rail and a sidebar, and its Apple Watch
+app talks to Cantrip Home by voice.
 Cantrip Gateway Mac brings the same Home and project tabs to a Mac window by
 compiling Cantrip Agent's shared Swift code from `Clients/CantripIOS`. Pair either one
 under **Settings > Remote control**; see [Remote control](docs/remote-control.md).
@@ -38,8 +40,9 @@ in place of the panel, with no pairing: see
 [Use the Home window instead of the panel](docs/everyday-tasks.md#use-the-home-window-instead-of-the-panel).
 
 Windows supports the launcher, math, Claude/Copilot/Codex/Antigravity, screen capture and
-plugins, but not yet local models, session tabs, memory, voice, council or
-Remote. See the [feature comparison](docs/windows.md#what-is-and-is-not-available)
+plugins, and shows a paired Mac's Cantrip Home read-only, but doesn't yet have
+local models, session tabs, memory, voice, council or Remote hosting; Cantrip
+Gateway for Windows is the full client for a Mac. See the [feature comparison](docs/windows.md#what-is-and-is-not-available)
 and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27-support).
 
 ## Features (macOS)
@@ -57,22 +60,42 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   subagent. Queue, Redirect, Inject and **Send now** stay available.
   [Send while busy](docs/sessions-and-council.md#send-instructions-while-the-agent-is-busy)
 - **Background work:** watchers and subagents keep running while you keep
-  chatting; Cantrip wakes the run when they finish.
+  chatting; Cantrip wakes the run when they finish. Home's **Background** list
+  shows every tab's running tasks, each with **Stop**, and tab lists mark the
+  tabs that have them. [Tabs' background tasks](docs/cantrip-home.md#tabs-background-tasks)
+- **Keep agents running when Cantrip quits:** a background engine runs tabs,
+  Home and paired devices with no window open, so quitting or updating the app
+  doesn't stop them. [Background engine](docs/headless.md#keep-agents-running-when-cantrip-quits)
+- **Cards:** replies about the weather, places and links get cards, and tools
+  can return their own. Builds, tests and transfers an agent runs get one live
+  card per reply with the elapsed time, an estimate from earlier runs and the
+  result, its earlier steps folded into a one-line summary. The Mac, Cantrip
+  Agent, both Gateways and the browser Remote draw them. [Cards](docs/cards.md)
 - **Child tabs:** an independent queued message runs (on its own for Auto
   delivery, paired devices and Home handoffs, several at once within the caps
   and the Mac's resources) in a nested tab with its own git branch; work that
   depends on it follows it there. It merges back when the parent is idle and
   asks on a conflict. [Child tabs](docs/sessions-and-council.md#child-tabs)
 - **Tabs look into each other:** parents see live child status, and models and
-  Home read any non-private tab's conversation on demand or ask it a question.
-  Type `@` to point a message at one tab. [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs)
+  Home read any non-private tab's conversation on demand or ask it a question,
+  which shows as an **Asked tab** card until the answer arrives. Type `@` to
+  point a message at one tab. [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs)
 - **Remote control:** the Mac's sessions from Cantrip Agent, Cantrip Gateway
   Mac, another Mac or a browser, over LAN or Tailscale, with push alerts,
-  approvals, attachments and View Mac. [Remote control](docs/remote-control.md);
+  approvals, attachments and full-screen View Mac (touch on the phone). Every
+  client changes the Mac's settings on the same pages.
+  [Remote control](docs/remote-control.md), [Mac settings](docs/remote-control.md#mac-settings);
   on a cloud or SSH-only Mac, run it headless. [Headless host](docs/headless.md)
 - **Cantrip Home:** one permanent conversation that answers questions, hands
-  project changes to the right tab, and runs scheduled tasks, trackers and
-  incident investigations. [Cantrip Home](docs/cantrip-home.md)
+  project changes to the right tab or opens a new one, and runs scheduled
+  (interval, weekday or monthly) tasks, trackers and incident investigations,
+  with cards on their results. In Cantrip Agent, Home's **Builds** section
+  lists your over-the-air install page. [Cantrip Home](docs/cantrip-home.md)
+- **Shared Mac resources:** tabs lease simulators from a small shared pool, and
+  with **Heavy builds take turns** on, `xcodebuild` and `swift` builds from
+  tabs, child tabs, self-hosted CI runners and Home wait for a few build slots, listed in
+  Background on every client. [Shared simulators](docs/updating-and-troubleshooting.md#shared-simulators),
+  [Heavy builds take turns](docs/updating-and-troubleshooting.md#heavy-builds-take-turns)
 - **Private Local:** a saved tab that only talks to your self-hosted Ollama
   server, with no tools or cloud fallback.
   [Setup](docs/remote-control.md#persistent-private-local-tab)
@@ -147,7 +170,8 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 | `cantrip env [list]` / `show [FOLDER]` / `set NAME …` / `run [--dir F] -- CMD` / `hook install` | Per-project environment profiles: the Xcode, Node, PATH and variables every backend, child tab and `!` command in a project gets | [Project toolchains](docs/backends.md#give-each-project-the-same-toolchain-on-every-backend) |
 | `cantrip api [--json]` / `api key new` / `api key clear` | Cantrip's OpenAI-compatible API for apps on this Mac: status, calls per consumer and the proxy key | [OpenAI-compatible API](docs/backends.md#serve-your-backends-to-other-apps-openai-compatible-api) |
 | `cantrip sim acquire --device NAME [--os VERSION] [--exact] [--wait SECONDS]` / `release` / `list` / `adopt UDID` / `tidy` | Lease a shared simulator to a tab (one iPhone for every iPhone request, a Duo per iOS version, at most 2 running at once) and give it back | [Shared simulators](docs/updating-and-troubleshooting.md#shared-simulators) |
-| `cantrip build-queue` | Builds running and waiting for a slot while heavy builds take turns | [Heavy builds take turns](docs/updating-and-troubleshooting.md#heavy-builds-take-turns) |
+| `cantrip build-queue` / `run [--tool NAME] -- COMMAND` | Builds running and waiting for a slot while heavy builds take turns, or run any command in one | [Heavy builds take turns](docs/updating-and-troubleshooting.md#heavy-builds-take-turns) |
+| `cantrip weather [PLACE] [--json]` | The forecast a reply's weather card shows (default: the Mac's location) | [Weather cards](docs/remote-control.md#weather-cards) |
 | `cantrip help` | Show the usage of these host commands (`cantrip --help` shows the ask and `runs` examples) | [Headless](docs/headless.md#commands) |
 
 ## Permissions and privacy
@@ -157,7 +181,8 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 trust the setup; explicit shell commands still run on their own. Either way,
 one [agent policy](docs/privacy-and-memory.md#set-what-agents-may-do) of allow,
 ask and deny rules applies to every tab and backend, checked on the Mac before
-each tool call. Memory,
+each tool call. A push rule can scan the outgoing commits for private details:
+a clean scan lets the push run, and a finding stops it for your approval. Memory,
 document search, calendar and location context are **on** by default (subject
 to macOS permissions); screen context and Remote hosting are off. Private mode
 stops Cantrip saving the conversation, but not tool writes, image caches or
