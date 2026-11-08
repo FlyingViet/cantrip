@@ -708,6 +708,11 @@ final class AppSettings: ObservableObject {
     @Published var memorySearchIndex: Bool {
         didSet { d.set(memorySearchIndex, forKey: "memorySearchIndex") }
     }
+    /// Link new or changed skills in Cantrip's skills library on their own (`SkillsAutoLink`),
+    /// instead of waiting for `cantrip skills sync` or Relink. Off by default.
+    @Published var skillsAutoLink: Bool {
+        didSet { d.set(skillsAutoLink, forKey: "skillsAutoLink") }
+    }
     /// A build disk (a NAS, say) exported to every agent as `CANTRIP_BUILD_ROOT`: build scripts
     /// put large output there and build locally whenever it isn't mounted. Empty: build locally.
     @Published var buildRoot: String {
@@ -861,7 +866,7 @@ final class AppSettings: ObservableObject {
             "allowActions": allowActions, "shareLocation": shareLocation,
             "shareCalendar": shareCalendar, "attachScreen": attachScreen,
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
-            "memoryPath": memoryPath, "memorySearchIndex": memorySearchIndex,
+            "memoryPath": memoryPath, "memorySearchIndex": memorySearchIndex, "skillsAutoLink": skillsAutoLink,
             "buildRoot": buildRoot, "fileRAGEnabled": fileRAGEnabled,
             "panelOpacity": panelOpacity,
             "remoteControlEnabled": remoteControlEnabled,
@@ -1006,6 +1011,7 @@ final class AppSettings: ObservableObject {
         bool("memoryEnabled") { self.memoryEnabled = $0 }
         str("memoryPath") { self.memoryPath = $0 }
         bool("memorySearchIndex") { self.memorySearchIndex = $0 }
+        bool("skillsAutoLink") { self.skillsAutoLink = $0 }
         str("buildRoot") { self.buildRoot = $0 }
         bool("fileRAGEnabled") { self.fileRAGEnabled = $0 }
         bool("remoteControlEnabled") { self.remoteControlEnabled = $0 }
@@ -1300,6 +1306,7 @@ final class AppSettings: ObservableObject {
         memoryEnabled = d.object(forKey: "memoryEnabled") == nil ? true : d.bool(forKey: "memoryEnabled")
         memoryPath = d.string(forKey: "memoryPath") ?? "\(NSHomeDirectory())/Cantrip Memory"
         memorySearchIndex = d.bool(forKey: "memorySearchIndex")
+        skillsAutoLink = d.bool(forKey: "skillsAutoLink")
         buildRoot = d.string(forKey: "buildRoot") ?? ""
     }
 }

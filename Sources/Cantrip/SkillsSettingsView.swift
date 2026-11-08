@@ -5,6 +5,7 @@ import SwiftUI
 /// problems) and the folder rules every backend gets, with drift in the repositories' rule files.
 struct SkillsSettingsView: View {
     @ObservedObject var hub = SkillsHub.shared
+    @ObservedObject var settings = AppSettings.shared
     @State private var error: String?
 
     var body: some View {
@@ -20,6 +21,10 @@ struct SkillsSettingsView: View {
             .font(.caption)
             Text("One skills library for every backend: Copilot, Codex and Antigravity read ~/.agents/skills, Claude Code ~/.claude/skills; both link here. Edit in the library or with `cantrip skills edit NAME`.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Toggle("Link new skills automatically", isOn: $settings.skillsAutoLink)
+                .font(.caption)
+                .toggleStyle(.checkbox)
+                .help("A skill added, changed or removed in the library is linked for every backend about a minute later, as Relink does")
             if let error { Text(error).font(.caption2).foregroundStyle(.orange).accessibilityLabel("Error: \(error)") }
             if !hub.messages.isEmpty {
                 Text(hub.messages.joined(separator: "\n")).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)

@@ -24,6 +24,7 @@ struct SkillsTests {
         let root = URL(fileURLWithPath: home)
         testSecretScan()
         try testSkillsLibrary(home: root)
+        try testAutoLink(home: root.appendingPathComponent("autolink-home", isDirectory: true))
         try testFolderRules(home: root)
         try testRulesCheck(home: root)
         print("Skills and folder rules: secret scan, library links, manifest, history, rules, worktrees, mirrors and drift checks passed")
@@ -55,6 +56,48 @@ struct SkillsTests {
     // Built at run time so this file never holds a token-shaped literal.
     static let fakeToken = "gh" + "p_" + String(repeating: "A1b2C3d4", count: 5)
     static let fakeHex = String(repeating: "9f8e7d6c5b4a", count: 3)
+
+    // MARK: - Automatic linking
+
+    /// `skillsAutoLink`: a new, changed or removed library skill is synced once its files stop
+    /// changing; a credential-looking value keeps a skill unlinked.
+    static func testAutoLink(home: URL) throws {
+        let library = SkillsLibrary(home: home)
+        let auto = SkillsAutoLink(library: library)
+        let agents = home.appendingPathComponent(".agents/skills"), claude = home.appendingPathComponent(".claude/skills")
+        func linked(_ name: String) -> Bool {
+            link(agents.appendingPathComponent(name)) != nil && link(claude.appendingPathComponent(name)) != nil
+        }
+        // A skill added while Cantrip was closed is linked on the first check.
+        try write(skill("lantern"), library.folder.appendingPathComponent("lantern/SKILL.md"))
+        let first = try auto.check()
+        precondition(first?.linked.count == 2 && linked("lantern"), "the first check catches up")
+        let idle = try auto.check()
+        precondition(idle == nil, "nothing changed, nothing to sync")
+
+        // A new skill waits until its files stop changing.
+        try write(skill("kiln"), library.folder.appendingPathComponent("kiln/SKILL.md"))
+        let seen = try auto.check()
+        precondition(seen == nil && !linked("kiln"), "a change is seen but not synced yet")
+        try write("#!/bin/sh\necho kiln\n", library.folder.appendingPathComponent("kiln/scripts/run.sh"))
+        let writing = try auto.check()
+        precondition(writing == nil && !linked("kiln"), "still being written")
+        let settled = try auto.check()
+        precondition(settled?.linked.count == 2 && linked("kiln"), "linked once it settled")
+
+        // A credential-looking value keeps a new skill unlinked; removing a skill removes its links.
+        try write(skill("ferry", extra: "export FERRY_TOKEN=\(fakeHex)\n"), library.folder.appendingPathComponent("ferry/SKILL.md"))
+        try FileManager.default.removeItem(at: library.folder.appendingPathComponent("lantern"))
+        let changing = try auto.check()
+        precondition(changing == nil)
+        let report = try auto.check()
+        precondition(report?.problems.contains { $0.contains("ferry") && $0.contains("credentials") } == true
+                     && !linked("ferry") && !linked("lantern") && linked("kiln"),
+                     "credentials stay unlinked and removed skills lose their links: \(String(describing: report?.lines))")
+        let quiet = try auto.check()
+        precondition(quiet == nil, "settled again")
+        print("Skills auto-link: catch-up, settle before linking, credentials and removals passed")
+    }
 
     // MARK: - Secret scan
 
