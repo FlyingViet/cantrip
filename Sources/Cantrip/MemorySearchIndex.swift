@@ -61,6 +61,9 @@ final class MemorySearchIndex {
     static let noteWeight = 1.25
     /// Archived note history is older detail: just below current notes on ties.
     static let archiveWeight = 1.1
+    /// A chunk matching words of more than one weight (the message and the exchange before it)
+    /// gains this share of its score per extra group: it fits the conversation, not one word.
+    static let agreementBonus = 0.5
 
     /// Where Cantrip keeps the index: `~/Library/Application Support/Cantrip/memory-index.sqlite`.
     static var defaultURL: URL {
@@ -189,32 +192,56 @@ final class MemorySearchIndex {
     /// The best chunks for `terms` (already lowercased words), at most one per file, highest
     /// score first. `now` sets how recent a session entry is.
     func search(terms: [String], limit: Int = 3, now: Date = Date()) throws -> [Hit] {
+        try search(weighted: terms.map { ($0, 1.0) }, limit: limit, now: now)
+    }
+
+    /// Like `search(terms:)`, with each word's share of the score: words of equal weight run as one
+    /// full-text query, and a chunk scores the weighted sum of its queries' BM25 relevance.
+    func search(weighted: [(word: String, weight: Double)], limit: Int = 3, now: Date = Date()) throws -> [Hit] {
         lock.lock(); defer { lock.unlock() }
-        let words = terms.filter { !$0.isEmpty && $0.unicodeScalars.allSatisfy(CharacterSet.alphanumerics.contains) }
-        guard !words.isEmpty, limit > 0 else { return [] }
-        let match = words.map { "\"\($0)\"" }.joined(separator: " OR ")
-        var rows: [Hit] = []
-        try query("""
-            SELECT path, heading, body, stamp, kind, bm25(chunks, 1.0, 0.5) AS rank
-            FROM chunks WHERE chunks MATCH ? ORDER BY rank LIMIT 300
-            """, [match]) { row in
-            let path = text(row, 0)
-            let kind = Kind(rawValue: sqlite3_column_int(row, 4)) ?? .note
-            let relevance = -sqlite3_column_double(row, 5)
-            let age = max(0, now.timeIntervalSince1970 - sqlite3_column_double(row, 3)) / 86_400
+        var best: [String: Double] = [:]
+        for (word, weight) in weighted where weight > 0 && !word.isEmpty
+            && word.unicodeScalars.allSatisfy(CharacterSet.alphanumerics.contains) {
+            best[word] = max(best[word] ?? 0, weight)
+        }
+        let groups = Dictionary(grouping: best.keys.sorted(), by: { best[$0]! })
+        guard !groups.isEmpty, limit > 0 else { return [] }
+        struct Row { let path, heading, body: String; let stamp: Double; let kind: Kind; var relevance: Double; var groups = 1 }
+        var rows: [Int64: Row] = [:]
+        for (weight, words) in groups {
+            let match = words.map { "\"\($0)\"" }.joined(separator: " OR ")
+            try query("""
+                SELECT rowid, path, heading, body, stamp, kind, bm25(chunks, 1.0, 0.5) AS rank
+                FROM chunks WHERE chunks MATCH ? ORDER BY rank LIMIT 300
+                """, [match]) { row in
+                let id = sqlite3_column_int64(row, 0)
+                let relevance = -sqlite3_column_double(row, 6) * weight
+                if rows[id] != nil {
+                    rows[id]!.relevance += relevance
+                    rows[id]!.groups += 1
+                } else {
+                    rows[id] = Row(path: text(row, 1), heading: text(row, 2), body: text(row, 3),
+                                   stamp: sqlite3_column_double(row, 4),
+                                   kind: Kind(rawValue: sqlite3_column_int(row, 5)) ?? .note, relevance: relevance)
+                }
+            }
+        }
+        var ranked = rows.values.map { row -> Hit in
+            let age = max(0, now.timeIntervalSince1970 - row.stamp) / 86_400
             let weight: Double
-            switch kind {
+            switch row.kind {
             case .session: weight = 1 + Self.sessionBoost * pow(0.5, age / Self.sessionHalfLifeDays)
             case .note: weight = Self.noteWeight
             case .archive: weight = Self.archiveWeight
             }
-            rows.append(Hit(file: path, heading: text(row, 1), text: text(row, 2), kind: kind,
-                            score: relevance * weight))
+            let agreement = 1 + Self.agreementBonus * Double(row.groups - 1)
+            return Hit(file: row.path, heading: row.heading, text: row.body, kind: row.kind,
+                       score: row.relevance * weight * agreement)
         }
-        rows.sort { $0.score != $1.score ? $0.score > $1.score : $0.file > $1.file }
+        ranked.sort { $0.score != $1.score ? $0.score > $1.score : $0.file > $1.file }
         var hits: [Hit] = []
         var chosenWords: [Set<String>] = []
-        for row in rows where !hits.contains(where: { $0.file == row.file }) {
+        for row in ranked where !hits.contains(where: { $0.file == row.file }) {
             let wordSet = Self.wordSet(row.text)
             if chosenWords.contains(where: { Self.similarity($0, wordSet) >= 0.8 }) { continue }
             hits.append(row)

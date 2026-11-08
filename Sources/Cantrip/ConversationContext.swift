@@ -67,6 +67,13 @@ enum ConversationContextBuilder {
         return result
     }
 
+    /// Every retrieval word in `text`, in order and repeated: lowercased, three characters or
+    /// more, no stopwords.
+    static func words(in text: String) -> [String] {
+        text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 3 && !stopwords.contains($0) }
+    }
+
     static func select(
         for query: String,
         from turns: [ConversationTurn]
