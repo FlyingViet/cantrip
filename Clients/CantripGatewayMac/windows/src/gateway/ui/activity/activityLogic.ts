@@ -4,7 +4,7 @@
 // CantripQueueView.swift / PromptTextView.swift. Dates: subagents and handoffs use UnixSeconds;
 // background runs and queued runs use AppleReferenceSeconds.
 import type {
-  BuildQueueBuild, BuildQueueSnapshot, HomeBackgroundHandoff, HomeBackgroundQueuedRun, TabBackgroundTasks, HomeBackgroundRun, HomeBackgroundSnapshot, InputDecision, InputRequest,
+  BuildQueueBuild, BuildQueuePipeline, BuildQueueSnapshot, HomeBackgroundHandoff, HomeBackgroundQueuedRun, TabBackgroundTasks, HomeBackgroundRun, HomeBackgroundSnapshot, InputDecision, InputRequest,
   RemoteMessage, RemoteSubagent,
 } from "../../api/types";
 import { plainMentions } from "../../state/tabMentions";
@@ -405,6 +405,42 @@ export function buildQueueState(build: BuildQueueBuild): string | null {
 export function buildQueueExtra(build: BuildQueueBuild): string | null {
   const lines = [build.step ? `Now: ${build.step}` : "", build.logLine ? `${build.logFile || "Log"}: ${build.logLine}` : ""].filter(Boolean);
   return lines.length ? lines.join("\n") : null;
+}
+
+/** A step's name, or "Step 6" until the job names it. */
+export function buildQueueStepName(pipeline: BuildQueuePipeline, step: number): string {
+  return (pipeline.steps[step - 1] ?? "").trim() || `Step ${step}`;
+}
+
+export function buildQueuePercent(fraction: number | undefined): string | null {
+  return typeof fraction === "number" ? `${Math.floor(Math.min(Math.max(fraction, 0), 1) * 100)}%` : null;
+}
+
+export type BuildQueueStep = { step: number; name: string; kind: "done" | "now" | "todo"; text: string };
+
+/** Each step with whether it's done, the one it's on or still to come, and its text: "pack", "shaders 99%", "Step 6". */
+export function buildQueueSteps(pipeline: BuildQueuePipeline): BuildQueueStep[] {
+  const total = pipeline.steps.length;
+  const current = Math.min(Math.max(Math.trunc(pipeline.current) || 1, 1), Math.max(total, 1));
+  const percent = buildQueuePercent(pipeline.fraction);
+  return pipeline.steps.map((_, index) => {
+    const step = index + 1, name = buildQueueStepName(pipeline, step);
+    const kind = step < current ? "done" : step === current ? "now" : "todo";
+    const text = kind === "now" && percent ? `${name} ${percent}` : name;
+    return { step, name, kind, text };
+  });
+}
+
+/** "Step 5 of 6: shaders, 99%. Done: pack, check. Next: Step 6." */
+export function buildQueuePipelineLabel(pipeline: BuildQueuePipeline): string {
+  const steps = buildQueueSteps(pipeline);
+  const now = steps.find((step) => step.kind === "now");
+  if (!now) return "";
+  const percent = buildQueuePercent(pipeline.fraction);
+  const done = steps.filter((step) => step.kind === "done").map((step) => step.name);
+  const next = steps.filter((step) => step.kind === "todo").map((step) => step.name);
+  return [`Step ${now.step} of ${steps.length}: ${now.name}${percent ? `, ${percent}` : ""}.`,
+    done.length ? `Done: ${done.join(", ")}.` : "", next.length ? `Next: ${next.join(", ")}.` : ""].filter(Boolean).join(" ");
 }
 
 export function buildQueueOrdinal(n: number): string {

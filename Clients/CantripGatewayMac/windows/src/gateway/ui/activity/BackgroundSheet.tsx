@@ -19,7 +19,8 @@ import { HomeCardStack } from "../home/HomeCards";
 import { inline } from "../transcript/Markdown";
 import { InputCard } from "../transcript/Inputs";
 import {
-  answerResultText, backgroundPollDelay, backgroundSubagents, buildQueueDetail, buildQueueExtra, buildQueueFootnote, elapsedAccessibilityLabel,
+  answerResultText, backgroundPollDelay, backgroundSubagents, buildQueueDetail, buildQueueExtra, buildQueueFootnote, buildQueuePipelineLabel,
+  buildQueueSteps, elapsedAccessibilityLabel,
   elapsedLabel, handoffIsActive, listedBuilds, listedTabTasks,
   handoffNeedsAnswer, handoffStatusText, handoffSummary, handoffTabTitle, isLabelledSummary, needsInputRuns, otherRuns,
   queuedRunDetail, remainingInputs, runCanExpand, runDetail, runIcon, runIsRunning, runNeedsInput, runResult, runShowsResult,
@@ -181,6 +182,33 @@ function TabTasksGroup(props: { tab: TabBackgroundTasks }): JSX.Element {
   );
 }
 
+/** Where a job is in its steps: a segment per step (done, the one it's on filled to its percentage
+ * or sweeping, those to come) over their names. Paused or waiting on disk dims the current step. */
+function JobPipeline(props: { build: BuildQueueBuild }): JSX.Element | null {
+  const { build } = props;
+  const pipeline = build.pipeline;
+  if (!pipeline || !Array.isArray(pipeline.steps) || !pipeline.steps.length) return null;
+  const steps = buildQueueSteps(pipeline);
+  const known = typeof pipeline.fraction === "number";
+  const stalled = build.state === "paused" || build.state === "waitingOnDisk" || build.state === "idle";
+  return (
+    <div class={`act-pipe${stalled ? " stalled" : ""}`} role="img" aria-label={buildQueuePipelineLabel(pipeline)}>
+      <div class="act-pipe-bar">
+        {steps.map((step) => (
+          <span key={step.step} class={step.kind} title={`${step.step}. ${step.name}`}>
+            {step.kind === "now" && (known || build.state !== "paused")
+              ? <span class={known ? "fill" : "fill sweep"} style={known ? { width: `${Math.min(Math.max(pipeline.fraction ?? 0, 0), 1) * 100}%` } : undefined} />
+              : null}
+          </span>
+        ))}
+      </div>
+      <div class="act-pipe-names">
+        {steps.map((step) => <span key={step.step} class={step.kind}>{step.text}</span>)}
+      </div>
+    </div>
+  );
+}
+
 /** One of the Mac's long jobs: a build running (place 0) or waiting its turn, or other long work (maybe paused). */
 function BuildRow(props: { build: BuildQueueBuild; place: number }): JSX.Element {
   const { build, place } = props;
@@ -196,6 +224,7 @@ function BuildRow(props: { build: BuildQueueBuild; place: number }): JSX.Element
         <div class="act-run-summary-block">
           <div class="act-run-label">{build.title}</div>
           <div class="act-run-detail">{buildQueueDetail(build, place, now.value / 1000)}</div>
+          <JobPipeline build={build} />
           {extra ? <div class="act-run-detail act-job-log">{extra}</div> : null}
         </div>
         {tabID && tab ? (

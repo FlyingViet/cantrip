@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BuildQueueSnapshot, HomeBackgroundHandoff, HomeBackgroundRun, HomeBackgroundSnapshot, InputRequest, RemoteMessage, RemoteSubagent } from "../src/gateway/api/types";
 import {
   activeBackground, answerResultText, APPLE_EPOCH, backgroundPollDelay, buildQueueDetail, buildQueueFootnote, buildQueueOrdinal,
-  buildQueueOrigin, buildQueueExtra, buildQueueState, listedBuilds, listedTabTasks, tabBackgroundLabel, backgroundSubagents, backgroundTaskAccessibilityLabel,
+  buildQueueOrigin, buildQueueExtra, buildQueuePipelineLabel, buildQueueSteps, buildQueueState, listedBuilds, listedTabTasks, tabBackgroundLabel, backgroundSubagents, backgroundTaskAccessibilityLabel,
   backgroundTaskIcon, backgroundTaskSummary, backgroundTaskTitle, backgroundTasksStatusLine, canStopSubagent, capitalized,
   elapsedAccessibilityLabel, elapsedLabel, handoffNeedsAnswer, handoffStatusText, handoffSummary, handoffTabTitle,
   isLabelledSummary, isLive, liveBackgroundSubagents, liveForegroundSubagents, needsInputRuns, otherRuns, promptPages,
@@ -327,6 +327,15 @@ describe("build queue", () => {
     const paused = { pid: 105, title: "export.py", source: "tab" as const, since: 996400, tabTitle: "Docs site", kind: "job" as const, state: "paused" as const };
     expect(buildQueueDetail(paused, 2, 1_000_000)).toBe("Paused · Docs site · 1h 00m");
     expect(buildQueueState(builds.running[0])).toBeNull();
+  });
+
+  it("lists a job's steps: done, the one it's on and those to come", () => {
+    const pipeline = { steps: ["pack", "check", "rewrite", "shader split", "shaders", ""], current: 5, fraction: 0.99 };
+    expect(buildQueueSteps(pipeline).map((step) => `${step.kind}:${step.text}`))
+      .toEqual(["done:pack", "done:check", "done:rewrite", "done:shader split", "now:shaders 99%", "todo:Step 6"]);
+    expect(buildQueuePipelineLabel(pipeline)).toBe("Step 5 of 6: shaders, 99%. Done: pack, check, rewrite, shader split. Next: Step 6.");
+    expect(buildQueuePipelineLabel({ steps: ["prepare.py", "publish.py"], current: 1 })).toBe("Step 1 of 2: prepare.py. Next: publish.py.");
+    expect(buildQueueSteps({ steps: ["a", "b"], current: 9 }).map((step) => step.kind)).toEqual(["done", "now"]);
   });
 });
 

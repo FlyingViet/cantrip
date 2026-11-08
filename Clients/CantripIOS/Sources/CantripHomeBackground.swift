@@ -585,6 +585,25 @@ enum CantripBuildQueueFormat {
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
+    /// A step's name, or "Step 6" until the job names it.
+    static func stepName(_ pipeline: CantripBuildQueueSnapshot.Build.Pipeline, _ step: Int) -> String {
+        let name = pipeline.steps.indices.contains(step - 1) ? pipeline.steps[step - 1].trimmingCharacters(in: .whitespaces) : ""
+        return name.isEmpty ? "Step \(step)" : name
+    }
+
+    static func percent(_ fraction: Double?) -> String? {
+        fraction.map { "\(Int((min(max($0, 0), 1) * 100).rounded(.down)))%" }
+    }
+
+    /// "Step 5 of 6: Shaders, 99%. Done: pack, check, rewrite, split. Next: Step 6."
+    static func pipelineLabel(_ pipeline: CantripBuildQueueSnapshot.Build.Pipeline) -> String {
+        let total = pipeline.steps.count, current = min(max(pipeline.current, 1), max(total, 1))
+        var text = "Step \(current) of \(total): \(stepName(pipeline, current))" + (percent(pipeline.fraction).map { ", \($0)" } ?? "") + "."
+        if current > 1 { text += " Done: " + (1..<current).map { stepName(pipeline, $0) }.joined(separator: ", ") + "." }
+        if current < total { text += " Next: " + ((current + 1)...total).map { stepName(pipeline, $0) }.joined(separator: ", ") + "." }
+        return text
+    }
+
     static func ordinal(_ n: Int) -> String {
         let suffix = (11...13).contains(n % 100) ? "th" : [1: "st", 2: "nd", 3: "rd"][n % 10] ?? "th"
         return "\(n)\(suffix)"
@@ -648,6 +667,10 @@ struct CantripBuildQueueRow: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    if let pipeline = build.pipeline, !pipeline.steps.isEmpty {
+                        CantripJobPipeline(pipeline: pipeline, state: build.state)
+                            .padding(.vertical, 2)
+                    }
                     if let extra = CantripBuildQueueFormat.extra(build) {
                         Text(extra)
                             .font(.caption.monospaced())
@@ -667,6 +690,66 @@ struct CantripBuildQueueRow: View {
             .accessibilityElement(children: .combine)
         }
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// Where a job is in its steps: a segment per step (done, the one it's on filled to its
+/// percentage or sweeping, those to come) over their names with a check, a dot or a ring.
+/// Each name keeps its words together, so a narrow row wraps between steps.
+struct CantripJobPipeline: View {
+    let pipeline: CantripBuildQueueSnapshot.Build.Pipeline
+    /// The job's state: paused or waiting on disk dims the step it's on.
+    var state: String? = nil
+
+    private var current: Int { min(max(pipeline.current, 1), max(pipeline.steps.count, 1)) }
+    private var stalled: Bool { state == "paused" || state == "waitingOnDisk" || state == "idle" }
+    private static let done = CantripCardStyle.tone("positive")
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 3) {
+                ForEach(pipeline.steps.indices, id: \.self) { index in
+                    segment(index + 1)
+                }
+            }
+            .frame(height: 5)
+            names
+                .font(.caption2)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(CantripBuildQueueFormat.pipelineLabel(pipeline))
+    }
+
+    @ViewBuilder private func segment(_ step: Int) -> some View {
+        if step < current {
+            Capsule().fill(Self.done)
+        } else if step == current {
+            CantripCardProgressBar(fraction: state == "paused" ? (pipeline.fraction ?? 0) : pipeline.fraction,
+                                   color: CantripCardStyle.accent.opacity(stalled ? 0.55 : 1))
+        } else {
+            Capsule().fill(Color.white.opacity(0.12))
+        }
+    }
+
+    private var names: Text {
+        var text = Text("")
+        for step in 1...max(pipeline.steps.count, 1) {
+            let name = CantripBuildQueueFormat.stepName(pipeline, step).replacingOccurrences(of: " ", with: "\u{00A0}")
+            let piece: Text
+            if step < current {
+                piece = Text("\(Image(systemName: "checkmark"))\u{00A0}\(name)").foregroundStyle(.secondary)
+            } else if step == current {
+                let percent = CantripBuildQueueFormat.percent(pipeline.fraction).map { "\u{00A0}\($0)" } ?? ""
+                piece = Text("\(Image(systemName: "circle.fill"))\u{00A0}\(name)\(percent)").fontWeight(.semibold)
+                    .foregroundStyle(CantripCardStyle.accent)
+            } else {
+                piece = Text("\(Image(systemName: "circle"))\u{00A0}\(name)").foregroundStyle(.tertiary)
+            }
+            text = step == 1 ? piece : text + Text("   ") + piece
+        }
+        return text
     }
 }
 

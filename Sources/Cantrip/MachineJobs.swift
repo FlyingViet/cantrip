@@ -59,6 +59,26 @@ enum MachineJobs {
         var logFile: String?
         var logLine: String?
         var logUpdatedAt: Double?
+        /// Where it is in its own steps, when it says (its log) or chains commands (its shell).
+        var pipeline: Pipeline? = nil
+    }
+
+    /// A job's steps and the one it's on: from `[3/6] Rewrite` lines in its log, or else from the
+    /// commands its shell runs one after another (`a.py && b.py`).
+    struct Pipeline: Encodable, Equatable {
+        /// Step names in order; "" for a step it hasn't named yet.
+        var steps: [String]
+        /// The step it's on, from 1; the ones before it are done.
+        var current: Int
+        /// How far the current step is (0...1), when its log prints a percentage.
+        var fraction: Double? = nil
+
+        /// "Step 5 of 6 · Shaders · 99%".
+        var label: String {
+            let name = steps.indices.contains(current - 1) ? steps[current - 1] : ""
+            return (["Step \(current) of \(steps.count)", name] + [fraction.map { "\(Int(($0 * 100).rounded(.down)))%" } ?? ""])
+                .filter { !$0.isEmpty }.joined(separator: " · ")
+        }
     }
 
     /// Tools that make a group a job on their own: builds, compiles, packaging, big copies, backups.
@@ -250,6 +270,152 @@ enum MachineJobs {
         return nil
     }
 
+    // MARK: Steps
+
+    private static let ansi = try! NSRegularExpression(pattern: "\u{1B}\\[[0-9;?]*[A-Za-z]")
+    /// `[3/6] Name`, after up to two bracketed tags (`[20:01:32]`, `[INFO]`) or a timestamp, or `Step 3 of 6: Name`.
+    private static let markerPattern = try! NSRegularExpression(pattern: #"^[\s#=>*•▶→:-]*(?:\[[^\]/]{1,40}\]\s*){0,2}"#
+        + #"(?:\d{4}-\d\d-\d\d[T ]\d\d:\d\d(?::\d\d(?:[.,]\d+)?)?(?:Z|[+-]\d\d:?\d\d)?\s+)?(?:\d\d:\d\d(?::\d\d(?:[.,]\d+)?)?\s+)?"#
+        + #"[\s#=>*•▶→:-]*(?:\[(\d{1,2})\s?/\s?(\d{1,2})\]|(?i:step)\s+(\d{1,2})\s*(?:/|of)\s*(\d{1,2})\b)[\s:.)\]–—-]*(.*)$"#)
+    private static let percentPattern = try! NSRegularExpression(pattern: #"(?<![\d.])(\d{1,3}(?:\.\d+)?)\s?%"#)
+
+    /// A step a script announces: `[3/6] rewrite`, `[20:01:32] [5/6] Shaders · compiling: 99%`,
+    /// `Step 2 of 4: Upload`. More than 20 steps is a compile counter (SwiftPM, Ninja), not steps.
+    static func stepMarker(in line: String) -> (index: Int, total: Int, name: String, rest: String)? {
+        let range = NSRange(line.startIndex..., in: line)
+        guard line.contains("/") || line.range(of: "step", options: .caseInsensitive) != nil,
+              let match = markerPattern.firstMatch(in: line, range: range) else { return nil }
+        func group(_ index: Int) -> String? { Range(match.range(at: index), in: line).map { String(line[$0]) } }
+        guard let index = Int(group(1) ?? group(3) ?? ""), let total = Int(group(2) ?? group(4) ?? ""),
+              (2...20).contains(total), (1...total).contains(index) else { return nil }
+        let rest = group(5) ?? ""
+        var name = rest
+        for stop in [" · ", ": ", " — ", " – ", " - ", "…", "...", " (", "\t"] {
+            if let cut = name.range(of: stop) { name = String(name[..<cut.lowerBound]) }
+        }
+        name = name.replacingOccurrences(of: #"\s*\d{1,3}(?:\.\d+)?\s?%.*$"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        if name.count > 40 { name = String(name.prefix(39)) + "…" }
+        return (index, total, name, rest)
+    }
+
+    /// The last percentage in a line, as a fraction.
+    static func percent(in line: String) -> Double? {
+        guard line.contains("%"), let match = percentPattern.matches(in: line, range: NSRange(line.startIndex..., in: line)).last,
+              let range = Range(match.range(at: 1), in: line), let value = Double(line[range]), value <= 100 else { return nil }
+        return value / 100
+    }
+
+    /// The steps a log has announced, read a piece at a time as it grows. A `[1/n]` after later
+    /// steps is a new run.
+    struct LogSteps: Equatable {
+        /// Bytes read so far; a file that got shorter was replaced and is read again.
+        var offset: UInt64 = 0
+        var names: [Int: String] = [:]
+        var current = 0
+        var total = 0
+        var fraction: Double?
+        /// A line still being written (a progress redraw ends in \r or nothing). It's read again
+        /// with what follows it, which changes nothing: taking a line twice is harmless.
+        var partial = ""
+
+        mutating func read(_ text: String) {
+            let lines = (partial + text).split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r" })
+            partial = lines.last.map(String.init) ?? ""
+            if partial.count > 4_000 { partial = String(partial.suffix(4_000)) }
+            for line in lines { take(String(line)) }
+        }
+
+        private mutating func take(_ raw: String) {
+            guard !raw.isEmpty else { return }
+            var line = raw
+            if line.contains("\u{1B}") {
+                line = MachineJobs.ansi.stringByReplacingMatches(in: line, range: NSRange(line.startIndex..., in: line), withTemplate: "")
+            }
+            if let marker = MachineJobs.stepMarker(in: line) {
+                if marker.index == 1 && current > 1 { names = [:] }
+                if marker.index != current { fraction = nil }
+                current = marker.index
+                total = marker.total
+                if !marker.name.isEmpty || names[marker.index] == nil { names[marker.index] = marker.name }
+                if let percent = MachineJobs.percent(in: marker.rest) { fraction = percent }
+            } else if current > 0, let percent = MachineJobs.percent(in: line) {
+                fraction = percent
+            }
+        }
+
+        var pipeline: Pipeline? {
+            guard (2...20).contains(total), (1...total).contains(current) else { return nil }
+            return Pipeline(steps: (1...total).map { names[$0] ?? "" }, current: current, fraction: fraction)
+        }
+    }
+
+    /// Reads what a log added since `steps.offset`: at most its last `limit` bytes, so a huge log
+    /// costs one bounded read and then only what it appends.
+    static func readSteps(_ steps: inout LogSteps, path: String, limit: UInt64 = 8 << 20) {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return }
+        defer { try? handle.close() }
+        guard let end = try? handle.seekToEnd() else { return }
+        if end < steps.offset { steps = LogSteps() }
+        var start = steps.offset
+        if end - start > limit {
+            start = end - limit
+            steps.partial = ""
+        }
+        guard end > start, (try? handle.seek(toOffset: start)) != nil,
+              let data = try? handle.read(upToCount: Int(end - start)) else { return }
+        steps.offset = start + UInt64(data.count)
+        steps.read(String(decoding: data, as: UTF8.self))
+    }
+
+    /// Commands that only tidy up around the real work: never a step of a chain.
+    static let housekeeping: Set<String> = [
+        "cd", "pushd", "popd", "echo", "printf", "mv", "rm", "cp", "ln", "mkdir", "rmdir", "touch", "chmod", "chown", "cat",
+        "head", "tail", "grep", "sed", "awk", "test", "[", "[[", "true", "false", "exit", "return", "sleep", "set", "unset",
+        "export", "source", ".", "read", "wait", "trap", "kill", "date", "tee", "ls", "wc", "sort", "uniq", "cut", "tr",
+        "basename", "dirname", "readlink", "realpath", "local", "declare", "shift", "eval", ":", "fi", "done", "esac", "then",
+        "else", "elif", "do", "if", "while", "until", "for", "case", "function", "{", "}", "(", ")", "!", "osascript", "say",
+        "open", "which", "type", "hash", "ulimit", "umask",
+    ]
+    private static let chainSeparator = try! NSRegularExpression(pattern: #"&&|\|\||;|\n|(?<![<>&|0-9])&(?![>&])"#)
+
+    /// The commands a shell job runs one after another (`a.py && b.py`, `x; if …; then y; fi`),
+    /// named like jobs. Housekeeping, assignments and the later commands of a pipe don't count;
+    /// empty unless two or more remain.
+    static func stages(of arguments: String) -> [String] {
+        let text = arguments.replacingOccurrences(of: "\\012", with: "\n")
+        guard let script = firstMatch(#"(?s)^(?:\S*/)?(?:bash|sh|zsh|dash)(?:\s+--?[A-Za-z][\w-]*)*?\s+-[A-Za-z]*c\s+(.+)$"#,
+                                      in: text, group: 1) else { return [] }
+        var pieces: [Substring] = []
+        var from = script.startIndex
+        for match in chainSeparator.matches(in: script, range: NSRange(script.startIndex..., in: script)) {
+            guard let range = Range(match.range, in: script) else { continue }
+            pieces.append(script[from..<range.lowerBound])
+            from = range.upperBound
+        }
+        pieces.append(script[from...])
+        let leading: Set<String> = ["then", "else", "do", "if", "elif", "while", "until", "!", "{", "(", "time", "exec"]
+        var names: [String] = []
+        for piece in pieces {
+            let command = piece.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+            var tokens = command.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+            var captures = false
+            while let first = tokens.first {
+                if leading.contains(first) { tokens.removeFirst(); continue }
+                guard first.range(of: #"^[A-Za-z_]\w*="#, options: .regularExpression) != nil else { break }
+                captures = captures || first.contains("$(") || first.contains("`")
+                tokens.removeFirst()
+            }
+            guard !captures, let first = tokens.first else { continue }
+            let program = (first.trimmingCharacters(in: CharacterSet(charactersIn: "'\"")) as NSString).lastPathComponent
+            guard !program.isEmpty, !housekeeping.contains(program) else { continue }
+            let name = summary(tokens.joined(separator: " "))
+            guard !housekeeping.contains(name), !launchers.contains(name), names.last != name else { continue }
+            names.append(name)
+        }
+        return names.count >= 2 ? names : []
+    }
+
     // MARK: Finding jobs
 
     /// Remembers groups between looks (once a job, always a job until it exits) and which run hot.
@@ -268,6 +434,9 @@ enum MachineJobs {
         /// Groups listed before, with the start first seen (ps elapsed times wobble by a second).
         private var known: [Int32: Double] = [:]
         private var logs: [String: (file: String, line: String?, updated: Double)] = [:]
+        private var logSteps: [String: LogSteps] = [:]
+        /// The furthest command of its chain each job has reached (between commands none runs).
+        private var stagesReached: [String: Int] = [:]
         private var logsTried: Set<String> = []
         private var logsAt: Double = 0
 
@@ -315,6 +484,8 @@ enum MachineJobs {
             }
             known = seen
             hot = hot.filter { groups[$0.key] != nil }
+            let keys = Set(jobs.map(\.key))
+            stagesReached = stagesReached.filter { keys.contains($0.key) }
             if now - logsAt >= 30 || jobs.contains(where: { !logsTried.contains($0.key) }) { refreshLogs(jobs, now: now) }
             return jobs.map { job in
                 var job = job
@@ -322,6 +493,7 @@ enum MachineJobs {
                     job.logFile = (log.file as NSString).lastPathComponent
                     job.logLine = log.line
                     job.logUpdatedAt = log.updated
+                    if let steps = logSteps[log.file]?.pipeline { job.pipeline = steps }
                 }
                 return job
             }.sorted { $0.since < $1.since }
@@ -339,11 +511,22 @@ enum MachineJobs {
             if title == leader.name, ordered.count > 1 { title = MachineJobs.summary(current.arguments) }
             let step = MachineJobs.summary(current.arguments)
             let tab = tabID(leader.pid) ?? ordered.prefix(3).lazy.compactMap { self.tabID($0.pid) }.first
+            var pipeline: Pipeline?
+            let stages = MachineJobs.stages(of: leader.arguments)
+            if !stages.isEmpty {
+                let running = Set(members.filter { $0.pid != leader.pid }.map { MachineJobs.summary($0.arguments) })
+                let matches = stages.indices.filter { running.contains(stages[$0]) }
+                let reached = stagesReached[key] ?? 1
+                let found = matches.first { $0 + 1 >= reached }.map { $0 + 1 } ?? matches.last.map { $0 + 1 }
+                let current = max(found ?? reached, reached)
+                stagesReached[key] = current
+                pipeline = Pipeline(steps: stages, current: current)
+            }
             return Job(key: key, group: group, processIDs: ordered.map(\.pid), title: title,
                        project: MachineJobs.project(in: [leader.arguments] + ordered.map(\.arguments)),
                        step: step == title ? nil : step, state: state, since: start,
                        cpu: (cpu / cores * 10).rounded() / 10, memory: members.reduce(0) { $0 + $1.memory },
-                       processes: members.count, tabID: tab.flatMap { UUID(uuidString: $0)?.uuidString })
+                       processes: members.count, tabID: tab.flatMap { UUID(uuidString: $0)?.uuidString }, pipeline: pipeline)
         }
 
         private func refreshLogs(_ jobs: [Job], now: Double) {
@@ -351,6 +534,7 @@ enum MachineJobs {
             logsTried = Set(jobs.map(\.key))
             let found = findLogs(Array(jobs.flatMap(\.processIDs).prefix(200)))
             var fresh: [String: (file: String, line: String?, updated: Double)] = [:]
+            var steps: [String: LogSteps] = [:]
             for job in jobs {
                 var best: (file: String, updated: Double)?
                 for file in Set(job.processIDs.flatMap { found[$0] ?? [] }) {
@@ -358,9 +542,15 @@ enum MachineJobs {
                           let modified = attributes[.modificationDate] as? Date else { continue }
                     if best == nil || modified.timeIntervalSince1970 > best!.updated { best = (file, modified.timeIntervalSince1970) }
                 }
-                if let best { fresh[job.key] = (best.file, MachineJobs.tail(of: best.file), best.updated) }
+                if let best {
+                    fresh[job.key] = (best.file, MachineJobs.tail(of: best.file), best.updated)
+                    var read = steps[best.file] ?? logSteps[best.file] ?? LogSteps()
+                    if steps[best.file] == nil { MachineJobs.readSteps(&read, path: best.file) }
+                    steps[best.file] = read
+                }
             }
             logs = fresh
+            logSteps = steps
         }
     }
 

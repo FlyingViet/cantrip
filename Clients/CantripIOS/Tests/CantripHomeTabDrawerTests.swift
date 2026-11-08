@@ -274,6 +274,15 @@ final class CantripHomeTabDrawerTests: XCTestCase {
                        + CantripSubagentFormat.elapsedLabel(startedAt: 992_800, finishedAt: nil, now: now))
         XCTAssertEqual(CantripBuildQueueFormat.extra(job), "Now: compile_shaders.py\nb.log: [5/6] shaders 99%")
         XCTAssertNil(CantripBuildQueueFormat.extra(builds.running[0]))
+        // Its steps: which one it's on, the ones done and the ones to come (unnamed ones by number).
+        let pipeline = try XCTUnwrap(job.pipeline)
+        XCTAssertEqual(pipeline.current, 5)
+        XCTAssertEqual(pipeline.fraction, 0.99)
+        XCTAssertEqual(CantripBuildQueueFormat.pipelineLabel(pipeline),
+                       "Step 5 of 6: shaders, 99%. Done: pack, check, rewrite, shader split. Next: Step 6.")
+        XCTAssertEqual(CantripBuildQueueFormat.pipelineLabel(.init(steps: ["prepare.py", "publish.py"], current: 1)),
+                       "Step 1 of 2: prepare.py. Next: publish.py.")
+        XCTAssertNil(builds.running[0].pipeline, "Older Macs and jobs without steps send none")
         XCTAssertEqual(CantripBuildQueueFormat.detail(builds.waiting[1], place: 2, now: now),
                        "Paused · Docs site · " + CantripSubagentFormat.elapsedLabel(startedAt: 996_400, finishedAt: nil, now: now),
                        "A paused job has no place in line")
@@ -301,7 +310,8 @@ final class CantripHomeTabDrawerTests: XCTestCase {
                      {"pid":102,"title":"swift test · Server","source":"child","since":999960,"tabTitle":"Server"},
                      {"pid":104,"title":"build-atlas.py","source":"other","since":992800,"kind":"job","state":"waitingOnDisk",
                       "project":"atlas","step":"compile_shaders.py","logFile":"b.log","logLine":"[5/6] shaders 99%",
-                      "logUpdatedAt":999990,"cpu":0.1,"memory":17000000,"processes":6}],
+                      "logUpdatedAt":999990,"cpu":0.1,"memory":17000000,"processes":6,
+                      "pipeline":{"steps":["pack","check","rewrite","shader split","shaders",""],"current":5,"fraction":0.99}}],
           "waiting":[{"pid":103,"title":"swift build · App","source":"ci","since":999970,"job":"app · TestFlight"},
                      {"pid":105,"title":"export.py","source":"tab","since":996400,"tabTitle":"Docs site","kind":"job","state":"paused"}]}}
         """.utf8)
@@ -400,6 +410,52 @@ final class CantripHomeTabDrawerTests: XCTestCase {
                           size: .accessibility3)
         try await capture(tabHeader, "home-tabs-tab-header-ax-320", style: .dark, width: 320, height: 160,
                           size: .accessibility3)
+    }
+
+    /// The Jobs list with each job's steps: one from its log's `[n/m]` lines, one chaining two
+    /// scripts, a build without steps and a paused job. Set TEST_RUNNER_HOME_TABS_ARTIFACT_DIR.
+    func testJobsPipelineScreenshots() async throws {
+        let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_TABS_ARTIFACT_DIR"]
+        guard let directory, !directory.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_HOME_TABS_ARTIFACT_DIR to render the Jobs list.")
+        }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let now = Date().timeIntervalSince1970
+        typealias Build = CantripBuildQueueSnapshot.Build
+        var render = Build(pid: 1, title: "render-atlas.py", source: "tab", since: now - 6_300, tabID: UUID().uuidString,
+                           tabTitle: "Atlas", kind: "job", state: "running", project: "atlas", step: "compile_shaders.py",
+                           logFile: "atlas-build.log", logLine: "[5/6] shaders · compiling: 42%, 5,512/13,124")
+        render.pipeline = .init(steps: ["pack", "check", "rewrite", "shader split", "shaders", ""], current: 5, fraction: 0.42)
+        var publish = Build(pid: 2, title: "prepare-atlas.py", source: "other", since: now - 840, kind: "job",
+                            state: "running", project: "atlas", step: "codesign")
+        publish.pipeline = .init(steps: ["prepare-atlas.py", "publish-atlas.py"], current: 2)
+        let archive = Build(pid: 3, title: "xcodebuild archive · App", source: "tab", since: now - 75, tabTitle: "Docs site")
+        var export = Build(pid: 4, title: "export.py", source: "tab", since: now - 3_600, tabTitle: "Docs site", kind: "job",
+                           state: "paused")
+        export.pipeline = .init(steps: ["scan", "encode", "upload"], current: 2, fraction: 0.3)
+        let builds = CantripBuildQueueSnapshot(enabled: true, slots: 2, limit: 2, running: [render, publish, archive],
+                                               waiting: [export])
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        for (width, size) in [(CGFloat(393), DynamicTypeSize.large), (320, .large), (393, .accessibility2)] {
+            let list = ScrollView { VStack(alignment: .leading, spacing: 10) { CantripBuildQueueList(builds: builds) }.padding(16) }
+                .background(Color.black)
+                .dynamicTypeSize(size)
+            let controller = UIHostingController(rootView: list)
+            controller.overrideUserInterfaceStyle = .dark
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: width, height: size == .large ? 760 : 1_400)
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(500))
+            controller.view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let name = "jobs-pipeline-\(Int(width))" + (size == .large ? "" : "-ax")
+            try XCTUnwrap(image.pngData()).write(to: output.appendingPathComponent("\(name).png"))
+        }
     }
 
     /// The iPhone Duo open upright (669 x 951 pt, an 81 pt status band with the clock and camera ring
