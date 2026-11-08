@@ -209,6 +209,25 @@ final class HostServices {
         }
         .store(in: &cancellables)
 
+        // Library skills linked for every backend on their own, while that's on.
+        let skillsAutoLink = SkillsAutoLink()
+        AppSettings.shared.$skillsAutoLink
+            .removeDuplicates()
+            .sink { on in
+                guard on else { skillsAutoLink.stop(); return }
+                skillsAutoLink.start { result in
+                    switch result {
+                    case .success(let report):
+                        guard !report.lines.isEmpty else { return }
+                        Log.write("skills: linked on their own: \(report.lines.joined(separator: "; "))")
+                        Task { @MainActor in SkillsHub.shared.refresh() }
+                    case .failure(let error):
+                        Log.write("skills: automatic link failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
         // Daily memory consolidation, off the launch path; failed runs retry with backoff.
         Consolidator.start()
         // Daily cleanup of agent session folders and worktrees nothing uses anymore.

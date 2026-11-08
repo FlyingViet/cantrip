@@ -157,6 +157,11 @@ cantrip skills sync                  # relink, and record the library's changes
 cantrip skills check                 # name clashes, missing links, credentials
 ```
 
+- **Link new skills automatically** (Settings › Tools & sign-ins › Skills, or Skills & Rules on
+  the Mac; off by default): Cantrip checks the library every 30 seconds and, once a new, changed
+  or removed skill has stopped changing, runs the same sync for it, so it reaches every backend
+  within about a minute without `cantrip skills sync`. It also catches up on launch. Its links,
+  removals and problems are logged in `~/Library/Logs/Cantrip.log` ("skills:").
 - Cantrip only touches links it made (they're listed in `skills-manifest.json` beside the
   library). A skill folder another tool installed, or Claude's own synced skills, stays as it
   is; a name clash with one is reported, never overwritten.

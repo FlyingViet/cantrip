@@ -200,7 +200,7 @@ test-simulator-pool:
 test-skills:
 	@BIN="/tmp/cantrip-skills-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc -parse-as-library Sources/Cantrip/SecretScan.swift Sources/Cantrip/SkillsLibrary.swift Sources/Cantrip/FolderInstructions.swift Sources/Cantrip/PrivateFile.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/CantripPaths.swift Tests/SkillsTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc -parse-as-library Sources/Cantrip/SecretScan.swift Sources/Cantrip/SkillsLibrary.swift Sources/Cantrip/SkillsAutoLink.swift Sources/Cantrip/FolderInstructions.swift Sources/Cantrip/PrivateFile.swift Sources/Cantrip/ProcessRunner.swift Sources/Cantrip/ToolPath.swift Sources/Cantrip/CantripPaths.swift Tests/SkillsTests/main.swift -o "$$BIN" && "$$BIN"
 
 # Delete message: memory log, backend transcript and Cantrip log scrubbing (temporary home).
 test-memory-index:

@@ -281,6 +281,7 @@ enum SettingsManifest {
             "memoryEnabled": .bool(s.memoryEnabled),
             "memoryPath": .string(s.memoryPath),
             "memorySearchIndex": .bool(s.memorySearchIndex),
+            "skillsAutoLink": .bool(s.skillsAutoLink),
             "agyMemoryConsolidation": .bool(s.agyMemoryConsolidation),
             "fileRAGEnabled": .bool(s.fileRAGEnabled),
             "shareCalendar": .bool(s.shareCalendar),
@@ -692,6 +693,10 @@ enum SettingsManifest {
                                          cliPath("copilotPath", "copilot", "/opt/homebrew/bin/copilot"),
                                          cliPath("codexPath", "codex", "~/.local/bin/codex"),
                                          cliPath("agyPath", "agy", "~/.local/bin/agy")]),
+                SettingsSection(id: "skills", title: "Skills",
+                                footer: "Skills live in Cantrip's skills library; `cantrip skills` lists them and which backends see each.",
+                                fields: [field("skillsAutoLink", .toggle, "Link new skills automatically",
+                                               help: "When a skill in the library is added, changed or removed, Cantrip links it for every backend about a minute later, as `cantrip skills sync` does. A skill with a value that looks like a credential stays unlinked.")]),
             ]),
             SettingsPageSpec(id: "home", title: "Home & tabs", sections: [
                 SettingsSection(id: "home", title: "Cantrip Home", fields: [homeOn, parallel]),
