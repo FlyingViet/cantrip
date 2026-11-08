@@ -213,23 +213,28 @@ Each message gets up to three **RETRIEVED** snippets from your notes and session
 logs, about 2,400 characters in all. By default Cantrip picks them by counting
 how often the message's words appear in each file, so a long file can win just
 by being long, and a pasted log that repeats a word can be picked again and
-again.
+again. To limit that, word counting only looks at your notes and the 14 newest
+session logs, and never at `archive/`.
 
 Turn on **Search memory with a local index** (under **Memory vault**, in
 Settings › Memory on every client) to pick them with a full-text index instead:
 
-- **What's indexed:** your notes and `sessions/` logs, split into chunks by heading
-  and paragraph. `MEMORY.md` and `USER.md` are always loaded anyway, so they're
-  left out. So are fenced code blocks, timestamped log lines, lines repeated three
-  or more times in a file, and long unbroken strings such as hashes. A chunk
-  that's already in the same file is indexed once.
+- **What's indexed:** your notes, every `sessions/` log and everything under
+  `archive/` (older note history), split into chunks by heading and paragraph.
+  Size no longer decides the ranking, so all of it can be searched. `MEMORY.md`
+  and `USER.md` are always loaded anyway, so they're left out. So are fenced
+  code blocks, timestamped log lines, lines repeated three or more times in a
+  file, and long unbroken strings such as hashes. A chunk that's already in the
+  same file is indexed once.
 - **How snippets are ranked:** SQLite's BM25 ranking with English stemming
   ("restarting" matches "restart"), so the chunk that best fits the message wins
   regardless of file size. Recent session entries get a boost that halves every
   7 days. Curated notes beat a session entry of equal relevance once it's more than
-  about 9 days old.
+  about 9 days old, and archived history ranks just below current notes.
   You get at most one chunk per file, and a near-copy of a chunk already chosen
-  is skipped.
+  is skipped. Each snippet names its file's path in the vault (such as
+  `archive/deploy-history.md`) so the agent can open the source. The budget is
+  the same as without the index, so prompts don't grow.
 - **Where it lives:** `~/Library/Application Support/Cantrip/memory-index.sqlite`,
   owner-only and outside the vault. The Markdown files stay the source of truth.
   The index is derived from them, built in the background when you turn it on,

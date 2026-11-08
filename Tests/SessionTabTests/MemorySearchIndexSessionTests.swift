@@ -35,6 +35,10 @@ extension SessionTabTests {
         }
         try bulk.write(to: vault.appendingPathComponent("weekly-notes.md"), atomically: true, encoding: .utf8)
         let query = "How do I restart the deploy waiter when it gives up?"
+        try FileManager.default.createDirectory(at: vault.appendingPathComponent("archive"), withIntermediateDirectories: true)
+        try "# Deploy waiter (history)\n\nThe first waiter version polled every five minutes and logged to the console.\n"
+            .write(to: vault.appendingPathComponent("archive/deploy-waiter-history.md"), atomically: true, encoding: .utf8)
+        let archiveQuery = "How often did the first waiter version poll?"
 
         func retrieved(_ searchIndex: Bool) async -> String {
             await MemoryStore.contextBlock(query: query, path: vault.path, isPrivate: true, isLocal: false,
@@ -45,6 +49,9 @@ extension SessionTabTests {
         }
 
         let keyword = await retrieved(false)
+        let archiveOff = await MemoryStore.contextBlock(query: archiveQuery, path: vault.path, isPrivate: true,
+                                                        isLocal: false, searchIndex: false)
+        precondition(!archiveOff.contains("polled every five minutes"), "off: archive/ isn't searched: \(archiveOff)")
         precondition(firstSource(keyword) == "— from weekly-notes.md:", "off: keyword counting as before: \(keyword)")
         precondition(!FileManager.default.fileExists(atPath: MemorySearchIndex.defaultURL.path), "off: no index is made")
 
@@ -53,8 +60,20 @@ extension SessionTabTests {
                      && indexed.contains("restart the waiter with the staged build"), "on: the index picks the note: \(indexed)")
         precondition(FileManager.default.fileExists(atPath: MemorySearchIndex.defaultURL.path),
                      "the index lives in Application Support, outside the vault")
+        let archiveOn = await MemoryStore.contextBlock(query: archiveQuery, path: vault.path, isPrivate: true,
+                                                       isLocal: false, searchIndex: true)
+        precondition(firstSource(archiveOn) == "— from archive/deploy-waiter-history.md:"
+                     && archiveOn.contains("polled every five minutes"), "on: archive/ is searched, by path: \(archiveOn)")
+        for block in [indexed, archiveOn] {
+            let marker = "(verify before relying on them):\n"
+            let snippets = block.components(separatedBy: marker).last?.components(separatedBy: "\n\nPRIVATE MODE").first ?? ""
+            precondition(block.contains(marker) && snippets.count <= 2_400
+                         && snippets.components(separatedBy: "— from ").count - 1 <= 3,
+                         "the per-message budget is unchanged: \(snippets.count) chars")
+        }
         let vaultFiles = try FileManager.default.contentsOfDirectory(atPath: vault.path).sorted()
-        precondition(vaultFiles == ["deploy-waiter.md", "sessions", "weekly-notes.md"], "the vault is untouched: \(vaultFiles)")
+        precondition(vaultFiles == ["archive", "deploy-waiter.md", "sessions", "weekly-notes.md"],
+                     "the vault is untouched: \(vaultFiles)")
 
         // A message deleted from a session log leaves the index right away.
         try "## 09:00 · Backend\n**User:** Where is the lighthouse key kept?\n\n**Assistant:** In the blue drawer.\n"
