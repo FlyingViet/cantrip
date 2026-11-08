@@ -11,7 +11,8 @@ targets and Swift module keep the app's original internal name, `Hermes`.
   so SwiftPM can use its scoped bare-repository cache.
 - The `.xcodeproj` is generated (git-ignored); regenerate after editing `project.yml`.
 - Unit tests: `xcodebuild test -scheme Hermes` on an iOS simulator. The `HermesUITests` scheme
-  runs real-touch checks against DEBUG-only fixture screens.
+  runs real-touch checks against DEBUG-only fixture screens. The folded Duo simulator ignores
+  `XCUIDevice` orientation; launch with `-CantripUITestLandscape` to turn the window instead.
 - The iOS app embeds the Apple Watch app; build or test it alone with the `CantripWatch` scheme
   on a watchOS simulator.
 - iOS 26+, universal (`TARGETED_DEVICE_FAMILY "1,2"`). Set your own bundle id +
@@ -58,21 +59,30 @@ spans the host and this app is one commit.
   Keep drafts, voice, and run ownership outside size-dependent branches.
 - `ChatDisplayObserver` reads window-local vertical-bar traits, the hinge (`onHingeChange`) and
   the window's own bounds (never the keyboard-shortened content).
-  `ChatHeader` moves actions into the native vertical toolbar
-  wherever the system has one. On an unfolded iPhone Duo (vertical bar + hinge not closed, either
-  orientation: `ChatDisplayTraits.isUnfoldedDuo`) that bar is the app's rail: a sidebar toggle at
-  the top, then Model Settings and Settings. The toggle shows `CantripDuoSidebar` beside the same
+  On a Duo, `ChatHeader` (`usesDuoBar`) leaves its actions to the Duo bar below, in the native
+  vertical toolbar wherever the system has one. On an unfolded iPhone Duo (vertical bar + hinge not
+  closed, either orientation: `ChatDisplayTraits.isUnfoldedDuo`) the bar leads with a sidebar
+  toggle instead of Tabs. The toggle shows `CantripDuoSidebar` beside the same
   stack; its open state is saved (`cantrip.duoSidebar.open`), so folding, rotation and the keyboard
   never change it. When the window can't keep the chat 400 pt wide beside it (split screen, or
   unfolded upright) the sidebar slides over the dimmed chat instead (`ChatNavigationView.overlaysSidebar`),
   with its own unsaved open state that starts closed; a tap outside, the toggle or a pick closes it.
   Folded, the Tabs button toggles the tab drawer (the vertical bar stays tappable above it). On a
-  Duo, in every pose and with the sidebar open or closed, Home's sections are at
-  the bottom of the right-side rail (the system's tab bar in the vertical bar, or
-  `CantripDuoRailSections` in the app rail upright), never a bottom bar. Upright, the app rail keeps its
-  actions low, just above the sections (or at the bottom in a tab), within thumb reach; other iPhones use
-  `CantripHomeCompactTabBar`. Home puts Tabs, Settings and the menu at the top of the vertical bar when
-  folded (`sharesVerticalBarWithTabBar`); unfolded, the toggle replaces Tabs. A project tab on the Duo
+  Duo, in every pose and with the sidebar open or closed, the side controls are one bar
+  (`CantripDuoBarItems`, Sources/CantripDuoBar.swift): Tabs (folded) or the sidebar toggle
+  (unfolded), Settings, View Mac and the menu, then in Home its sections at the bottom, never a
+  bottom bar. It minimizes to one pill (`CantripDuoBarPill`: the current section's icon, or an up
+  chevron in a tab, badged with running tasks, working tabs or "?") and a tap expands it. Choosing a
+  section, Tabs, Settings or View Mac, a tap or scroll outside the bar (`CantripDuoBarDismissal`,
+  which never takes the touch) or a lane change minimizes it; the sidebar toggle leaves it open.
+  Where the system has a vertical bar (folded, unfolded on its side) the bar is one `.bottomBar`
+  group with `.axisBehavior(.verticalPreferred)` (`CantripDuoVerticalBar`). The vertical bar has no
+  system minimize (iOS 27.1), so the pill is a swap of toolbar items that the system morphs: re-id
+  the host by `CantripDuoBarLayout` (posture, Home or tab, View Mac), never by the expanded state.
+  Sections are `.visibilityPriority(.high)` and actions `.low`, so a short bar (folded landscape, a
+  Live Activity) moves actions into the system's "…" first. Upright, the app draws the same bar at
+  the bottom of its rail (`CantripDuoAppRail`, within thumb reach, text capped at xxxLarge). Home's
+  `TabView` tab bar is always hidden; other iPhones use `CantripHomeCompactTabBar`. A project tab on the Duo
   (folded or not) has no "‹ Home": the left-edge swipe and the Tabs button (folded; unfolded, the
   sidebar toggle) bring out the tab picker, with Home pinned first (`usesDuoTabPicker`). Other
   iPhones keep "‹ Home" and the swipe back to Home. Do not infer Duo from dimensions or device

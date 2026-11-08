@@ -474,7 +474,7 @@ final class CantripHomeTabDrawerTests: XCTestCase {
         let tab = session(plexID, "Mario Kart World cache-prepared update for first launch stutters", streaming: true,
                           status: "Building the cache")
         func header(inBand: Bool) -> some View {
-            ChatHeader(style: .tab, hidesLeadingInRail: true, actionsInRail: true, statusBand: inBand ? band : nil) {
+            ChatHeader(style: .tab, usesDuoBar: true, actionsInRail: true, statusBand: inBand ? band : nil) {
                 CantripTabHeaderTitle(session: tab, connectionState: .connected)
             } connection: { EmptyView() } lane: { EmptyView() } usage: { EmptyView() }
             delivery: { EmptyView() } settings: { EmptyView() }
@@ -496,11 +496,11 @@ final class CantripHomeTabDrawerTests: XCTestCase {
                 // As ChatView: below the band in its safe-area inset, or over the band.
                 .safeAreaInset(edge: .top, spacing: 0) { if !inBand { header(inBand: false) } }
                 .overlay(alignment: .top) { if inBand { header(inBand: true).ignoresSafeArea(edges: .top) } }
-                CantripDuoAppRail(dividerTop: inBand ? band : 0) {
-                    Image(systemName: "sidebar.left").frame(width: 44, height: 44)
-                    Image(systemName: "gearshape").frame(width: 44, height: 44)
-                    Image(systemName: "ellipsis").frame(width: 44, height: 44)
-                } bottom: { EmptyView() }
+                CantripDuoAppRail(dividerTop: inBand ? band : 0, items: CantripDuoBarItems(
+                    leading: AnyView(Image(systemName: "sidebar.left").frame(width: 44, height: 44)),
+                    settings: AnyView(Image(systemName: "gearshape").frame(width: 44, height: 44)),
+                    menu: AnyView(Image(systemName: "ellipsis").frame(width: 44, height: 44))
+                ), isExpanded: .constant(true))
             }
             .overlay(alignment: .topTrailing) {
                 // Where the clock and camera ring sit on the device.

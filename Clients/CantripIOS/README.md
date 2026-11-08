@@ -182,8 +182,8 @@ finish, or earlier to stay in the tab. A swipe that starts on a link, card or ca
 opens the drawer or goes back; links and cards open on a tap. Home shows its latest look until its conversation has
 reloaded; with Reduce Motion, **‹ Home** switches without sliding. Handoff cards' **Open tab**, a tab's push
 notification and the Tabs widget open the tab the same way. On an iPhone Duo, folded or
-unfolded, a tab has no **‹ Home**: the right swipe from the left edge, or **Tabs** at the bottom of
-the side bar when folded (the sidebar button when unfolded), brings out the tab list instead, so you
+unfolded, a tab has no **‹ Home**: the right swipe from the left edge, or **Tabs** in the side bar
+when folded (the sidebar button when unfolded; tap the bar's pill first if it's minimized), brings out the tab list instead, so you
 can switch straight to another tab or pick Cantrip Home, pinned at the top. Tab ages and outcomes need
 Cantrip host e8e5c0b or later; older hosts show names and live status only.
 
@@ -220,10 +220,10 @@ the Remote error banner; it is never automatically retried.
 
 Tap the **stacked-tabs icon at the top left** or swipe right from the **left edge**
 to open the Cantrip **Tabs** drawer; **Settings** is the gear in its footer, beside the
-connection line. The **hamburger menu is at the top right**. On Duo's vertical toolbar in Home, **Tabs and the
-white hamburger menu sit at the top**, as in Home's iPhone header, and Home's Chat,
-Tasks, Artifacts and Builds take the bottom of the vertical toolbar. In a project tab, the back pill sits near the bottom, with a separate
-**Settings gear** and the **white hamburger menu at the top**.
+connection line. The **hamburger menu is at the top right**. On an iPhone Duo these controls
+share one side bar instead (see [Adaptive layouts and iPhone Duo](#adaptive-layouts-and-iphone-duo)):
+tap its pill to show **Tabs**, the **Settings gear**, **View Mac** and the **white hamburger menu**,
+with Home's Chat, Tasks, Artifacts and Builds below them.
 The hamburger stays white when paused, with a small orange pause badge. Select a
 tab to return to chat; swipe left on the drawer header or backdrop, tap outside,
 or use **Close tabs** to dismiss
@@ -1393,22 +1393,28 @@ The `HermesUITests` scheme runs real-touch UI checks against DEBUG-only fixture 
 ### Adaptive layouts and iPhone Duo
 
 The app supports portrait and both landscape orientations on iPhone, plus all
-orientations on iPad. Duo unfolded (the hinge open, upright or on its side) uses the system's
-vertical bar as a navigation rail: a **sidebar toggle** at the top, then **Settings** and the
-tab's menu, whose first item is **Model Settings**. The toggle opens
+orientations on iPad. On iPhone Duo, in every pose, the side controls are **one bar** along the
+screen's edge: **Tabs** (folded) or a **sidebar toggle** (unfolded), **Settings**, **View Mac** and
+the tab's menu, whose first item is **Model Settings**, then, in Home, its sections (Chat, Tasks,
+Artifacts, Builds) at the bottom, never in a bottom bar. The bar rests minimized as one small pill
+showing where you are (Home's current section, or an up chevron in a tab) with a badge for
+running tasks, working tabs or a tab that needs you; tap it to expand the whole bar. Choosing a
+section, Tabs, Settings or View Mac, tapping elsewhere (which also does what you tapped) or
+scrolling the chat minimizes it again. VoiceOver reads the pill as "Navigation" with the
+section and running count. When the bar is short (folded on its side, or beside a Live
+Activity), the sections stay and the other actions move into the system's **…** button. The
+sidebar toggle opens
 and closes Gateway Mac's left sidebar with Pip, Home's sections, the tabs (with **+**), the open
 chat's **Skills** and the connection; the chat header keeps the title and state on the left and
 Stop and delivery on the right. The sidebar stays open or closed as you left it through folding,
-unfolding, rotating and typing. Home's sections (Chat, Tasks, Artifacts, Builds) stay at the
-bottom of the rail either way, never in a bottom bar. With the sidebar closed, the toggle shows the working or needs-input count the Tabs button would. Folded Duo (in
+unfolding, rotating and typing, and the bar stays open while you toggle it. With the sidebar
+closed, the toggle shows the working or needs-input count the Tabs button would. Folded Duo (in
 either orientation, and while the keyboard is up) keeps chat full-width with
-sessions in the drawer: where the system supplies a
-vertical bar, Home's sections use the bottom of Apple's native adaptive toolbar with Tabs and
-the hamburger menu at the top; in a project tab the back pill uses the bottom and a separate
-Settings gear and the hamburger menu stay at the top, instead of duplicating controls
-above the conversation. The title, connection/usage row,
+sessions in the drawer, and the bar uses Apple's native adaptive toolbar in the system's
+vertical bar, as unfolded Duo on its side does. The title, connection/usage row,
 and composer remain with the chat. Unfolded upright, where the status bar is an empty band across
-the top with the clock and camera ring at its end, the app draws the rail itself and a tab's
+the top with the clock and camera ring at its end, the app draws the rail itself, with the bar at
+its bottom within thumb reach, and a tab's
 header sits in that band (its title level with the clock, clear of it), so the header and rail
 read as one bar. In other display configurations the familiar
 header returns; regular-width iPad windows retain their session sidebar.

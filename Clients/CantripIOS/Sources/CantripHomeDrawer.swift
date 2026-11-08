@@ -149,7 +149,7 @@ struct CantripHomeTabsButton: View {
     var body: some View {
         Button(action: action) {
             ChatHeaderIcon(systemName: "sidebar.left")
-                .frame(width: 44, height: 44)
+                .chatBarItemFrame()
                 .overlay(alignment: .topTrailing) {
                     CantripTabsBadge(workingCount: workingCount, inputCount: inputCount)
                 }

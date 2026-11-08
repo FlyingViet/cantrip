@@ -177,7 +177,8 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
     private func tabContent<Content: View>(_ content: Content) -> some View {
         content
             .safeAreaPadding(.bottom, sectionsInRail ? 0 : CantripHomeLayout.compactContentBottomClearance)
-            .toolbar(displayTraits.hasVerticalBar ? .visible : .hidden, for: .tabBar)
+            // On a Duo the sections are in its one navigation bar (`CantripDuoBarItems`).
+            .toolbar(.hidden, for: .tabBar)
     }
 }
 

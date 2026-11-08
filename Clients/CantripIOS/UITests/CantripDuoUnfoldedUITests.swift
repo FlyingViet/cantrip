@@ -31,8 +31,16 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
             guard deny.waitForExistence(timeout: 4) else { break }
             deny.tap()
         }
+        let window = app.windows.firstMatch
+        // Element taps can land offset on the inner display; a window coordinate doesn't.
+        func press(_ element: XCUIElement) {
+            let frame = element.frame, origin = window.frame.origin
+            window.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: frame.midX - origin.x, dy: frame.midY - origin.y)).tap()
+        }
+        app.expandDuoBar(timeout: 15, press: press)
         let toggle = app.buttons["duo.rail.sidebar"].firstMatch
-        guard toggle.waitForExistence(timeout: 15) else {
+        guard toggle.waitForExistence(timeout: 5) else {
             throw XCTSkip("Unfold the Duo: the rail's sidebar toggle shows only unfolded")
         }
         XCTAssertFalse(app.buttons["duo.rail.modelSettings"].exists, "Model Settings is in the menu, not the rail")
@@ -41,10 +49,10 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
 
         // Any element type: iOS 27.1 reports the sidebar container as an alert.
         let sidebar = app.descendants(matching: .any)["duo.sidebar"]
-        if !sidebar.exists { toggle.tap() }
+        if !sidebar.exists { press(toggle) }
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "Show Sidebar opens it")
-        // Home's sections stay in the right-side rail (the sidebar lists Builds too, on the left).
-        let window = app.windows.firstMatch
+        // Home's sections stay in the right-side rail (the sidebar lists Builds too, on the left); the
+        // toggle leaves the bar open.
         let railBuilds = {
             app.buttons.matching(NSPredicate(format: "label == 'Builds'")).allElementsBoundByIndex
                 .contains { $0.frame.midX > window.frame.width * 0.85 }
@@ -55,7 +63,7 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         XCTAssertEqual(toggle.label, "Hide Sidebar")
         save(app, "sidebar-open")
 
-        toggle.tap()
+        press(toggle)
         XCTAssertTrue(waitForAbsence(sidebar), "Hide Sidebar closes it")
         XCTAssertEqual(toggle.label, "Show Sidebar")
         XCTAssertTrue(railBuilds(), "Home's sections stay in the rail with the sidebar closed")
@@ -69,7 +77,9 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         sleep(1)
         XCTAssertFalse(sidebar.exists, "Typing must not reopen the sidebar")
         save(app, "sidebar-closed-typing")
-        toggle.tap()
+        // The tap into the message field minimized the bar.
+        app.expandDuoBar(press: press)
+        press(toggle)
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "The toggle works with the keyboard up")
         sleep(1)
         XCTAssertTrue(sidebar.exists, "The sidebar stays open while typing")
@@ -78,7 +88,7 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         // The rail is the sidebar toggle, Settings and the menu; Model Settings is the menu's first item.
         // By label: the menu's identifier is masked in the rail.
         let menu = app.buttons.matching(NSPredicate(format: "label IN %@", ["Chat menu", "Tab menu"])).firstMatch
-        XCTAssertTrue(menu.exists, "The rail has the menu")
+        XCTAssertTrue(menu.waitForExistence(timeout: 5), "The rail has the menu")
         menu.tap()
         let modelSettings = app.buttons["Model Settings"].firstMatch
         XCTAssertTrue(modelSettings.waitForExistence(timeout: 5), "The menu has Model Settings")
@@ -117,35 +127,42 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
             guard deny.waitForExistence(timeout: 4) else { break }
             deny.tap()
         }
-        let toggle = app.buttons["duo.rail.sidebar"].firstMatch
-        guard toggle.waitForExistence(timeout: 15) else {
-            throw XCTSkip("Unfold the Duo: the rail's sidebar toggle shows only unfolded")
-        }
         let window = app.windows.firstMatch
-        // Home's sections in the right-side rail (the sidebar lists them too, on the left).
-        func rail(_ label: String) throws -> XCUIElement {
-            try XCTUnwrap(app.buttons.matching(NSPredicate(format: "label == %@", label)).allElementsBoundByIndex
-                .first { $0.frame.midX > window.frame.width * 0.85 }, "\(label) is in the rail")
-        }
         // Element taps can land offset on the inner display; a window coordinate doesn't.
         func press(_ element: XCUIElement) {
             let frame = element.frame, origin = window.frame.origin
             window.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: frame.midX - origin.x, dy: frame.midY - origin.y)).tap()
         }
+        app.expandDuoBar(timeout: 15, press: press)
+        let toggle = app.buttons["duo.rail.sidebar"].firstMatch
+        guard toggle.waitForExistence(timeout: 5) else {
+            throw XCTSkip("Unfold the Duo: the rail's sidebar toggle shows only unfolded")
+        }
+        // Home's sections in the right-side rail (the sidebar lists them too, on the left).
+        func rail(_ label: String) throws -> XCUIElement {
+            try XCTUnwrap(app.buttons.matching(NSPredicate(format: "label == %@", label)).allElementsBoundByIndex
+                .first { $0.frame.midX > window.frame.width * 0.85 }, "\(label) is in the rail")
+        }
         let sidebar = app.descendants(matching: .any)["duo.sidebar"]
         let cards = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'home.builds.app.'"))
         for open in [true, false] {
-            // The sidebar toggle is in Chat's rail.
+            // Each choice minimizes the bar; expand it again first.
+            app.expandDuoBar(press: press)
             press(try rail("Chat"))
+            app.expandDuoBar(press: press)
             XCTAssertTrue(toggle.waitForExistence(timeout: 5))
             if sidebar.exists != open {
                 press(toggle)
                 XCTAssertTrue(open ? sidebar.waitForExistence(timeout: 5) : waitForAbsence(sidebar))
             }
+            app.expandDuoBar(timeout: 2, press: press)
             press(try rail("Builds"))
             // Upright the sidebar overlays the chat, and the first tap outside it only closes it.
-            if !cards.firstMatch.waitForExistence(timeout: 3), !sidebar.exists { press(try rail("Builds")) }
+            if !cards.firstMatch.waitForExistence(timeout: 3), !sidebar.exists {
+                app.expandDuoBar(press: press)
+                press(try rail("Builds"))
+            }
             XCTAssertTrue(cards.firstMatch.waitForExistence(timeout: 15), "The install page's apps load")
             sleep(1)
             let posture = window.frame.width > window.frame.height ? "landscape" : "upright"

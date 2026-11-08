@@ -19,6 +19,18 @@ enum CantripUITestFixtures {
         _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
     }
 
+    /// `-CantripUITestLandscape` turns the window to landscape at launch (the folded iPhone Duo
+    /// simulator doesn't turn for XCUITest's device orientation).
+    @MainActor
+    static func turnToLandscapeIfAsked() async {
+        #if os(iOS)
+        guard ProcessInfo.processInfo.arguments.contains("-CantripUITestLandscape") else { return }
+        try? await Task.sleep(for: .seconds(1))
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        scene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
+        #endif
+    }
+
     static var pairsWithFixtureHost: Bool {
         ProcessInfo.processInfo.arguments.contains("-CantripUITestRemoteURL")
     }
