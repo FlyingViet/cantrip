@@ -1,7 +1,8 @@
 import Foundation
 import SQLite3
 
-/// An optional full-text index over the memory vault, used to pick the RETRIEVED snippets.
+/// An optional full-text index over the memory vault, used to pick the RETRIEVED snippets: the
+/// notes, every session log and the `archive/` folder of older note history.
 ///
 /// The Markdown files stay the source of truth: this SQLite FTS5 database is derived from
 /// them, kept outside the vault, refreshed when a file's modification date or size changes,
@@ -10,12 +11,18 @@ import SQLite3
 /// out, so a pasted log can't win on sheer word count. Chunks rank by BM25 (Porter-stemmed),
 /// with a boost for recent session entries. It never stores queries and makes no network calls.
 final class MemorySearchIndex {
+    /// Where a chunk comes from; ranking weighs them differently.
+    enum Kind: Int32 {
+        case note = 0, session = 1, archive = 2
+    }
+
     struct Hit: Equatable {
-        /// The file's name, e.g. "deploy.md" or "2026-01-05.md".
+        /// The file's path in the vault, e.g. "deploy.md", "sessions/2026-01-05.md" or
+        /// "archive/deploy-history.md", so the agent can open the source.
         let file: String
         let heading: String
         let text: String
-        let isSession: Bool
+        let kind: Kind
         let score: Double
 
         /// The snippet as injected: its heading for context, then the chunk, within `limit`.
@@ -43,7 +50,7 @@ final class MemorySearchIndex {
         var description: String { if case .sqlite(let message) = self { return message }; return "" }
     }
 
-    static let schemaVersion: Int32 = 1
+    static let schemaVersion: Int32 = 2
     /// Chunks aim for this size; longer paragraphs are split at line or word boundaries.
     static let chunkTarget = 700
     static let maximumFileBytes = 16 << 20
@@ -52,6 +59,8 @@ final class MemorySearchIndex {
     static let sessionBoost = 0.6
     /// Curated notes outrank a session entry of equal relevance unless it's from the last week or so.
     static let noteWeight = 1.25
+    /// Archived note history is older detail: just below current notes on ties.
+    static let archiveWeight = 1.1
 
     /// Where Cantrip keeps the index: `~/Library/Application Support/Cantrip/memory-index.sqlite`.
     static var defaultURL: URL {
@@ -97,8 +106,8 @@ final class MemorySearchIndex {
     // MARK: - Refresh
 
     /// Brings the index up to date with `vault`: notes at its top level (except the always-loaded
-    /// MEMORY.md and USER.md) and `sessions/*.md`. Only files whose modification date or size
-    /// changed are read again; files that are gone are dropped.
+    /// MEMORY.md and USER.md), every `sessions/*.md` and every `.md` under `archive/`. Only files
+    /// whose modification date or size changed are read again; files that are gone are dropped.
     @discardableResult
     func refresh(vault: URL) throws -> RefreshResult {
         lock.lock(); defer { lock.unlock() }
@@ -114,6 +123,15 @@ final class MemorySearchIndex {
         for url in (try? fm.contentsOfDirectory(at: sessions, includingPropertiesForKeys: keys)) ?? []
         where url.pathExtension.lowercased() == "md" {
             sources.append(("sessions/" + url.lastPathComponent, url))
+        }
+        let archive = root.appendingPathComponent("archive", isDirectory: true)
+        if let found = fm.enumerator(at: archive, includingPropertiesForKeys: keys,
+                                     options: [.skipsHiddenFiles, .skipsPackageDescendants]) {
+            for case let url as URL in found where url.pathExtension.lowercased() == "md" {
+                let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+                guard path.hasPrefix(archive.path + "/") else { continue }
+                sources.append(("archive/" + path.dropFirst(archive.path.count + 1), url))
+            }
         }
 
         try execute("BEGIN IMMEDIATE")
@@ -136,7 +154,8 @@ final class MemorySearchIndex {
                 let mtime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
                 let size = Int64(values.fileSize ?? 0)
                 if let old = known[source.relative], old.mtime == mtime, old.size == size { continue }
-                let isSession = source.relative.hasPrefix("sessions/")
+                let kind = Self.kind(of: source.relative)
+                let isSession = kind == .session
                 var chunks: [Chunk] = []
                 if size <= Self.maximumFileBytes, let data = try? Data(contentsOf: source.url) {
                     let base = isSession ? Self.sessionDay(source.url.lastPathComponent) ?? mtime : mtime
@@ -144,8 +163,8 @@ final class MemorySearchIndex {
                 }
                 try run("DELETE FROM chunks WHERE path = ?", [source.relative])
                 for chunk in chunks {
-                    try run("INSERT INTO chunks(body, heading, path, stamp, session) VALUES (?, ?, ?, ?, ?)",
-                            [chunk.body, chunk.heading, source.relative, chunk.stamp, isSession ? 1 : 0])
+                    try run("INSERT INTO chunks(body, heading, path, stamp, kind) VALUES (?, ?, ?, ?, ?)",
+                            [chunk.body, chunk.heading, source.relative, chunk.stamp, Int(kind.rawValue)])
                 }
                 try run("INSERT OR REPLACE INTO files(path, mtime, size) VALUES (?, ?, ?)",
                         [source.relative, mtime, size])
@@ -176,18 +195,21 @@ final class MemorySearchIndex {
         let match = words.map { "\"\($0)\"" }.joined(separator: " OR ")
         var rows: [Hit] = []
         try query("""
-            SELECT path, heading, body, stamp, session, bm25(chunks, 1.0, 0.5) AS rank
+            SELECT path, heading, body, stamp, kind, bm25(chunks, 1.0, 0.5) AS rank
             FROM chunks WHERE chunks MATCH ? ORDER BY rank LIMIT 300
             """, [match]) { row in
             let path = text(row, 0)
-            let isSession = sqlite3_column_int(row, 4) == 1
+            let kind = Kind(rawValue: sqlite3_column_int(row, 4)) ?? .note
             let relevance = -sqlite3_column_double(row, 5)
             let age = max(0, now.timeIntervalSince1970 - sqlite3_column_double(row, 3)) / 86_400
-            let weight = isSession
-                ? 1 + Self.sessionBoost * pow(0.5, age / Self.sessionHalfLifeDays)
-                : Self.noteWeight
-            rows.append(Hit(file: (path as NSString).lastPathComponent, heading: text(row, 1),
-                            text: text(row, 2), isSession: isSession, score: relevance * weight))
+            let weight: Double
+            switch kind {
+            case .session: weight = 1 + Self.sessionBoost * pow(0.5, age / Self.sessionHalfLifeDays)
+            case .note: weight = Self.noteWeight
+            case .archive: weight = Self.archiveWeight
+            }
+            rows.append(Hit(file: path, heading: text(row, 1), text: text(row, 2), kind: kind,
+                            score: relevance * weight))
         }
         rows.sort { $0.score != $1.score ? $0.score > $1.score : $0.file > $1.file }
         var hits: [Hit] = []
@@ -305,6 +327,10 @@ final class MemorySearchIndex {
         return Double(hours * 60 + minutes)
     }
 
+    static func kind(of relative: String) -> Kind {
+        relative.hasPrefix("sessions/") ? .session : relative.hasPrefix("archive/") ? .archive : .note
+    }
+
     /// A session log's day ("2026-01-05.md") as local midnight.
     static func sessionDay(_ name: String) -> Double? {
         let formatter = DateFormatter()
@@ -378,7 +404,7 @@ final class MemorySearchIndex {
         try execute("CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, mtime REAL NOT NULL, size INTEGER NOT NULL)")
         try execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
-                body, heading, path UNINDEXED, stamp UNINDEXED, session UNINDEXED,
+                body, heading, path UNINDEXED, stamp UNINDEXED, kind UNINDEXED,
                 tokenize = 'porter unicode61 remove_diacritics 2')
             """)
         // Also drop a deleted chunk's words from the full-text index (SQLite 3.42+).

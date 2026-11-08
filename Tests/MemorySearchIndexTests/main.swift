@@ -173,13 +173,13 @@ let video = try index.search(terms: videoTerms, now: now)
 check(!video.contains { $0.text.contains("declares video entitlement") },
       "new: no log line is ever returned: \(video.map(\.text))")
 let blackScreen = try index.search(terms: ["car", "display", "black", "screen"], now: now)
-check(blackScreen.first?.file == "2026-01-03.md" && blackScreen.first?.text.contains("never draws its root view") == true,
+check(blackScreen.first?.file == "sessions/2026-01-03.md" && blackScreen.first?.text.contains("never draws its root view") == true,
       "the conversation around a pasted log is still found: \(blackScreen.map(\.text))")
 
 // 3. Recent entries win ties, and the older copy isn't repeated.
 let lantern = try index.search(terms: ["lantern", "supplier", "settle"], now: now)
-check(lantern.first?.file == "2026-01-09.md", "the newer of two equal entries wins: \(lantern.map(\.file))")
-check(!lantern.contains { $0.file == "2026-01-02.md" }, "a near-identical older entry isn't returned too: \(lantern.map(\.file))")
+check(lantern.first?.file == "sessions/2026-01-09.md", "the newer of two equal entries wins: \(lantern.map(\.file))")
+check(!lantern.contains { $0.file == "sessions/2026-01-02.md" }, "a near-identical older entry isn't returned too: \(lantern.map(\.file))")
 check(lantern.first?.snippet(limit: 800).hasPrefix("## 10:00 · Backend\n**User:**") == true, "snippets lead with their heading")
 check(lantern.first?.snippet(limit: 20).count == 20, "snippets respect their limit")
 
@@ -200,7 +200,7 @@ check(try index.search(terms: ["twelve"], now: now).first?.file == "deploy-waite
 check(try index.search(terms: ["eight"], now: now).isEmpty, "its old text is gone")
 try FileManager.default.removeItem(at: vault.appendingPathComponent("sessions/2026-01-09.md"))
 check(try index.refresh(vault: vault).removed == 1, "a deleted file is dropped")
-check(try index.search(terms: ["lantern"], now: now).map(\.file) == ["2026-01-02.md"], "and its entries with it")
+check(try index.search(terms: ["lantern"], now: now).map(\.file) == ["sessions/2026-01-02.md"], "and its entries with it")
 
 // Another vault starts over; reopening keeps the index.
 let other = base.appendingPathComponent("other-vault", isDirectory: true)
@@ -212,6 +212,68 @@ let reopened = try MemorySearchIndex(url: dbURL)
 check(try reopened.refresh(vault: other) == .init(), "a reopened index is still current")
 check(try reopened.search(terms: ["tomatoes"], now: now).first?.file == "garden.md", "and searchable")
 reopened.close()
+
+// MARK: All history: every session log and archive/
+
+let history = base.appendingPathComponent("history-vault", isDirectory: true)
+let supplier = "The harbor lantern supplier delivers every Friday before the market opens."
+try write("# Lanterns\n\n## Supplier\n\(supplier)\n", "lanterns.md", in: history)
+try write("""
+# Lanterns (history)
+
+## Supplier
+\(supplier)
+
+## Glassworks
+In March the glassworks kiln cracked, and the replacement kiln came from the ridge foundry.
+""", "archive/lanterns-history.md", in: history)
+try write("# Ferry (older)\n\nThe dock crane was repainted green after the storm season.\n",
+          "archive/2025/ferry-history.md", in: history)
+// Fifteen recent days of unrelated chat, then one older day with the answer.
+for day in 1...15 {
+    try write("## 09:00 · Backend\n**User:** How often should the garden beds be watered in week \(day)?\n\n"
+              + "**Assistant:** Water the raised garden beds every \(["morning", "evening", "other day"][day % 3]).\n",
+              "sessions/2026-01-\(String(format: "%02d", day)).md", in: history)
+}
+try write("## 18:20 · Backend\n**User:** When does the ferry switch timetables?\n\n"
+          + "**Assistant:** The ferry timetable changes to the winter schedule on the first Monday of November.\n",
+          "sessions/2025-10-02.md", in: history)
+// A large unrelated note that keeps saying "kiln".
+var kilnBulk = "# Pottery log\n"
+for week in 0..<150 {
+    kilnBulk += "\n## Batch \(week)\n- Loaded the kiln with \(["bowls", "mugs", "plates", "vases"][week % 4]) "
+        + "glazed in \(["blue", "white", "rust", "green", "sand"][week % 5]); the kiln ran \(["hot", "even", "slow"][week % 3]).\n"
+}
+try write(kilnBulk, "pottery-log.md", in: history)
+
+let all = try MemorySearchIndex(url: base.appendingPathComponent("history/memory-index.sqlite"))
+let built = try all.refresh(vault: history)
+check(built.indexed == 20, "both notes, all 16 session logs and both archive files are indexed: \(built)")
+
+let kilnTerms = ["glassworks", "kiln", "cracked", "replacement"]
+check(!keywordRetrieve(vault: history, terms: kilnTerms).contains { $0.file.contains("history") },
+      "old: archive/ is never searched: \(keywordRetrieve(vault: history, terms: kilnTerms).map(\.file))")
+let kiln = try all.search(terms: kilnTerms, now: now)
+check(kiln.first?.file == "archive/lanterns-history.md" && kiln.first?.kind == .archive
+      && kiln.first?.text.contains("ridge foundry") == true,
+      "new: the archived paragraph is found, ahead of the large note that only repeats one word: \(kiln.map(\.file))")
+
+let ferryTerms = ["ferry", "timetable", "winter", "schedule"]
+check(keywordRetrieve(vault: history, terms: ferryTerms).isEmpty,
+      "old: a session log older than the 14 newest is never searched")
+let ferry = try all.search(terms: ferryTerms, now: now)
+check(ferry.first?.file == "sessions/2025-10-02.md" && ferry.first?.text.contains("first Monday of November") == true,
+      "new: the older session entry is found: \(ferry.map(\.file))")
+check(try all.search(terms: ["crane", "repainted"], now: now).first?.file == "archive/2025/ferry-history.md",
+      "archive subfolders are indexed and hits keep their path")
+
+let tie = try all.search(terms: ["harbor", "lantern", "supplier", "friday"], now: now)
+check(tie.first?.file == "lanterns.md" && !tie.contains { $0.file == "archive/lanterns-history.md" },
+      "on a tie the current note wins and the archived copy isn't repeated: \(tie.map(\.file))")
+check(MemorySearchIndex.archiveWeight < MemorySearchIndex.noteWeight, "archive ranks just below notes")
+check(try all.search(terms: ["kiln", "garden", "ferry", "lantern", "crane"], now: now).count == 3,
+      "still at most three snippets")
+all.close()
 
 // Removing it deletes the database files; an unusable path fails to open (callers fall back).
 MemorySearchIndex.remove(at: dbURL)

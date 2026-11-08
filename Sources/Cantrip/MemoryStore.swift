@@ -229,7 +229,7 @@ final class MemoryStore {
                 let entry = "— from \(hit.file):\n\(hit.snippet(limit: 800))\n"
                 if out.count + entry.count > maxChars { break }
                 out += entry
-                if !hit.isSession && recordsUsage { noteUsed(hit.file) }
+                if hit.kind == .note && recordsUsage { noteUsed(hit.file) }
             }
             return out.isEmpty ? nil : out
         }
