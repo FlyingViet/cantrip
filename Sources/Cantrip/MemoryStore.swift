@@ -17,12 +17,13 @@ final class MemoryStore {
     var sessionsURL: URL { dirURL.appendingPathComponent("sessions") }
 
     static func contextBlock(query: String, path: String, isPrivate: Bool, isLocal: Bool,
-                             searchIndex: Bool = false) async -> String {
+                             searchIndex: Bool = false, previous: ConversationTurn? = nil) async -> String {
         await withCheckedContinuation { continuation in
             preparationQueue.async {
                 let store = MemoryStore(directory: URL(fileURLWithPath: path))
                 if !isPrivate { store.ensureVault() }
-                let retrieved = store.retrieve(for: query, recordsUsage: !isPrivate, searchIndex: searchIndex).map {
+                let retrieved = store.retrieve(for: query, recordsUsage: !isPrivate, searchIndex: searchIndex,
+                                               previous: previous).map {
                     "\n\nRETRIEVED — memory snippets auto-matched to this query (verify before relying on them):\n\($0)"
                 } ?? ""
                 let result: String
@@ -54,13 +55,13 @@ final class MemoryStore {
     /// The same memory protocol split for prompts that keep a cacheable prefix: `stable` (core
     /// files, notes list, sessions pointer, maintenance rule) changes only when memory does;
     /// `retrieved` depends on the query, so it goes last.
-    static func contextParts(query: String, path: String,
-                             searchIndex: Bool = false) async -> (stable: String, retrieved: String) {
+    static func contextParts(query: String, path: String, searchIndex: Bool = false,
+                             previous: ConversationTurn? = nil) async -> (stable: String, retrieved: String) {
         await withCheckedContinuation { continuation in
             preparationQueue.async {
                 let store = MemoryStore(directory: URL(fileURLWithPath: path))
                 store.ensureVault()
-                let retrieved = store.retrieve(for: query, searchIndex: searchIndex).map {
+                let retrieved = store.retrieve(for: query, searchIndex: searchIndex, previous: previous).map {
                     "\n\n(RETRIEVED — memory snippets auto-matched to this task (verify before relying on them):\n\($0))"
                 } ?? ""
                 let stable = """
@@ -216,12 +217,18 @@ final class MemoryStore {
         }
     }
 
+    /// Weighted occurrences of `terms` in `text` (lowercased).
+    static func score(_ text: String, terms: [MemoryQuery.Term]) -> Double {
+        terms.reduce(0) { $0 + $1.weight * Double(score(text, terms: [$1.word])) }
+    }
+
     /// Find the most relevant note/session snippets for a query and
     /// return them ready for injection. Nil when nothing matches. With `searchIndex`, the
     /// local full-text index picks them; if it can't, the keyword counting below does.
+    /// `previous`, the exchange before the message, adds its topic at a lower weight (`MemoryQuery`).
     func retrieve(for query: String, maxChars: Int = 2400, recordsUsage: Bool = true,
-                  searchIndex: Bool = false) -> String? {
-        let terms = Self.terms(from: query)
+                  searchIndex: Bool = false, previous: ConversationTurn? = nil) -> String? {
+        let terms = MemoryQuery(message: query, previous: previous).terms
         guard !terms.isEmpty else { return nil }
         if searchIndex, let hits = Self.indexedHits(terms: terms, vault: dirURL) {
             var out = ""
@@ -242,7 +249,7 @@ final class MemoryStore {
             .prefix(14)
         candidates += sessionFiles
 
-        var scored: [(name: String, score: Int, chunk: String, isNote: Bool)] = []
+        var scored: [(name: String, score: Double, chunk: String, isNote: Bool)] = []
         for url in candidates {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             let fileScore = Self.score(text.lowercased(), terms: terms)
@@ -276,7 +283,7 @@ final class MemoryStore {
 
     /// Up to three hits from the search index, refreshed first; nil when the index can't be
     /// used (it's then deleted, logged, and rebuilt on a later try).
-    static func indexedHits(terms: [String], vault: URL, now: Date = Date()) -> [MemorySearchIndex.Hit]? {
+    static func indexedHits(terms: [MemoryQuery.Term], vault: URL, now: Date = Date()) -> [MemorySearchIndex.Hit]? {
         indexLock.lock(); defer { indexLock.unlock() }
         guard now >= indexRetryAfter else { return nil }
         let started = Date()
@@ -284,7 +291,7 @@ final class MemoryStore {
             let index = try openIndex ?? MemorySearchIndex()
             openIndex = index
             let refreshed = try index.refresh(vault: vault)
-            let hits = try index.search(terms: terms, limit: 3, now: now)
+            let hits = try index.search(weighted: terms.map { ($0.word, $0.weight) }, limit: 3, now: now)
             if refreshed.indexed > 0 || refreshed.removed > 0 {
                 Log.write("memory: search index refreshed \(refreshed.indexed) file(s), \(refreshed.chunks) chunk(s), "
                           + "removed \(refreshed.removed), with search in \(Int(Date().timeIntervalSince(started) * 1000)) ms")

@@ -115,6 +115,7 @@ struct SessionTabTests {
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "memory-index" {
             try await testMemorySearchIndexRetrieval()
+            try await testMemoryFollowUpQueries()
             return
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "artifacts" {
@@ -275,6 +276,7 @@ struct SessionTabTests {
         try await testCantripHomeArtifactThumbnails()
         try await testPanelArtifacts()
         try await testMemorySearchIndexRetrieval()
+        try await testMemoryFollowUpQueries()
         try await testCantripHomeBuilds()
         try await testCantripHomeGuardrails()
         try await testAgentPolicyGate()

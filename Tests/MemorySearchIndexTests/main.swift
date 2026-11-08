@@ -275,6 +275,76 @@ check(try all.search(terms: ["kiln", "garden", "ferry", "lantern", "crane"], now
       "still at most three snippets")
 all.close()
 
+// MARK: Follow-ups: the previous exchange joins the query
+
+let follow = base.appendingPathComponent("follow-vault", isDirectory: true)
+try write("# Kiln schedule\n\n## Firing\nBisque firings run on a slow overnight schedule. Glaze firings use the "
+          + "cone six program with a short hold, then cool with the lid closed.\n", "kiln-schedule.md", in: follow)
+try write("# Laptop boot\n\nTo make the laptop boot faster, remove login items and keep the disk under eighty "
+          + "percent full.\n", "laptop-boot.md", in: follow)
+try write("# Garden\n\nWater the raised garden beds every other morning; mulch keeps them from drying out.\n",
+          "garden.md", in: follow)
+let followIndex = try MemorySearchIndex(url: base.appendingPathComponent("follow/memory-index.sqlite"))
+try followIndex.refresh(vault: follow)
+let kilnTurn = ConversationTurn(
+    user: "How should we schedule the kiln firings for the glaze batch?",
+    assistant: """
+    Checking the kiln notes first.
+
+    Run the glaze batch on the cone six kiln program with a short hold. The bisque firing stays on the slow
+    overnight schedule, so the kiln is free for the glaze firing by morning.
+
+    ![Kiln chart](/Users/someone/shots/laptop-boot.png) [schedule](https://example.com/laptop/boot)
+
+    ```card
+    {"title": "Laptop boot decoy card"}
+    ```
+    """)
+
+func weighted(_ query: MemoryQuery) -> [(word: String, weight: Double)] { query.terms.map { ($0.word, $0.weight) } }
+
+let vague = MemoryQuery(message: "Will that make it faster?", previous: kilnTurn)
+let previousWords = vague.terms.filter { $0.weight < 1 }.map(\.word)
+check(vague.terms.first == .init(word: "faster", weight: 1), "the message's own words lead, at full weight: \(vague.terms)")
+check(previousWords.count <= MemoryQuery.previousTermLimit && previousWords.prefix(3).contains("kiln")
+      && previousWords.contains("schedule") && previousWords.contains("glaze"),
+      "the previous exchange adds its topic words at a lower weight: \(previousWords)")
+for noise in ["laptop", "boot", "decoy", "card", "checking", "users", "someone", "https", "example"] {
+    check(!vague.words.contains(noise), "\(noise) isn't conversation text: \(vague.words)")
+}
+check(try followIndex.search(terms: ["faster"], now: now).first?.file == "laptop-boot.md",
+      "the message alone finds an unrelated note")
+check(try followIndex.search(weighted: weighted(vague), now: now).first?.file == "kiln-schedule.md",
+      "with the previous exchange, a vague follow-up finds its topic")
+let newTopic = MemoryQuery(message: "How often should the raised garden beds be watered?", previous: kilnTurn)
+check(try followIndex.search(weighted: weighted(newTopic), now: now).first?.file == "garden.md",
+      "a message that changes the subject finds its own topic first")
+check(MemoryQuery(message: "Will that make it faster?").terms == [.init(word: "faster", weight: 1)],
+      "without a previous exchange the query is the message alone")
+check(MemoryQuery(message: "Kiln kiln schedule", previous: kilnTurn).terms.filter { $0.word == "kiln" }.count == 1,
+      "a word in the message isn't added again from the previous exchange")
+
+// Blocks Cantrip adds around a message never enter the query.
+let wrapped = """
+Context - selected earlier turns only (not the full transcript):
+User: earlier laptop question
+New message:
+(Context: this message comes from a paired device that isn't sharing its location. Use the Mac's location.)
+
+What about the kiln?
+
+(Persistent memory — three layers, all in /vault:
+CORE — laptop boot notes
+RETRIEVED — memory snippets auto-matched to this query (verify before relying on them):
+— from laptop-boot.md:
+laptop boot faster)
+"""
+check(MemoryQuery(message: wrapped).words == ["kiln"], "only the message's own words: \(MemoryQuery(message: wrapped).words)")
+let retrievedReply = ConversationTurn(user: "What's next?", assistant: "Sure.\n\nRETRIEVED — memory snippets auto-matched:\n— from laptop-boot.md:\nlaptop boot")
+check(!MemoryQuery(message: "and then?", previous: retrievedReply).words.contains("laptop"),
+      "RETRIEVED snippets in an earlier turn are skipped")
+followIndex.close()
+
 // Removing it deletes the database files; an unusable path fails to open (callers fall back).
 MemorySearchIndex.remove(at: dbURL)
 check(!FileManager.default.fileExists(atPath: dbURL.path) && !FileManager.default.fileExists(atPath: dbURL.path + "-wal"),

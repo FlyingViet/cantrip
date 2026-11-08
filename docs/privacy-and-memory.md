@@ -216,6 +216,14 @@ by being long, and a pasted log that repeats a word can be picked again and
 again. To limit that, word counting only looks at your notes and the 14 newest
 session logs, and never at `archive/`.
 
+Either way, a follow-up that doesn't name its subject ("will that make it
+faster?") is searched with the exchange before it: up to 12 of that exchange's
+most frequent words are added at half the weight of your message's own words.
+With the index on, a snippet that matches both also gets a boost. Your message still decides, so a
+new subject finds its own notes. Only conversation text is used, never the
+memory, snippets, cards, links or file paths Cantrip and agents add, and the
+snippet budget stays the same.
+
 Turn on **Search memory with a local index** (under **Memory vault**, in
 Settings › Memory on every client) to pick them with a full-text index instead:
 

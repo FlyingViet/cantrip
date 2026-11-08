@@ -206,7 +206,8 @@ test-skills:
 test-memory-index:
 	@BIN="/tmp/cantrip-memory-index-tests-$$$$"; H="$$(mktemp -d)"; \
 	trap 'rm -f "$$BIN"; rm -rf "$$H"' EXIT; \
-	swiftc Sources/Cantrip/MemorySearchIndex.swift Tests/MemorySearchIndexTests/main.swift -o "$$BIN" && \
+	swiftc Sources/Cantrip/MemorySearchIndex.swift Sources/Cantrip/MemoryQuery.swift Sources/Cantrip/ConversationContext.swift \
+		Tests/MemorySearchIndexTests/main.swift -o "$$BIN" && \
 	CFFIXED_USER_HOME="$$H" "$$BIN"
 
 test-message-deletion:

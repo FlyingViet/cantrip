@@ -2493,7 +2493,8 @@ final class ChatSession: ObservableObject {
         armWatchdog()
         streamGeneration += 1
         let generation = streamGeneration
-        prepareMemory(onto: backendPrompt, query: prompt, backendKind: backendKind,
+        // A follow-up's memory search also uses the exchange before it, at a lower weight.
+        prepareMemory(onto: backendPrompt, query: prompt, previous: previousTurns.last, backendKind: backendKind,
                       generation: generation, includeMemory: !isSlashCommand,
                       taskHead: taskHead) { [weak self] prepared in
             guard let self else { return }
@@ -2537,7 +2538,8 @@ final class ChatSession: ObservableObject {
 
     /// With `taskHead`, memory goes between that static head and `prompt`, and retrieved
     /// snippets go last, so a scheduled-task run's message starts with a shared prefix.
-    private func prepareMemory(onto prompt: String, query: String, backendKind: BackendKind?,
+    private func prepareMemory(onto prompt: String, query: String, previous: ConversationTurn? = nil,
+                               backendKind: BackendKind?,
                                generation: Int, includeMemory: Bool = true, taskHead: String? = nil,
                                completion: @escaping (String) -> Void) {
         let memoryEnabled = settings.memoryEnabled && !isLocalPrivate && includeMemory
@@ -2559,11 +2561,12 @@ final class ChatSession: ObservableObject {
             var block = ""
             var parts = (stable: "", retrieved: "")
             if memoryEnabled, taskHead != nil {
-                parts = await MemoryStore.contextParts(query: query, path: path, searchIndex: searchIndex)
+                parts = await MemoryStore.contextParts(query: query, path: path, searchIndex: searchIndex,
+                                                       previous: previous)
             } else if memoryEnabled {
                 block = await MemoryStore.contextBlock(
                     query: query, path: path, isPrivate: privacy, isLocal: backendKind == .localModel,
-                    searchIndex: searchIndex
+                    searchIndex: searchIndex, previous: previous
                 )
             }
             guard !Task.isCancelled, self.streamGeneration == generation,
@@ -2828,7 +2831,7 @@ final class ChatSession: ObservableObject {
         streamGeneration += 1
         let generation = streamGeneration
 
-        prepareMemory(onto: composed, query: prompt, backendKind: nil,
+        prepareMemory(onto: composed, query: prompt, previous: previousTurns.last, backendKind: nil,
                       generation: generation) { [weak self] prepared in
             guard let self else { return }
             self.statusText = "Council of \(members.count) deliberating…"
