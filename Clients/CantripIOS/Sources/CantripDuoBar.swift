@@ -85,12 +85,14 @@ struct CantripDuoBarPill: View {
                 .symbolVariant(summary.section == nil ? .none : .fill)
                 .font(inAppRail ? .title3 : nil)
                 .foregroundStyle(summary.section == nil ? Color.primary : Color.accentColor)
-                .frame(width: inAppRail ? 48 : nil, height: inAppRail ? 44 : nil)
+                // In the system's bar the badge sits on the pill's rim, clear of the icon.
+                .frame(width: inAppRail ? 48 : 34, height: inAppRail ? 44 : 34)
                 .background {
                     if inAppRail, summary.section != nil { Capsule().fill(Color.accentColor.opacity(0.2)) }
                 }
                 .overlay(alignment: .topTrailing) {
                     CantripTabsBadge(workingCount: summary.badgeCount, inputCount: summary.tabsNeedingInput)
+                        .offset(x: inAppRail ? 0 : 6, y: inAppRail ? 0 : -6)
                 }
                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                 .contentShape(Rectangle())
