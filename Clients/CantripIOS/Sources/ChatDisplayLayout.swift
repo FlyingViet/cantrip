@@ -177,6 +177,9 @@ struct ChatNavigationActions<Leading: View, Settings: View, Trailing: View>: Vie
     /// Cantrip Home, whose tab bar takes the bottom of the vertical bar: its leading action, settings
     /// and its trailing action, all at the top.
     var sharesVerticalBarWithTabBar = false
+    /// The iPhone Duo's one navigation bar (`CantripDuoVerticalBar`, attached by ChatView) holds
+    /// the actions, so none go to the vertical bar from here.
+    var usesDuoBar = false
     /// The unfolded iPhone Duo's rail: a sidebar toggle at the top (the tab's Model Settings is
     /// the first item in its menu).
     var sidebarToggle: AnyView? = nil
@@ -193,7 +196,8 @@ struct ChatNavigationActions<Leading: View, Settings: View, Trailing: View>: Vie
     func body(content: Content) -> some View {
         content
             .toolbar(usesVerticalBar || showsHorizontalBar ? .visible : .hidden, for: .navigationBar)
-            .toolbar(usesVerticalBar && !sharesVerticalBarWithTabBar && !hidesLeadingInRail ? .visible : .hidden,
+            .toolbar(usesVerticalBar && usesDuoBar ? .automatic
+                        : usesVerticalBar && !sharesVerticalBarWithTabBar && !hidesLeadingInRail ? .visible : .hidden,
                      for: .bottomBar)
             .toolbar { actions }
             .modifier(ChatAdaptiveToolbar())
@@ -202,36 +206,39 @@ struct ChatNavigationActions<Leading: View, Settings: View, Trailing: View>: Vie
     @ToolbarContentBuilder private var actions: some ToolbarContent {
         #if AGENTGATEWAY_DUO_SDK
         if #available(iOS 27.1, *), usesVerticalBar {
-            if let sidebarToggle, displayTraits.isUnfoldedDuo {
-                ToolbarItem(placement: .topBarTrailing) { sidebarToggle }
-                    .axisBehavior(.verticalPreferred)
-            }
-            if sharesVerticalBarWithTabBar {
-                if !hidesLeadingInRail {
-                    ToolbarItem(placement: .topBarTrailing) { leading() }
+            // On the Duo its one navigation bar holds them.
+            if !usesDuoBar {
+                if let sidebarToggle, displayTraits.isUnfoldedDuo {
+                    ToolbarItem(placement: .topBarTrailing) { sidebarToggle }
                         .axisBehavior(.verticalPreferred)
                 }
-                ToolbarItem(placement: .topBarTrailing) { settings() }
-                    .axisBehavior(.verticalPreferred)
-                if let mac {
-                    ToolbarItem(placement: .topBarTrailing) { mac }
+                if sharesVerticalBarWithTabBar {
+                    if !hidesLeadingInRail {
+                        ToolbarItem(placement: .topBarTrailing) { leading() }
+                            .axisBehavior(.verticalPreferred)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) { settings() }
+                        .axisBehavior(.verticalPreferred)
+                    if let mac {
+                        ToolbarItem(placement: .topBarTrailing) { mac }
+                            .axisBehavior(.verticalPreferred)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) { trailing() }
+                        .axisBehavior(.verticalPreferred)
+                } else {
+                    if !hidesLeadingInRail {
+                        ToolbarItem(placement: .bottomBar) { leading() }
+                            .axisBehavior(.verticalPreferred)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) { settings() }
+                        .axisBehavior(.verticalPreferred)
+                    if let mac {
+                        ToolbarItem(placement: .topBarTrailing) { mac }
+                            .axisBehavior(.verticalPreferred)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) { trailing() }
                         .axisBehavior(.verticalPreferred)
                 }
-                ToolbarItem(placement: .topBarTrailing) { trailing() }
-                    .axisBehavior(.verticalPreferred)
-            } else {
-                if !hidesLeadingInRail {
-                    ToolbarItem(placement: .bottomBar) { leading() }
-                        .axisBehavior(.verticalPreferred)
-                }
-                ToolbarItem(placement: .topBarTrailing) { settings() }
-                    .axisBehavior(.verticalPreferred)
-                if let mac {
-                    ToolbarItem(placement: .topBarTrailing) { mac }
-                        .axisBehavior(.verticalPreferred)
-                }
-                ToolbarItem(placement: .topBarTrailing) { trailing() }
-                    .axisBehavior(.verticalPreferred)
             }
         } else {
             horizontalActions

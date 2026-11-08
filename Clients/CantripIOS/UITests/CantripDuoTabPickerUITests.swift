@@ -1,8 +1,8 @@
 import XCTest
 
 /// iPhone Duo folded (the simulator's default pose), in a project tab: there is no "‹ Home". The Tabs
-/// button at the bottom of the vertical bar and a swipe in from the left edge both bring out the tab
-/// picker, which switches tabs or goes back to Home.
+/// button in the navigation bar (expanded from its pill) and a swipe in from the left edge both bring
+/// out the tab picker, which switches tabs or goes back to Home.
 /// Run on an iPhone Duo simulator with `TEST_RUNNER_CANTRIP_UITEST_HOME_URL=http://127.0.0.1:<port>`
 /// (and `TEST_RUNNER_CANTRIP_UITEST_HOME_TOKEN` if the host's token isn't `duo-qa-token`) against a
 /// fixture host with at least two tabs. `TEST_RUNNER_CANTRIP_UITEST_SHOTS=<folder>` saves screenshots.
@@ -33,7 +33,8 @@ final class CantripDuoTabPickerUITests: XCTestCase {
         }
 
         let tabs = app.buttons["home.tabs"].firstMatch
-        XCTAssertTrue(tabs.waitForExistence(timeout: 15), "A tab shows the Tabs button")
+        XCTAssertTrue(app.expandDuoBar(timeout: 15), "A tab's bar starts minimized to a pill")
+        XCTAssertTrue(tabs.waitForExistence(timeout: 5), "Expanded, the bar has the Tabs button")
         XCTAssertFalse(app.buttons["tab.home"].exists, "No ‹ Home on the Duo")
         XCTAssertGreaterThan(tabs.frame.midX, window.frame.width * 0.75, "It sits in the vertical bar")
 
@@ -42,9 +43,11 @@ final class CantripDuoTabPickerUITests: XCTestCase {
         XCTAssertTrue(drawer.waitForExistence(timeout: 5), "Tabs brings out the tab picker")
         sleep(1)
         save("picker-from-tabs")
-        // Tabs is a toggle: tapping it again puts the picker away.
+        // Tabs is a toggle: tapping it again (the bar minimized after the first tap) puts the picker away.
+        app.expandDuoBar()
         tabs.tap()
         XCTAssertTrue(waitForAbsence(drawer), "Tapping Tabs again closes the tab picker")
+        app.expandDuoBar()
         tabs.tap()
         XCTAssertTrue(drawer.waitForExistence(timeout: 5), "And opens it again")
         // Another tab (the fixture opens on its first one).
@@ -54,7 +57,7 @@ final class CantripDuoTabPickerUITests: XCTestCase {
         XCTAssertNotNil(other, "The picker lists other tabs")
         other?.tap()
         XCTAssertTrue(waitForAbsence(drawer), "Picking a tab closes the picker")
-        XCTAssertTrue(app.buttons["home.tabs"].firstMatch.waitForExistence(timeout: 5), "Still in a tab")
+        XCTAssertTrue(app.duoBarPill.waitForExistence(timeout: 5), "Still in a tab")
         save("switched-tab")
 
         // A swipe in from the left edge brings it out too.
@@ -69,8 +72,9 @@ final class CantripDuoTabPickerUITests: XCTestCase {
         XCTAssertTrue(home.waitForExistence(timeout: 5), "Home is in the picker")
         home.tap()
         XCTAssertTrue(waitForAbsence(drawer), "Choosing Home closes the picker")
-        XCTAssertTrue(app.toolbars.buttons["Builds"].firstMatch.waitForExistence(timeout: 10),
-                      "Back on Home: its sections are in the vertical bar")
+        XCTAssertTrue(app.expandDuoBar(), "Home's bar is minimized to a pill")
+        XCTAssertTrue(app.buttons["duo.bar.section.builds"].firstMatch.waitForExistence(timeout: 10),
+                      "Back on Home: its sections are in the bar")
     }
 
     /// The folded Duo's outer display, saved to `CANTRIP_UITEST_SHOTS` when set.
