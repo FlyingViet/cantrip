@@ -527,6 +527,113 @@ code {
   border: 1px solid #3a3a3d;
 }
 
+/* A long job's steps: done, the one it's on and those to come, over their names. */
+.job-pipe {
+  display: grid;
+  gap: 5px;
+  margin: 6px 0 2px;
+}
+
+.job-pipe-bar {
+  display: flex;
+  gap: 3px;
+  height: 5px;
+}
+
+.job-pipe-bar > span {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.job-pipe-bar > .done {
+  background: #6ee7a0;
+}
+
+.job-pipe-bar .fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  min-width: 4px;
+  border-radius: 3px;
+  background: #8ccaff;
+}
+
+.job-pipe-bar .fill.sweep {
+  width: 35%;
+  animation: job-pipe-sweep 1.6s ease-in-out infinite;
+}
+
+.job-pipe.stalled .fill {
+  opacity: 0.55;
+}
+
+@keyframes job-pipe-sweep {
+  from {
+    left: -35%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .job-pipe-bar .fill.sweep {
+    animation: none;
+    width: 100%;
+    opacity: 0.35;
+  }
+}
+
+.job-pipe-names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+}
+
+.job-pipe-names > span {
+  white-space: nowrap;
+}
+
+.job-pipe-names > .done {
+  color: #a1a1a6;
+}
+
+.job-pipe-names > .now {
+  color: #8ccaff;
+  font-weight: 600;
+}
+
+.job-pipe-names > span::before {
+  display: inline-block;
+  margin-right: 4px;
+  vertical-align: 1px;
+}
+
+.job-pipe-names > .done::before {
+  content: "✓";
+  vertical-align: 0;
+}
+
+.job-pipe-names > .now::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.job-pipe-names > .todo::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+}
+
 /* A long job's current step and the last line of its log. */
 .item-meta.mono {
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;

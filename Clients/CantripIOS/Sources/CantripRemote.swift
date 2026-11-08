@@ -943,6 +943,18 @@ struct CantripBuildQueueSnapshot: Decodable, Equatable {
         var cpu: Double? = nil
         var memory: Int64? = nil
         var processes: Int? = nil
+        /// Its steps and the one it's on, when the Mac knows them (its log's `[3/6] Name` lines, or
+        /// the commands its shell runs one after another).
+        var pipeline: Pipeline? = nil
+
+        struct Pipeline: Decodable, Equatable {
+            /// Step names in order; "" for a step it hasn't named yet.
+            let steps: [String]
+            /// The step it's on, from 1; the ones before it are done.
+            let current: Int
+            /// How far the current step is (0...1), when its log prints a percentage.
+            var fraction: Double? = nil
+        }
     }
 
     let enabled: Bool

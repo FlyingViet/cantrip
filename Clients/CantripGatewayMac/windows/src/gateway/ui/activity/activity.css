@@ -210,4 +210,21 @@ button.act-step-row:hover { background: rgba(255, 255, 255, 0.08); }
 }
 .plan-chip.fork { color: var(--child-lane); background: rgba(100, 210, 255, 0.13); }
 /* A long job's current step and the last line of its log. */
+.act-pipe { display: grid; gap: 5px; margin: 4px 0 2px; }
+.act-pipe-bar { display: flex; gap: 3px; height: 5px; }
+.act-pipe-bar > span { flex: 1; position: relative; overflow: hidden; border-radius: 3px; background: rgba(255, 255, 255, 0.12); }
+.act-pipe-bar > .done { background: var(--green); }
+.act-pipe-bar .fill { position: absolute; top: 0; bottom: 0; left: 0; min-width: 4px; border-radius: 3px; background: var(--accent); }
+.act-pipe-bar .fill.sweep { width: 35%; animation: act-pipe-sweep 1.6s ease-in-out infinite; }
+.act-pipe.stalled .fill { opacity: 0.55; }
+@keyframes act-pipe-sweep { from { left: -35%; } to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .act-pipe-bar .fill.sweep { animation: none; width: 100%; opacity: 0.35; } }
+.act-pipe-names { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 11px; color: var(--tertiary); }
+.act-pipe-names > span { white-space: nowrap; }
+.act-pipe-names > .done { color: var(--secondary); }
+.act-pipe-names > .now { color: var(--accent); font-weight: 600; }
+.act-pipe-names > span::before { display: inline-block; margin-right: 4px; vertical-align: 1px; }
+.act-pipe-names > .done::before { content: "✓"; vertical-align: 0; }
+.act-pipe-names > .now::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.act-pipe-names > .todo::before { content: ""; width: 5px; height: 5px; border-radius: 50%; border: 1px solid currentColor; }
 .act-job-log { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }

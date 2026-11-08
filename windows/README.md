@@ -23,7 +23,7 @@ capture, updates, and platform limitations.
 - Weather cards: an Open-Meteo forecast under replies about the weather, drawn from Cantrip's generic card blocks
 - A read-only **Cantrip Home** window, paired with your Mac through a `cantrip pair` link:
   Home's conversation, Background runs with their cards and full log (plus each tab's running
-  background tasks and the Mac's long jobs, builds and other long work), and Tasks with their latest runs,
+  background tasks and the Mac's long jobs, builds and other long work, with their steps), and Tasks with their latest runs,
   workspaces and record cards
 - Hash-approved plugins with sandboxed dashboards, bounded data sources, MCP
   injection, and live reload

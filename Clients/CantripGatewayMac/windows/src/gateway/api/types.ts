@@ -1740,6 +1740,17 @@ export interface BuildQueueBuild {
   cpu?: number;
   memory?: number;
   processes?: Int;
+  /** Its steps and the one it's on, when the Mac knows them (its log's `[3/6] Name` lines, or the
+   * commands its shell runs one after another). */
+  pipeline?: BuildQueuePipeline;
+}
+
+/** A job's steps: names in order ("" for one it hasn't named yet), the one it's on (from 1; those
+ * before it are done) and how far that one is (0...1) when its log prints a percentage. */
+export interface BuildQueuePipeline {
+  steps: string[];
+  current: Int;
+  fraction?: number;
 }
 
 export interface BuildQueueSnapshot {

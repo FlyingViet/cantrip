@@ -22,6 +22,8 @@ import {
   buildOrigin,
   buildQueueNote,
   buildExtra,
+  pipelineLabel,
+  pipelineSteps,
   cardsOf,
   listedBuilds,
   listedTabTasks,
@@ -347,6 +349,12 @@ describe("Home helpers", () => {
     expect(buildExtra(builds.running[0])).toBeNull();
     expect(buildDetail({ ...job, source: "tab", tabTitle: "Docs", state: "paused", project: undefined }, 2, time))
       .toBe("Paused · Docs · started 1000000");
+    // Its steps: done, the one it's on and those to come (unnamed ones by number)
+    const pipeline = { steps: ["pack", "check", "rewrite", "shader split", "shaders", ""], current: 5, fraction: 0.99 };
+    expect(pipelineSteps(pipeline).map((step) => `${step.kind}:${step.text}`))
+      .toEqual(["done:pack", "done:check", "done:rewrite", "done:shader split", "now:shaders 99%", "todo:Step 6"]);
+    expect(pipelineLabel(pipeline)).toBe("Step 5 of 6: shaders, 99%. Done: pack, check, rewrite, shader split. Next: Step 6.");
+    expect(pipelineLabel({ steps: ["prepare.py", "publish.py"], current: 1 })).toBe("Step 1 of 2: prepare.py. Next: publish.py.");
   });
 
   it("lists tabs' running background tasks", () => {

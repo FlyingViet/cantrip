@@ -484,6 +484,8 @@ enum BuildQueue {
             var cpu: Double? = nil
             var memory: Int64? = nil
             var processes: Int? = nil
+            /// Its steps and the one it's on (MachineJobs.Pipeline), when known.
+            var pipeline: MachineJobs.Pipeline? = nil
 
             /// Copies what MachineJobs saw about this build's process group.
             mutating func describe(_ job: MachineJobs.Job, includingState: Bool = true) {
@@ -496,6 +498,7 @@ enum BuildQueue {
                 cpu = job.cpu
                 memory = job.memory
                 processes = job.processes
+                pipeline = job.pipeline
             }
         }
 
@@ -611,6 +614,7 @@ enum BuildQueue {
                 let state = job.state == .running ? "" : " (\(job.state == .waitingOnDisk ? "waiting on disk" : job.state.rawValue))"
                 lines.append("  \(job.title)\(job.project.map { " · \($0)" } ?? "")\(state) — "
                              + "\(SubagentInfo.elapsedLabel(max(0, now - job.since))), process group \(job.group)")
+                if let pipeline = job.pipeline { lines.append("    \(pipeline.label)") }
                 if let line = job.logLine { lines.append("    \(job.logFile ?? "log"): \(line)") }
             }
         }

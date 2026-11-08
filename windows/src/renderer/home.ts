@@ -10,6 +10,8 @@ import {
   buildDetail,
   buildQueueNote,
   buildExtra,
+  pipelineLabel,
+  pipelineSteps,
   cardsOf,
   hasRecordCards,
   listedBuilds,
@@ -246,10 +248,39 @@ function runItem(run: HomeBackgroundRun): HTMLElement {
   return item;
 }
 
+/** Where a job is in its steps: a segment per step (done, the one it's on filled to its percentage
+ * or sweeping, those to come) over their names. Paused or waiting on disk dims the current step. */
+function pipelineNode(build: HomeBuild): HTMLElement | null {
+  const pipeline = build.pipeline;
+  if (!pipeline || !Array.isArray(pipeline.steps) || !pipeline.steps.length) return null;
+  const known = typeof pipeline.fraction === "number";
+  const stalled = build.state === "paused" || build.state === "waitingOnDisk" || build.state === "idle";
+  const wrap = el("div", `job-pipe${stalled ? " stalled" : ""}`);
+  wrap.setAttribute("role", "img");
+  wrap.setAttribute("aria-label", pipelineLabel(pipeline));
+  const bar = el("div", "job-pipe-bar");
+  const names = el("div", "job-pipe-names");
+  for (const step of pipelineSteps(pipeline)) {
+    const segment = el("span", step.kind);
+    segment.title = `${step.step}. ${step.name}`;
+    if (step.kind === "now" && (known || build.state !== "paused")) {
+      const fill = el("span", known ? "fill" : "fill sweep");
+      if (known) fill.style.width = `${Math.min(Math.max(pipeline.fraction ?? 0, 0), 1) * 100}%`;
+      segment.append(fill);
+    }
+    bar.append(segment);
+    names.append(el("span", step.kind, step.text));
+  }
+  wrap.append(bar, names);
+  return wrap;
+}
+
 function buildItem(build: HomeBuild, place: number): HTMLElement {
   const item = el("li", "home-item");
   item.append(el("span", "item-title", build.title));
   item.append(el("span", "item-meta", buildDetail(build, place, (date) => timeFormat.format(date))));
+  const pipe = pipelineNode(build);
+  if (pipe) item.append(pipe);
   const extra = buildExtra(build);
   if (extra) item.append(el("span", "item-meta mono", extra));
   return item;

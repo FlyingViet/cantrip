@@ -545,8 +545,20 @@ slots instead:
   else "Started outside Cantrip"), the project folder, **Waiting on disk**,
   **Idle** or **Paused** when it isn't simply running, what it's doing now and the
   last line of the log it writes. A build holding or waiting for a slot gets the
-  same details from its own process group. Cantrip only reads `ps`, `lsof` and
-  that one environment variable.
+  same details from its own process group. Cantrip only reads `ps`, `lsof`, the
+  logs jobs write and that one environment variable.
+- **Steps:** a job with steps shows them as a row of segments, green for the
+  steps done, the one it's on filled to its percentage (or sweeping), grey for
+  those to come, with their names under it ("✓ pack ✓ check ● shaders 99% ○ Step
+  6"). Steps come from lines its log prints, `[3/6] Name` (after a timestamp or
+  tag such as `[12:01:32]` is fine) or `Step 3 of 6: Name`, the newest run when a
+  `[1/n]` follows later steps; anything after the name such as `· compiling:
+  42%` gives the step's progress. More than 20 steps is a compile counter
+  (SwiftPM, Ninja), not steps. A job without them that's a shell running commands
+  one after another (`prepare.py && publish.py`, or `a; if …; then b; fi`) shows
+  those commands as its steps, leaving out tidying such as `cd`, `echo`, `mv` and
+  tests. To give a long script of your own a pipeline, print a `[n/m] Name` line
+  as it starts each step.
 - **CI:** a self-hosted runner on the Mac uses the queue when its `.path` file
   starts with `~/.cache/Cantrip/build-queue/bin` (restart the runner after
   editing it). Its jobs count as CI jobs.
@@ -558,7 +570,9 @@ Remote clients get the same list as `builds` in `GET /api/v1/home/background`
 `kind` "job", `source` "other" when no tab started them, and paused ones are
 listed with the waiting; any entry may add `state` (`running`, `waitingOnDisk`,
 `idle`, `paused`), `project`, `step`, `logFile`, `logLine`, `logUpdatedAt`,
-`cpu` (percent of the Mac), `memory` (bytes) and `processes`), and Home's session
+`cpu` (percent of the Mac), `memory` (bytes), `processes` and `pipeline`
+(`steps`, names in order with "" for one not named yet; `current`, from 1; and
+`fraction`, 0–1, when the step prints a percentage)), and Home's session
 summary carries `buildsRunning` and `buildsWaiting`, which count other long jobs
 too; both are left out while the queue is off and nothing runs. Slots are file
 locks in `~/.cache/Cantrip/build-queue`, so a build that crashes or is killed

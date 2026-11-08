@@ -221,7 +221,8 @@ extension SessionTabTests {
         func job(_ group: Int32, _ pids: [Int32], _ title: String, _ state: MachineJobs.State, tab: String? = nil) -> MachineJobs.Job {
             .init(key: "\(group)-1", group: group, processIDs: pids, title: title, project: "atlas", step: "compile_shaders.py",
                   state: state, since: 100, cpu: 1.5, memory: 4096, processes: pids.count, tabID: tab,
-                  logFile: "b.log", logLine: "[5/6] 99%", logUpdatedAt: 120)
+                  logFile: "b.log", logLine: "[5/6] 99%", logUpdatedAt: 120,
+                  pipeline: .init(steps: ["pack", "", "", "", "shaders", ""], current: 5, fraction: 0.99))
         }
         let jobs = [job(70, [70, getpid()], "make app", .running),
                     job(80, [80, 81], "build-atlas.py", .waitingOnDisk, tab: tabID.uuidString),
@@ -243,9 +244,13 @@ extension SessionTabTests {
                                        jobs: [jobs[1]])?.running == 1, "a job alone shows even with the queue off")
         let jobStatus = BuildQueue.statusText(store: listed, policy: .init(slots: 2), enabled: true, resources: calm, jobs: jobs)
         precondition(jobStatus.contains("Other long jobs:\n  build-atlas.py · atlas (waiting on disk)")
-                     && jobStatus.contains("    b.log: [5/6] 99%") && !jobStatus.contains("make app"), jobStatus)
+                     && jobStatus.contains("    Step 5 of 6 · shaders · 99%\n    b.log: [5/6] 99%") && !jobStatus.contains("make app"), jobStatus)
         let jobJSON = try requireHome(JSONSerialization.jsonObject(with: JSONEncoder().encode(atlas)) as? [String: Any])
         precondition(jobJSON["kind"] as? String == "job" && jobJSON["logFile"] as? String == "b.log" && jobJSON["job"] == nil, "\(jobJSON)")
+        let pipelineJSON = try requireHome(jobJSON["pipeline"] as? [String: Any])
+        precondition(pipelineJSON["steps"] as? [String] == ["pack", "", "", "", "shaders", ""] && pipelineJSON["current"] as? Int == 5
+                     && pipelineJSON["fraction"] as? Double == 0.99, "the pipeline in the JSON: \(pipelineJSON)")
+        precondition(borrowed.pipeline?.current == 5, "a build borrows its group's pipeline too")
         precondition(MachineJobs.tabIDVariable == TabInsight.tabIDVariable)
         listed.removeTicket(pid: getpid())
 
