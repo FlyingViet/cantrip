@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type {
   CopilotQuotaBucket, CopilotUsageSnapshot, DesktopFrame, GitHubBuildJob, GitHubBuildRepository, GitHubBuildSnapshot,
-  MaintenanceAction, MaintenanceSnapshot, MemoryCatalog, MemoryPage, ModelSettingsSnapshot, UsageFallbackSnapshot,
+  MaintenanceAction, MaintenanceSnapshot, MemoryCatalog, MemoryPage, ModelSettingsSnapshot, PrivateLocalSettingsSnapshot,
+  PrivateLocalUpdateRequest, UsageFallbackSnapshot,
 } from "../src/gateway/api/types";
 import {
   EMPTY_READER, INVALID_RESPONSE, alignMemoryPage, codeFenceAfter, renderableMemory, NotSentError, QueueReadiness, amountRatio, assignmentText, bucketSummary, bucketTitle,
@@ -11,7 +12,8 @@ import {
   isUsageStale, jobStatusTitle, maintenancePollDelay, memoryCatalogPath, memoryCharacterCount, memoryDocumentPath,
   memoryEntriesByCategory, memoryName, memoryTitle, mergeCatalog, modelInfo, modelSettingsChange, modelValidationError,
   normalizeTabName, normalizedPoint, openCombined, overageAllowedText, overageText, parseContextTokens, percentageSummary,
-  permissionStateLabel, pickerChoices, primaryBucket, privateModelChoices, queueReadiness, queueReason, readerApply,
+  permissionStateLabel, pickerChoices, primaryBucket, PRIVATE_LOCAL_APIS, privateModelChoices, privateModelsQuery,
+  privateServerFooter, privateURLField, queueReadiness, queueReason, readerApply,
   readerRequest, relativeDuration, repositoryIsStale, sealCombined, selectModel, snapshotIsComplete, tabNameError,
   tokenLabel, usageFallbackAdd, usageFallbackAddable, usageFallbackChain, usageFallbackEfforts, usageFallbackEntries, usageFallbackEntry,
   usageFallbackFreeModel, usageFallbackLabel, usageFallbackLimitNote, usageFallbackLimits, usageFallbackModelChange, usageFallbackModelOptions,
@@ -117,6 +119,32 @@ describe("model settings", () => {
     expect(parseContextTokens("8k")).toBeNull();
     expect(parseContextTokens("")).toBeNull();
     expect(parseContextTokens("1.5")).toBeNull();
+  });
+
+  it("offers the Private Local server API and keeps older Macs on theirs", () => {
+    expect(PRIVATE_LOCAL_APIS.map((choice) => choice.value)).toEqual(["ollama", "openai"]);
+    expect(PRIVATE_LOCAL_APIS[1].label).toBe("OpenAI-compatible (oMLX, LM Studio, mlx-serve)");
+    expect(privateURLField("openai").placeholder).toBe("https://your-llm-server/v1");
+    expect(privateURLField("openai").label).toContain("/v1");
+    expect(privateURLField("ollama")).toEqual(privateURLField(undefined));
+    expect(privateURLField("ollama").label).toBe("Self-hosted Ollama URL");
+    expect(privateServerFooter("openai")).toContain("set on the server");
+    expect(privateServerFooter("ollama")).not.toContain("set on the server");
+    expect(privateModelsQuery({ baseURL: "https://llm.example.ts.net/v1", api: "openai" }))
+      .toBe("baseURL=https%3A%2F%2Fllm.example.ts.net%2Fv1&api=openai");
+    expect(privateModelsQuery({ baseURL: "https://llm.example.ts.net/ollama" }))
+      .toBe("baseURL=https%3A%2F%2Fllm.example.ts.net%2Follama");
+
+    // The sheet saves `{ ...snapshot.configuration }` edits: `api` round-trips only when the Mac sent it.
+    const legacy: PrivateLocalSettingsSnapshot = JSON.parse(
+      `{"revision":"v1","configuration":{"baseURL":"http://127.0.0.1:11434","model":"local","contextWindow":8192,"systemPrompt":""}}`);
+    const legacyChange: PrivateLocalUpdateRequest = { revision: legacy.revision, configuration: { ...legacy.configuration } };
+    expect(Object.keys(JSON.parse(JSON.stringify(legacyChange)).configuration).sort())
+      .toEqual(["baseURL", "contextWindow", "model", "systemPrompt"]);
+    const current: PrivateLocalSettingsSnapshot = JSON.parse(
+      `{"revision":"v2","configuration":{"baseURL":"https://llm.example.ts.net/v1","model":"Local-8B","contextWindow":8192,"systemPrompt":"","api":"openai"}}`);
+    const change: PrivateLocalUpdateRequest = { revision: current.revision, configuration: { ...current.configuration, api: "ollama" } };
+    expect(JSON.parse(JSON.stringify(change)).configuration.api).toBe("ollama");
   });
 });
 

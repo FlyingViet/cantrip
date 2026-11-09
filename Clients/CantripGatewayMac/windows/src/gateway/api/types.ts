@@ -1340,14 +1340,19 @@ export interface ModelSettingsOverrideRequest extends ModelSelection {
 
 export type ModelSettingsUpdateRequest = ModelSettingsUseDefaultsRequest | ModelSettingsOverrideRequest;
 
+/** `PrivateLocalAPI`: the wire API the self-hosted server speaks. */
+export type PrivateLocalAPI = "ollama" | "openai";
+
 /** `PrivateLocalConfiguration`. */
 export interface PrivateLocalConfiguration {
-  /** OpenAI-compatible server, e.g. "http://127.0.0.1:11434". */
+  /** Ollama's base, e.g. "http://127.0.0.1:11434", or an OpenAI-compatible base ending in /v1. */
   baseURL: string;
   model: string;
-  /** Integer tokens. */
+  /** Integer tokens (sent to Ollama only; OpenAI-compatible servers set their own). */
   contextWindow: Int;
   systemPrompt: string;
+  /** Absent from Macs that predate the choice (they speak Ollama); omit it when saving to them. */
+  api?: PrivateLocalAPI;
 }
 
 /** GET/POST /api/v1/sessions/<privateLocalID>/private-settings. */
@@ -1357,13 +1362,13 @@ export interface PrivateLocalSettingsSnapshot {
   unavailableReason?: string;
 }
 
-/** POST private-settings: exactly {revision, configuration} with all four configuration keys. */
+/** POST private-settings: exactly {revision, configuration} with all four configuration keys, plus `api` when the Mac sent one. */
 export interface PrivateLocalUpdateRequest {
   revision: string;
   configuration: PrivateLocalConfiguration;
 }
 
-/** GET /api/v1/sessions/<privateLocalID>/private-models?baseURL=… */
+/** GET /api/v1/sessions/<privateLocalID>/private-models?baseURL=…[&api=…] */
 export interface PrivateLocalModelsResponse {
   models: string[];
 }

@@ -97,8 +97,8 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   tabs, child tabs, self-hosted CI runners and Home wait for a few build slots, listed in
   Background on every client with the Mac's other long jobs. [Shared simulators](docs/updating-and-troubleshooting.md#shared-simulators),
   [Heavy builds take turns](docs/updating-and-troubleshooting.md#heavy-builds-take-turns)
-- **Private Local:** a saved tab that only talks to your self-hosted Ollama
-  server, with no tools or cloud fallback.
+- **Private Local:** a saved tab that only talks to your self-hosted Ollama or
+  OpenAI-compatible (oMLX, LM Studio, mlx-serve) server, with no tools or cloud fallback.
   [Setup](docs/remote-control.md#persistent-private-local-tab)
 - **Memory and council:** editable Markdown memory, with an optional local
   search index for picking the notes each message gets, and multi-model answers.

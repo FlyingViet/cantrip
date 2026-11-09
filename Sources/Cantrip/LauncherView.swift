@@ -1769,7 +1769,10 @@ struct LauncherView: View {
 
     /// Backend + model, shown subtly since the placeholder no longer does.
     private var backendBadge: String {
-        if session.isLocalPrivate { return "Private Local - Ollama" }
+        if session.isLocalPrivate {
+            return (try? session.privateLocalConfiguration())?.api == .openAI
+                ? "Private Local - OpenAI-compatible" : "Private Local - Ollama"
+        }
         switch settings.backend {
         case .claudeCode:
             let model = settings.claudeModel.trimmingCharacters(in: .whitespaces)

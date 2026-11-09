@@ -53,16 +53,18 @@ restarts. It cannot
 be closed, cleared, unlocked or converted into a cloud-backed tab. It is separate
 from the older **Private mode**, which disables saving and hides a tab from Remote.
 
-1. Run a trusted Ollama installation on your chosen server and install a model
+1. Run a trusted Ollama installation, or an OpenAI-compatible server such as
+   oMLX, LM Studio or mlx-serve, on your chosen server and install a model
    there. The server must be reachable from the Cantrip Mac.
 2. Right-click **Private Local** on the Mac, or open the tab's three-dot menu in
    Mac/browser Remote, and choose **Private Local Settings**. Cantrip Agent has the
    same action in its chat menu and tab actions.
-3. Set the server's base URL, choose **Load server models**, and select an
+3. Choose the **Server API** (**Ollama**, the default, or **OpenAI-compatible**),
+   set the server's base URL, choose **Load server models**, and select an
    installed model. Set context tokens and the
    optional system prompt, then save while idle.
 
-The phone never calls Ollama directly: its paired connection controls the Mac.
+The phone never calls the model server directly: its paired connection controls the Mac.
 Use HTTPS for another machine, for example `https://llm.your-tailnet.ts.net` or
 `https://your-server.example/ollama`. LAN hostnames/IPs and reverse-proxy base
 paths are supported with HTTPS and a trusted certificate. A Tailscale Serve
@@ -72,10 +74,20 @@ that address still means the Cantrip Mac, not the phone. URL credentials,
 query parameters, fragments and automatic redirects are rejected. Normal TLS
 certificate validation remains enabled.
 
+For an **OpenAI-compatible** server the base URL includes its API version path,
+for example `https://llm.your-tailnet.ts.net/v1` or `http://127.0.0.1:8000/v1`;
+Cantrip appends `/models` and `/chat/completions` and streams the reply
+(server-sent events, including `reasoning_content` thinking). No API key is
+sent. Those servers set their own context size, so the saved context tokens
+apply to Ollama only.
+
 Ollama's installed model list and local architecture metadata are checked on
 the **configured server** before each prompt. Cloud-tagged models and Ollama
-cloud aliases are rejected. Missing models or a stopped server fail
-visibly without using Copilot, Claude, Codex, or any cloud fallback.
+cloud aliases are rejected. An OpenAI-compatible server has no architecture
+metadata, so Cantrip requires the model in its `/models` list and relies on the
+address rules above and on the server being yours. Missing models or a stopped
+server fail visibly without using Copilot, Claude, Codex, or any cloud fallback.
+Tool calls in a reply stop the run without executing anything.
 Settings use revision checks so another device cannot overwrite a stale form.
 Loading models never submits a conversation or downloads a model.
 
@@ -95,13 +107,16 @@ devices can access the saved conversation. Prompts and selected history are sent
 to your configured server for inference; that server's own logging/storage policy
 also applies. Only configure a server you control and trust, not a gateway that
 forwards inference to a managed cloud provider. A URL alone cannot prove server
-ownership. This tab currently uses the native Ollama API; the global Local Model
-backend's arbitrary OpenAI-compatible endpoints are not reused.
+ownership. This tab has its own transport (native Ollama or OpenAI-compatible
+chat completions); the global Local Model backend's settings, API key and tools
+are not reused.
 
 Both native apps need updated builds and the host must reopen to activate it.
 The paired API advertises `isLocalPrivate`/`supportsPrivateLocalSettings`, with
 `GET/POST /api/v1/sessions/{id}/private-settings` and read-only
-`GET /api/v1/sessions/{id}/private-models?baseURL=...`.
+`GET /api/v1/sessions/{id}/private-models?baseURL=...&api=...`. The configuration's
+`api` is `"ollama"` or `"openai"`; a save that omits it (clients from before the
+choice) keeps the saved API, and so does a model list without `api`.
 
 ## Per-tab model, effort and context window
 
