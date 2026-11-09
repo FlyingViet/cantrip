@@ -196,6 +196,11 @@ never logged; in observe mode it goes only to your classifier.
    off, narrow its `scope`, move it to local, or set `askClassifier`. **Detector
    hits** show which part of the message matched (`@request`, `@earlier`,
    `@memory`, `@context`); hits in `@context` are Home's own data.
+   To see how a request would be routed without sending it, run
+   `cantrip privacy test "<text>"` (add `--task <id>` for a scheduled task, which
+   without text uses its saved prompt, or `--earlier "<text>"` for an earlier
+   turn). It prints the route, the rule or hint, the hits and the classifier's
+   probabilities (also when a rule decided), and logs nothing.
 4. Check the classifier line: a 95th percentile near 2.5 s or many unanswered
    calls means requests would wait or ask. Answers just under the cloud
    threshold are listed; raise or lower `cloudMinProbability` to match.

@@ -92,6 +92,10 @@ enum CantripCLI {
                                   What the Privacy Gate decided for Home chat and Home tasks (default: 7 days):
                                   routes, what enforce mode would change, rules, detector hits and classifier speed
       cantrip privacy test        Ask the Privacy Gate's classifier one synthetic question
+      cantrip privacy test "<text>" [--task <id>] [--source chat|task] [--earlier "<text>"] [--json]
+                                  Run the rules and the classifier on text you write (as Home chat, or a task;
+                                  --task without text uses that task's saved prompt): route, rule, hits and
+                                  probabilities. Logs nothing
       cantrip api [--json]        The OpenAI-compatible API: where it listens, its backends and calls per consumer
       cantrip api key new         Make a key for requests that come through a proxy (printed once)
       cantrip api key clear       Remove it: proxied requests are refused again
@@ -692,6 +696,8 @@ enum CantripCLI {
             }
             print(PrivacyGate.shared.report(days: days))
             return 0
+        case "test" where arguments.count > 1:
+            return try privacyTrial(Array(arguments.dropFirst()))
         case "test":
             let semaphore = DispatchSemaphore(value: 0)
             var result = PrivacyClassifierTest(ok: false)
@@ -708,8 +714,135 @@ enum CantripCLI {
             }
             throw Failure(message: result.error ?? "The classifier didn't answer.")
         default:
-            throw Failure(message: "Usage: cantrip privacy report [--days N] | cantrip privacy test", code: 64)
+            throw Failure(message: "Usage: cantrip privacy report [--days N] | cantrip privacy test [\"<text>\"] "
+                          + "[--task <id>] [--source chat|task] [--earlier \"<text>\"] [--json]", code: 64)
         }
+    }
+
+    /// `cantrip privacy test "<text>"`: the rules and the classifier on a request you write, as Home
+    /// chat (or `--task <id>`: that scheduled task, with its own route; without text, its saved
+    /// prompt). Nothing is logged and no state changes.
+    static func privacyTrial(_ arguments: [String]) throws -> Int32 {
+        let usage = Failure(message: "Usage: cantrip privacy test \"<text>\" [--task <id>] [--source chat|task] "
+                            + "[--earlier \"<text>\"] [--json]", code: 64)
+        var words: [String] = []
+        var taskID: UUID?
+        var kind = PrivacyGateRequest.Kind.homeChat
+        var earlier = ""
+        var json = false
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            func value() throws -> String {
+                guard index + 1 < arguments.count else { throw usage }
+                index += 1
+                return arguments[index]
+            }
+            switch argument {
+            case "--task":
+                guard let id = UUID(uuidString: try value()) else { throw Failure(message: "--task needs a task UUID.", code: 64) }
+                taskID = id
+                kind = .homeTask
+            case "--source":
+                switch try value() {
+                case "chat": kind = .homeChat
+                case "task": kind = .homeTask
+                default: throw usage
+                }
+            case "--earlier": earlier = try value()
+            case "--json": json = true
+            default:
+                guard !argument.hasPrefix("--") else { throw usage }
+                words.append(argument)
+            }
+            index += 1
+        }
+        if taskID != nil, kind == .homeChat { throw Failure(message: "--task tests a scheduled task; drop --source chat.", code: 64) }
+        var text = words.joined(separator: " ")
+        var title: String?
+        if let taskID {
+            let data = (try? Data(contentsOf: CantripHomeStore.tasksFile)) ?? Data()
+            let tasks = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] ?? []
+            guard let task = tasks.first(where: { ($0["id"] as? String).flatMap(UUID.init(uuidString:)) == taskID }) else {
+                throw Failure(message: "No Home task \(taskID.uuidString).")
+            }
+            title = task["title"] as? String ?? "Untitled task"
+            if text.isEmpty {
+                // As a scheduled run sends it.
+                text = ChatSession.cantripHomeScheduledTaskPrefix + (title ?? "") + "\n\n" + (task["prompt"] as? String ?? "")
+            }
+        } else if kind == .homeTask {
+            title = "Test task"
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw usage }
+        let request = PrivacyGateRequest(
+            kind: kind, taskID: taskID, taskTitle: title, conversationKey: "privacy-test:\(UUID().uuidString)",
+            request: text, earlier: earlier, message: text, workdir: "", backend: "test")
+        let gate = PrivacyGate.shared
+        let settings = gate.settings
+        let started = Date()
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: (decision: PrivacyDecision, classifier: PrivacyDecision?)?
+        Task.detached {
+            result = await gate.trial(request, settings: settings)
+            semaphore.signal()
+        }
+        semaphore.wait()
+        guard let result else { throw Failure(message: "The Privacy Gate didn't decide.") }
+        let (decision, opinion) = result
+        let totalMs = Int(Date().timeIntervalSince(started) * 1000)
+        let enforcement = PrivacyEnforcement.of(decision, kind: kind, settings: settings)
+        func odds(_ probabilities: [PrivacyRoute: Double]?) -> [String: Double]? {
+            probabilities.map { Dictionary(uniqueKeysWithValues: $0.map { ($0.key.rawValue, ($0.value * 1000).rounded() / 1000) }) }
+        }
+        func describe(_ probabilities: [PrivacyRoute: Double]) -> String {
+            [PrivacyRoute.local, .cloud, .redactApprove].map { "\($0 == .redactApprove ? "redact" : $0.rawValue) "
+                + "\(Int(((probabilities[$0] ?? 0) * 100).rounded()))%" }.joined(separator: ", ")
+        }
+        let hits = decision.hits.filter { $0.value > 0 }.sorted { $0.key < $1.key }
+        if json {
+            var object: [String: Any] = [
+                "kind": kind.rawValue, "route": decision.route?.rawValue ?? "offline", "enforce": enforcement.rawValue,
+                "source": decision.source.rawValue, "reason": decision.reason, "rulesMs": decision.rulesMs, "totalMs": totalMs,
+                "hits": Dictionary(uniqueKeysWithValues: hits.map { ($0.key, $0.value) }), "logged": false,
+            ]
+            object["rule"] = decision.rule
+            object["hint"] = decision.hint
+            object["probabilities"] = odds(decision.probabilities)
+            object["classifierMs"] = decision.classifierMs
+            object["classifierError"] = decision.classifierError
+            if let opinion {
+                var alone: [String: Any] = ["route": opinion.route?.rawValue ?? "offline"]
+                alone["probabilities"] = odds(opinion.probabilities)
+                alone["classifierMs"] = opinion.classifierMs
+                alone["error"] = opinion.classifierError
+                object["classifierAlone"] = alone
+            }
+            printJSON(object)
+            return 0
+        }
+        let meanings: [PrivacyEnforcement: String] = [
+            .local: "run it locally", .cloud: "send it to the cloud with every tool (its own route)",
+            .cloudRestricted: "send it to the cloud without private tools", .ask: "ask first",
+            .hold: "wait for the classifier", .cancel: "not send it"]
+        print("\(kind == .homeChat ? "Home chat message" : "Home task “\(title ?? "")”") (\(text.count) characters)")
+        print("Route: \(decision.route?.label ?? "none (the classifier didn't answer)"). Enforce mode would "
+              + "\(meanings[enforcement] ?? enforcement.rawValue).")
+        print("Why: \(decision.reason)")
+        if let probabilities = decision.probabilities {
+            print("Classifier: \(describe(probabilities))\(decision.classifierMs.map { " in \($0) ms" } ?? "").")
+        }
+        if let opinion {
+            if let probabilities = opinion.probabilities {
+                print("Classifier alone would say \(opinion.route?.label.lowercased() ?? "?"): \(describe(probabilities))"
+                      + "\(opinion.classifierMs.map { " in \($0) ms" } ?? "").")
+            } else {
+                print("Classifier alone: \(opinion.classifierError ?? opinion.reason)")
+            }
+        }
+        print("Hits: \(hits.isEmpty ? "none" : hits.map { "\($0.key) \($0.value)" }.joined(separator: ", "))")
+        print("Rules \(decision.rulesMs) ms, \(totalMs) ms in all. Nothing was logged.")
+        return 0
     }
 
     static func weather(_ arguments: [String]) throws {
