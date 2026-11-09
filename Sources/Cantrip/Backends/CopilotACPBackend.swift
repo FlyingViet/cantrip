@@ -467,7 +467,8 @@ final class CopilotACPBackend: Backend, CantripHomeGuardedBackend {
         if guardrail != nil || AgentPolicyGate.enforcesEverywhere, !readOnly, !suppressUpdates, promptInFlight, let id,
            let action = Self.homeAction(params["toolCall"] as? [String: Any] ?? [:]) {
             let outcome = AgentPolicyGate.decide(action, guardrail: guardrail, approval: .ask,
-                                                 label: guardrailLabel, workdir: settings.claudeWorkdir)
+                                                 label: guardrailLabel, workdir: settings.claudeWorkdir,
+                                                 privacy: PrivacyRunRestrictions.restriction(for: self))
             func answer(_ approved: Bool) {
                 let kinds = approved ? ["allow_once", "allow_always"] : ["reject_once", "reject_always"]
                 let choice = kinds.lazy.compactMap { kind in

@@ -924,6 +924,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/browser/frame"
                 || request.path == "/api/v1/usage-fallback"
                 || request.path == "/api/v1/policy"
+                || request.path == "/api/v1/policy/privacy-test"
                 || request.path == "/api/v1/model-tiers"
                 || request.path == "/api/v1/mcp"
                 || request.path == "/api/v1/backends"
@@ -1163,6 +1164,14 @@ final class RemoteControlServer {
                 enabled: AppSettings.shared.openAIEndpointEnabled,
                 listening: AppSettings.shared.openAIEndpointListeningPort)
             sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
+            return
+        }
+        if request.path == "/api/v1/policy/privacy-test" {
+            guard request.method == "POST" else { sendError(405, "method not allowed", on: connection); return }
+            Task { @MainActor in
+                let result = await PrivacyGate.shared.testClassifier()
+                self.sendEncoded(on: connection) { try JSONEncoder().encode(result) }
+            }
             return
         }
         if request.path == "/api/v1/policy" {

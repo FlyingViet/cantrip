@@ -1419,7 +1419,8 @@ final class AntigravityBackend: Backend, CantripHomeGuardedBackend {
         let action = CantripHomeActionRequest(antigravityTool: toolName, input: args)
         let approval = CantripHomeApproval.chosen(for: .antigravity, settings: settings)
         let outcome = AgentPolicyGate.decide(action, guardrail: guardrail, approval: approval,
-                                             label: guardrailLabel, workdir: workdir)
+                                             label: guardrailLabel, workdir: workdir,
+                                             privacy: PrivacyRunRestrictions.restriction(for: self))
         switch outcome {
         case .deny(let reason, let by):
             Log.write("antigravity: \(by) blocked \(toolName): \(reason)")

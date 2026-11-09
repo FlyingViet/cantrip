@@ -664,7 +664,8 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
         case .ask, .policy, .guardrail:
             let approval = CantripHomeApproval.chosen(for: .codex, settings: settings)
             let outcome = AgentPolicyGate.decide(action, guardrail: guardrail, approval: approval,
-                                                 label: guardrailLabel, workdir: lock.withLock { workdir })
+                                                 label: guardrailLabel, workdir: lock.withLock { workdir },
+                                                 privacy: PrivacyRunRestrictions.restriction(for: self))
             switch outcome {
             case .deny(let reason, let by):
                 Log.write("codex: \(by) blocked \(action.kind.rawValue): \(reason)")

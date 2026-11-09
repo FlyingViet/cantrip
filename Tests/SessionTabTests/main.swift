@@ -103,6 +103,10 @@ struct SessionTabTests {
             try await testRemoteMaintenanceRelease()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "privacy" {
+            try await testPrivacyGate()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "home-handoffs" {
             try await testCantripHomeNewTabs()
             try await testCantripHomeListsEveryOpenTab()
@@ -296,6 +300,7 @@ struct SessionTabTests {
         try await testCantripHomeDoneWhen()
         try await testCantripHomeNewTabs()
         try await testCantripHomeListsEveryOpenTab()
+        try await testPrivacyGate()
         try testBuildQueue()
         try await testThreadTags()
         try testCantripHomeRunSummaries()

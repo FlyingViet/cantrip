@@ -21,7 +21,7 @@ test: test-prune test-architectures test-tool-path test-process-runner test-mach
 test-agent-policy:
 	@BIN="/tmp/cantrip-agent-policy-tests-$$$$"; HOME_DIR="$$(mktemp -d)"; \
 	trap 'rm -rf "$$BIN" "$$HOME_DIR"' EXIT; \
-	swiftc Sources/Cantrip/ShellCommandText.swift Sources/Cantrip/AgentActionRequest.swift Sources/Cantrip/AgentPolicy.swift Sources/Cantrip/AgentPolicySetup.swift Tests/AgentPolicyTests/ImportTests.swift Tests/AgentPolicyTests/main.swift -o "$$BIN" && HOME="$$HOME_DIR" CFFIXED_USER_HOME="$$HOME_DIR" "$$BIN"
+	swiftc Sources/Cantrip/ShellCommandText.swift Sources/Cantrip/AgentActionRequest.swift Sources/Cantrip/AgentPolicy.swift Sources/Cantrip/PrivacyGateSettings.swift Sources/Cantrip/AgentPolicySetup.swift Tests/AgentPolicyTests/ImportTests.swift Tests/AgentPolicyTests/main.swift -o "$$BIN" && HOME="$$HOME_DIR" CFFIXED_USER_HOME="$$HOME_DIR" "$$BIN"
 
 test-architectures:
 	@bash Tests/ArchitectureTests/run.sh
