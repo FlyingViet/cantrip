@@ -76,7 +76,7 @@ enum PrivacyRules {
         var hits: [String: Int] = [:]
         var found: [PrivacySegment: Set<PrivacyDetector>] = [:]
         for (segment, text) in segments where !text.isEmpty {
-            for (detector, count) in PrivacyDetectors.scan(text) where count > 0 {
+            for (detector, count) in PrivacyDetectors.scan(text, ownerNames: settings.ownerNames) where count > 0 {
                 hits["\(detector.rawValue)@\(segment.rawValue)", default: 0] += count
                 found[segment, default: []].insert(detector)
             }
@@ -142,7 +142,7 @@ enum PrivacyDetectors {
     /// Characters each detector reads at most per segment (long Home data stays fast).
     static let scanLimit = 60_000
 
-    static func scan(_ text: String) -> [PrivacyDetector: Int] {
+    static func scan(_ text: String, ownerNames: [String] = []) -> [PrivacyDetector: Int] {
         let text = String(text.prefix(scanLimit))
         var result: [PrivacyDetector: Int] = [:]
         result[.secret] = SecretScan.scan(text: text, file: "").count
@@ -153,7 +153,7 @@ enum PrivacyDetectors {
         let detected = dataDetector(text)
         result[.phone] = detected.phones
         result[.address] = detected.addresses
-        result[.name] = personalNames(in: text)
+        result[.name] = personalNames(in: text, ignoring: ownerNames)
         return result
     }
 
@@ -212,17 +212,27 @@ enum PrivacyDetectors {
     /// Assistant, product and model names that NLTagger reads as people.
     static let notPeople: Set<String> = ["cantrip", "pip", "claude", "copilot", "codex", "gemini", "siri", "alexa",
                                           "qwen", "gemma", "llama", "mistral", "sonnet", "opus", "haiku", "grok",
-                                          "antigravity", "xcode", "swift", "home"]
+                                          "antigravity", "xcode", "swift", "home", "godot"]
 
-    static func personalNames(in text: String) -> Int {
+    /// People's names in `text`, other than the owner's (`ignoring`: "Pat Example" also covers "Pat").
+    static func personalNames(in text: String, ignoring owners: [String] = []) -> Int {
+        func words(_ name: String) -> [String] {
+            name.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        }
+        let ownerWords = Set(owners.flatMap(words).filter { $0.count > 1 })
         let tagger = NLTagger(tagSchemes: [.nameType])
         tagger.string = text
         var names: Set<String> = []
         tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word, scheme: .nameType,
                              options: [.omitPunctuation, .omitWhitespace, .joinNames]) { tag, range in
-            if tag == .personalName {
-                let name = text[range].trimmingCharacters(in: .whitespaces)
-                if name.count > 1, !notPeople.contains(name.lowercased()) { names.insert(name.lowercased()) }
+            guard tag == .personalName else { return true }
+            let name = text[range].trimmingCharacters(in: .whitespaces)
+            let parts = words(name)
+            // Units and acronyms the tagger sometimes reads as names: GB, NAS, API.
+            let acronym = name.count <= 4 && name.allSatisfy { $0.isUppercase && $0.isLetter }
+            if name.count > 1, !acronym, !notPeople.contains(name.lowercased()),
+               parts.isEmpty || !parts.allSatisfy(ownerWords.contains) {
+                names.insert(name.lowercased())
             }
             return true
         }

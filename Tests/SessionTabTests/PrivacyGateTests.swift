@@ -10,6 +10,7 @@ extension SessionTabTests {
         try await testPrivacyClassifierClient()
         try testPrivacyPolicySection()
         try await testPrivacyGateObserveAndEnforce()
+        try await testPrivacyHints()
         print("Privacy Gate: detectors, rules, classifier client, policy section, observe no-op and enforce routing passed")
     }
 
@@ -38,6 +39,15 @@ extension SessionTabTests {
         precondition(scan("Ship it to 742 Evergreen Terrace, Springfield, OR 97477")[.address] == 1, "street addresses")
         precondition(scan("Ask Maria Gonzalez about the invoice")[.name, default: 0] >= 1, "people's names")
         precondition(scan("Ask Claude or Copilot to review the diff")[.name] == 0, "assistant names aren't people")
+        // The owner's own names (whole or in part) and acronyms the tagger reads as names don't count.
+        let owners = ["Jordan Rivera"]
+        let mention = "Jordan Rivera asked to free 40 GB on the build disk."
+        precondition(scan(mention)[.name, default: 0] >= 1, "without owner names it's a person: \(scan(mention))")
+        precondition(PrivacyDetectors.scan(mention, ownerNames: owners)[.name] == 0
+                     && PrivacyDetectors.scan("Jordan, free some space", ownerNames: owners)[.name] == 0, "the owner isn't counted")
+        precondition(PrivacyDetectors.personalNames(in: "Jordan Rivera and Maria Gonzalez met", ignoring: owners) >= 1,
+                     "other people still count")
+        precondition(PrivacyDetectors.personalNames(in: "Keep 40 GB free. NAS backups run nightly.") == 0, "units and acronyms aren't people")
         let code = scan("How do I reverse the words in a Swift string?")
         precondition(code.values.allSatisfy { $0 == 0 }, "a code question has no hits: \(code)")
         precondition(PrivacyDetectors.privateTermCount(["Zephyrine"], in: "notes for zephyrine's party") == 1
@@ -76,21 +86,122 @@ extension SessionTabTests {
         precondition(rule(privacyRequest("Use \(syntheticSecret) to deploy")).rule?.id == "secrets")
         precondition(rule(privacyRequest("Summarize my emails from today")).rule?.id == "private-sources")
         precondition(rule(privacyRequest("What did my bank statement say about fees?")).rule?.route == .local)
+        // Numbers that identify someone decide; names, terms and contact details hand over to the classifier.
+        let card = rule(privacyRequest("Pay with 4111 1111 1111 1111"))
+        precondition(card.rule?.id == "personal-details" && card.rule?.route == .redactApprove && card.rule?.askClassifier != true)
+        precondition(rule(privacyRequest("My SSN is 123-45-6789")).rule?.id == "personal-details")
         let pii = rule(privacyRequest("Text \(syntheticPhone) that I'm late"))
-        precondition(pii.rule?.id == "personal-details" && pii.rule?.route == .redactApprove && pii.hits["phone@request"] == 1, "\(pii)")
-        precondition(rule(privacyRequest("Plan the trip with Zephyrine"), terms: ["Zephyrine"]).rule?.id == "personal-details")
+        precondition(pii.rule?.id == "personal-hints" && pii.rule?.askClassifier == true && pii.hits["phone@request"] == 1, "\(pii)")
+        precondition(rule(privacyRequest("Plan the trip with Zephyrine"), terms: ["Zephyrine"]).rule?.id == "personal-hints")
         precondition(rule(privacyRequest("Fix the failing test", workdir: "/tmp/repo"), repo: true).rule?.id == "code")
         precondition(rule(privacyRequest("How do I reverse a list?")).rule == nil)
         // Personal details in added context (Home's data, location) are recorded but don't decide by default.
         let context = rule(privacyRequest("How do I reverse a list?", message: "How do I reverse a list?\n\nCall \(syntheticPhone)"))
         precondition(context.rule == nil && context.hits["phone@context"] == 1, "\(context)")
-        // An earlier turn counts for personal details.
-        precondition(rule(privacyRequest("And then?", earlier: "Text \(syntheticPhone) about dinner")).rule?.id == "personal-details")
+        // Home's own data is full of names and private terms: they're recorded and never decide.
+        let homeData = "How do I reverse a list?\n\n(CANTRIP HOME — data: tab “Party for Maria Gonzalez” in /Volumes/Zephyrine)"
+        let busy = rule(privacyRequest("How do I reverse a list?", earlier: "Ask Maria Gonzalez about Zephyrine", message: homeData),
+                        terms: ["Zephyrine"])
+        precondition(busy.rule == nil && busy.hits["privateTerm@context"] == 1 && busy.hits["privateTerm@earlier"] == 1, "\(busy)")
+        // An earlier turn counts for numbers that identify someone, not for weaker signs.
+        precondition(rule(privacyRequest("And then?", earlier: "My SSN is 123-45-6789")).rule?.id == "personal-details")
+        precondition(rule(privacyRequest("And then?", earlier: "Text \(syntheticPhone) about dinner")).rule == nil)
+        // A weak sign comes before the code rule: the classifier decides, not "it's a repository".
+        precondition(rule(privacyRequest("Send the diff to jane.doe@example.com", workdir: "/tmp/repo"), repo: true).rule?.id == "personal-hints")
+
+        // A saved copy of the old rule (weak signs anywhere decided) is split; other rules stay as saved.
+        func decoded(_ rules: [PrivacyGateRule]) throws -> [PrivacyGateRule] {
+            var saved = PrivacyGateSettings()
+            saved.rules = rules
+            return try JSONDecoder().decode(PrivacyGateSettings.self, from: JSONEncoder().encode(saved)).rules
+        }
+        var oldOff = PrivacyGateRule.previousPersonalDetails
+        oldOff.enabled = false
+        let old = try decoded([PrivacyGateRule.defaults[0], oldOff, PrivacyGateRule.defaults.last!])
+        precondition(old.map(\.id) == ["secrets", "personal-details", "personal-hints", "code"]
+                     && old[1].detectors == [.ssn, .card, .account] && old[2].askClassifier == true
+                     && !old[1].enabled && !old[2].enabled, "\(old.map(\.id))")
+        var custom = PrivacyGateRule.previousPersonalDetails
+        custom.scope = [.request]
+        let kept = try decoded([custom])
+        let current = try decoded(PrivacyGateRule.defaults)
+        precondition(kept == [custom] && current == PrivacyGateRule.defaults, "a changed rule is the user's own")
+        var named = PrivacyGateSettings()
+        named.ownerNames = ["Jordan Rivera"]
+        let roundTrip = try JSONDecoder().decode(PrivacyGateSettings.self, from: JSONEncoder().encode(named))
+        precondition(roundTrip.ownerNames == ["Jordan Rivera"])
+        named.ownerNames = Array(repeating: "x", count: 21)
+        precondition(!named.validationErrors().isEmpty, "a bounded owner list")
         // A disabled rule is skipped.
         var off = settings
         off.rules[0].enabled = false
         precondition(PrivacyRules.evaluate(privacyRequest("Use \(syntheticSecret)"), settings: off, privateTerms: [])
             .rule?.id != "secrets")
+    }
+
+    /// A weak sign hands the decision to the classifier (or decides when there's none); `trial`
+    /// (`cantrip privacy test`) decides without recording, and says what the classifier thinks.
+    static func testPrivacyHints() async throws {
+        let gate = PrivacyGate.shared
+        let saved = (gate.classifier, gate.directory, gate.privateLocal, gate.policy)
+        let logs = FileManager.default.temporaryDirectory.appendingPathComponent("privacy-hints-\(UUID().uuidString)")
+        defer {
+            (gate.classifier, gate.directory, gate.privateLocal, gate.policy) = saved
+            try? FileManager.default.removeItem(at: logs)
+        }
+        gate.directory = logs
+        gate.privateLocal = {
+            var local = PrivateLocalConfiguration()
+            local.api = .openAI
+            local.baseURL = "https://model-server.local/v1"
+            local.model = "local-model"
+            return local
+        }
+        var section = PrivacyGateSettings()
+        section.ownerNames = ["Jordan Rivera"]
+        gate.policy = { var document = AgentPolicyDocument(); document.privateTerms = ["Zephyrine"]; document.privacyGate = section; return document }
+        var calls = 0
+        var answer = (local: 0.03, cloud: 0.95)
+        gate.classifier = PrivacyClassifier(transport: { request in
+            calls += 1
+            let redact = max(0, 1 - answer.local - answer.cloud)
+            let data = decisionsReply((0..<3).map { _ in [("local", answer.local), ("cloud", answer.cloud), ("redact", redact)] })
+            return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+
+        // A name in the request: the classifier decides (here, cloud); the hint is recorded.
+        let named = privacyRequest("Remind me to call Maria Gonzalez about the invoice")
+        let cloud = await gate.decide(named, settings: section)
+        precondition(cloud.route == .cloud && cloud.source == .classifier && cloud.rule == nil && cloud.hint == "personal-hints"
+                     && cloud.reason.hasPrefix("personal-hints (") && calls == 1, "\(cloud)")
+        gate.record(cloud, request: named, settings: section, applied: false, totalMs: 1)
+        let logged = gate.records(since: .distantPast)
+        precondition(logged.last?.hint == "personal-hints" && logged.last?.rule == nil, "\(logged)")
+        precondition(gate.report(days: 1).contains("matched personal-hints, which leaves the decision to the classifier"))
+
+        // The owner's own name and Home's data alone are no hint at all.
+        let own = await gate.decide(privacyRequest("Jordan Rivera here: how do I reverse a list?",
+                                                   message: "Jordan Rivera here: how do I reverse a list?\n\nTabs: Zephyrine, Maria Gonzalez"),
+                                    settings: section)
+        precondition(own.hint == nil && own.rule == nil && own.source == .classifier, "\(own)")
+
+        // Without a classifier the hint decides, as the rule's own route.
+        var off = section
+        off.classifier.enabled = false
+        let fallback = await gate.decide(privacyRequest("Plan the trip with Zephyrine"), settings: off)
+        precondition(fallback.route == .redactApprove && fallback.source == .rule && fallback.rule == "personal-hints"
+                     && fallback.hint == nil, "\(fallback)")
+
+        // A trial records nothing; when a rule decides, it still says what the classifier thinks.
+        let before = gate.records(since: .distantPast).count
+        answer = (0.9, 0.05)
+        let card = await gate.trial(privacyRequest("Pay the deposit with 4111 1111 1111 1111"), settings: section)
+        precondition(card.decision.rule == "personal-details" && card.decision.route == .redactApprove
+                     && card.classifier?.route == .local && (card.classifier?.probabilities?[.local] ?? 0) > 0.85, "\(card)")
+        answer = (0.03, 0.95)
+        let code = await gate.trial(privacyRequest("Write a Swift function that reverses a sentence."), settings: section)
+        precondition(code.decision.route == .cloud && code.decision.source == .classifier && code.classifier == nil, "\(code)")
+        precondition(gate.records(since: .distantPast).count == before, "a trial isn't recorded")
     }
 
     static func decisionsReply(_ orders: [[(String, Double)]]) -> Data {
@@ -184,12 +295,12 @@ extension SessionTabTests {
         // A file from before the gate: on and observing.
         let old = try decoder.decode(AgentPolicyDocument.self, from: Data(#"{"version":1,"rules":[]}"#.utf8))
         precondition(old.privacyGate == PrivacyGateSettings() && old.privacyGate.enabled && old.privacyGate.mode == .observe
-                     && old.privacyGate.rules.map(\.id) == ["secrets", "private-sources", "personal-details", "code"])
+                     && old.privacyGate.rules.map(\.id) == ["secrets", "private-sources", "personal-details", "personal-hints", "code"])
         // A partial section keeps every default it leaves out.
         let partial = try decoder.decode(AgentPolicyDocument.self, from: Data(
             #"{"privacyGate":{"mode":"enforce","classifier":{"timeoutMs":1500},"tasks":{"\#(UUID().uuidString)":"local"}}}"#.utf8))
         precondition(partial.privacyGate.mode == .enforce && partial.privacyGate.classifier.timeoutMs == 1500
-                     && partial.privacyGate.classifier.rotations == 3 && partial.privacyGate.rules.count == 4
+                     && partial.privacyGate.classifier.rotations == 3 && partial.privacyGate.rules.count == 5
                      && partial.privacyGate.tasks.count == 1 && partial.privacyGate.cloudRuns == PrivacyCloudRuns())
         let encoded = try JSONEncoder().encode(partial)
         let roundTrip = try decoder.decode(AgentPolicyDocument.self, from: encoded)
@@ -388,9 +499,9 @@ extension SessionTabTests {
         }
         try await finish(cloudBackend)
 
-        // Personal details ask first; "Run locally" routes local.
+        // A card number asks first; "Run locally" routes local.
         home = newHome()
-        let asked = try await turn("Text \(syntheticPhone) that dinner moved to eight")
+        let asked = try await turn("Pay the deposit with card 4111 1111 1111 1111")
         try await waitForJournalTest { !home.pendingInputs.isEmpty }
         precondition(cloudBackend.lastPrompt == nil && localBackend.lastPrompt == nil, "nothing is sent before the answer")
         let card = try requireHome(home.pendingInputs.first)

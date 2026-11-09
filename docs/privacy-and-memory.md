@@ -144,11 +144,19 @@ How it decides, first match wins:
    message) → local; `private-sources` (the request asks about mail, messages,
    calendar, contacts, finances, documents, passwords or forms, or carries a Mail
    or Messages attachment) → local; `personal-details` (Social Security, card or
-   account numbers, email addresses, phone numbers, street addresses, people's
-   names, or your `privateTerms`, in the request, earlier turns or retrieved
-   memory) → ask first; `code` (work in a git repository) → cloud. The
-   always-loaded core memory is left out: it goes with every message on every
-   backend, so it would flag everything.
+   account numbers in the request, earlier turns or retrieved memory) → ask
+   first; `personal-hints` (email addresses, phone numbers, street addresses,
+   people's names or your `privateTerms`, in the request only) → the classifier
+   decides; `code` (work in a git repository) → cloud. The always-loaded core
+   memory is left out: it goes with every message on every backend, so it would
+   flag everything. Home's own data (tab titles, tasks, workspace records,
+   handoffs) is full of names and private terms, so they're recorded there but
+   never decide. Your own names don't count as a person's name: list them in
+   `ownerNames` (such as `["Pat Example"]`, which also covers "Pat"). A rule with
+   `askClassifier` hands the request to the classifier instead of deciding; its
+   `route` applies only when there's no classifier. A policy file that saved the
+   earlier single `personal-details` rule (which also covered names, contact
+   details and private terms anywhere) is read as these two rules.
 3. The classifier, for requests no rule decides: a model on your own server
    (oMLX's `POST /v1/decisions`, by default Private Local's server and model)
    reads the request and the latest earlier turn, three times with the options in
@@ -184,10 +192,10 @@ never logged; in observe mode it goes only to your classifier.
    Home chat or a daily task depends on cloud models with your private tools
    (bills, follow-ups, briefings), give it **Always cloud, with private tools**
    before enforcing.
-3. Check **Why**. A rule that fires on most requests (often `personal-details`
-   through names in earlier turns) asks too often: turn it off, narrow its
-   `scope`, or move it to local. **Detector hits** show which part of the
-   message matched (`@request`, `@earlier`, `@memory`, `@context`).
+3. Check **Why**. A rule that fires on most requests asks too often: turn it
+   off, narrow its `scope`, move it to local, or set `askClassifier`. **Detector
+   hits** show which part of the message matched (`@request`, `@earlier`,
+   `@memory`, `@context`); hits in `@context` are Home's own data.
 4. Check the classifier line: a 95th percentile near 2.5 s or many unanswered
    calls means requests would wait or ask. Answers just under the cloud
    threshold are listed; raise or lower `cloudMinProbability` to match.
