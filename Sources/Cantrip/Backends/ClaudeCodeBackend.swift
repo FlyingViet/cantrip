@@ -606,7 +606,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
 
     private func decideWithPolicy(id: String, action: CantripHomeActionRequest) {
         let outcome = AgentPolicyGate.decide(action, guardrail: guardrail, approval: homeApproval,
-                                             label: guardrailLabel, workdir: processWorkdir)
+                                             label: guardrailLabel, workdir: processWorkdir,
+                                             privacy: PrivacyRunRestrictions.restriction(for: self))
         switch outcome {
         case .deny(let reason, let by):
             currentOnEvent?(.activity(AgentPolicyGate.denialActivity(action, reason: reason, by: by)))
@@ -651,7 +652,8 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
     private func answerWithPolicy(tool: String, input: [String: Any], id: String) -> Bool {
         let request = CantripHomeActionRequest(claudeTool: tool, input: input)
         let outcome = AgentPolicyGate.decide(request, guardrail: guardrail, approval: homeApproval,
-                                             label: guardrailLabel, workdir: processWorkdir)
+                                             label: guardrailLabel, workdir: processWorkdir,
+                                             privacy: PrivacyRunRestrictions.restriction(for: self))
         switch outcome {
         case .deny(let reason, let by):
             currentOnEvent?(.activity(AgentPolicyGate.denialActivity(request, reason: reason, by: by)))

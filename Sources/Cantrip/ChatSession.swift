@@ -44,6 +44,8 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var weatherCard: WeatherCard?
     /// A card from a tool result (built by Cantrip, or a model's `card` block verified against it).
     var cards: [CardDocument] = []
+    /// The Privacy Gate's route for this request (on the user's message of a Home turn).
+    var privacy: PrivacyBadge?
     /// Builds, test runs and uploads this reply's commands ran, each shown as a live card.
     var builds: [BuildRun] = []
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
@@ -56,7 +58,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
-        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards, builds
+        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards, builds, privacy
     }
 }
 
@@ -504,8 +506,13 @@ final class ChatSession: ObservableObject {
     }
 
     private var activeBackend: Backend {
-        backend(for: runningBackendKind ?? effectiveBackendKind)
+        privacyRoutedBackend ?? backend(for: runningBackendKind ?? effectiveBackendKind)
     }
+    /// The local backend the Privacy Gate routed this run to (enforce mode), if it did.
+    private var privacyRoutedBackend: Backend?
+    private var privacyAddedExclusions = PrivacyAddedExclusions()
+    /// Tests: the backend enforce mode's local route uses instead of Private Local / Local Model.
+    var privacyLocalBackendOverride: Backend?
 
     private func backend(for kind: BackendKind) -> Backend {
         if isLocalPrivate { return privateLocalModel }
@@ -2493,6 +2500,20 @@ final class ChatSession: ObservableObject {
         armWatchdog()
         streamGeneration += 1
         let generation = streamGeneration
+        // Home chat and scheduled Home tasks pass the Privacy Gate (PrivacyGate.swift): observing,
+        // it decides beside the send and changes nothing; enforcing, it decides first and routes.
+        privacyRoutedBackend = nil
+        localModel.baseURLOverride = nil
+        localModel.modelOverride = nil
+        let privacyKind: PrivacyGateRequest.Kind? = isSlashCommand || councilMode || isLocalPrivate ? nil
+            : isCantripHome ? .homeChat
+            : isCantripHomeBackground && cantripHomeTask != nil && automatedRun?.isIncident != true ? .homeTask : nil
+        let privacySettings = privacyKind.map { _ in PrivacyGate.shared.settings }
+        let privacyGated = privacyKind.flatMap { kind in
+            privacySettings?.applies(to: kind == .homeChat ? .homeChat : .homeTasks) == true ? kind : nil
+        }
+        let privacyMessageID = promptUsageMessageID
+        if privacyGated != nil, let privacySettings { PrivacyGate.shared.prewarm(privacySettings) }
         // A follow-up's memory search also uses the exchange before it, at a lower weight.
         prepareMemory(onto: backendPrompt, query: prompt, previous: previousTurns.last, backendKind: backendKind,
                       generation: generation, includeMemory: !isSlashCommand,
@@ -2522,18 +2543,265 @@ final class ChatSession: ObservableObject {
                 ))
                 return
             }
-            let backend = self.backend(for: backendKind)
-            (backend as? CantripHomeGuardedBackend)?.guardrailLabel = self.notificationTitle
-            backend.send(request, workdir: self.workdir) { [weak self] event in
-                DispatchQueue.main.async {
-                    guard let self, self.streamGeneration == generation else {
-                        if case .inputRequired(let request) = event { request.cancel() }
-                        return
-                    }
-                    self.handle(event)
-                }
+            guard let kind = privacyGated, let settings = privacySettings else {
+                // A Home run with the gate off gets back what an earlier enforced cloud run took away.
+                if privacyKind != nil { self.applyPrivacyCloudRestriction(nil) }
+                self.dispatchRun(request, backend: self.backend(for: backendKind), generation: generation)
+                return
+            }
+            let gate = self.privacyGateRequest(kind: kind, prompt: prompt, prepared: prepared,
+                                               previousTurns: previousTurns, backendKind: backendKind)
+            if settings.mode == .enforce {
+                self.enforcePrivacy(gate, settings: settings, request: request, backendKind: backendKind,
+                                    generation: generation, messageID: privacyMessageID)
+            } else {
+                // Observing: the run goes out exactly as before; the decision is only recorded.
+                self.applyPrivacyCloudRestriction(nil)
+                self.dispatchRun(request, backend: self.backend(for: backendKind), generation: generation)
+                self.observePrivacy(gate, settings: settings, messageID: privacyMessageID)
             }
         }
+    }
+
+    private func dispatchRun(_ request: BackendRequest, backend: Backend, generation: Int) {
+        (backend as? CantripHomeGuardedBackend)?.guardrailLabel = notificationTitle
+        backend.send(request, workdir: workdir) { [weak self] event in
+            DispatchQueue.main.async {
+                guard let self, self.streamGeneration == generation else {
+                    if case .inputRequired(let request) = event { request.cancel() }
+                    return
+                }
+                self.handle(event)
+            }
+        }
+    }
+
+    // MARK: Privacy Gate
+
+    /// The key Home chat's "stays local" state is kept under; Start Fresh clears it.
+    static let privacyHomeConversationKey = "home-chat"
+
+    private func privacyGateRequest(kind: PrivacyGateRequest.Kind, prompt: String, prepared: String,
+                                    previousTurns: [ConversationTurn], backendKind: BackendKind) -> PrivacyGateRequest {
+        let taskID = kind == .homeTask ? cantripHomeTask?.id : nil
+        let earlier = previousTurns.suffix(3).map { $0.user + "\n" + $0.assistant }.joined(separator: "\n\n")
+        let configured = CantripHomeTaskTools.configuredServers()
+        let servers = kind == .homeTask ? configured.filter { !CantripHomeTaskTools.disabledServers(configured: configured).contains($0) }
+            : configured
+        return PrivacyGateRequest(
+            kind: kind, taskID: taskID,
+            taskTitle: taskID.flatMap { id in CantripHomeStore.shared.tasks.first { $0.id == id }?.title },
+            conversationKey: taskID.map { "task:\($0.uuidString)" } ?? Self.privacyHomeConversationKey,
+            request: prompt, earlier: earlier, message: prepared, workdir: workdir,
+            backend: backendKind.rawValue, mcpServers: servers)
+    }
+
+    /// Records what the gate would do, beside a run that has already been sent unchanged.
+    private func observePrivacy(_ gate: PrivacyGateRequest, settings: PrivacyGateSettings, messageID: UUID?) {
+        let started = Date()
+        let session = WeakSessionBox(self)
+        Task.detached(priority: .utility) {
+            let decision = await PrivacyGate.shared.decide(gate, settings: settings)
+            let total = Int(Date().timeIntervalSince(started) * 1000)
+            PrivacyGate.shared.record(decision, request: gate, settings: settings, applied: false, totalMs: total)
+            let badge = PrivacyGate.badge(decision, kind: gate.kind, settings: settings, applied: false, totalMs: total)
+            await MainActor.run { session.value?.setPrivacyBadge(badge, on: messageID) }
+        }
+    }
+
+    /// Lets a detached task reach the session without holding it.
+    private final class WeakSessionBox: @unchecked Sendable {
+        weak var value: ChatSession?
+        init(_ value: ChatSession) { self.value = value }
+    }
+
+    /// Decides first, then routes: local, cloud (without private tools unless the run's own route
+    /// keeps them), ask, or hold. Never falls back to the cloud when the classifier can't answer.
+    private func enforcePrivacy(_ gate: PrivacyGateRequest, settings: PrivacyGateSettings, request: BackendRequest,
+                                backendKind: BackendKind, generation: Int, messageID: UUID?) {
+        let started = Date()
+        statusText = "Checking privacy…"
+        Task { [weak self] in
+            let decision = await PrivacyGate.shared.decide(gate, settings: settings, skipsClassifierWhenFixed: true)
+            guard let self, self.streamGeneration == generation, self.isStreaming else { return }
+            let total = Int(Date().timeIntervalSince(started) * 1000)
+            PrivacyGate.shared.record(decision, request: gate, settings: settings, applied: true, totalMs: total)
+            self.setPrivacyBadge(PrivacyGate.badge(decision, kind: gate.kind, settings: settings, applied: true, totalMs: total),
+                                 on: messageID)
+            self.statusText = "Thinking…"
+            self.followPrivacy(PrivacyEnforcement.of(decision, kind: gate.kind, settings: settings), decision: decision,
+                               gate: gate, settings: settings, request: request, backendKind: backendKind,
+                               generation: generation, messageID: messageID)
+        }
+    }
+
+    private func followPrivacy(_ enforcement: PrivacyEnforcement, decision: PrivacyDecision, gate: PrivacyGateRequest,
+                               settings: PrivacyGateSettings, request: BackendRequest, backendKind: BackendKind,
+                               generation: Int, messageID: UUID?) {
+        switch enforcement {
+        case .local:
+            applyPrivacyCloudRestriction(nil)
+            do {
+                let backend = try privacyLocalBackend(for: gate.kind)
+                privacyRoutedBackend = backend
+                Log.write("privacy: routed \(gate.kind.rawValue) to the local model")
+                dispatchRun(request, backend: backend, generation: generation)
+            } catch {
+                endPrivacyRun("Not sent: the Privacy Gate routed this to your local model, but "
+                              + error.localizedDescription)
+            }
+        case .cloud:
+            applyPrivacyCloudRestriction(nil)
+            dispatchRun(request, backend: backend(for: backendKind), generation: generation)
+        case .cloudRestricted:
+            applyPrivacyCloudRestriction(PrivacyCloudRestriction(settings.cloudRuns))
+            dispatchRun(request, backend: backend(for: backendKind), generation: generation)
+        case .ask:
+            askPrivacyRoute(decision, gate: gate, settings: settings) { [weak self] chosen in
+                guard let self, self.streamGeneration == generation, self.isStreaming else { return }
+                guard let chosen else {
+                    self.endPrivacyRun("Not sent: you chose not to send this to the cloud.")
+                    return
+                }
+                self.followPrivacy(chosen, decision: decision, gate: gate, settings: settings, request: request,
+                                   backendKind: backendKind, generation: generation, messageID: messageID)
+            }
+        case .hold:
+            holdForPrivacyCheck(gate: gate, settings: settings, request: request, backendKind: backendKind,
+                                generation: generation, messageID: messageID)
+        case .cancel:
+            endPrivacyRun("Not sent: the privacy check couldn't run (\(decision.reason)).")
+        }
+    }
+
+    /// Ends this run without a model, with a short reply saying why.
+    private func endPrivacyRun(_ text: String) {
+        Log.write("privacy: \(text.prefix(160))")
+        handle(.textDelta(text))
+        handle(.done)
+    }
+
+    /// Enforce mode's local backend: Private Local (no tools) for Home chat, the Local Model backend
+    /// pointed at the same server (with tools) for a scheduled task.
+    private func privacyLocalBackend(for kind: PrivacyGateRequest.Kind) throws -> Backend {
+        if let privacyLocalBackendOverride { return privacyLocalBackendOverride }
+        let configuration = try privateLocalConfiguration()
+        do { try configuration.validate() } catch {
+            throw SessionModelSettingsError(400, "Private Local isn't set up: \(error.localizedDescription)")
+        }
+        if kind == .homeChat {
+            privateLocalModel.configuration = configuration
+            return privateLocalModel
+        }
+        guard configuration.api == .openAI else {
+            throw SessionModelSettingsError(400, "scheduled tasks need Private Local on an OpenAI-compatible server for tools.")
+        }
+        localModel.baseURLOverride = configuration.baseURL
+        localModel.modelOverride = configuration.model
+        return localModel
+    }
+
+    /// MCP servers enforce mode added to each backend's exclusions for the current cloud run, so the
+    /// next run can take back exactly those and keep what its own settings excluded.
+    struct PrivacyAddedExclusions {
+        var claude: Set<String> = []
+        var codex: Set<String> = []
+        var copilot: Set<String> = []
+        var copilotHadNoList = false
+        var servers: Set<String> = []
+    }
+
+    /// Cloud runs in enforce mode lose the private MCP servers (never started) and their folders
+    /// (refused per call); nil gives back what the last cloud run took away.
+    private func applyPrivacyCloudRestriction(_ restriction: PrivacyCloudRestriction?) {
+        let backends: [AnyObject] = [copilot as AnyObject, copilotRemote as AnyObject, claudeCode, codex, antigravity,
+                                     localModel, privateLocalModel]
+        for backend in backends { PrivacyRunRestrictions.set(restriction, for: backend) }
+        let copilotBackend = copilot as? CopilotBackend
+        let added = privacyAddedExclusions
+        claudeCode.excludedMcpServers.subtract(added.claude)
+        codex.excludedMcpServers.subtract(added.codex)
+        if let copilotBackend, !added.copilot.isEmpty {
+            let remaining = (copilotBackend.disabledMcpServers ?? []).filter { !added.copilot.contains($0) }
+            copilotBackend.disabledMcpServers = remaining.isEmpty && added.copilotHadNoList ? nil : remaining
+        }
+        privacyAddedExclusions = PrivacyAddedExclusions()
+        guard let servers = restriction?.excludedServers, !servers.isEmpty else { return }
+        var next = PrivacyAddedExclusions(servers: servers)
+        next.claude = servers.subtracting(claudeCode.excludedMcpServers)
+        next.codex = servers.subtracting(codex.excludedMcpServers)
+        claudeCode.excludedMcpServers.formUnion(servers)
+        codex.excludedMcpServers.formUnion(servers)
+        if let copilotBackend {
+            let current = copilotBackend.disabledMcpServers
+            next.copilotHadNoList = current == nil
+            next.copilot = servers.subtracting(current ?? [])
+            copilotBackend.disabledMcpServers = Array(Set(current ?? []).union(servers)).sorted()
+        }
+        privacyAddedExclusions = next
+        Log.write("privacy: cloud run without \(servers.sorted().joined(separator: ", "))")
+    }
+
+    /// The MCP servers enforce mode keeps out of this tab's current cloud run (tests read it).
+    var privacyExcludedServers: Set<String> { privacyAddedExclusions.servers }
+
+    /// Asks before cloud: run locally, send to the cloud without private tools, or don't send.
+    private func askPrivacyRoute(_ decision: PrivacyDecision, gate: PrivacyGateRequest, settings: PrivacyGateSettings,
+                                 completion: @escaping (PrivacyEnforcement?) -> Void) {
+        let offline = decision.route == nil
+        let local = "Run locally", cloud = "Send to cloud without private tools", stop = "Don't send"
+        let choices = offline ? [cloud, stop] : [local, cloud, stop]
+        let minutes = gate.kind == .homeChat ? settings.approvalTimeoutMinutes.chat : settings.approvalTimeoutMinutes.tasks
+        let detail = (offline
+            ? "The privacy check couldn't reach the classifier, so Cantrip can't tell whether this is private. "
+            : "The Privacy Gate found what may be personal details: ") + decision.reason
+            + ". Nothing has been sent yet. Without an answer in \(minutes) min, it isn't sent."
+        let request = BackendInputRequest(
+            kind: .question, source: "Privacy Gate",
+            title: offline ? "Send without a privacy check?" : "Send this to the cloud?",
+            detail: detail, choices: choices, lifetime: TimeInterval(minutes * 60)
+        ) { answer in
+            DispatchQueue.main.async {
+                guard answer.decision == .submit, let text = answer.text else { completion(nil); return }
+                completion(text == local ? .local : text == cloud ? .cloudRestricted : nil)
+            }
+        }
+        receiveInput(request)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(minutes * 60)) { [weak request] in request?.cancel() }
+    }
+
+    /// A scheduled task whose privacy check can't reach the classifier waits for it (it never goes
+    /// to the cloud unchecked), checking every minute until the task approval timeout.
+    private func holdForPrivacyCheck(gate: PrivacyGateRequest, settings: PrivacyGateSettings, request: BackendRequest,
+                                     backendKind: BackendKind, generation: Int, messageID: UUID?) {
+        let deadline = Date().addingTimeInterval(TimeInterval(settings.approvalTimeoutMinutes.tasks * 60))
+        statusText = "Waiting for the privacy check (the classifier is offline)…"
+        Log.write("privacy: holding \(gate.taskTitle ?? "a task") until the classifier answers")
+        Task { [weak self] in
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: PrivacyGate.holdRetryNanoseconds)
+                guard let self, self.streamGeneration == generation, self.isStreaming else { return }
+                let decision = await PrivacyGate.shared.decide(gate, settings: settings, skipsClassifierWhenFixed: true)
+                guard self.streamGeneration == generation, self.isStreaming else { return }
+                guard decision.route != nil else { continue }
+                PrivacyGate.shared.record(decision, request: gate, settings: settings, applied: true, totalMs: 0)
+                self.setPrivacyBadge(PrivacyGate.badge(decision, kind: gate.kind, settings: settings, applied: true, totalMs: 0),
+                                     on: messageID)
+                self.statusText = "Thinking…"
+                self.followPrivacy(PrivacyEnforcement.of(decision, kind: gate.kind, settings: settings), decision: decision,
+                                   gate: gate, settings: settings, request: request, backendKind: backendKind,
+                                   generation: generation, messageID: messageID)
+                return
+            }
+            guard let self, self.streamGeneration == generation, self.isStreaming else { return }
+            self.endPrivacyRun("Not sent: the privacy check stayed offline for \(settings.approvalTimeoutMinutes.tasks) min.")
+        }
+    }
+
+    private func setPrivacyBadge(_ badge: PrivacyBadge, on messageID: UUID?) {
+        guard let messageID, let index = messages.firstIndex(where: { $0.id == messageID }) else { return }
+        messages[index].privacy = badge
+        if !isStreaming { persistTranscript() }
     }
 
     /// With `taskHead`, memory goes between that static head and `prompt`, and retrieved
@@ -4424,6 +4692,7 @@ final class ChatSession: ObservableObject {
             tabActionError = SessionTabError.locked.localizedDescription
             return
         }
+        if isCantripHome { PrivacyGate.shared.resetConversation(Self.privacyHomeConversationKey) }
         invalidateRouting()
         deliveryStatus = nil
         mcpAppContext.removeAll()
@@ -4549,6 +4818,7 @@ final class ChatSession: ObservableObject {
     /// gets none of the earlier turns: a divider marks where the model's context begins again.
     func startFresh() throws {
         if let reason = startFreshUnavailableReason { throw SessionModelSettingsError(409, reason) }
+        if isCantripHome { PrivacyGate.shared.resetConversation(Self.privacyHomeConversationKey) }
         invalidateRouting()
         deliveryStatus = nil
         mcpAppContext.removeAll()

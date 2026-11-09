@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "weather", "build-queue", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "weather", "build-queue", "privacy", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 
@@ -27,6 +27,7 @@ enum CantripCLI {
             case "env": return EnvironmentCLI.main(Array(arguments.dropFirst()))
             case "weather": try weather(Array(arguments.dropFirst()))
             case "build-queue": return try buildQueue(Array(arguments.dropFirst()))
+            case "privacy": return try privacy(Array(arguments.dropFirst()))
             default: print(usage)
             }
             return 0
@@ -87,6 +88,10 @@ enum CantripCLI {
                                   for simulatorPoolIdleMinutes, delete members the pool no longer keeps once free,
                                   and old temporary copies; prints the space freed
       cantrip build-queue         Builds running and waiting for a slot (buildQueueEnabled, buildQueueSlots)
+      cantrip privacy report [--days N]
+                                  What the Privacy Gate decided for Home chat and Home tasks (default: 7 days):
+                                  routes, what enforce mode would change, rules, detector hits and classifier speed
+      cantrip privacy test        Ask the Privacy Gate's classifier one synthetic question
       cantrip api [--json]        The OpenAI-compatible API: where it listens, its backends and calls per consumer
       cantrip api key new         Make a key for requests that come through a proxy (printed once)
       cantrip api key clear       Remove it: proxied requests are refused again
@@ -674,6 +679,39 @@ enum CantripCLI {
 
     /// `cantrip weather [PLACE]`: the same forecast, from the same 10-minute cache, as the weather
     /// card of a reply naming that place, so a model's numbers match its card.
+    /// `cantrip privacy report|test`: reads this Mac's decision log (never prompt text).
+    static func privacy(_ arguments: [String]) throws -> Int32 {
+        switch arguments.first ?? "report" {
+        case "report":
+            var days = 7
+            if let index = arguments.firstIndex(of: "--days"), index + 1 < arguments.count {
+                guard let value = Int(arguments[index + 1]), (1...365).contains(value) else {
+                    throw Failure(message: "Usage: cantrip privacy report [--days 1-365]", code: 64)
+                }
+                days = value
+            }
+            print(PrivacyGate.shared.report(days: days))
+            return 0
+        case "test":
+            let semaphore = DispatchSemaphore(value: 0)
+            var result = PrivacyClassifierTest(ok: false)
+            Task.detached {
+                result = await PrivacyGate.shared.testClassifier()
+                semaphore.signal()
+            }
+            semaphore.wait()
+            if result.ok {
+                let p = result.probabilities ?? [:]
+                print("Classifier \(result.model ?? "") at \(result.address ?? ""): \(result.route ?? "?") in \(result.latencyMs ?? 0) ms "
+                      + "(cloud \(p["cloud"] ?? 0), local \(p["local"] ?? 0), redact \(p["redactApprove"] ?? 0)).")
+                return 0
+            }
+            throw Failure(message: result.error ?? "The classifier didn't answer.")
+        default:
+            throw Failure(message: "Usage: cantrip privacy report [--days N] | cantrip privacy test", code: 64)
+        }
+    }
+
     static func weather(_ arguments: [String]) throws {
         let json = arguments.contains("--json")
         let place = arguments.filter { $0 != "--json" }.joined(separator: " ")

@@ -654,7 +654,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         // The mode this turn started with ("Act on my behalf"), matching the bridge's own checks.
         let approval: CantripHomeApproval = configuration?.autoApprove == true ? .automatic : .ask
         let outcome = AgentPolicyGate.decide(request, guardrail: guardrail, approval: approval,
-                                             label: guardrailLabel, workdir: configuration?.workdir ?? "")
+                                             label: guardrailLabel, workdir: configuration?.workdir ?? "",
+                                             privacy: PrivacyRunRestrictions.restriction(for: self))
         let title: String, detailText: String, scope: String, source: String, what: String
         switch outcome {
         case .deny(let reason, let by):

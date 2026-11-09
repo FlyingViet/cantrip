@@ -29,6 +29,10 @@ enum RemoteHistory {
         if message.role == .user, let usage = message.promptUsage, !usage.isEmpty {
             result["promptUsage"] = usage.snapshot
         }
+        if let privacy = message.privacy {
+            result["privacy"] = ["route": privacy.route, "mode": privacy.mode, "applied": privacy.applied,
+                                 "label": privacy.label, "detail": privacy.detail]
+        }
         if !message.delegations.isEmpty {
             result["delegations"] = message.delegations.map(\.snapshot)
         }

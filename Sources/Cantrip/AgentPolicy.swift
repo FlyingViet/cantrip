@@ -23,6 +23,8 @@ struct AgentPolicyDocument: Codable, Equatable {
     var conflicts: [AgentPolicyConflict] = []
     /// Deny rules Cantrip wrote into each CLI's own configuration, so it can replace them later.
     var backstops: [String: [String]] = [:]
+    /// Where Home chat and scheduled Home tasks may run: local, cloud or ask first.
+    var privacyGate = PrivacyGateSettings()
 
     init(rules: [AgentPolicyRule] = [], projects: [AgentPolicyProject] = []) {
         self.rules = rules
@@ -40,6 +42,7 @@ struct AgentPolicyDocument: Codable, Equatable {
         imports = try c.decodeIfPresent([AgentPolicyImportRecord].self, forKey: .imports) ?? []
         conflicts = try c.decodeIfPresent([AgentPolicyConflict].self, forKey: .conflicts) ?? []
         backstops = try c.decodeIfPresent([String: [String]].self, forKey: .backstops) ?? [:]
+        privacyGate = try c.decodeIfPresent(PrivacyGateSettings.self, forKey: .privacyGate) ?? PrivacyGateSettings()
     }
 
     /// The rules a new Mac starts with. Personal rules belong in the user's own file.
@@ -71,6 +74,7 @@ struct AgentPolicyDocument: Codable, Equatable {
         for project in projects where !project.path.hasPrefix("/") && !project.path.hasPrefix("~") {
             errors.append("Project overrides need a full folder path (\(project.path)).")
         }
+        errors += privacyGate.validationErrors()
         return errors
     }
 }

@@ -8,6 +8,8 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
     /// Per-instance model override (council members run models different
     /// from the session's setting). Nil = use the configured model.
     var modelOverride: String?
+    /// The server's base URL for this run instead of the Local Model setting (Privacy Gate local routes).
+    var baseURLOverride: String?
     /// Read-only instance (council advisors): no tool loop, regardless
     /// of global autonomy.
     var readOnly = false
@@ -74,9 +76,9 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         finishReason = nil
         pendingToolCalls = [:]
 
-        let base = settings.localBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        let base = (baseURLOverride ?? settings.localBaseURL).trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
         guard let url = URL(string: base + "/chat/completions") else {
-            onEvent?(.failure("Invalid base URL: \(settings.localBaseURL)"))
+            onEvent?(.failure("Invalid base URL: \(baseURLOverride ?? settings.localBaseURL)"))
             return
         }
 
@@ -282,7 +284,8 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         }
         // Local models have no approval prompts of their own: what no rule stops runs.
         let outcome = AgentPolicyGate.decide(request, guardrail: guardrail, approval: .ask,
-                                             label: guardrailLabel, workdir: currentWorkdir)
+                                             label: guardrailLabel, workdir: currentWorkdir,
+                                             privacy: PrivacyRunRestrictions.restriction(for: self))
         switch outcome {
         case .allow, .prompt:
             return nil

@@ -30,8 +30,13 @@ enum AgentPolicyGate {
     static func decide(
         _ request: CantripHomeActionRequest, guardrail: CantripHomeGuardrail?, approval: CantripHomeApproval,
         label: String, workdir: String, policy: AgentPolicyDocument? = nil, context: AgentPolicyContext? = nil,
-        homeEnvironment: CantripHomeActionPolicy.Environment? = nil
+        homeEnvironment: CantripHomeActionPolicy.Environment? = nil, privacy: PrivacyCloudRestriction? = nil
     ) -> AgentPolicyOutcome {
+        // The Privacy Gate's cloud runs (enforce mode) can't reach private servers or folders.
+        if let privacy, let reason = privacy.denial(for: request) {
+            Log.write("privacy: denied \(request.kind.rawValue) in a cloud run: \((request.server ?? request.command).prefix(120))")
+            return .deny(reason: reason, by: "Privacy Gate")
+        }
         let document = policy ?? store.current()
         // Home's rules are the stricter layer: its refusals come first in Home and child tabs.
         var home: CantripHomeActionDecision?
