@@ -1199,6 +1199,12 @@ final class CantripHomeDelegations {
         return lines.joined(separator: "\n")
     }
 
+    /// Open project tabs as "ID: title" lines, for a model that only needs where to hand work.
+    var compactTabLines: [String] {
+        guard let manager else { return [] }
+        return Self.eligibleTabs(in: manager).map { "- \($0.id.uuidString): \(Self.excerpt($0.title, limit: 60))" }
+    }
+
     /// The open tabs and recent handoffs Home's handoff rules refer to (data).
     var homeTabsData: String {
         let tabLines = openTabLines

@@ -585,6 +585,8 @@ struct BackendRequest {
     let prompt: String
     let userMessage: String
     let previousTurns: [ConversationTurn]
+    /// The earlier-turn messages already chosen for a stateless backend; nil lets it choose.
+    var replay: [ConversationContextMessage]? = nil
 }
 
 enum MidTurnDelivery {

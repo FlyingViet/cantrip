@@ -2505,6 +2505,7 @@ final class ChatSession: ObservableObject {
         privacyRoutedBackend = nil
         localModel.baseURLOverride = nil
         localModel.modelOverride = nil
+        localModel.contextBudgetTokens = nil
         let privacyKind: PrivacyGateRequest.Kind? = isSlashCommand || councilMode || isLocalPrivate ? nil
             : isCantripHome ? .homeChat
             : isCantripHomeBackground && cantripHomeTask != nil && automatedRun?.isIncident != true ? .homeTask : nil
@@ -2645,7 +2646,8 @@ final class ChatSession: ObservableObject {
                 let backend = try privacyLocalBackend(for: gate.kind)
                 privacyRoutedBackend = backend
                 Log.write("privacy: routed \(gate.kind.rawValue) to the local model")
-                dispatchRun(request, backend: backend, generation: generation)
+                dispatchRun(gate.kind == .homeChat ? homeLocalRequest(request, gate: gate) : request,
+                            backend: backend, generation: generation)
             } catch {
                 endPrivacyRun("Not sent: the Privacy Gate routed this to your local model, but "
                               + error.localizedDescription)
@@ -2698,7 +2700,39 @@ final class ChatSession: ObservableObject {
         }
         localModel.baseURLOverride = configuration.baseURL
         localModel.modelOverride = configuration.model
+        localModel.contextBudgetTokens = configuration.contextWindow - HomeLocalProfile.outputReserveTokens
         return localModel
+    }
+
+    /// What composeContext added after Home's own data this turn (location, calendar, selection,
+    /// attachments), kept for Home chat's local profile.
+    private var homeAmbientContext = ""
+
+    /// Home chat's message for the local model: Home's block rules as a fixed system prompt, then
+    /// only what this message needs, within the local budget (HomeLocalProfile).
+    private func homeLocalRequest(_ request: BackendRequest, gate: PrivacyGateRequest) -> BackendRequest {
+        let store = CantripHomeStore.shared
+        let prepared = gate.message
+        let notes = prepared.range(of: gate.request).map {
+            String(prepared[..<$0.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        } ?? ""
+        let window = (try? privateLocalConfiguration().contextWindow) ?? PrivateLocalConfiguration().contextWindow
+        let profile = HomeLocalProfile.build(HomeLocalProfile.Inputs(
+            request: gate.request, notes: String(notes.prefix(1_500)),
+            taskIndex: store.tasks.prefix(30).map(CantripHomeTaskContext.indexLine),
+            workspaces: CantripHomeTaskContext.mentionedWorkspaces(
+                CantripHomeTaskContext.relevantTasks(for: gate.request, in: store.tasks)),
+            tabs: CantripHomeDelegations.shared.compactTabLines,
+            ambient: homeAmbientContext.trimmingCharacters(in: .whitespacesAndNewlines),
+            memoryCore: HomeLocalProfile.memoryCore(in: prepared),
+            retrieved: PrivacyRules.split(message: prepared).retrieved,
+            turns: request.previousTurns
+        ), budget: HomeLocalProfile.budget(window: window))
+        privateLocalModel.configuration.systemPrompt = profile.system
+        Log.write("privacy: local Home message ~\(profile.estimatedTokens) tokens"
+                  + (profile.trimmed.isEmpty ? "" : ", shortened: \(profile.trimmed.joined(separator: ", "))"))
+        return BackendRequest(prompt: profile.message, userMessage: request.userMessage, previousTurns: profile.turns,
+                              replay: profile.replay)
     }
 
     /// MCP servers enforce mode added to each backend's exclusions for the current cloud run, so the
@@ -2876,6 +2910,11 @@ final class ChatSession: ObservableObject {
             backendPrompt += isCantripHomeBackground && cantripHomeTask != nil
                 ? cantripHomeTaskStaticInstructions
                 : compactHome ? cantripHomeChatTurnContext(query: query) : cantripHomeInstructions
+        }
+        let ambientStart = backendPrompt.utf8.count
+        defer {
+            homeAmbientContext = isCantripHome
+                ? String(decoding: backendPrompt.utf8.dropFirst(ambientStart), as: UTF8.self) : ""
         }
         if isFirstOfConversation,
            let digest = UserDefaults.standard.string(forKey: "lastConversationDigest"),
