@@ -167,7 +167,9 @@ How it decides, first match wins:
    about your messages, health, money, accounts, family or other people are. After
    changing the classifier's model, try a few requests you know with
    `cantrip privacy test "<text>"`: models differ in how sure they are. It
-   waits at most 2.5 s and never falls back to the cloud: Home chat asks, and a
+   waits at most 2.5 s (10 s for a scheduled task, whose long saved prompt takes
+   a few seconds to read the first time; `taskTimeoutMs`) and never falls back to
+   the cloud: Home chat asks, and a
    scheduled task waits for the classifier (checking every minute, up to 4 hours)
    in enforce mode. The classifier must be on this Mac, your network or your
    tailnet, over HTTPS unless on this Mac, and never Cantrip's own model API;

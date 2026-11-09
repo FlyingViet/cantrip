@@ -248,7 +248,9 @@ final class PrivacyGate: @unchecked Sendable {
                 decision.reason = Self.classifierReason(hit, route: decision.route, cached: true)
                 return
             }
-            switch await classifier.classify(text: input, endpoint: endpoint, settings: settings.classifier) {
+            var asking = settings.classifier
+            if request.kind == .homeTask { asking.timeoutMs = max(asking.timeoutMs, asking.taskTimeoutMs) }
+            switch await classifier.classify(text: input, endpoint: endpoint, settings: asking) {
             case .success(let classification):
                 store(key, classification)
                 decision.probabilities = classification.probabilities

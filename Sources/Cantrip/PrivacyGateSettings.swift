@@ -175,6 +175,9 @@ struct PrivacyClassifierSettings: Codable, Equatable {
     /// Empty: Private Local's model.
     var model = ""
     var timeoutMs = 2500
+    /// Scheduled tasks wait longer: nobody is waiting on them, and their long saved prompts take a
+    /// few seconds to read when the server hasn't seen them.
+    var taskTimeoutMs = 10_000
     /// The question is asked this many times with the options in a different order, and averaged.
     var rotations = 3
     /// Cloud only when the averaged probability of "cloud" is at least this.
@@ -192,6 +195,7 @@ struct PrivacyClassifierSettings: Codable, Equatable {
         baseURL = try c.decodeIfPresent(String.self, forKey: .baseURL) ?? d.baseURL
         model = try c.decodeIfPresent(String.self, forKey: .model) ?? d.model
         timeoutMs = try c.decodeIfPresent(Int.self, forKey: .timeoutMs) ?? d.timeoutMs
+        taskTimeoutMs = try c.decodeIfPresent(Int.self, forKey: .taskTimeoutMs) ?? d.taskTimeoutMs
         rotations = try c.decodeIfPresent(Int.self, forKey: .rotations) ?? d.rotations
         cloudMinProbability = try c.decodeIfPresent(Double.self, forKey: .cloudMinProbability) ?? d.cloudMinProbability
         cacheMinutes = try c.decodeIfPresent(Int.self, forKey: .cacheMinutes) ?? d.cacheMinutes
@@ -293,6 +297,7 @@ struct PrivacyGateSettings: Codable, Equatable {
         }
         let c = classifier
         if !(500...10_000).contains(c.timeoutMs) { errors.append("The classifier timeout must be 500-10000 ms.") }
+        if !(500...60_000).contains(c.taskTimeoutMs) { errors.append("The classifier timeout for tasks must be 500-60000 ms.") }
         if !(1...6).contains(c.rotations) { errors.append("Ask the classifier 1-6 times.") }
         if !(0.5...1).contains(c.cloudMinProbability) { errors.append("The cloud threshold must be 0.5-1.") }
         if !(200...20_000).contains(c.maxInputCharacters) { errors.append("Send the classifier 200-20000 characters.") }
