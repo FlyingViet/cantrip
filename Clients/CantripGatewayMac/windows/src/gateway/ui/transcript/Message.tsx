@@ -24,6 +24,7 @@ import { BrowserCard, usesBrowser } from "./BrowserPreview";
 import { MentionText } from "./TabMentions";
 import { Markdown, type InlineImages } from "./Markdown";
 import { CardStack } from "./Cards";
+import { PrivacyBadgeLine } from "./PrivacyBadge";
 import { LinkPreviewStack, PlaceCardView, WeatherCardView } from "./RichCards";
 import { ThreadLaneRow, ThreadQuote, ThreadRepliesButton } from "./ThreadTags";
 
@@ -546,6 +547,7 @@ export function MessageRow(props: {
       <div class={`turn user${line}`} data-message-id={message.id} onContextMenu={onContextMenu}>
         {deletable ? <div class="bubble-line"><MessageMenuButton session={session} messageID={message.id} align="end" />{bubble}</div> : bubble}
         {replies ? <ThreadRepliesButton sessionID={session.id} promptID={message.id} prompt={text ?? ""} count={replies} /> : null}
+        {message.privacy ? <PrivacyBadgeLine privacy={message.privacy} /> : null}
         {message.promptUsage ? <PromptUsageLine usage={message.promptUsage} /> : null}
       </div>
     );
