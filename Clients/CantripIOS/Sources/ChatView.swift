@@ -3924,6 +3924,11 @@ struct TurnView: View {
                     CantripPromptUsageLine(usage: usage)
                         .padding(.trailing, 6)
                 }
+                if let privacy = remoteMessage?.privacy, privacy.isVisible {
+                    CantripPrivacyBadgeView(badge: privacy)
+                        .padding(.leading, 40)
+                        .padding(.trailing, 6)
+                }
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {

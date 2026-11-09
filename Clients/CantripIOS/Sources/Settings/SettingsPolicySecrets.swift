@@ -42,18 +42,46 @@ struct CantripPolicySnapshot: Decodable, Equatable {
         let note: String
     }
 
-    struct Document: Decodable, Equatable {
+    /// Encodes as the Mac sent it, with this client's Privacy Gate section, for a
+    /// `{"policy": …}` save: nothing this client doesn't show is lost, and a `privacyGate` that
+    /// couldn't be read is left out (the Mac then keeps its own) rather than sent back broken.
+    struct Document: Codable, Equatable {
         let revision: Int
         let enabled: Bool
         let rules: [Rule]
         var projects: [Project]? = nil
         var conflicts: [Conflict]? = nil
+        /// Cantrip Home's Privacy Gate; nil from Macs before it (Settings then hides it).
+        var privacyGate: CantripPrivacyGate? = nil
+        /// Every field as the Mac sent it.
+        var raw: [String: MCPAppJSONValue] = [:]
+
+        private enum CodingKeys: String, CodingKey { case revision, enabled, rules, projects, conflicts, privacyGate }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            revision = try container.decode(Int.self, forKey: .revision)
+            enabled = try container.decode(Bool.self, forKey: .enabled)
+            rules = try container.decode([Rule].self, forKey: .rules)
+            projects = try container.decodeIfPresent([Project].self, forKey: .projects)
+            conflicts = try container.decodeIfPresent([Conflict].self, forKey: .conflicts)
+            privacyGate = try? container.decodeIfPresent(CantripPrivacyGate.self, forKey: .privacyGate)
+            if case .object(let object) = try MCPAppJSONValue(from: decoder) { raw = object }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var object = raw
+            object["privacyGate"] = privacyGate.map { MCPAppJSONValue.object($0.raw) }
+            try MCPAppJSONValue.object(object).encode(to: encoder)
+        }
     }
 
     let policy: Document
     let summaries: [String: String]
     let file: String
     let loadError: String?
+    /// Where the Privacy Gate's classifier is; nil from Macs before the gate.
+    var privacyClassifier: CantripPrivacyClassifierStatus? = nil
 
     static let effects = ["deny", "ask", "allow"]
 
@@ -142,6 +170,7 @@ struct SettingsAgentPolicyPage: View {
     @State private var saving = false
     @State private var adding = false
     @State private var removing: CantripPolicySnapshot.Rule?
+    @State private var homeTasks: [CantripHomeTask] = []
 
     var body: some View {
         Form {
@@ -167,6 +196,10 @@ struct SettingsAgentPolicyPage: View {
                 Section {
                     Button("Add a Rule", systemImage: "plus.circle") { adding = true }
                         .accessibilityIdentifier("policy.add")
+                }
+                if let gate = snapshot.policy.privacyGate {
+                    SettingsPrivacyGateSections(remote: remote, gate: gate, classifier: snapshot.privacyClassifier,
+                                                tasks: homeTasks, save: save)
                 }
                 if let projects = snapshot.policy.projects, !projects.isEmpty {
                     Section("Project overrides") {
@@ -275,6 +308,10 @@ struct SettingsAgentPolicyPage: View {
             error = nil
         } catch {
             self.error = error.localizedDescription
+        }
+        // The Privacy Gate's per-task routes; a Mac without the gate doesn't need them.
+        if snapshot?.policy.privacyGate != nil, let tasks = try? await remote.homeTasksForSettings() {
+            homeTasks = tasks
         }
     }
 
