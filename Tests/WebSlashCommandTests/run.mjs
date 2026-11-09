@@ -238,5 +238,112 @@ vm.runInContext(`draftValue = "x"`, mentions);
 mentions.pruneMentions();
 same(mentions.currentMentions(), [], "deleting a mention's text drops its chip");
 
+// Privacy Gate: the route badge under prompts and the policy editor's section, on a minimal DOM.
+{
+    class FakeNode {
+        constructor(tag) {
+            Object.assign(this, { tagName: tag, children: [], attributes: {}, dataset: {}, className: "", textContent: "", value: "", disabled: false, checked: false, options: [], isConnected: true });
+            const classes = new Set();
+            this.classList = { toggle: (name, on) => { if (on) classes.add(name); else classes.delete(name) }, contains: name => classes.has(name) };
+        }
+        append(...items) { for (const item of items) { if (item?.tagName === "option") this.options.push(item); this.children.push(item) } }
+        replaceChildren(...items) { for (const child of this.children) if (typeof child === "object") child.isConnected = false; this.children = []; this.append(...items) }
+        setAttribute(name, value) { this.attributes[name] = String(value) }
+        get text() { return this.textContent + this.children.map(child => typeof child === "string" ? child : child.text).join("") }
+        all() { return this.children.flatMap(child => typeof child === "string" ? [] : [child, ...child.all()]) }
+        querySelectorAll() { return this.all().filter(node => node.dataset.focusKey) }
+        focus() { privacyDOM.focused = this }
+    }
+    const elements = {}, calls = [], posts = [];
+    const tags = { privacyChatRoute: "select", privacyMode: "select", privacyGateEnabled: "input", policyEditor: "dialog" };
+    const privacyDOM = { focused: null };
+    const context = vm.createContext({
+        privacyDOM, calls, posts,
+        $: id => elements[id] || (elements[id] = Object.assign(new FakeNode(tags[id] || "div"), { id, open: id === "policyEditor" })),
+        document: {
+            body: new FakeNode("body"),
+            get activeElement() { return privacyDOM.focused || this.body },
+            createElement: tag => new FakeNode(tag),
+            createElementNS: (_, tag) => new FakeNode(tag),
+        },
+        Option: class extends FakeNode { constructor(label, value) { super("option"); this.textContent = label; this.value = value } },
+        api: async (path, options = {}) => {
+            calls.push({ path, method: options.method || "GET" });
+            if (path === "/api/v1/home/tasks") return { revision: "r1", tasks: [{ id: "11111111-1111-4111-8111-111111111111", title: "Morning digest" }] };
+            if (path === "/api/v1/policy/privacy-test") return { ok: true, address: "https://llm-server.local/v1", model: "fixture-classifier", latencyMs: 412, route: "cloud", probabilities: { local: 0.02, cloud: 0.97, redactApprove: 0.01 } };
+            throw new Error(`unexpected ${path}`);
+        },
+    });
+    vm.runInContext(`var policyState=null,policySaving=false,privacyTasks=null,privacyTest=null,privacyFocus=null;
+      async function policyPost(body,errorBox){posts.push({body,errorBox});return true}
+      function el(tag,cls="",text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n}`, context);
+    vm.runInContext(templateSlice("    // Privacy Gate: where each", "    function el(tag,cls=\"\",text)"), context);
+    const run = code => vm.runInContext(code, context);
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+    context.$("privacyGate").append(...["privacyGateEnabled", "privacyMode", "privacyTest", "privacyChatRoute", "privacyTasks", "privacyRules"].map(id => context.$(id)));
+
+    const badge = run(`privacyBadge({route:"local",mode:"enforce",applied:true,label:"Ran locally · secrets",detail:"Rule secrets matched in the request (3 ms)."})`);
+    expect(badge.className.includes("privacy-badge") && badge.className.includes("enforce") && badge.className.includes("route-local"), "an enforced local badge uses the accent class");
+    same([badge.title, badge.attributes.role, badge.text], ["Rule secrets matched in the request (3 ms).", "note", "Ran locally · secrets"], "the badge shows the label with the detail as its tooltip");
+    expect(badge.attributes["aria-label"].includes("Ran locally · secrets") && badge.attributes["aria-label"].includes("Rule secrets matched"), "the badge's accessible label has the label and the detail");
+    expect(badge.children[0].tagName === "svg" && badge.children[0].innerHTML.includes("path"), "each route has a glyph");
+    const observed = run(`privacyBadge({route:"cloud",mode:"observe",applied:false,label:"Would run in the cloud",detail:"Classifier"})`);
+    expect(observed.className.includes("observe") && !observed.className.includes("enforce"), "observe mode is quiet");
+    const unknown = run(`privacyBadge({route:"elsewhere",mode:"observe",label:"",detail:""})`);
+    expect(!unknown.className.includes("route-") && unknown.text === "Privacy check", "an unknown route still renders");
+    const slot = run(`privacyBadge({label:"Privacy check"},true)`);
+    expect(slot.className.includes("privacy-slot") && slot.attributes["aria-hidden"] === "true" && !slot.title, "a slot is invisible and silent");
+    same(run(`privacyPendingID([{id:"a",role:"user",privacy:{route:"local"}},{id:"b",role:"assistant"},{id:"c",role:"user"},{id:"d",role:"assistant"}])`), "c",
+        "the latest prompt without a badge holds its line once the conversation has badges");
+    same(run(`privacyPendingID([{id:"a",role:"user"},{id:"b",role:"user"}])`), null, "conversations without badges reserve nothing");
+    same(run(`privacyPendingID([{id:"a",role:"user"},{id:"b",role:"user",privacy:{route:"cloud"}}])`), null, "nothing is pending once the latest prompt has its badge");
+
+    run(`renderPrivacyGate({policy:{revision:1,enabled:true,rules:[]}})`);
+    expect(context.$("privacyGate").classList.contains("hidden"), "a Mac without the Privacy Gate hides the section");
+    const stale = "22222222-2222-4222-8222-222222222222";
+    run(`policyState={policy:{revision:7,privacyGate:{enabled:true,mode:"observe",appliesTo:["homeChat","homeTasks"],defaultRoute:"cloud",uncertainRoute:"redactApprove",
+        classifier:{enabled:true,baseURL:"",model:"",timeoutMs:2500},chat:"auto",tasks:{"${stale}":"local"},stickyTurns:3,
+        rules:[{id:"secrets",route:"local",enabled:true,detectors:["secret"],scope:["request","earlier","memory","context"]},{id:"personal-details",route:"redactApprove",enabled:false,detectors:["email","phone"],privateTerms:true},{id:"code",route:"cloud",enabled:true,repoWorkdir:true}]}},
+      privacyClassifier:{address:"https://llm-server.local/v1",model:"fixture-classifier",from:"privateLocal",log:"~/.cache/Cantrip/privacy/decisions.jsonl"}};renderPrivacyGate(policyState)`);
+    await settle();
+    expect(!context.$("privacyGate").classList.contains("hidden"), "the section shows when the Mac has the Privacy Gate");
+    same(context.$("privacyClassifier").textContent, "fixture-classifier at https://llm-server.local/v1, from Private Local", "the classifier says where it is");
+    same([context.$("privacyGateEnabled").checked, context.$("privacyMode").value, context.$("privacyChatRoute").value, context.$("privacyChatRoute").options.length], [true, "observe", "auto", 4],
+        "on, observing, and Home chat decides each time");
+    same(calls.filter(call => call.path === "/api/v1/home/tasks").length, 1, "Home's tasks load once for the pickers");
+    const taskRows = context.$("privacyTasks").children.filter(row => row.className === "privacy-route");
+    same(taskRows.map(row => [row.children[0].textContent, row.children[1].value]), [["Morning digest", "auto"], ["A task that no longer exists", "local"]],
+        "each task gets a picker, including a route left for a removed task");
+    const ruleRows = context.$("privacyRules").children;
+    same(ruleRows.map(row => [row.children[0].children[0].textContent, row.children[0].children[1].text, row.children[0].children[2].children[0].checked]),
+        [["secrets", "Local", true], ["personal-details", "Ask first", false], ["code", "Cloud", true]], "rules show their ID, route and switch");
+    expect(ruleRows[1].className.includes("off") && ruleRows[1].children[1].textContent.includes("email addresses") && ruleRows[1].children[1].textContent.includes("private terms"), "rules say what they match");
+
+    ruleRows[1].children[0].children[2].children[0].checked = true;
+    ruleRows[1].children[0].children[2].children[0].onchange();
+    let post = posts.at(-1);
+    same([post.errorBox, post.body.privacyGate.rules.map(rule => rule.enabled), post.body.privacyGate.mode, post.body.privacyGate.tasks, post.body.privacyGate.classifier.timeoutMs, post.body.privacyGate.stickyTurns],
+        ["privacyGateError", [true, true, true], "observe", { [stale]: "local" }, 2500, 3], "a rule switch sends the whole section with one change");
+    context.$("privacyMode").value = "enforce"; context.$("privacyMode").onchange();
+    post = posts.at(-1);
+    same([post.body.privacyGate.mode, post.body.privacyGate.rules[1].enabled, post.body.privacyGate.enabled], ["enforce", false, true], "the mode switch changes only the mode");
+    context.$("privacyGateEnabled").checked = false; context.$("privacyGateEnabled").onchange();
+    same(posts.at(-1).body.privacyGate.enabled, false, "the gate turns off");
+    context.$("privacyChatRoute").value = "local"; context.$("privacyChatRoute").onchange();
+    same(posts.at(-1).body, { privacyRoute: { task: null, route: "local" } }, "Home chat's route has no task");
+    taskRows[0].children[1].value = "cloudWithPrivateTools"; taskRows[0].children[1].onchange();
+    same(posts.at(-1).body, { privacyRoute: { task: "11111111-1111-4111-8111-111111111111", route: "cloudWithPrivateTools" } }, "a task's route names the task");
+    run(`renderPrivacyGate(policyState)`);
+    expect(context.privacyDOM.focused?.dataset.focusKey === "task:11111111-1111-4111-8111-111111111111" && context.privacyDOM.focused !== taskRows[0].children[1],
+        "the re-rendered picker gets focus back");
+
+    context.$("privacyTest").onclick();
+    await settle();
+    same(context.$("privacyTestResult").textContent, "Answered in 412 ms: Cloud · cloud probability 97%", "the test shows the route, latency and cloud probability");
+    same(calls.at(-1), { path: "/api/v1/policy/privacy-test", method: "POST" }, "the test is a POST");
+    same(run(`privacyTestText({ok:false,error:"The classifier timed out after 2500 ms."})`), "Didn't work: The classifier timed out after 2500 ms.", "a failed test shows the error");
+    same(run(`privacyClassifierText({classifier:{enabled:true}},{from:"none",problem:"Private Local isn't set up.",log:"x"})`), "No classifier: Private Local isn't set up.", "a missing classifier says why");
+}
+
 console.log(failures === 0 ? `Web slash command tests passed (${passes})` : `${failures} web slash command tests failed`);
 process.exit(failures === 0 ? 0 : 1);
