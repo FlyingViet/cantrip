@@ -404,6 +404,27 @@ final class CantripHistoryTests: XCTestCase {
         XCTAssertEqual(model.selectedSession?.transcript.map(\.text), ["Reply 6"])
     }
 
+    /// The older-history anchor holds the reading place only on the visit that loaded it: left set,
+    /// the tab's transcript would never follow its latest message again when reopened.
+    func testOlderHistoryAnchorEndsWhenTheTabIsLeft() async throws {
+        let model = try await model()
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(list: request.url!.path == "/api/v1/sessions"))
+        }
+        model.setAppActive(true)
+        try await waitForRefresh(model)
+        HistoryRequestProtocol.handler = { _ in (200, try self.session(values: [1, 2], older: false)) }
+        await model.loadOlderMessages()
+        XCTAssertEqual(model.historyPrependAnchor, messageID(3))
+        model.setAppActive(false)
+        HistoryRequestProtocol.handler = { _ in throw URLError(.timedOut) }
+        await model.selectSession("00000000-0000-0000-0000-000000000002")
+        XCTAssertNil(model.historyPrependAnchor, "Another tab never inherits the anchor")
+        await model.selectSession(id)
+        XCTAssertEqual(model.selectedSession?.transcript.count, 4, "The tab reopens with the history it loaded")
+        XCTAssertNil(model.historyPrependAnchor, "and follows its latest message again")
+    }
+
     func testOlderHistoryFailureAndServerSwitchDoNotMixTranscripts() async throws {
         let model = try await model()
         HistoryRequestProtocol.handler = { request in
