@@ -9,6 +9,8 @@ struct PrivacyDecision: Equatable {
     var source: Source
     var rule: String?
     var reason: String
+    /// A rule that matched and handed the decision to the classifier (`askClassifier`).
+    var hint: String?
     var hits: [String: Int] = [:]
     var probabilities: [PrivacyRoute: Double]?
     var rulesMs = 0
@@ -67,6 +69,7 @@ struct PrivacyDecisionRecord: Codable, Equatable {
     var source: String
     var rule: String?
     var reason: String
+    var hint: String?
     var hits: [String: Int]
     var pLocal: Double?
     var pCloud: Double?
@@ -184,11 +187,20 @@ final class PrivacyGate: @unchecked Sendable {
         let isSticky = request.kind == .homeChat && settings.stickyTurns > 0 && isStickyLocal(request.conversationKey)
         var decision = PrivacyDecision(route: nil, source: .rule, rule: outcome.rule?.id, reason: outcome.reason,
                                        hits: outcome.hits, rulesMs: outcome.elapsedMs, override: override)
-        if let rule = outcome.rule {
+        let hint = outcome.rule?.askClassifier == true ? outcome.rule : nil
+        if let rule = outcome.rule, hint == nil {
             decision.route = rule.route
             decision.reason = "\(rule.id): \(outcome.reason)"
         } else if !(skipsClassifierWhenFixed && (override != .auto || isSticky)) {
-            await classify(request, settings: settings, into: &decision)
+            decision.rule = nil
+            decision.hint = hint?.id
+            await classify(request, settings: settings, into: &decision, fallback: hint)
+            if let hint, decision.source != .rule {
+                decision.reason = "\(hint.id) (\(outcome.reason)), so the classifier decides; " + decision.reason
+            }
+        } else if let hint {
+            decision.rule = nil
+            decision.hint = hint.id
         }
         decision.underlying = decision.route
         if override != .auto, let route = override.route {
@@ -203,10 +215,20 @@ final class PrivacyGate: @unchecked Sendable {
         return decision
     }
 
-    private func classify(_ request: PrivacyGateRequest, settings: PrivacyGateSettings, into decision: inout PrivacyDecision) async {
+    /// `fallback`: the rule that handed over, which decides when no classifier is set up.
+    private func classify(_ request: PrivacyGateRequest, settings: PrivacyGateSettings, into decision: inout PrivacyDecision,
+                          fallback: PrivacyGateRule? = nil) async {
         let input = Self.classifierInput(request, limit: settings.classifier.maxInputCharacters)
         switch PrivacyClassifierEndpoint.resolve(settings.classifier, privateLocal: privateLocal()) {
         case .failure(.notConfigured(let why)):
+            if let fallback {
+                decision.route = fallback.route
+                decision.source = .rule
+                decision.rule = fallback.id
+                decision.hint = nil
+                decision.reason = "\(fallback.id): \(decision.reason) (\(why))"
+                return
+            }
             decision.route = settings.defaultRoute == .cloud ? .cloud : settings.defaultRoute
             decision.source = .defaultRoute
             decision.reason = "no rule matched; " + why
@@ -343,7 +365,7 @@ final class PrivacyGate: @unchecked Sendable {
         let record = PrivacyDecisionRecord(
             at: at, kind: request.kind.rawValue, task: request.taskID?.uuidString, taskTitle: request.taskTitle,
             mode: settings.mode.rawValue, route: decision.route?.rawValue ?? "offline", source: decision.source.rawValue,
-            rule: decision.rule, reason: String(decision.reason.prefix(300)), hits: decision.hits,
+            rule: decision.rule, reason: String(decision.reason.prefix(300)), hint: decision.hint, hits: decision.hits,
             pLocal: decision.probabilities?[.local], pCloud: decision.probabilities?[.cloud],
             pRedact: decision.probabilities?[.redactApprove], rulesMs: decision.rulesMs, classifierMs: decision.classifierMs,
             classifierError: decision.classifierError, totalMs: totalMs, backend: request.backend,
@@ -462,6 +484,9 @@ final class PrivacyGate: @unchecked Sendable {
         for (source, n) in counts(all.map { $0.source == "rule" ? "rule \($0.rule ?? "?")" : $0.source }) {
             lines.append("  \(source): \(n)")
         }
+        for (hint, n) in counts(all.compactMap(\.hint)) {
+            lines.append("  \(n) of them matched \(hint), which leaves the decision to the classifier")
+        }
         let hits = all.flatMap { $0.hits.filter { $0.value > 0 }.map(\.key) }
         if !hits.isEmpty {
             lines.append("")
@@ -556,4 +581,19 @@ extension PrivacyGate {
 
     /// How long a held task waits between checks.
     static var holdRetryNanoseconds: UInt64 = 60_000_000_000
+
+    /// What the gate decides for `request` (`cantrip privacy test`), recording nothing. When the
+    /// classifier didn't take part (a rule or the run's own route decided), `classifier` is what it
+    /// would have said.
+    func trial(_ request: PrivacyGateRequest, settings: PrivacyGateSettings? = nil) async
+        -> (decision: PrivacyDecision, classifier: PrivacyDecision?) {
+        let settings = settings ?? self.settings
+        let decision = await decide(request, settings: settings)
+        guard decision.probabilities == nil, decision.classifierError == nil, settings.classifier.enabled else {
+            return (decision, nil)
+        }
+        var opinion = PrivacyDecision(route: nil, source: .classifier, reason: "")
+        await classify(request, settings: settings, into: &opinion)
+        return (decision, opinion)
+    }
 }

@@ -100,9 +100,12 @@ struct PrivacyGateRule: Codable, Equatable, Identifiable {
     var repoWorkdir: Bool?
     /// Where detectors and terms look; nil = request, earlier turns and memory snippets.
     var scope: [PrivacySegment]?
+    /// A match doesn't decide: the classifier does (signs that are often harmless, such as a
+    /// person's name). `route` applies only when no classifier is set up.
+    var askClassifier: Bool?
 
     init(id: String, route: PrivacyRoute, detectors: [PrivacyDetector]? = nil, sources: [String]? = nil,
-         privateTerms: Bool? = nil, repoWorkdir: Bool? = nil, scope: [PrivacySegment]? = nil) {
+         privateTerms: Bool? = nil, repoWorkdir: Bool? = nil, scope: [PrivacySegment]? = nil, askClassifier: Bool? = nil) {
         self.id = id
         self.route = route
         self.detectors = detectors
@@ -110,6 +113,7 @@ struct PrivacyGateRule: Codable, Equatable, Identifiable {
         self.privateTerms = privateTerms
         self.repoWorkdir = repoWorkdir
         self.scope = scope
+        self.askClassifier = askClassifier
     }
 
     init(from decoder: Decoder) throws {
@@ -122,6 +126,7 @@ struct PrivacyGateRule: Codable, Equatable, Identifiable {
         privateTerms = try c.decodeIfPresent(Bool.self, forKey: .privateTerms)
         repoWorkdir = try c.decodeIfPresent(Bool.self, forKey: .repoWorkdir)
         scope = try c.decodeIfPresent([PrivacySegment].self, forKey: .scope)
+        askClassifier = try c.decodeIfPresent(Bool.self, forKey: .askClassifier)
     }
 
     var segments: Set<PrivacySegment> { Set(scope ?? [.request, .earlier, .memory]) }
@@ -130,10 +135,36 @@ struct PrivacyGateRule: Codable, Equatable, Identifiable {
         PrivacyGateRule(id: "secrets", route: .local, detectors: [.secret], scope: PrivacySegment.allCases),
         PrivacyGateRule(id: "private-sources", route: .local,
                         sources: ["personal", "homelab", "bitwarden", "forms", "mail", "messages"], scope: [.request]),
-        PrivacyGateRule(id: "personal-details", route: .redactApprove, detectors: [.ssn, .card, .account, .email, .phone, .address, .name],
-                        privateTerms: true),
+        // Numbers that identify a person or an account decide on their own.
+        PrivacyGateRule(id: "personal-details", route: .redactApprove, detectors: [.ssn, .card, .account]),
+        // Names, private terms and contact details are usually harmless (Home's own data is full of
+        // them), so they count only in what the user asked, and the classifier decides.
+        PrivacyGateRule(id: "personal-hints", route: .redactApprove, detectors: [.email, .phone, .address, .name],
+                        privateTerms: true, scope: [.request], askClassifier: true),
         PrivacyGateRule(id: "code", route: .cloud, repoWorkdir: true),
     ]
+
+    /// The one personal-details rule before November 2026: names, private terms and contact details
+    /// anywhere decided "ask first", including in Home's own data, so nearly every request matched.
+    static let previousPersonalDetails = PrivacyGateRule(
+        id: "personal-details", route: .redactApprove, detectors: [.ssn, .card, .account, .email, .phone, .address, .name],
+        privateTerms: true)
+
+    /// Saved rules with that old rule replaced by the current personal-details and personal-hints
+    /// (keeping whether it was on). Changed or renamed rules are left as they are.
+    static func migrated(_ rules: [PrivacyGateRule]) -> [PrivacyGateRule] {
+        guard !rules.contains(where: { $0.id == "personal-hints" }),
+              let index = rules.firstIndex(where: { var rule = $0; rule.enabled = true; return rule == previousPersonalDetails })
+        else { return rules }
+        let replacements = defaults.filter { $0.id == "personal-details" || $0.id == "personal-hints" }.map { rule -> PrivacyGateRule in
+            var rule = rule
+            rule.enabled = rules[index].enabled
+            return rule
+        }
+        var result = rules
+        result.replaceSubrange(index...index, with: replacements)
+        return result
+    }
 }
 
 struct PrivacyClassifierSettings: Codable, Equatable {
@@ -216,6 +247,8 @@ struct PrivacyGateSettings: Codable, Equatable {
     /// Once a Home chat request is routed local, the next turns stay local while it is still among
     /// the earlier turns sent along with each new message (Home has no Start Fresh). 0 = off.
     var stickyTurns = 3
+    /// The user's own names ("Pat" or "Pat Example"): never counted as a person's name.
+    var ownerNames: [String] = []
 
     init() {}
 
@@ -228,13 +261,14 @@ struct PrivacyGateSettings: Codable, Equatable {
         defaultRoute = try c.decodeIfPresent(PrivacyRoute.self, forKey: .defaultRoute) ?? d.defaultRoute
         uncertainRoute = try c.decodeIfPresent(PrivacyRoute.self, forKey: .uncertainRoute) ?? d.uncertainRoute
         classifier = try c.decodeIfPresent(PrivacyClassifierSettings.self, forKey: .classifier) ?? d.classifier
-        rules = try c.decodeIfPresent([PrivacyGateRule].self, forKey: .rules) ?? d.rules
+        rules = try c.decodeIfPresent([PrivacyGateRule].self, forKey: .rules).map(PrivacyGateRule.migrated) ?? d.rules
         chat = try c.decodeIfPresent(PrivacyRouteOverride.self, forKey: .chat) ?? d.chat
         tasks = try c.decodeIfPresent([String: PrivacyRouteOverride].self, forKey: .tasks) ?? d.tasks
         cloudRuns = try c.decodeIfPresent(PrivacyCloudRuns.self, forKey: .cloudRuns) ?? d.cloudRuns
         offline = try c.decodeIfPresent(Offline.self, forKey: .offline) ?? d.offline
         approvalTimeoutMinutes = try c.decodeIfPresent(Timeouts.self, forKey: .approvalTimeoutMinutes) ?? d.approvalTimeoutMinutes
         stickyTurns = try c.decodeIfPresent(Int.self, forKey: .stickyTurns) ?? d.stickyTurns
+        ownerNames = try c.decodeIfPresent([String].self, forKey: .ownerNames) ?? d.ownerNames
     }
 
     func applies(to scope: Scope) -> Bool { enabled && appliesTo.contains(scope) }
@@ -264,6 +298,9 @@ struct PrivacyGateSettings: Codable, Equatable {
         if !(200...20_000).contains(c.maxInputCharacters) { errors.append("Send the classifier 200-20000 characters.") }
         if !c.baseURL.isEmpty, let problem = PrivacyHostCheck.problem(with: c.baseURL) { errors.append(problem) }
         if !(0...20).contains(stickyTurns) { errors.append("Stay local for 0-20 turns.") }
+        if ownerNames.count > 20 || ownerNames.contains(where: { $0.count > 80 }) {
+            errors.append("List up to 20 owner names of up to 80 characters.")
+        }
         if !(1...1440).contains(approvalTimeoutMinutes.chat) || !(1...1440).contains(approvalTimeoutMinutes.tasks) {
             errors.append("Approval timeouts must be 1-1440 minutes.")
         }
