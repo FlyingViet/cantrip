@@ -3595,6 +3595,9 @@ struct MessageRow: View {
                 if let usage = message.promptUsage, !usage.isEmpty {
                     PromptUsageLine(usage: usage)
                 }
+                if let privacy = message.privacy {
+                    PrivacyBadgeLine(badge: privacy)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         case .assistant:
