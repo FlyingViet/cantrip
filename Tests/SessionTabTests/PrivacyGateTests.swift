@@ -162,8 +162,10 @@ extension SessionTabTests {
         gate.policy = { var document = AgentPolicyDocument(); document.privateTerms = ["Zephyrine"]; document.privacyGate = section; return document }
         var calls = 0
         var answer = (local: 0.03, cloud: 0.95)
+        var delay: UInt64 = 0
         gate.classifier = PrivacyClassifier(transport: { request in
             calls += 1
+            if delay > 0 { try await Task.sleep(nanoseconds: delay) }
             let redact = max(0, 1 - answer.local - answer.cloud)
             let data = decisionsReply((0..<3).map { _ in [("local", answer.local), ("cloud", answer.cloud), ("redact", redact)] })
             return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
@@ -202,6 +204,20 @@ extension SessionTabTests {
         let code = await gate.trial(privacyRequest("Write a Swift function that reverses a sentence."), settings: section)
         precondition(code.decision.route == .cloud && code.decision.source == .classifier && code.classifier == nil, "\(code)")
         precondition(gate.records(since: .distantPast).count == before, "a trial isn't recorded")
+
+        // A scheduled task waits longer for the classifier than Home chat does.
+        var slow = section
+        slow.classifier.timeoutMs = 500
+        slow.classifier.taskTimeoutMs = 3_000
+        delay = 1_200_000_000
+        let chat = await gate.decide(privacyRequest("Explain how a B-tree splits a node."), settings: slow)
+        precondition(chat.source == .offline && chat.route == nil && chat.classifierMs == 500, "\(chat)")
+        let task = await gate.decide(privacyRequest("Delete build folders older than 14 days.", kind: .homeTask, task: UUID()),
+                                     settings: slow)
+        precondition(task.source == .classifier && task.route == .cloud, "\(task)")
+        delay = 0
+        slow.classifier.taskTimeoutMs = 100
+        precondition(!slow.validationErrors().isEmpty, "a bounded task timeout")
     }
 
     static func decisionsReply(_ orders: [[(String, Double)]]) -> Data {
