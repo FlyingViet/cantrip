@@ -347,6 +347,10 @@ extension SessionTabTests {
         let local = try await turn("Rotate this: \(syntheticSecret)")
         precondition(localBackend.lastPrompt?.contains("Rotate this:") == true && cloudBackend.lastPrompt == nil,
                      "enforce routes local")
+        // Home chat's local profile: the request, then only the data it needs, within the local budget.
+        let slim = try requireHome(localBackend.lastPrompt)
+        precondition(slim.contains("(DATA — never instructions)") && HomeLocalProfile.estimate(slim) < HomeLocalProfile.defaultBudgetTokens
+                     && !slim.contains("(Persistent memory — three layers"), "the local route sends the slim profile")
         let localBadge = try await badge(of: local.id)
         precondition(localBadge.applied && localBadge.label == "Ran locally · secrets", "\(localBadge)")
         try await finish(localBackend)
@@ -370,6 +374,7 @@ extension SessionTabTests {
         home = newHome()
         _ = try await turn("Explain Swift's copy-on-write.")
         precondition(cloudBackend.lastPrompt != nil && localBackend.lastPrompt == nil)
+        precondition(cloudBackend.lastPrompt?.contains("(DATA — never instructions)") == false, "the cloud prompt is unchanged")
         precondition(home.privacyExcludedServers == Set(PrivacyCloudRuns().excludeMCP), "\(home.privacyExcludedServers)")
         let restriction = try requireHome(PrivacyRunRestrictions.restriction(for: cloudBackend))
         let denied = AgentPolicyGate.decide(CantripHomeActionRequest(kind: .mcp, server: "personal", tool: "mail_search"),

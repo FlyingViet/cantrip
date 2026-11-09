@@ -10,6 +10,11 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
     var modelOverride: String?
     /// The server's base URL for this run instead of the Local Model setting (Privacy Gate local routes).
     var baseURLOverride: String?
+    /// A hard input budget for this run (the Privacy Gate's local route): older tool output is left
+    /// out first, and the run stops rather than overflow the model's window.
+    var contextBudgetTokens: Int?
+    /// Earlier-turn messages at the start of `history` (the budget may drop them).
+    private var replayedMessages = 0
     /// Read-only instance (council advisors): no tool loop, regardless
     /// of global autonomy.
     var readOnly = false
@@ -65,9 +70,51 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         ).map {
             ["role": $0.role, "content": $0.content]
         }
+        replayedMessages = history.count
         history.append(["role": "user", "content": request.prompt])
         onEvent(.status("Thinking…"))
         startRequest()
+    }
+
+    static func tools() -> [[String: Any]] {
+        [[
+            "type": "function",
+            "function": [
+                "name": "run_shell",
+                "description": "Run a zsh command on the user's Mac and return stdout+stderr. Use for opening apps (open -a Name), reading/writing files, fetching URLs (curl), and system queries.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "command": ["type": "string", "description": "The shell command to run"]
+                    ],
+                    "required": ["command"],
+                ],
+            ],
+        ]] + MCPManager.shared.openAITools()
+    }
+
+    static let leftOut = "[Earlier tool output left out to stay within the local model's context.]"
+
+    /// Fits a run's messages in `budget` tokens: older tool output goes first (the two latest stay),
+    /// then the oldest of the `replayed` earlier-turn messages before the run's own request. False
+    /// when even that isn't enough.
+    static func fit(_ history: inout [[String: Any]], budget: Int, replayed: inout Int) -> Bool {
+        func size() -> Int {
+            history.reduce(0) { total, message in
+                let content = message["content"] as? String ?? ""
+                let calls = message["tool_calls"].flatMap { try? JSONSerialization.data(withJSONObject: $0) }.map { $0.count / 3 } ?? 0
+                return total + HomeLocalProfile.estimate(content) + calls + 4
+            }
+        }
+        let tools = history.indices.filter { history[$0]["role"] as? String == "tool" }
+        for index in tools.dropLast(2) where size() > budget {
+            history[index]["content"] = leftOut
+        }
+        while size() > budget, replayed > 0 {
+            history.removeFirst()
+            replayed -= 1
+        }
+        return size() <= budget
     }
 
     private func startRequest() {
@@ -87,6 +134,21 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         if !system.isEmpty {
             messages.append(["role": "system", "content": system])
         }
+        let tools = settings.allowActions && !readOnly ? Self.tools() : []
+        if let budget = contextBudgetTokens {
+            let fixed = HomeLocalProfile.estimate(system)
+                + HomeLocalProfile.estimate(String(decoding: (try? JSONSerialization.data(withJSONObject: tools)) ?? Data(), as: UTF8.self))
+            let before = (history.count, history.filter { $0["content"] as? String == Self.leftOut }.count)
+            guard Self.fit(&history, budget: budget - fixed, replayed: &replayedMessages) else {
+                Log.write("local run: over its \(budget)-token budget even after leaving out earlier output; stopped")
+                onEvent?(.failure("This local run reached its \(budget)-token budget for the model's window. Nothing was sent to a cloud model."))
+                return
+            }
+            let leftOut = history.filter { $0["content"] as? String == Self.leftOut }.count - before.1
+            if leftOut > 0 || history.count < before.0 {
+                Log.write("local run: left out \(leftOut) earlier tool outputs and \(before.0 - history.count) earlier messages to stay within \(budget) tokens")
+            }
+        }
         messages += history
 
         var body: [String: Any] = [
@@ -94,24 +156,7 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
             "messages": messages,
             "stream": true,
         ]
-        if settings.allowActions, !readOnly {
-            var tools: [[String: Any]] = [[
-                "type": "function",
-                "function": [
-                    "name": "run_shell",
-                    "description": "Run a zsh command on the user's Mac and return stdout+stderr. Use for opening apps (open -a Name), reading/writing files, fetching URLs (curl), and system queries.",
-                    "parameters": [
-                        "type": "object",
-                        "properties": [
-                            "command": ["type": "string", "description": "The shell command to run"]
-                        ],
-                        "required": ["command"],
-                    ],
-                ],
-            ]]
-            tools += MCPManager.shared.openAITools()
-            body["tools"] = tools
-        }
+        if !tools.isEmpty { body["tools"] = tools }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

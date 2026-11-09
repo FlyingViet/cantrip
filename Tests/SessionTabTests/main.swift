@@ -103,7 +103,12 @@ struct SessionTabTests {
             try await testRemoteMaintenanceRelease()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_LOCAL_PROFILE_LIVE_TEST"] == "1" {
+            try await testHomeLocalLive()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "privacy" {
+            try testHomeLocalProfile()
             try await testPrivacyGate()
             return
         }
@@ -300,6 +305,7 @@ struct SessionTabTests {
         try await testCantripHomeDoneWhen()
         try await testCantripHomeNewTabs()
         try await testCantripHomeListsEveryOpenTab()
+        try testHomeLocalProfile()
         try await testPrivacyGate()
         try testBuildQueue()
         try await testThreadTags()

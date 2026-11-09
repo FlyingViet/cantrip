@@ -115,7 +115,14 @@ Privacy Gate decides where it should run:
 
 - **Local**: on your own model server. Home chat uses Private Local (no tools);
   a scheduled task uses the Local Model backend pointed at the same server, with
-  tools.
+  tools. A local Home chat message gets a short, fixed system prompt with Home's
+  block rules (tasks, records, handoffs), then only what the message needs: the
+  task index, workspaces it mentions, open tabs (one line each), core memory and
+  matched notes, within 8,000 tokens (less when Private Local's context window
+  is small). Earlier turns, workspace records, notes and tabs are shortened first,
+  core memory last. A local task run stays within the model's context window
+  minus 4,096 tokens for the reply: older tool output is left out first, and the
+  run stops rather than overflow. Nothing on the cloud route changes.
 - **Cloud**: on the backend chosen in Settings.
 - **Ask first**: personal details that could be hidden. Until hiding exists,
   enforce mode asks before sending: **Run locally**, **Send to cloud without

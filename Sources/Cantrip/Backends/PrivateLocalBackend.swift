@@ -114,7 +114,7 @@ final class PrivateLocalClient: NSObject, URLSessionTaskDelegate {
         if !configuration.systemPrompt.isEmpty {
             messages.append(["role": "system", "content": configuration.systemPrompt])
         }
-        messages += ConversationContextBuilder.chatMessages(for: input.userMessage, turns: input.previousTurns)
+        messages += (input.replay ?? ConversationContextBuilder.chatMessages(for: input.userMessage, turns: input.previousTurns))
             .map { ["role": $0.role, "content": $0.content] }
         messages.append(["role": "user", "content": input.prompt])
         var body: [String: Any] = ["model": configuration.model, "messages": messages, "stream": true]
