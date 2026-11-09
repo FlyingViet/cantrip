@@ -1663,12 +1663,17 @@ struct ChatView: View {
                     subagents: CantripPinnedSubagents.liveForeground(
                         in: remote.selectedSession?.transcript ?? []
                     ),
-                    maxHeight: max(120, chatAvailableHeight * 0.35)
+                    maxHeight: max(120, chatAvailableHeight * 0.35),
+                    compact: compactActivity
                 )
             }
             inputBar
         }
     }
+
+    /// The folded iPhone Duo's outer display is short: the running work above the composer (subagents,
+    /// the queue, the status line) takes one line each, so the chat keeps most of the screen.
+    private var compactActivity: Bool { displayTraits.isFolded }
 
     /// Unfolded upright, the status bar's band across the top is empty but for the clock and camera
     /// ring at its trailing end: a tab's header sits in it instead of below it, as tall as the band.
@@ -2114,7 +2119,8 @@ struct ChatView: View {
             sendNow: nextID.map { id in { sendQueuedPromptNow(id, sessionID: session.id) } },
             resume: queueResume(for: session),
             isSendingNow: remote.sendingQueuedPromptID != nil && remote.sendingQueuedPromptID == nextID,
-            canSendNow: remote.isConnected && !remote.isMutating
+            canSendNow: remote.isConnected && !remote.isMutating,
+            compact: compactActivity
         ) {
             composerFocused = false
             showQueue = true
@@ -3076,15 +3082,16 @@ struct ChatView: View {
             }
         } else if vm.isWorking && !(vm.activeLane.usesCantripRemote && remote.chatInputRequest != nil) {
             HStack(spacing: 10) {
-                ThinkingView(size: 22, color: .accentColor)
+                ThinkingView(size: compactActivity ? 18 : 22, color: .accentColor)
                 Text(
                     vm.runStatusText
                         ?? (vm.activeLane.usesCantripRemote
                             ? "Cantrip is working…"
                             : "Hermes is thinking…")
                 )
-                    .font(.callout)
+                    .font(compactActivity ? .subheadline : .callout)
                     .foregroundStyle(.secondary)
+                    .lineLimit(compactActivity ? 1 : nil)
                 Spacer(minLength: 0)
             }
         }

@@ -416,6 +416,23 @@ final class CantripSubagentTests: XCTestCase {
         }
     }
 
+    func testCompactPinnedCardIsOneShortRowThatKeepsStop() throws {
+        let running = try XCTUnwrap(screenshotSubagents().first { $0.status == .running })
+        func height(compact: Bool, size: DynamicTypeSize, width: CGFloat = 434) -> CGFloat {
+            UIHostingController(rootView:
+                CantripSubagentCard(remote: CantripRemoteModel(), sessionID: sessionID, subagent: running, compact: compact)
+                    .environment(\.dynamicTypeSize, size)
+            ).sizeThatFits(in: CGSize(width: width, height: 2_000)).height
+        }
+        for width in [434.0, 320] {
+            let compact = height(compact: true, size: .large, width: width)
+            XCTAssertGreaterThanOrEqual(compact, 44, "Stop and the row keep 44 pt targets at \(width)")
+            XCTAssertLessThanOrEqual(compact, 60, "One row on the folded Duo at \(width)")
+            XCTAssertLessThan(compact, height(compact: false, size: .large, width: width) / 2)
+        }
+        XCTAssertLessThan(height(compact: true, size: .accessibility3), height(compact: false, size: .accessibility3))
+    }
+
     private func sessionPayload(subagentStatus: String) throws -> Data {
         try JSONSerialization.data(withJSONObject: [
             "session": [

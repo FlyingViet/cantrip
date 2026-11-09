@@ -140,6 +140,8 @@ struct CantripPinnedSubagents: View {
     let sessionID: String?
     let subagents: [CantripRemoteSubagent]
     let maxHeight: CGFloat
+    /// One short row per agent until tapped (the folded iPhone Duo, where the full cards crowd out the chat).
+    var compact = false
 
     @State private var contentHeight: CGFloat = 0
 
@@ -162,9 +164,9 @@ struct CantripPinnedSubagents: View {
     var body: some View {
         if !subagents.isEmpty {
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: compact ? 6 : 8) {
                     ForEach(subagents) { subagent in
-                        CantripSubagentCard(remote: remote, sessionID: sessionID, subagent: subagent)
+                        CantripSubagentCard(remote: remote, sessionID: sessionID, subagent: subagent, compact: compact)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -173,7 +175,7 @@ struct CantripPinnedSubagents: View {
             .scrollBounceBehavior(.basedOnSize)
             .frame(height: min(contentHeight, maxHeight))
             .padding(.horizontal)
-            .padding(.vertical, 8)
+            .padding(.vertical, compact ? 6 : 8)
             .background(.bar)
             .overlay(alignment: .top) { Divider() }
             .accessibilityElement(children: .contain)
@@ -411,7 +413,11 @@ struct CantripSubagentCard: View {
     @ObservedObject var remote: CantripRemoteModel
     let sessionID: String?
     let subagent: CantripRemoteSubagent
+    /// Collapsed, the card is one row: the name, then what it's doing and for how long, with Stop.
+    /// A tap shows the whole card.
+    var compact = false
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var expanded = false
     @State private var showingStopConfirmation = false
     @State private var isStopping = false
@@ -443,6 +449,90 @@ struct CantripSubagentCard: View {
 
     @ViewBuilder
     private func card(now: Date) -> some View {
+        if compact, !expanded {
+            compactRow(now: now)
+        } else {
+            fullCard(now: now)
+        }
+    }
+
+    /// What the compact row says under the name: the current step, else the task, else the status.
+    private var compactDetail: String {
+        if let current = currentWorkLine { return "Now: \(current)" }
+        if let summaryLine { return summaryLine }
+        return subagent.status == .queued ? CantripSubagentFormat.queuedHint : subagent.status.displayText
+    }
+
+    private func compactRow(now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 8) {
+                compactSummary(now: now)
+                if canStop {
+                    stopButton
+                }
+            }
+            if let stopError {
+                CantripSubagentErrorRow(stopError)
+                    .padding(.bottom, 4)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color(.separator).opacity(0.24))
+        }
+    }
+
+    private func compactSummary(now: Date) -> some View {
+        let lines = dynamicTypeSize.isAccessibilitySize ? 2 : 1
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) { expanded = true }
+        } label: {
+            HStack(alignment: .center, spacing: 8) {
+                statusIcon
+                    .frame(width: 18, height: 18)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(lines)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        // At accessibility sizes the time alone fits; the step is in the accessibility value.
+                        if !dynamicTypeSize.isAccessibilitySize {
+                            Text(compactDetail)
+                                .foregroundStyle(subagent.status == .running ? .primary : .secondary)
+                                .lineLimit(1)
+                        }
+                        Text((dynamicTypeSize.isAccessibilitySize ? "" : "· ") + CantripSubagentFormat.elapsedLabel(
+                            startedAt: subagent.startedAt, finishedAt: subagent.finishedAt, now: now
+                        ))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                    }
+                    .font(.caption)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel(now: now))
+        .accessibilityValue(compactDetail)
+        .accessibilityHint("Shows subagent details")
+    }
+
+    @ViewBuilder
+    private func fullCard(now: Date) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 Button {
@@ -568,14 +658,23 @@ struct CantripSubagentCard: View {
     }
 
     private var stopButton: some View {
-        Button {
-            showingStopConfirmation = true
-        } label: {
-            Text(isStopping ? "Stopping..." : "Stop")
-                .font(.caption.weight(.semibold))
-                .frame(minHeight: 44)
+        Group {
+            if compact && !expanded {
+                Button {
+                    showingStopConfirmation = true
+                } label: {
+                    stopLabel.frame(minWidth: 44)
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Button {
+                    showingStopConfirmation = true
+                } label: {
+                    stopLabel
+                }
+                .buttonStyle(.bordered)
+            }
         }
-        .buttonStyle(.bordered)
         .tint(.red)
         .disabled(isStopping)
         .accessibilityLabel("Stop \(displayName)")
@@ -587,6 +686,12 @@ struct CantripSubagentCard: View {
         } message: {
             Text("Cantrip will stop this subagent if it is still running.")
         }
+    }
+
+    private var stopLabel: some View {
+        Text(isStopping ? "Stopping..." : "Stop")
+            .font(.caption.weight(.semibold))
+            .frame(minHeight: 44)
     }
 
     private var summaryLine: String? {
