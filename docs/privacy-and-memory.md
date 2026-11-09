@@ -161,7 +161,8 @@ How it decides, first match wins:
    (oMLX's `POST /v1/decisions`, by default Private Local's server and model)
    reads the request and the latest earlier turn, three times with the options in
    a different order, and Cantrip averages the answers. It says cloud only when
-   it's at least 90% sure; otherwise local, or ask first when it isn't sure.
+   it's at least 80% sure (`cloudMinProbability`); otherwise local, or ask first
+   when it isn't sure, never the cloud.
    Its instructions say coding, writing, general knowledge, questions about the
    assistant itself and routine work on your computer aren't private; requests
    about your messages, health, money, accounts, family or other people are. After

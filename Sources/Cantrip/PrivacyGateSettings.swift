@@ -180,8 +180,9 @@ struct PrivacyClassifierSettings: Codable, Equatable {
     var taskTimeoutMs = 10_000
     /// The question is asked this many times with the options in a different order, and averaged.
     var rotations = 3
-    /// Cloud only when the averaged probability of "cloud" is at least this.
-    var cloudMinProbability = 0.9
+    /// Cloud only when the averaged probability of "cloud" is at least this. Below it the gate never
+    /// guesses toward the cloud: local, or ask first.
+    var cloudMinProbability = 0.8
     var cacheMinutes = 60
     /// The request and the latest earlier turn are cut to this many characters.
     var maxInputCharacters = 3000

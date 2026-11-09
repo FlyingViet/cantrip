@@ -511,8 +511,12 @@ final class PrivacyGate: @unchecked Sendable {
             func at(_ q: Double) -> Int { times.isEmpty ? 0 : times[min(times.count - 1, Int(Double(times.count - 1) * q))] }
             lines.append("")
             lines.append("Classifier: \(asked.count) calls, \(errors) unanswered; median \(at(0.5)) ms, 95th percentile \(at(0.95)) ms.")
-            let near = all.filter { ($0.pCloud ?? 0) >= 0.7 && ($0.pCloud ?? 0) < 0.9 }.count
-            if near > 0 { lines.append("  \(near) answers were 70-89% cloud: just under the cloud threshold.") }
+            let threshold = settings.classifier.cloudMinProbability
+            let near = all.filter { ($0.pCloud ?? 0) >= threshold - 0.2 && ($0.pCloud ?? 0) < threshold }.count
+            if near > 0 {
+                let percent = Int((threshold * 100).rounded())
+                lines.append("  \(near) answers were \(percent - 20)-\(percent - 1)% cloud: just under the cloud threshold (\(percent)%).")
+            }
         }
         let rulesSorted = all.map(\.rulesMs).sorted()
         lines.append("")
