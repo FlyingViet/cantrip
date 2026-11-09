@@ -106,7 +106,7 @@ struct SettingsPrivacyGateSections: View {
         } header: {
             Text("Privacy rules (\(gate.rules.count))")
         } footer: {
-            Text("Rules decide before the classifier: the first rule that's on and matches wins.")
+            Text("Rules decide before the classifier: the first rule that's on and matches wins. A rule marked Classifier decides hands the request to the classifier.")
         }
     }
 

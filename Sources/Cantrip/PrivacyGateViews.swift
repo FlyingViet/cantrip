@@ -82,11 +82,12 @@ struct PrivacyGateSettingsView: View {
                                 if let index = gate.rules.firstIndex(where: { $0.id == rule.id }) { gate.rules[index].enabled = value }
                             } }
                         )) {
-                            Text("\(rule.id) → \(rule.route.label.lowercased())").font(.caption2)
+                            Text("\(rule.id) → \(rule.askClassifier == true ? "classifier decides" : rule.route.label.lowercased())")
+                                .font(.caption2)
                         }
                         .toggleStyle(.checkbox)
                     }
-                    Text("First match wins, after Home chat's or the task's own route. Requests no rule decides go to the classifier; it says cloud only when it's at least \(Int(settings.classifier.cloudMinProbability * 100))% sure.")
+                    Text("First match wins, after Home chat's or the task's own route. Requests no rule decides, and those a “classifier decides” rule matches, go to the classifier; it says cloud only when it's at least \(Int(settings.classifier.cloudMinProbability * 100))% sure.")
                         .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.top, 2)

@@ -217,6 +217,8 @@ struct CantripPrivacyGate: Decodable, Equatable {
         let sources: [String]
         let privateTerms: Bool
         let repoWorkdir: Bool
+        /// A match hands the request to the classifier instead of deciding.
+        let askClassifier: Bool
 
         init?(_ value: MCPAppJSONValue) {
             guard case .object(let object) = value, let id = object["id"]?.privacyString, !id.isEmpty else { return nil }
@@ -227,9 +229,12 @@ struct CantripPrivacyGate: Decodable, Equatable {
             sources = object["sources"]?.privacyStrings ?? []
             privateTerms = object["privateTerms"]?.privacyBool ?? false
             repoWorkdir = object["repoWorkdir"]?.privacyBool ?? false
+            askClassifier = object["askClassifier"]?.privacyBool ?? false
         }
 
-        var routeTitle: String { CantripPrivacyRoute(rawValue: route)?.title ?? route }
+        var routeTitle: String {
+            askClassifier ? "Classifier decides" : CantripPrivacyRoute(rawValue: route)?.title ?? route
+        }
 
         /// What it looks for: "card numbers, phone numbers · private terms".
         var matches: String {

@@ -3903,7 +3903,7 @@ private extension RemoteControlServer {
     <h4>Classifier</h4><div class="privacy-classifier"><span id="privacyClassifier"></span><button id="privacyTest" type="button" class="control" data-focus-key="test">Test connection</button></div>
     <div id="privacyTestResult" class="muted" role="status" aria-live="polite"></div><p id="privacyLog" class="muted"></p>
     <h4>Routes</h4><div class="privacy-route"><label for="privacyChatRoute">Home chat</label><select id="privacyChatRoute" data-focus-key="chat"></select></div><div id="privacyTasks"></div>
-    <h4>Rules</h4><p class="muted">The first rule that's on and matches decides; the classifier decides the rest.</p><div id="privacyRules"></div></section>
+    <h4>Rules</h4><p class="muted">The first rule that's on and matches decides; the classifier decides the rest, and requests a “Classifier decides” rule matches.</p><div id="privacyRules"></div></section>
     <details><summary id="policyConflictsTitle">Imported rules a stricter rule overrides</summary><div id="policyConflicts"></div></details>
     <details><summary>Imported from each CLI</summary><div id="policyImports"></div></details>
     <details id="policyJSONBox"><summary>Edit the whole policy as JSON</summary><textarea id="policyJSON" spellcheck="false" aria-label="Policy JSON"></textarea>
@@ -4728,8 +4728,8 @@ private extension RemoteControlServer {
         for(const task of rows){const row=el("div","privacy-route"),label=el("label","",task.title),select=document.createElement("select"),key=`task:${task.id}`;select.id=`privacyTask-${task.id}`;label.htmlFor=select.id;select.dataset.focusKey=key;
           privacyRouteSelect(select,privacyTaskRoute(gate,task.id));select.onchange=()=>privacyRoutePost(task.id,select.value,key);row.append(label,select);tasks.append(row)}}
       const rules=$("privacyRules");rules.replaceChildren();
-      for(const rule of gate.rules||[]){const row=el("div",`policy-rule${rule.enabled===false?" off":""}`),head=el("div","policy-head"),chip=el("span",`policy-effect privacy-route route-${rule.route}`),on=el("label"),box=document.createElement("input"),key=`rule:${rule.id}`,summary=privacyRuleSummary(rule);
-        chip.append(privacyGlyph(rule.route),privacyRouteNames[rule.route]||rule.route);box.type="checkbox";box.checked=rule.enabled!==false;box.disabled=policySaving;box.dataset.focusKey=key;box.setAttribute("aria-label",`${rule.id} on`);
+      for(const rule of gate.rules||[]){const row=el("div",`policy-rule${rule.enabled===false?" off":""}`),head=el("div","policy-head"),chip=el("span",`policy-effect privacy-route route-${rule.askClassifier?"classifier":rule.route}`),on=el("label"),box=document.createElement("input"),key=`rule:${rule.id}`,summary=privacyRuleSummary(rule);
+        chip.append(privacyGlyph(rule.askClassifier?"":rule.route),rule.askClassifier?"Classifier decides":privacyRouteNames[rule.route]||rule.route);box.type="checkbox";box.checked=rule.enabled!==false;box.disabled=policySaving;box.dataset.focusKey=key;box.setAttribute("aria-label",`${rule.id} on`);
         box.onchange=()=>privacyGatePost({rules:(gate.rules||[]).map(r=>r.id===rule.id?{...r,enabled:box.checked}:r)},key);on.append(box," On");head.append(el("strong","",rule.id),chip,on);row.append(head);if(summary)row.append(el("span","muted",summary));rules.append(row)}
       if(!(gate.rules||[]).length)rules.append(el("p","muted","No rules: the classifier decides every request."));
       privacyRestoreFocus()}

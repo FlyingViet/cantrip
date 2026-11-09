@@ -343,6 +343,11 @@ same(mentions.currentMentions(), [], "deleting a mention's text drops its chip")
     same(calls.at(-1), { path: "/api/v1/policy/privacy-test", method: "POST" }, "the test is a POST");
     same(run(`privacyTestText({ok:false,error:"The classifier timed out after 2500 ms."})`), "Didn't work: The classifier timed out after 2500 ms.", "a failed test shows the error");
     same(run(`privacyClassifierText({classifier:{enabled:true}},{from:"none",problem:"Private Local isn't set up.",log:"x"})`), "No classifier: Private Local isn't set up.", "a missing classifier says why");
+    run(`renderPrivacyGate({policy:{revision:8,privacyGate:{enabled:true,mode:"observe",classifier:{enabled:true},chat:"auto",tasks:{},
+        rules:[{id:"personal-hints",route:"redactApprove",enabled:true,detectors:["name"],privateTerms:true,scope:["request"],askClassifier:true}]}}})`);
+    const hint = context.$("privacyRules").children[0].children[0];
+    same([hint.children[0].textContent, hint.children[1].text], ["personal-hints", "Classifier decides"],
+        "a rule that hands requests to the classifier says so, not its fallback route");
 }
 
 console.log(failures === 0 ? `Web slash command tests passed (${passes})` : `${failures} web slash command tests failed`);

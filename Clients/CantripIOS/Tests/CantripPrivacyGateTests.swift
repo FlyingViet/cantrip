@@ -157,6 +157,18 @@ final class CantripPrivacyGateTests: XCTestCase {
 
     // MARK: Policy
 
+    /// A rule that only hands requests to the classifier says so instead of showing its fallback route.
+    func testARuleThatAsksTheClassifier() throws {
+        let value = try JSONDecoder().decode(MCPAppJSONValue.self, from: Data(#"""
+            {"id": "personal-hints", "route": "redactApprove", "detectors": ["name", "email"], "privateTerms": true,
+             "scope": ["request"], "askClassifier": true}
+            """#.utf8))
+        let rule = try XCTUnwrap(CantripPrivacyGate.Rule(value))
+        XCTAssertTrue(rule.askClassifier)
+        XCTAssertEqual(rule.routeTitle, "Classifier decides")
+        XCTAssertEqual(rule.matches, "people's names, email addresses · private terms")
+    }
+
     func testPolicyDecodesThePrivacyGate() throws {
         let snapshot = try PrivacyGateFixture.snapshot()
         let gate = try XCTUnwrap(snapshot.policy.privacyGate)
