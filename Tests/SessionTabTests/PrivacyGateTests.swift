@@ -180,6 +180,13 @@ extension SessionTabTests {
         let logged = gate.records(since: .distantPast)
         precondition(logged.last?.hint == "personal-hints" && logged.last?.rule == nil, "\(logged)")
         precondition(gate.report(days: 1).contains("matched personal-hints, which leaves the decision to the classifier"))
+        // Answers just under the threshold in use are counted against that threshold.
+        var close = cloud
+        close.probabilities = [.cloud: 0.72, .local: 0.2, .redactApprove: 0.08]
+        close.route = .redactApprove
+        gate.record(close, request: named, settings: section, applied: false, totalMs: 1)
+        precondition(gate.report(days: 1).contains("1 answers were 60-79% cloud: just under the cloud threshold (80%)."),
+                     gate.report(days: 1))
 
         // The owner's own name and Home's data alone are no hint at all.
         let own = await gate.decide(privacyRequest("Jordan Rivera here: how do I reverse a list?",
@@ -256,6 +263,12 @@ extension SessionTabTests {
                      && unsure.route(cloudMinimum: 0.9, uncertain: .cloud) == .redactApprove
                      && PrivacyClassification(probabilities: [.local: 0.8, .cloud: 0.1], answered: 3, elapsedMs: 1)
                         .route(cloudMinimum: 0.9, uncertain: .redactApprove) == .local)
+        // The default threshold is 80%: 0.85 goes to the cloud, 0.79 doesn't, and still never by guessing.
+        let threshold = PrivacyClassifierSettings().cloudMinProbability
+        let unsureBelow = PrivacyClassification(probabilities: [.cloud: 0.79, .local: 0.12, .redactApprove: 0.09], answered: 3, elapsedMs: 1)
+        precondition(threshold == 0.8 && unsure.route(cloudMinimum: threshold, uncertain: .redactApprove) == .cloud
+                     && unsureBelow.route(cloudMinimum: threshold, uncertain: .redactApprove) == .redactApprove
+                     && unsureBelow.route(cloudMinimum: threshold, uncertain: .cloud) == .redactApprove, "threshold \(threshold)")
         // Refusals are left out of the average; all refused is an error.
         let partly = try JSONSerialization.data(withJSONObject: ["answers": [
             ["type": "refusal", "name": "route_0"],
@@ -310,6 +323,9 @@ extension SessionTabTests {
         let decoder = AgentPolicyStore.decoder
         // A file from before the gate: on and observing.
         let old = try decoder.decode(AgentPolicyDocument.self, from: Data(#"{"version":1,"rules":[]}"#.utf8))
+        precondition(old.privacyGate.classifier.cloudMinProbability == 0.8, "the default cloud threshold")
+        let strict = try decoder.decode(AgentPolicyDocument.self, from: Data(#"{"privacyGate":{"classifier":{"cloudMinProbability":0.9}}}"#.utf8))
+        precondition(strict.privacyGate.classifier.cloudMinProbability == 0.9, "a saved threshold is kept")
         precondition(old.privacyGate == PrivacyGateSettings() && old.privacyGate.enabled && old.privacyGate.mode == .observe
                      && old.privacyGate.rules.map(\.id) == ["secrets", "private-sources", "personal-details", "personal-hints", "code"])
         // A partial section keeps every default it leaves out.
