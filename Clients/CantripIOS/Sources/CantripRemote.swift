@@ -642,6 +642,9 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     /// Every card under the reply as blocks (weather, places, links, tool results); absent from
     /// older Macs, which send only the three fields above.
     var cards: [CantripCard]? = nil
+    /// Cantrip Home prompts: the Privacy Gate's decision, which can arrive a moment after the
+    /// message. Absent from Macs before the gate.
+    var privacy: CantripPrivacyBadge? = nil
 
     var presentedText: String { displayText ?? text }
     /// Result cards Cantrip posts into Home's chat; never a model reply.
@@ -1980,6 +1983,10 @@ struct CantripRemoteAPI {
 
     fileprivate func updateAgentPolicy(body: Data) async throws -> CantripPolicySnapshot {
         try await request(path: "/api/v1/policy", method: "POST", body: body)
+    }
+
+    fileprivate func testPrivacyClassifier(body: Data) async throws -> CantripPrivacyTestResult {
+        try await request(path: "/api/v1/policy/privacy-test", method: "POST", body: body)
     }
 
     func secrets() async throws -> CantripSecretsSnapshot {
@@ -4721,12 +4728,26 @@ final class CantripRemoteModel: ObservableObject {
         try await performHistoryRead { try await $0.agentPolicy() }
     }
 
-    /// One policy change with the revision read (`enabled`, `rule`, `removeRule`, `setRuleEnabled`);
-    /// nil when it didn't save (`errorMessage` says why).
+    /// One policy change with the revision read (`enabled`, `rule`, `removeRule`, `setRuleEnabled`,
+    /// `privacyGate`, `privacyRoute`); nil when it didn't save (`errorMessage` says why).
     func updateAgentPolicy(_ change: [String: Any]) async -> CantripPolicySnapshot? {
         await mutate(prepare: { _ in try JSONSerialization.data(withJSONObject: change) }, { api, body in
             try await api.updateAgentPolicy(body: body)
         })
+    }
+
+    /// Asks the Privacy Gate's classifier one synthetic question; nil when the Mac didn't answer
+    /// (`errorMessage` says why).
+    func testPrivacyClassifier() async -> CantripPrivacyTestResult? {
+        await mutate(prepare: { _ in Data("{}".utf8) }, { api, body in
+            try await api.testPrivacyClassifier(body: body)
+        })
+    }
+
+    /// Home's scheduled tasks, for per-task settings: the ones Home has loaded, else read now.
+    func homeTasksForSettings() async throws -> [CantripHomeTask] {
+        if !homeTasks.isEmpty { return homeTasks }
+        return try await performHistoryRead { try await $0.homeTasks() }.tasks
     }
 
     /// The Mac's secrets by name, never a value.
@@ -6503,6 +6524,9 @@ private struct CantripRemoteMessageBubble: View {
                 }
                 if message.role == "user", let usage = message.promptUsage {
                     CantripPromptUsageLine(usage: usage)
+                }
+                if message.role == "user", let privacy = message.privacy, privacy.isVisible {
+                    CantripPrivacyBadgeView(badge: privacy)
                 }
             }
             .padding(11)
