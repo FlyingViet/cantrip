@@ -2,7 +2,7 @@
 
 # Run Cantrip without windows (headless)
 
-**Platform: macOS today; Linux is in progress.** A headless host runs Cantrip's
+**Platform: macOS only.** A Linux host isn't built yet. A headless host runs Cantrip's
 sessions, Remote control, Cantrip Home and the `cantrip` CLI with no panel, menu
 bar icon or hotkey. Use it on a cloud Mac, a Mac you reach over remote desktop or
 SSH, or any Mac nobody sits at, then drive it from Cantrip Agent, Cantrip Gateway
