@@ -573,6 +573,7 @@ final class ChatSession: ObservableObject {
             copilot.onAgentSession = { [weak self] cliSessionID in
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
+                        if self?.isCantripHome == true { self?.homeRepeated.observe(session: cliSessionID) }
                         guard let self, !self.isPrivate, !self.isLocalPrivate else { return }
                         SessionOutputFolders.shared.record(cliSessionID, for: self.id)
                     }
@@ -2566,6 +2567,18 @@ final class ChatSession: ObservableObject {
 
     private func dispatchRun(_ request: BackendRequest, backend: Backend, generation: Int) {
         (backend as? CantripHomeGuardedBackend)?.guardrailLabel = notificationTitle
+        var request = request
+        if isCantripHome, backend is CopilotBackend {
+            // Data the conversation already holds goes as a short note (HomeRepeatedData).
+            let memory = HomeRepeatedData.memory(in: request.prompt, vault: settings.memoryPath)
+            let compacted = homeRepeated.compact(request.prompt, sections: (memory.map { [$0] } ?? []) + homeDataSections)
+            if compacted.saved > 0 {
+                Log.write("home: \(compacted.saved) characters of unchanged data sent as short notes")
+                request = BackendRequest(prompt: compacted.message, userMessage: request.userMessage,
+                                         previousTurns: request.previousTurns, replay: request.replay)
+            }
+        }
+        homeDataSections = []
         backend.send(request, workdir: workdir) { [weak self] event in
             DispatchQueue.main.async {
                 guard let self, self.streamGeneration == generation else {
@@ -2703,6 +2716,11 @@ final class ChatSession: ObservableObject {
         localModel.contextBudgetTokens = configuration.contextWindow - HomeLocalProfile.outputReserveTokens
         return localModel
     }
+
+    /// Home chat's data sections this turn (cantripHomeChatTurnContext), and what the Copilot
+    /// conversation already holds of them.
+    var homeDataSections: [HomeRepeatedData.Section] = []
+    private var homeRepeated = HomeRepeatedData()
 
     /// What composeContext added after Home's own data this turn (location, calendar, selection,
     /// attachments), kept for Home chat's local profile.
@@ -3703,6 +3721,7 @@ final class ChatSession: ObservableObject {
             updatePromptUsage { promptUsage, _ in promptUsage.apply(usage) }
         case .context(let context):
             updatePromptUsage { $0.apply(context, typedCharacters: $1) }
+            if isCantripHome, let tokens = context.tokens { homeRepeated.observe(contextTokens: tokens) }
         case .approval(let approval):
             recordApproval(approval)
         case .backgroundWake(let ids):
@@ -3728,6 +3747,8 @@ final class ChatSession: ObservableObject {
             finishStream()
         case .failure(let message):
             isWaitingOnBackgroundWatchers = false
+            // The message may never have reached the conversation: send Home's data whole next time.
+            homeRepeated.reset(keepingConversation: true)
             handleRunInterruption(errorText: message)
         }
     }
@@ -4686,6 +4707,7 @@ final class ChatSession: ObservableObject {
     }
 
     private func cancel(keepQueue: Bool) {
+        homeRepeated.reset(keepingConversation: true)
         deviceLogin.cancel()
         invalidateRouting()
         deliveryStatus = nil
