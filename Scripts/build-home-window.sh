@@ -45,6 +45,30 @@ if [ ! -e "$PACKAGES" ]; then
     done
     rm -rf "$PACKAGES.tmp"
 fi
+# The package state records absolute artifact paths. A cloned cache, or one that moved out of
+# DerivedData, can point at folders that were since pruned, and the build then can't find them.
+# Point each at this cache's own copy when it has one.
+if [ -f "$PACKAGES/workspace-state.json" ]; then
+    /usr/bin/python3 - "$PACKAGES" <<'PY' || true
+import json, os, sys
+spm = os.path.abspath(sys.argv[1])
+path = os.path.join(spm, "workspace-state.json")
+state = json.load(open(path))
+changed = False
+for artifact in state.get("object", {}).get("artifacts", []):
+    old = artifact.get("path", "")
+    if "/artifacts/" not in old:
+        continue
+    new = os.path.join(spm, "artifacts", old.split("/artifacts/", 1)[1])
+    if new != old and os.path.exists(new):
+        artifact["path"] = new
+        changed = True
+if changed:
+    with open(path + ".tmp", "w") as out:
+        json.dump(state, out, indent=2)
+    os.replace(path + ".tmp", path)
+PY
+fi
 if ! (cd "$SRC" && xcodegen generate --quiet) >"$log" 2>&1; then
     skip "xcodegen failed, see $log"
 fi
