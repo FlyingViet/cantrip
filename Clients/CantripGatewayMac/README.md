@@ -125,8 +125,11 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   with a branch mark and stay there until their work merges. The footer
   shows the connection.
 - **Tabs:** selecting a tab shows its transcript and composer in place, with the cursor in the
-  composer. Typing while the sidebar list has focus goes to the composer instead of jumping to a
-  tab by its first letter; the arrow keys still move through the list. The toolbar shows its
+  composer. The transcript opens at its latest message and stays there while the rest of it
+  arrives (the Mac's refresh, images loading), until you scroll up; loading older history in a
+  tab doesn't stop it following when you open that tab again. Typing while the sidebar list has
+  focus goes to the composer instead of jumping to a tab by its first letter; the arrow keys
+  still move through the list. The toolbar shows its
   name and **Working / Idle · folder**, with Stop, delivery (**Auto**) and **⋯** for the tab's
   actions, Resume, voice mode and **Back to Home**. ⌘1–⌘3 or any Home section returns.
   **Start Fresh** (also in the Tab menu) keeps the tab and its messages but starts the next

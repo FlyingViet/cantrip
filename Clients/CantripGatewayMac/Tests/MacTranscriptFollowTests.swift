@@ -123,5 +123,20 @@ final class MacTranscriptFollowTests: XCTestCase {
                        "scrolling alone never follows")
         XCTAssertFalse(HistoryScrollSample.keepsLatestVisible(previous: sample(offset: 2_000), current: sample(offset: 2_000, visible: 300)),
                        "a reader further up is left in place")
+
+        let short = sample(offset: 1_000)
+        XCTAssertTrue(HistoryScrollSample.keepsLatestVisible(previous: short, current: sample(offset: 1_000, content: 5_400),
+                                                             holdingLatest: true),
+                      "a transcript that just opened goes back to its end even when it landed short")
+        XCTAssertTrue(HistoryScrollSample.keepsLatestVisible(previous: short, current: sample(offset: 1_000, content: 4_800),
+                                                             holdingLatest: true))
+        XCTAssertFalse(HistoryScrollSample.keepsLatestVisible(previous: short, current: sample(offset: 900), holdingLatest: true),
+                       "scrolling alone never follows")
+        XCTAssertTrue(HistoryScrollSample.readerMovedUp(previous: atEnd, current: sample(offset: 4_300)), "the reader scrolled up")
+        XCTAssertFalse(HistoryScrollSample.readerMovedUp(previous: short, current: sample(offset: 1_200)), "moving down is the app's")
+        XCTAssertFalse(HistoryScrollSample.readerMovedUp(previous: atEnd, current: sample(offset: 4_000, content: 4_600)),
+                       "content getting shorter pulls the end up by itself")
+        XCTAssertFalse(HistoryScrollSample.readerMovedUp(previous: atEnd, current: sample(offset: 4_300, visible: 700)),
+                       "nor does the window getting taller")
     }
 }

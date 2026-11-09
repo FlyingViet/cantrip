@@ -19,6 +19,11 @@ struct ChatTranscriptScrollView<Content: View>: View {
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var prependAnchorState = HistoryPrependAnchor()
     @State private var follow = TranscriptFollowTracker()
+    #if os(macOS)
+    /// A transcript that just opened (a tab switch) keeps its latest message in view until the
+    /// reader scrolls, whatever loads into it meanwhile.
+    @State private var holdsLatest = true
+    #endif
 
     var body: some View {
         ScrollView {
@@ -53,6 +58,9 @@ struct ChatTranscriptScrollView<Content: View>: View {
                 || newPhase == .interacting
                 || newPhase == .decelerating
             scrollPhase = newPhase
+            #if os(macOS)
+            if userIsScrolling { holdsLatest = false }
+            #endif
             if newPhase == .idle, prependAnchor != nil,
                let target = prependAnchorState.target(previous: HistoryScrollGeometry(context.geometry, prependRevision: prependRevision),
                                                       current: HistoryScrollGeometry(context.geometry, prependRevision: prependRevision),
@@ -102,11 +110,23 @@ struct ChatTranscriptScrollView<Content: View>: View {
         // macOS holds the bottom anchor neither while content grows (images loading, streaming
         // replies) nor when the transcript itself gets shorter (a question card, pinned subagents
         // or queued messages opening below it), so stay on the latest message whenever the reader
-        // was already there. A scroll issued mid-layout can land short, so it's re-applied.
+        // was already there. A transcript that just opened stays on it through every size change
+        // until the reader scrolls: its first layout can land short of the end (macOS 26), and the
+        // rule above would then leave it there as the rest loads. A scroll issued mid-layout can
+        // land short, so it's re-applied.
         .onScrollGeometryChange(for: HistoryScrollSample.self) { HistoryScrollSample($0) } action: { previous, current in
-            guard HistoryScrollSample.keepsLatestVisible(previous: previous, current: current),
+            if HistoryScrollSample.readerMovedUp(previous: previous, current: current) { holdsLatest = false }
+            guard HistoryScrollSample.keepsLatestVisible(previous: previous, current: current, holdingLatest: holdsLatest),
                   prependAnchor == nil, !scrollPhase.isFingerDriven else { return }
             followToLatest()
+        }
+        // The first layout can also finish short of the end without any geometry callback, so
+        // settle on the end a few times as the transcript opens.
+        .task {
+            for delay in [150, 350, 900, 2000] {
+                guard (try? await Task.sleep(for: .milliseconds(delay))) != nil else { return }
+                if holdsLatest, canFollow { position.scrollTo(edge: .bottom) }
+            }
         }
         #endif
         .overlay(alignment: .bottomTrailing) {
@@ -123,6 +143,9 @@ struct ChatTranscriptScrollView<Content: View>: View {
 
     private func scrollToLatest() {
         followsBottom = true
+        #if os(macOS)
+        holdsLatest = true
+        #endif
         position.scrollTo(edge: .bottom)
     }
 
@@ -197,10 +220,19 @@ struct HistoryScrollSample: Equatable {
     var isNearBottom: Bool { contentHeight - (offset + visibleHeight) < 72 }
 
     /// A reader at the latest message stays there when the content grows or the visible area
-    /// changes height; one reading further up is left in place.
-    static func keepsLatestVisible(previous: Self, current: Self) -> Bool {
-        previous.isNearBottom
-            && (current.contentHeight > previous.contentHeight || current.visibleHeight != previous.visibleHeight)
+    /// changes height; one reading further up is left in place. A transcript holding its latest
+    /// message (opened and not scrolled since) goes back to it on any size change.
+    static func keepsLatestVisible(previous: Self, current: Self, holdingLatest: Bool = false) -> Bool {
+        let resized = current.visibleHeight != previous.visibleHeight
+        if holdingLatest { return resized || current.contentHeight != previous.contentHeight }
+        return previous.isNearBottom && (current.contentHeight > previous.contentHeight || resized)
+    }
+
+    /// The reader moved toward older messages: the transcript moved up while nothing changed size.
+    /// Layout and the app's own scrolls move it only down, or along with a size change.
+    static func readerMovedUp(previous: Self, current: Self) -> Bool {
+        current.offset < previous.offset - 0.5
+            && current.contentHeight == previous.contentHeight && current.visibleHeight == previous.visibleHeight
     }
 }
 

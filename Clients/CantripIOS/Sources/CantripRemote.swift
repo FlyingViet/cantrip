@@ -3183,7 +3183,11 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var configuredURL: String
     @Published private(set) var hasStoredToken: Bool
     @Published private(set) var sessions: [CantripRemoteSession] = []
-    @Published private(set) var selectedSessionID: String?
+    @Published private(set) var selectedSessionID: String? {
+        // The anchor belongs to the conversation that loaded older history; left set, it would
+        // keep that tab's transcript from following its latest message when it's opened again.
+        didSet { if selectedSessionID != oldValue { historyPrependAnchor = nil } }
+    }
     @Published private(set) var selectedSession: CantripRemoteSession?
     @Published private(set) var isHomeSelected = false
     /// Cantrip Home's latest listed summary, kept current while a project tab is open.
