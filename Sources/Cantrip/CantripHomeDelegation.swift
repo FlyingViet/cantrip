@@ -1146,17 +1146,62 @@ final class CantripHomeDelegations {
         """
     }
 
-    /// The open tabs and recent handoffs Home's handoff rules refer to (data).
-    var homeTabsData: String {
-        let tabs = manager.map { Self.eligibleTabs(in: $0) } ?? []
-        let tabLines = tabs.prefix(20).map { tab in
+    /// Tabs listed with their requests and child tabs; every other open tab gets one short line,
+    /// so Home sees every tab while its data grows little with each one.
+    static let detailedTabLimit = 15
+    /// A bound for very long tab lists; `tab list` shows the rest.
+    static let listedTabLimit = 80
+
+    /// The tabs listed in full: those working or waiting for the user, then the most recently
+    /// active, up to `limit` (ties and tabs that never ran keep their sidebar order).
+    static func detailedTabIDs(
+        _ tabs: [(id: UUID, isActive: Bool, lastActivity: Date?)], limit: Int = detailedTabLimit
+    ) -> Set<UUID> {
+        let active = tabs.filter(\.isActive).map(\.id)
+        let recent = tabs.enumerated().filter { !$0.element.isActive }.sorted { a, b in
+            switch (a.element.lastActivity, b.element.lastActivity) {
+            case let (x?, y?) where x != y: return x > y
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return a.offset < b.offset
+            }
+        }.map(\.element.id)
+        return Set(active + recent.prefix(max(0, limit - active.count)))
+    }
+
+    /// Every open project tab, one line each, for Home and its background runs (data).
+    private var openTabLines: String {
+        guard let manager else { return "" }
+        let tabs = Self.eligibleTabs(in: manager)
+        let detailed = Self.detailedTabIDs(tabs.map {
+            ($0.id, $0.isStreaming || !$0.pendingInputs.isEmpty, $0.lastActivityDate)
+        })
+        func line(_ tab: ChatSession, brief: Bool) -> String {
             let state = !tab.pendingInputs.isEmpty ? "waiting for the user's input"
                 : tab.isStreaming ? "busy" : "idle"
+            let children = Self.childParts(for: tab.id, manager: manager)
             return Self.tabSummary(
                 id: tab.id, title: tab.title, workdir: tab.workdir, state: state,
-                projects: projects(in: tab), messages: tab.messages, children: Self.childParts(for: tab.id, manager: manager)
+                projects: projects(in: tab), messages: tab.messages,
+                children: brief ? children.filter { $0.hasPrefix("child tab of ") } : children, brief: brief
             )
-        }.joined(separator: "\n")
+        }
+        let others = tabs.filter { !detailed.contains($0.id) }
+        let shown = others.prefix(max(0, Self.listedTabLimit - detailed.count))
+        var lines = tabs.filter { detailed.contains($0.id) }.map { line($0, brief: false) }
+        if !shown.isEmpty {
+            lines.append("Other open tabs, briefly (`tab read <tab ID>` shows their requests):")
+            lines += shown.map { line($0, brief: true) }
+        }
+        if others.count > shown.count {
+            lines.append("- \(others.count - shown.count) more open tabs: `tab list` lists them")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The open tabs and recent handoffs Home's handoff rules refer to (data).
+    var homeTabsData: String {
+        let tabLines = openTabLines
         let recent = allHandoffs
             .suffix(6)
             .map { handoff in
@@ -1181,17 +1226,7 @@ final class CantripHomeDelegations {
         """
     }
 
-    private var backgroundTabLines: String {
-        let tabs = manager.map { Self.eligibleTabs(in: $0) } ?? []
-        return tabs.prefix(20).map { tab in
-            let state = !tab.pendingInputs.isEmpty ? "waiting for the user's input"
-                : tab.isStreaming ? "busy" : "idle"
-            return Self.tabSummary(
-                id: tab.id, title: tab.title, workdir: tab.workdir, state: state,
-                projects: projects(in: tab), messages: tab.messages, children: Self.childParts(for: tab.id, manager: manager)
-            )
-        }.joined(separator: "\n")
-    }
+    private var backgroundTabLines: String { openTabLines }
 
     private var activeHandoffLines: String {
         allHandoffs.filter(\.isActive).suffix(6).map {
@@ -1248,10 +1283,11 @@ final class CantripHomeDelegations {
         """
     }
 
-    /// One bounded line describing what a tab is about.
+    /// One bounded line describing what a tab is about. `brief`: a shorter first request and no
+    /// recent ones.
     static func tabSummary(
         id: UUID, title: String, workdir: String, state: String,
-        projects: [String], messages: [ChatMessage], children: [String] = []
+        projects: [String], messages: [ChatMessage], children: [String] = [], brief: Bool = false
     ) -> String {
         func clean(_ text: String, _ limit: Int) -> String {
             let line = text.split(whereSeparator: \.isNewline).map(String.init)
@@ -1280,9 +1316,9 @@ final class CantripHomeDelegations {
         parts += children
         let described = substantive.isEmpty ? requests : substantive
         if let first = described.first {
-            parts.append("started \"\(clean(first.text, 110))\"")
+            parts.append("started \"\(clean(first.text, brief ? 60 : 110))\"")
         }
-        let latest = described.dropFirst().suffix(2).reversed().map { "\"\(clean($0.text, 110))\"" }
+        let latest = brief ? [] : described.dropFirst().suffix(2).reversed().map { "\"\(clean($0.text, 110))\"" }
         if !latest.isEmpty { parts.append("recent " + latest.joined(separator: " · ")) }
         if requests.isEmpty { parts.append("no requests yet") }
         return parts.joined(separator: "; ")

@@ -288,8 +288,12 @@ session and survives compaction. Each message carries only that turn's data:
 - a one-line index of every task
 - the schema and records of the workspaces the message mentions (by title,
   record title or UUID)
-- the open tabs (with their child tabs), recent handoffs and recent background
-  results; the static protocol says how to read a tab's conversation on demand
+- every open tab (with its child tabs), recent handoffs and recent background
+  results; the static protocol says how to read a tab's conversation on demand.
+  Tabs that are working, waiting for you or most recently active (15 in all) are
+  listed with their first and latest requests; the rest get one short line (title,
+  state, folder, projects and first request), so Home can hand work to any open tab.
+  `tabs.txt` for scheduled-task runs uses the same list.
 
 Home can print any task's records with the same `python3 -c` read command.
 Other backends, and council mode, still get the full protocol with every
