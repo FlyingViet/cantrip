@@ -2747,7 +2747,7 @@ final class ChatSession: ObservableObject {
             turns: request.previousTurns
         ), budget: HomeLocalProfile.budget(window: window))
         privateLocalModel.configuration.systemPrompt = profile.system
-        Log.write("privacy: local Home message ~\(profile.estimatedTokens) tokens"
+        Log.write("privacy: local Home message ~\(profile.estimatedTokens) tokens (\(profile.breakdown))"
                   + (profile.trimmed.isEmpty ? "" : ", shortened: \(profile.trimmed.joined(separator: ", "))"))
         return BackendRequest(prompt: profile.message, userMessage: request.userMessage, previousTurns: profile.turns,
                               replay: profile.replay)

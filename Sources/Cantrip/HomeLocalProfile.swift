@@ -51,6 +51,11 @@ enum HomeLocalProfile {
         var estimatedTokens: Int
         /// What was shortened or left out to fit, for the log.
         var trimmed: [String]
+        /// Estimated tokens per part, in the order sent (they add up to `estimatedTokens`).
+        var sections: [(name: String, tokens: Int)]
+
+        /// "rules 853, request 40, …" for the log.
+        var breakdown: String { sections.map { "\($0.name) \($0.tokens)" }.joined(separator: ", ") }
     }
 
     /// Home's rules for blocks Cantrip saves (tasks, records, handoffs), without the tool and file
@@ -150,8 +155,24 @@ enum HomeLocalProfile {
                 if !trimmed.contains(label) { trimmed.append(label) }
             }
         }
-        return Prompt(system: system, message: message(), turns: turns, replay: replay(),
-                      estimatedTokens: total(), trimmed: trimmed)
+        let sent = message()
+        let parts: [(String, String)] = [
+            ("time", "Now: \(inputs.now.formatted(date: .complete, time: .shortened)) (\(inputs.timeZone))."),
+            ("task list", taskIndex.joined(separator: "\n")), ("workspaces", workspaces),
+            ("tabs", tabs.joined(separator: "\n")), ("core memory", memory), ("matched notes", retrieved),
+        ]
+        var sections = [("rules", estimate(system)), ("earlier turns", estimate(replay()))]
+        var counted = 0
+        var data: [(String, Int)] = []
+        for (name, text) in parts where !text.isEmpty {
+            data.append((name, estimate(text)))
+            counted += estimate(text)
+        }
+        // The request with its notes and added context, the section labels and separators.
+        sections.append(("request", max(0, estimate(sent) - counted)))
+        sections += data
+        return Prompt(system: system, message: sent, turns: turns, replay: replay(),
+                      estimatedTokens: total(), trimmed: trimmed, sections: sections)
     }
 
     /// Halves a text (keeping its start), then drops it; false when there's nothing left.
