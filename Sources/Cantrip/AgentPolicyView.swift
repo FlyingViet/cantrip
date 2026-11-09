@@ -9,6 +9,7 @@ struct AgentPolicyView: View {
     @State private var error: String?
     @State private var showRules = false
     @State private var showAdd = false
+    @State private var showPrivacy = false
     @State private var draft = Draft()
 
     struct Draft {
@@ -76,6 +77,12 @@ struct AgentPolicyView: View {
                 .padding(.top, 4)
             } label: {
                 Text("Rules (\(policy.rules.count))").font(.caption)
+            }
+            DisclosureGroup(isExpanded: $showPrivacy) {
+                PrivacyGateSettingsView(settings: policy.privacyGate) { change in save { change(&$0.privacyGate) } }
+                    .padding(.top, 4)
+            } label: {
+                Text("Privacy Gate · \(policy.privacyGate.enabled ? policy.privacyGate.mode.rawValue.capitalized : "Off")").font(.caption)
             }
             if !policy.conflicts.isEmpty {
                 DisclosureGroup {
