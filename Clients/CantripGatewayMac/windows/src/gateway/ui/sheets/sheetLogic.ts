@@ -7,7 +7,7 @@ import type {
   BackendHealth, BackendState, BackendsSnapshot, GitHubAuth, CopilotQuotaBucket, CopilotUsageSnapshot, MCPServer, SkillEntry, SkillsDrift, SkillsRule, SkillsSnapshot, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
-  ModelSettingsUpdateRequest, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackChoice, UsageFallbackEntryChange, UsageFallbackRequest,
+  ModelSettingsUpdateRequest, PrivateLocalAPI, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackChoice, UsageFallbackEntryChange, UsageFallbackRequest,
   UsageFallbackSnapshot,
   AntigravityLimitBucket, AntigravityUsageState, ClaudeLimitWindow, ClaudeUsageState, CodexLimitWindow, CodexUsageState,
 } from "../../api/types";
@@ -178,6 +178,33 @@ export const MODEL_REFRESH_POLLS = 30;
 export const DEFAULT_PRIVATE_CONFIGURATION: PrivateLocalConfiguration = {
   baseURL: "http://127.0.0.1:11434", model: "", contextWindow: 8192, systemPrompt: "",
 };
+
+/** The "Server API" picker (`PrivateLocalAPI`). */
+export const PRIVATE_LOCAL_APIS: readonly { value: PrivateLocalAPI; label: string }[] = [
+  { value: "ollama", label: "Ollama" },
+  { value: "openai", label: "OpenAI-compatible (oMLX, LM Studio, mlx-serve)" },
+];
+
+/** The URL field's label and placeholder for a server API; a Mac without the choice speaks Ollama. */
+export function privateURLField(api: PrivateLocalAPI | undefined): { label: string; placeholder: string } {
+  return api === "openai"
+    ? { label: "Self-hosted server base URL (ending in /v1)", placeholder: "https://your-llm-server/v1" }
+    : { label: "Self-hosted Ollama URL", placeholder: "https://your-llm-server/" };
+}
+
+/** The server section's footer: OpenAI-compatible servers size their own context. */
+export function privateServerFooter(api: PrivateLocalAPI | undefined): string {
+  return "Cantrip connects to this server on your behalf. Use your own server's HTTPS URL, including a LAN or Tailscale hostname; reverse-proxy base paths are supported. HTTP is allowed only on loopback. Install models on that server. "
+    + (api === "openai"
+      ? "Context size is set on the server for OpenAI-compatible servers; saved history is not unlimited model context."
+      : "Context size depends on its model and RAM; saved history is not unlimited model context.");
+}
+
+/** The model-list query: `api` only for a Mac that reported one, so older Macs keep their saved choice. */
+export function privateModelsQuery(configuration: Pick<PrivateLocalConfiguration, "baseURL" | "api">): string {
+  const query = `baseURL=${encodeURIComponent(configuration.baseURL)}`;
+  return configuration.api ? `${query}&api=${encodeURIComponent(configuration.api)}` : query;
+}
 
 /** The "Server model" picker: the server's models plus the typed one, sorted. */
 export function privateModelChoices(models: readonly string[], current: string): string[] {

@@ -13,10 +13,17 @@ struct PrivateLocalSettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
             Label("Private Local Settings", systemImage: "lock.shield")
                 .font(.headline)
-            Text("Local means self-hosted, not limited to this Mac. Your Ollama server can run on another machine. Sessions stay saved on this Mac and accessible through Cantrip Remote and Cantrip Agent, with no cloud fallback.")
+            Text("Local means self-hosted, not limited to this Mac. Your self-hosted server can run on another machine. Sessions stay saved on this Mac and accessible through Cantrip Remote and Cantrip Agent, with no cloud fallback.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Form {
-                TextField("Self-hosted Ollama URL", text: $configuration.baseURL)
+                Picker("Server API", selection: $configuration.api) {
+                    ForEach(PrivateLocalAPI.allCases, id: \.self) { Text($0.pickerLabel).tag($0) }
+                }
+                .accessibilityLabel("Server API")
+                .onChange(of: configuration.api) { _, _ in models = [] }
+                TextField(configuration.api.urlLabel, text: $configuration.baseURL,
+                          prompt: Text(configuration.api.urlPlaceholder))
+                    .accessibilityLabel(configuration.api.urlLabel)
                 TextField("Installed model", text: $configuration.model)
                 if !models.isEmpty {
                     Picker("Choose installed model", selection: $configuration.model) {
@@ -29,7 +36,7 @@ struct PrivateLocalSettingsView: View {
                 TextField("System prompt", text: $configuration.systemPrompt, axis: .vertical)
                     .lineLimit(3...6)
             }
-            Text("Use your own server's HTTPS URL, including a LAN or Tailscale hostname. HTTP is allowed only on loopback. A reverse-proxy base path is supported. Install models on that server; context size depends on its model and RAM. No tools, shared memory, push summaries or automatic external content.")
+            Text("Use your own server's HTTPS URL, including a LAN or Tailscale hostname. HTTP is allowed only on loopback. A reverse-proxy base path is supported. Install models on that server; context size depends on its model and RAM, and OpenAI-compatible servers set it on the server. No tools, shared memory, push summaries or automatic external content.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let error { Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
             HStack {
@@ -72,4 +79,10 @@ struct PrivateLocalSettingsView: View {
             models = []
         } catch { self.error = error.localizedDescription }
     }
+}
+
+extension PrivateLocalAPI {
+    var pickerLabel: String { self == .ollama ? "Ollama" : "OpenAI-compatible (oMLX, LM Studio, mlx-serve)" }
+    var urlLabel: String { self == .ollama ? "Self-hosted Ollama URL" : "Self-hosted server base URL" }
+    var urlPlaceholder: String { self == .ollama ? "https://your-llm-server/" : "https://your-llm-server/v1" }
 }

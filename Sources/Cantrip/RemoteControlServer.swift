@@ -1666,6 +1666,13 @@ final class RemoteControlServer {
                     guard request.method == "GET" else { throw SessionModelSettingsError(405, "method not allowed") }
                     var configuration = try session.privateLocalConfiguration()
                     if let baseURL = request.query("baseURL") { configuration.baseURL = baseURL }
+                    // Older clients send only the URL and keep the saved server API.
+                    if let api = request.query("api") {
+                        guard let value = PrivateLocalAPI(rawValue: api) else {
+                            throw SessionModelSettingsError(400, "Choose Ollama or an OpenAI-compatible server API.")
+                        }
+                        configuration.api = value
+                    }
                     try configuration.validate(requireModel: false)
                     Task {
                         let client = PrivateLocalClient()
@@ -1682,16 +1689,11 @@ final class RemoteControlServer {
                 if request.method == "POST" {
                     guard let json, Set(json.keys) == ["revision", "configuration"],
                           let revision = json["revision"] as? String,
-                          let fields = json["configuration"] as? [String: Any],
-                          Set(fields.keys) == ["baseURL", "model", "contextWindow", "systemPrompt"],
-                          fields["baseURL"] is String, fields["model"] is String, fields["systemPrompt"] is String,
-                          let tokens = fields["contextWindow"] as? NSNumber,
-                          CFGetTypeID(tokens) != CFBooleanGetTypeID(),
-                          tokens.doubleValue == Double(tokens.intValue) else {
+                          let fields = json["configuration"] as? [String: Any] else {
                         throw SessionModelSettingsError(400, "Provide revision and the complete Private Local configuration.")
                     }
-                    let configuration = try JSONDecoder().decode(PrivateLocalConfiguration.self,
-                        from: JSONSerialization.data(withJSONObject: fields))
+                    let configuration = try PrivateLocalConfiguration.remote(
+                        fields, savedAPI: session.privateLocalConfiguration().api)
                     try session.updatePrivateLocalSettings(configuration, revision: revision)
                 } else if request.method != "GET" {
                     throw SessionModelSettingsError(405, "method not allowed")
@@ -3913,12 +3915,13 @@ private extension RemoteControlServer {
     <div id="desktopPermissions"></div></dialog>
     <dialog id="privateEditor" aria-labelledby="privateTitle"><form id="privateForm">
     <strong id="privateTitle">Private Local Settings</strong>
-    <p class="muted">Local means self-hosted, not limited to the Cantrip Mac. Your Ollama server may run on another machine. This permanent tab stays saved on the Mac and accessible through paired Remote clients. No cloud fallback, tools, shared memory, push summaries or automatic external content.</p>
-    <label>Self-hosted Ollama server URL<input id="privateURL" type="url" required autocomplete="off"></label>
+    <p class="muted">Local means self-hosted, not limited to the Cantrip Mac. Your self-hosted server may run on another machine. This permanent tab stays saved on the Mac and accessible through paired Remote clients. No cloud fallback, tools, shared memory, push summaries or automatic external content.</p>
+    <label>Server API<select id="privateAPI" aria-label="Server API"><option value="ollama">Ollama</option><option value="openai">OpenAI-compatible (oMLX, LM Studio, mlx-serve)</option></select></label>
+    <label><span id="privateURLLabel">Self-hosted Ollama server URL</span><input id="privateURL" type="url" required autocomplete="off" aria-labelledby="privateURLLabel"></label>
     <label>Installed model<input id="privateModel" required autocomplete="off" list="privateModels"></label><datalist id="privateModels"></datalist>
     <label>Context tokens<input id="privateContext" type="number" min="512" max="131072" step="1" required></label>
     <label>System prompt<textarea id="privatePrompt" maxlength="8000" rows="4"></textarea></label>
-    <p class="muted">Use your own server's HTTPS URL, including LAN or Tailscale hostnames and reverse-proxy base paths. HTTP is allowed only on loopback. Install models on that server. Context depends on its model and RAM; saved history is not unlimited model context. Save while idle.</p>
+    <p class="muted">Use your own server's HTTPS URL, including LAN or Tailscale hostnames and reverse-proxy base paths. HTTP is allowed only on loopback. Install models on that server. Context depends on its model and RAM; for OpenAI-compatible servers, context size is set on the server. Saved history is not unlimited model context. Save while idle.</p>
     <div id="privateError" role="alert"></div><div class="tab-actions">
     <button id="privateReload" type="button" class="control">Reload settings</button><button id="privateRefresh" type="button" class="control">Load server models</button>
     <button id="privateCancel" type="button" class="control">Cancel</button><button id="privateSave" type="submit" class="control primary">Save</button>
@@ -4503,23 +4506,27 @@ private extension RemoteControlServer {
     let privateEditorState=null;
     function privateBusy(busy){for(const element of $("privateForm").elements)element.disabled=busy;
       $("privateSave").disabled=busy||!privateEditorState?.data||Boolean(privateEditorState?.data?.unavailableReason)||Boolean(privateEditorState?.needsReload)}
+    function privateAPIChanged(){const openAI=$("privateAPI").value==="openai";
+      $("privateURLLabel").textContent=openAI?"Self-hosted server base URL (ending in /v1)":"Self-hosted Ollama server URL";
+      $("privateURL").placeholder=openAI?"https://your-llm-server/v1":"https://your-llm-server/"}
+    $("privateAPI").onchange=privateAPIChanged;
     function editPrivateSettings(item){privateEditorState={id:item.id,token,data:null,saving:false,needsReload:false};
       $("privateEditor").showModal();loadPrivateSettings()}
     async function loadPrivateSettings(){const state=privateEditorState;if(!state||state.saving)return;privateBusy(true);
       try{const data=await api(`/api/v1/sessions/${state.id}/private-settings`);if(privateEditorState!==state||token!==state.token)return;
-        state.data=data;state.needsReload=false;const c=data.configuration;$("privateURL").value=c.baseURL;$("privateModel").value=c.model;$("privateContext").value=c.contextWindow;$("privatePrompt").value=c.systemPrompt;$("privateModels").replaceChildren();$("privateError").textContent=data.unavailableReason||""}
+        state.data=data;state.needsReload=false;const c=data.configuration;$("privateAPI").value=c.api||"ollama";privateAPIChanged();$("privateURL").value=c.baseURL;$("privateModel").value=c.model;$("privateContext").value=c.contextWindow;$("privatePrompt").value=c.systemPrompt;$("privateModels").replaceChildren();$("privateError").textContent=data.unavailableReason||""}
       catch(error){if(privateEditorState===state){state.needsReload=true;$("privateError").textContent=error.message}}
       finally{if(privateEditorState===state)privateBusy(false)}}
     $("privateReload").onclick=loadPrivateSettings;
     $("privateRefresh").onclick=async()=>{const state=privateEditorState;if(!state?.data||state.saving)return;privateBusy(true);
-      try{const data=await api(`/api/v1/sessions/${state.id}/private-models?baseURL=${encodeURIComponent($("privateURL").value)}`);if(privateEditorState!==state||token!==state.token)return;
+      try{const data=await api(`/api/v1/sessions/${state.id}/private-models?baseURL=${encodeURIComponent($("privateURL").value)}&api=${encodeURIComponent($("privateAPI").value)}`);if(privateEditorState!==state||token!==state.token)return;
         $("privateModels").replaceChildren();for(const model of data.models){const option=document.createElement("option");option.value=model;$("privateModels").append(option)}
-        $("privateError").textContent=data.models.length?"Server models loaded. Choose an installed model.":"No self-hosted models installed. Install one with Ollama on the selected server."}
+        $("privateError").textContent=data.models.length?"Server models loaded. Choose an installed model.":"No self-hosted models installed. Install or load one on the selected server."}
       catch(error){if(privateEditorState===state)$("privateError").textContent=error.message}finally{if(privateEditorState===state)privateBusy(false)}};
     $("privateCancel").onclick=()=>{if(privateEditorState?.saving)return;$("privateEditor").close();privateEditorState=null};
     $("privateEditor").addEventListener("cancel",event=>{if(privateEditorState?.saving)event.preventDefault();else privateEditorState=null});
     $("privateForm").onsubmit=async event=>{event.preventDefault();const state=privateEditorState;if(!state?.data||state.saving||state.needsReload||token!==state.token)return;
-      const configuration={baseURL:$("privateURL").value,model:$("privateModel").value,contextWindow:Number($("privateContext").value),systemPrompt:$("privatePrompt").value};
+      const configuration={api:$("privateAPI").value,baseURL:$("privateURL").value,model:$("privateModel").value,contextWindow:Number($("privateContext").value),systemPrompt:$("privatePrompt").value};
       state.saving=true;privateBusy(true);
       try{await api(`/api/v1/sessions/${state.id}/private-settings`,{method:"POST",body:JSON.stringify({revision:state.data.revision,configuration})});
         if(privateEditorState===state&&token===state.token){$("privateEditor").close();privateEditorState=null;await refresh()}}

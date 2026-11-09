@@ -132,6 +132,14 @@ struct SessionTabTests {
             try await testBuildCards()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "private-local" {
+            try await testPrivateLocal()
+            return
+        }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "private-local-live" {
+            try await testPrivateLocalLive()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "settings" {
             try testSettingsIdentity()
             try testCLIPathRepair()

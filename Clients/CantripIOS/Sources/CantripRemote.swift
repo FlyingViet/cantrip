@@ -2735,9 +2735,11 @@ struct CantripRemoteAPI {
         return response.accepted
     }
 
-    func privateLocalModels(id: String, baseURL: String) async throws -> [String] {
+    /// `api` is nil for a Mac that predates the API choice; it then uses its saved one.
+    func privateLocalModels(id: String, baseURL: String, api: CantripPrivateLocalAPI? = nil) async throws -> [String] {
         var query = URLComponents()
         query.queryItems = [URLQueryItem(name: "baseURL", value: baseURL)]
+            + (api.map { [URLQueryItem(name: "api", value: $0.rawValue)] } ?? [])
         struct Response: Decodable { let models: [String] }
         let response: Response = try await request(path: "/api/v1/sessions/\(id)/private-models?\(query.percentEncodedQuery ?? "")")
         return response.models
@@ -4783,8 +4785,8 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
-    func privateLocalModels(id: String, baseURL: String) async throws -> [String] {
-        try await performHistoryRead { try await $0.privateLocalModels(id: id, baseURL: baseURL) }
+    func privateLocalModels(id: String, baseURL: String, api: CantripPrivateLocalAPI? = nil) async throws -> [String] {
+        try await performHistoryRead { try await $0.privateLocalModels(id: id, baseURL: baseURL, api: api) }
     }
 
     func inputRequests(sessionID: String) async throws -> [CantripInputRequest] {

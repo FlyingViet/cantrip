@@ -940,13 +940,16 @@ offer the same screen.
 
 The updated Mac provides a permanent **Private Local** tab. It keeps conversation
 history and run recovery on the Mac while routing inference **only to your
-self-hosted Ollama server**. "Local" is the self-hosted label, not a requirement
+self-hosted Ollama or OpenAI-compatible server** (oMLX, LM Studio, mlx-serve). "Local" is the self-hosted label, not a requirement
 that inference runs on the Cantrip Mac. The server can be on another computer
 or NAS. It never falls back to Copilot or other cloud models.
 
 Open this tab's **Chat menu > Private Local Settings**, or its tab actions, to
-set your self-hosted server's HTTPS base URL, installed model, context tokens and
-system prompt. **Load server models** reads that server's installed models through
+choose the **Server API** (Ollama or OpenAI-compatible; shown when the Mac supports
+the choice) and set your self-hosted server's HTTPS base URL (ending in its API
+version path, such as `/v1`, for OpenAI-compatible servers), installed model,
+context tokens and system prompt. OpenAI-compatible servers set their own context
+size. **Load server models** reads that server's installed models through
 Cantrip. Install models on the chosen server, which must be reachable from the
 Cantrip Mac. LAN/Tailscale HTTPS URLs and reverse-proxy base paths are supported.
 HTTP is allowed only on loopback; `http://127.0.0.1:11434` still means the Mac,
@@ -957,7 +960,7 @@ This tab cannot be closed, cleared, unlocked or changed into a cloud tab.
 It is text-only: tools, shell/slash execution, Council, shared-memory logging,
 push summaries and automatic external content are disabled. Auto queues locally,
 and drafts stay with their tabs. Model input context remains bounded even though
-the full saved conversation is retained. The configured Ollama service must be
+the full saved conversation is retained. The configured server must be
 yours and trusted, not a managed-cloud inference gateway. Cloud aliases,
 unencrypted non-loopback URLs and automatic redirects are refused; TLS
 certificate validation stays enabled.

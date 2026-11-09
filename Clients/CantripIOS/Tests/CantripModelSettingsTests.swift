@@ -647,12 +647,11 @@ final class CantripModelSettingsTests: XCTestCase {
         catch CantripRemoteError.authentication {}
     }
 
-    private func privateSnapshot(revision: String = "private-v1", reason: String? = nil) throws -> Data {
-        var value: [String: Any] = [
-            "revision": revision,
-            "configuration": ["baseURL": "https://llm.example.ts.net/ollama", "model": "local:latest",
-                              "contextWindow": 8192, "systemPrompt": "Keep this conversation local."]
-        ]
+    private func privateSnapshot(revision: String = "private-v1", reason: String? = nil, api: String? = nil) throws -> Data {
+        var configuration: [String: Any] = ["baseURL": "https://llm.example.ts.net/ollama", "model": "local:latest",
+                                            "contextWindow": 8192, "systemPrompt": "Keep this conversation local."]
+        if let api { configuration["api"] = api }
+        var value: [String: Any] = ["revision": revision, "configuration": configuration]
         if let reason { value["unavailableReason"] = reason }
         return try JSONSerialization.data(withJSONObject: value)
     }
@@ -678,6 +677,7 @@ final class CantripModelSettingsTests: XCTestCase {
                 XCTAssertEqual(configuration["baseURL"] as? String, "https://llm.example.ts.net/ollama")
                 XCTAssertEqual(configuration["model"] as? String, "local:latest")
                 XCTAssertEqual(configuration["contextWindow"] as? Int, 8192)
+                XCTAssertNil(configuration["api"], "A Mac without the API choice gets the four fields it accepts")
                 XCTAssertNil(body["usesDefaults"], "Private Local cannot inherit a cloud route")
             }
             return (200, try self.privateSnapshot())
@@ -687,6 +687,48 @@ final class CantripModelSettingsTests: XCTestCase {
             identity: model.usageIdentity)
         XCTAssertTrue(saved, model.errorMessage ?? "")
         XCTAssertEqual(methods, ["GET", "POST"])
+    }
+
+    func testPrivateLocalServerAPIRoundTripsAndOldMacsKeepTheirs() async throws {
+        let legacy = try JSONDecoder().decode(CantripPrivateLocalSettings.self, from: privateSnapshot())
+        XCTAssertNil(legacy.configuration.api)
+        let legacyBody = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy.configuration)) as? [String: Any])
+        XCTAssertEqual(Set(legacyBody.keys), ["baseURL", "model", "contextWindow", "systemPrompt"])
+        let ollama = try JSONDecoder().decode(CantripPrivateLocalSettings.self, from: privateSnapshot(api: "ollama"))
+        XCTAssertEqual(ollama.configuration.api, .ollama)
+        XCTAssertThrowsError(try JSONDecoder().decode(CantripPrivateLocalSettings.self, from: privateSnapshot(api: "cloud")))
+
+        let model = try await model()
+        let settings = try JSONDecoder().decode(CantripPrivateLocalSettings.self, from: privateSnapshot(api: "ollama"))
+        var configuration = settings.configuration
+        configuration.api = .openAI
+        configuration.baseURL = "https://llm.example.ts.net/v1"
+        var posted: [String: Any]?
+        ModelSettingsRequestProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                let stream = try XCTUnwrap(request.httpBodyStream)
+                stream.open()
+                defer { stream.close() }
+                var bytes = [UInt8](repeating: 0, count: 4096)
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bytes.prefix(count))) as? [String: Any])
+                posted = body["configuration"] as? [String: Any]
+            }
+            return (200, try self.privateSnapshot(api: "ollama"))
+        }
+        let saved = await model.updatePrivateLocalSettings(id: id,
+            change: .init(revision: settings.revision, configuration: configuration), identity: model.usageIdentity)
+        XCTAssertTrue(saved, model.errorMessage ?? "")
+        XCTAssertEqual(posted?["api"] as? String, "openai")
+        XCTAssertEqual(posted?["baseURL"] as? String, "https://llm.example.ts.net/v1")
+
+        XCTAssertEqual(CantripPrivateLocalAPI.allCases.map(\.rawValue), ["ollama", "openai"])
+        XCTAssertEqual(CantripPrivateLocalAPI.openAI.label, "OpenAI-compatible (oMLX, LM Studio, mlx-serve)")
+        XCTAssertTrue(CantripPrivateLocalAPI.openAI.urlPlaceholder.hasSuffix("/v1"))
+        XCTAssertTrue(CantripPrivateLocalAPI.openAI.urlLabel.contains("/v1"))
+        XCTAssertFalse(CantripPrivateLocalAPI.ollama.urlPlaceholder.hasSuffix("/v1"))
+        XCTAssertTrue(CantripPrivateLocalSettingsView.footer(for: .openAI).contains("set on the server"))
+        XCTAssertFalse(CantripPrivateLocalSettingsView.footer(for: .ollama).contains("set on the server"))
     }
 
     func testPrivateLocalBusyStaleAndChangedMacNeverWrite() async throws {
@@ -735,10 +777,19 @@ final class CantripModelSettingsTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.id)/private-models")
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             XCTAssertEqual(query?.queryItems?.first(where: { $0.name == "baseURL" })?.value, "https://llm.example.ts.net/ollama")
+            XCTAssertNil(query?.queryItems?.first(where: { $0.name == "api" }), "Old Macs use their saved server API")
             return (200, Data(#"{"models":["local:latest"]}"#.utf8))
         }
         let models = try await api.privateLocalModels(id: id, baseURL: "https://llm.example.ts.net/ollama")
         XCTAssertEqual(models, ["local:latest"])
+        ModelSettingsRequestProtocol.handler = { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            XCTAssertEqual(query?.queryItems?.first(where: { $0.name == "baseURL" })?.value, "https://llm.example.ts.net/v1")
+            XCTAssertEqual(query?.queryItems?.first(where: { $0.name == "api" })?.value, "openai")
+            return (200, Data(#"{"models":["Local-8B-4bit"]}"#.utf8))
+        }
+        let openAIModels = try await api.privateLocalModels(id: id, baseURL: "https://llm.example.ts.net/v1", api: .openAI)
+        XCTAssertEqual(openAIModels, ["Local-8B-4bit"])
         for code in [404, 405] {
             ModelSettingsRequestProtocol.handler = { _ in (code, Data(#"{"error":"not found"}"#.utf8)) }
             do { _ = try await api.privateLocalSettings(id: id); XCTFail("Do not fall back to cloud model settings") }
@@ -763,7 +814,8 @@ final class CantripModelSettingsTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.id)/private-settings",
                            "Private tabs must not open Copilot settings or refresh the cloud catalog")
             reads += 1
-            return (200, try self.privateSnapshot())
+            // The OpenAI-compatible choice has the longest picker and URL labels.
+            return (200, try self.privateSnapshot(api: "openai"))
         }
         for width: CGFloat in [320, 768] {
             for size: DynamicTypeSize in [.large, .accessibility3] {

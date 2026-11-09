@@ -14,8 +14,9 @@ import * as remote from "../../state/remote";
 import { FormRow, FormSection, Sheet, Spinner } from "../kit";
 import { Loading, StatusLabel, Warning, findSession, sleep, useAlive } from "./common";
 import {
-  DEFAULT_PRIVATE_CONFIGURATION, MODEL_REFRESH_POLLS, capitalized, contextLabel, errorText, isUnsupported, modelInfo,
-  modelSettingsChange, modelValidationError, parseContextTokens, pickerChoices, privateModelChoices, selectModel, tokenLabel,
+  DEFAULT_PRIVATE_CONFIGURATION, MODEL_REFRESH_POLLS, PRIVATE_LOCAL_APIS, capitalized, contextLabel, errorText, isUnsupported, modelInfo,
+  modelSettingsChange, modelValidationError, parseContextTokens, pickerChoices, privateModelChoices, privateModelsQuery,
+  privateServerFooter, privateURLField, selectModel, tokenLabel,
   usageFallbackAdd, usageFallbackAddable, usageFallbackEfforts, usageFallbackEntries, usageFallbackLabel, usageFallbackLimitNote,
   usageFallbackLimits, usageFallbackModelChange, usageFallbackModelOptions, usageFallbackMove, usageFallbackPerModel,
   usageFallbackRemove, usageFallbackStatus, writeFailure,
@@ -388,7 +389,7 @@ function PrivateLocalSettings(props: { session: RemoteSessionSummary; onClose: (
   const needsReload = useSignal(false);
   const error = useSignal<string | null>(null);
   const alive = useAlive();
-  const ids = { url: useId(), model: useId(), server: useId(), context: useId(), prompt: useId() };
+  const ids = { api: useId(), url: useId(), model: useId(), server: useId(), context: useId(), prompt: useId() };
   const base = `/api/v1/sessions/${pathComponent(session.id)}`;
 
   const fetchSettings = async (): Promise<PrivateLocalSettingsSnapshot> => {
@@ -427,10 +428,10 @@ function PrivateLocalSettings(props: { session: RemoteSessionSummary; onClose: (
     if (loading.value || saving.value) return;
     loading.value = true;
     try {
-      const data = await api<PrivateLocalModelsResponse>(`${base}/private-models?baseURL=${encodeURIComponent(configuration.value.baseURL)}`);
+      const data = await api<PrivateLocalModelsResponse>(`${base}/private-models?${privateModelsQuery(configuration.value)}`);
       if (!alive.current) return;
       models.value = data.models;
-      error.value = data.models.length ? null : "No self-hosted models found. Install a model with Ollama on the selected server.";
+      error.value = data.models.length ? null : "No self-hosted models found. Install or load a model on the selected server.";
     } catch (failure) {
       if (alive.current) error.value = errorText(failure);
     } finally {
@@ -446,6 +447,7 @@ function PrivateLocalSettings(props: { session: RemoteSessionSummary; onClose: (
   const busy = loading.value || saving.value;
   const canSave = Boolean(current) && !busy && !needsReload.value && !remote.isMutating.value && !unavailable && config.model !== "";
   const message = error.value ?? unavailable ?? null;
+  const urlField = privateURLField(config.api);
   const update = (change: Partial<PrivateLocalConfiguration>) => {
     configuration.value = { ...configuration.value, ...change };
   };
@@ -489,12 +491,25 @@ function PrivateLocalSettings(props: { session: RemoteSessionSummary; onClose: (
           </FormRow>
         </FormSection>
         <fieldset class="sh-fieldset" disabled={!current || Boolean(unavailable)}>
-          <FormSection header="Self-hosted LLM server"
-            footer="Cantrip connects to this server on your behalf. Use your own server's HTTPS URL, including a LAN or Tailscale hostname; reverse-proxy base paths are supported. HTTP is allowed only on loopback. Install models on that server. Context size depends on its model and RAM; saved history is not unlimited model context.">
+          <FormSection header="Self-hosted LLM server" footer={privateServerFooter(config.api)}>
+            {config.api ? (
+              <FormRow label={<label for={ids.api}>Server API</label>}>
+                <select id={ids.api} class="select" value={config.api} aria-label="Server API"
+                  onChange={(event) => {
+                    const value = event.currentTarget.value as PrivateLocalConfiguration["api"];
+                    if (value === configuration.value.api) return;
+                    batch(() => { update({ api: value }); models.value = []; });
+                  }}>
+                  {PRIVATE_LOCAL_APIS.map((choice) => (
+                    <option key={choice.value} value={choice.value} selected={choice.value === config.api}>{choice.label}</option>
+                  ))}
+                </select>
+              </FormRow>
+            ) : null}
             <FormRow stack>
-              <label class="sh-field-label" for={ids.url}>Self-hosted Ollama URL</label>
-              <input id={ids.url} class="text-field" type="url" value={config.baseURL} placeholder="https://your-llm-server"
-                aria-label="Self-hosted Ollama server URL" autocomplete="off" spellcheck={false} autocapitalize="off"
+              <label class="sh-field-label" for={ids.url}>{urlField.label}</label>
+              <input id={ids.url} class="text-field" type="url" value={config.baseURL} placeholder={urlField.placeholder}
+                aria-label={urlField.label} autocomplete="off" spellcheck={false} autocapitalize="off"
                 onInput={(event) => update({ baseURL: event.currentTarget.value })} />
             </FormRow>
             <FormRow stack>

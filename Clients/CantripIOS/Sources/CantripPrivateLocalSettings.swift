@@ -1,10 +1,23 @@
 import SwiftUI
 
+/// The wire API the Private Local server speaks (`PrivateLocalAPI` on the Mac).
+enum CantripPrivateLocalAPI: String, Codable, CaseIterable, Identifiable {
+    case ollama
+    case openAI = "openai"
+
+    var id: String { rawValue }
+    var label: String { self == .ollama ? "Ollama" : "OpenAI-compatible (oMLX, LM Studio, mlx-serve)" }
+    var urlLabel: String { self == .ollama ? "Self-hosted Ollama URL" : "Self-hosted server base URL (ending in /v1)" }
+    var urlPlaceholder: String { self == .ollama ? "https://your-llm-server/" : "https://your-llm-server/v1" }
+}
+
 struct CantripPrivateLocalConfiguration: Codable, Equatable {
     var baseURL = "http://127.0.0.1:11434"
     var model = ""
     var contextWindow = 8192
     var systemPrompt = ""
+    /// Nil from a Mac that predates the API choice: saves then omit it and that Mac stays on Ollama.
+    var api: CantripPrivateLocalAPI?
 }
 
 struct CantripPrivateLocalSettings: Decodable, Equatable {
@@ -58,12 +71,25 @@ struct CantripPrivateLocalSettingsView: View {
                     Label("Saved, self-hosted models", systemImage: "lock.shield")
                     Text("Local means self-hosted, not limited to the Cantrip Mac. Your LLM server can run on another machine. Conversations stay saved on the Mac and available through Remote, with no cloud fallback.")
                 }
+                if configuration.api != nil {
+                    // Inline rows let the long OpenAI-compatible label wrap at narrow widths.
+                    Section("Server API") {
+                        Picker("Server API", selection: serverAPI) {
+                            ForEach(CantripPrivateLocalAPI.allCases) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+                        .accessibilityLabel("Server API")
+                        .accessibilityIdentifier("privateLocal.api")
+                    }
+                    .disabled(snapshot == nil || snapshot?.unavailableReason != nil)
+                }
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Self-hosted Ollama URL").font(.caption).foregroundStyle(.secondary)
-                        TextField("https://your-llm-server", text: $configuration.baseURL)
+                        Text(selectedAPI.urlLabel).font(.caption).foregroundStyle(.secondary)
+                        TextField(selectedAPI.urlPlaceholder, text: $configuration.baseURL)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .keyboardType(.URL).accessibilityLabel("Self-hosted Ollama server URL")
+                            .keyboardType(.URL).accessibilityLabel(selectedAPI.urlLabel)
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Installed model").font(.caption).foregroundStyle(.secondary)
@@ -91,7 +117,7 @@ struct CantripPrivateLocalSettingsView: View {
                 } header: {
                     Text("Self-hosted LLM server")
                 } footer: {
-                    Text("Cantrip connects to this server on your behalf. Use your own server's HTTPS URL, including a LAN or Tailscale hostname; reverse-proxy base paths are supported. HTTP is allowed only on loopback. Install models on that server. Context size depends on its model and RAM; saved history is not unlimited model context.")
+                    Text(Self.footer(for: selectedAPI))
                 }
                 .disabled(snapshot == nil || snapshot?.unavailableReason != nil)
                 Section {
@@ -137,6 +163,23 @@ struct CantripPrivateLocalSettingsView: View {
         .onChange(of: model.usageIdentity) { _, _ in dismiss() }
     }
 
+    private var selectedAPI: CantripPrivateLocalAPI { configuration.api ?? .ollama }
+
+    private var serverAPI: Binding<CantripPrivateLocalAPI> {
+        Binding(get: { selectedAPI }, set: {
+            guard $0 != configuration.api else { return }
+            configuration.api = $0
+            models = []
+        })
+    }
+
+    static func footer(for api: CantripPrivateLocalAPI) -> String {
+        "Cantrip connects to this server on your behalf. Use your own server's HTTPS URL, including a LAN or Tailscale hostname; reverse-proxy base paths are supported. HTTP is allowed only on loopback. Install models on that server. "
+            + (api == .ollama
+                ? "Context size depends on its model and RAM; saved history is not unlimited model context."
+                : "Context size is set on the server for OpenAI-compatible servers; saved history is not unlimited model context.")
+    }
+
     @MainActor
     private func load() async {
         loading = true
@@ -162,8 +205,8 @@ struct CantripPrivateLocalSettingsView: View {
         loading = true
         defer { loading = false }
         do {
-            models = try await model.privateLocalModels(id: session.id, baseURL: configuration.baseURL)
-            error = models.isEmpty ? "No self-hosted models found. Install a model with Ollama on the selected server." : nil
+            models = try await model.privateLocalModels(id: session.id, baseURL: configuration.baseURL, api: configuration.api)
+            error = models.isEmpty ? "No self-hosted models found. Install or load a model on the selected server." : nil
         } catch is CancellationError {
             return
         } catch { self.error = error.localizedDescription }
