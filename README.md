@@ -152,6 +152,7 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 | `cantrip --backend NAME "question"` | Ask a specific backend (`claude`, `copilot`, `codex`, `agy` or `local`), e.g. `< changes.diff` | [Ask from Terminal](docs/everyday-tasks.md#ask-cantrip-from-terminal) |
 | `cantrip runs [session-or-run-id]` | List recent runs, or show one session's or run's events | [Recover after a crash](docs/sessions-and-council.md#recover-after-a-crash-or-interruption) |
 | `cantrip tab list` / `read ID` / `ask ID "question"` | List tabs with their child tabs, read a tab's recent turns (read-only), or ask a tab and print its reply | [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs) |
+| `cantrip privacy report [--days N]` / `test` | Summarize where the Privacy Gate routed (or would route) Home chat and Home tasks, or test its classifier | [Privacy Gate](docs/privacy-and-memory.md#decide-where-home-requests-run-privacy-gate) |
 | `cantrip daemon start` | Run Cantrip in the background now and at every login (no windows) | [Headless](docs/headless.md#commands) |
 | `cantrip daemon stop` | Stop it and don't start it at login | [Headless](docs/headless.md#commands) |
 | `cantrip daemon restart` | Restart it (installs a staged update) | [Headless](docs/headless.md#commands) |
