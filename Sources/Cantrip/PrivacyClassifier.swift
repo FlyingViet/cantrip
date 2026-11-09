@@ -66,13 +66,19 @@ struct PrivacyClassification: Equatable {
 final class PrivacyClassifier {
     typealias Transport = (URLRequest) async throws -> (Data, URLResponse)
 
+    /// Scored on a labeled synthetic set (`CANTRIP_PRIVACY_CLASSIFIER_LIVE_TEST`). The earlier wording
+    /// kept every private request off the cloud but sent 1 of 12 plain ones there.
     static let instructions = """
-        Decide where this request to a personal AI assistant should run. Answer local when it \
-        contains or asks about personal or private information: the user's messages, email, health, \
-        money, accounts, passwords, family, home, identity documents, or other people's details. \
-        Answer cloud only when nothing in it is private, such as coding, general knowledge or public \
-        information. Answer redact when it is mainly a general task that mentions a few personal \
-        details (names, contacts, addresses) that could be hidden before sending.
+        Decide where this request to a personal AI assistant should run. Most requests are not \
+        private: coding, debugging, pasted code, logs and error messages, writing, planning, general \
+        knowledge, questions about apps or about testing and setting up the assistant itself \
+        (including its privacy features), and routine work on the user's computer (files, folders, \
+        builds, git, simulators) belong in the cloud. Answer local only when the request itself \
+        contains or asks about private information: the user's messages or email, health, money, \
+        bank or other accounts, passwords, family and relationships, legal matters, identity \
+        documents, or details about other people. Answer redact when it is mainly a general task \
+        that mentions a few personal details (a name, phone number or address) that could be hidden \
+        before sending.
         """
     static let choices: [(PrivacyRoute, String)] = [
         (.local, "run on the private model at home"),

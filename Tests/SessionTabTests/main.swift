@@ -103,6 +103,10 @@ struct SessionTabTests {
             try await testRemoteMaintenanceRelease()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_PRIVACY_CLASSIFIER_LIVE_TEST"] == "1" {
+            try await testPrivacyClassifierLive()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_LOCAL_PROFILE_LIVE_TEST"] == "1" {
             try await testHomeLocalLive()
             return

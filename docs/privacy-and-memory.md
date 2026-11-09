@@ -161,7 +161,12 @@ How it decides, first match wins:
    (oMLX's `POST /v1/decisions`, by default Private Local's server and model)
    reads the request and the latest earlier turn, three times with the options in
    a different order, and Cantrip averages the answers. It says cloud only when
-   it's at least 90% sure; otherwise local, or ask first when it isn't sure. It
+   it's at least 90% sure; otherwise local, or ask first when it isn't sure.
+   Its instructions say coding, writing, general knowledge, questions about the
+   assistant itself and routine work on your computer aren't private; requests
+   about your messages, health, money, accounts, family or other people are. After
+   changing the classifier's model, try a few requests you know with
+   `cantrip privacy test "<text>"`: models differ in how sure they are. It
    waits at most 2.5 s and never falls back to the cloud: Home chat asks, and a
    scheduled task waits for the classifier (checking every minute, up to 4 hours)
    in enforce mode. The classifier must be on this Mac, your network or your
