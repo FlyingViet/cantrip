@@ -8,6 +8,8 @@ struct CantripQueueButton: View {
     var resume: (() -> Void)? = nil
     var isSendingNow = false
     var canSendNow = true
+    /// One line: the count and the next message, with Send now beside it (the folded iPhone Duo).
+    var compact = false
     let action: () -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -18,6 +20,9 @@ struct CantripQueueButton: View {
     }
 
     private var isPaused: Bool { session.queuePaused == true && resume != nil }
+
+    /// Accessibility text sizes keep the two-line row, which doesn't truncate the count.
+    private var isOneLine: Bool { compact && !dynamicTypeSize.isAccessibilitySize }
 
     var body: some View {
         Group {
@@ -39,34 +44,63 @@ struct CantripQueueButton: View {
                 HStack(spacing: 0) {
                     openButton
                     sendNowButton
-                        .padding(.trailing, 10)
+                        .padding(.trailing, isOneLine ? 4 : 10)
                 }
             }
         }
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
+    private var title: String {
+        if isOneLine {
+            return session.queuePaused == true ? "Paused (\(session.queuedCount))" : "\(session.queuedCount) queued"
+        }
+        return session.queuePaused == true ? "Queue paused (\(session.queuedCount))"
+            : "Queued messages (\(session.queuedCount))"
+    }
+
+    private var icon: String { session.queuePaused == true ? "pause.circle" : "clock" }
+
     private var openButton: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Label(session.queuePaused == true ? "Queue paused (\(session.queuedCount))"
-                          : "Queued messages (\(session.queuedCount))",
-                          systemImage: session.queuePaused == true ? "pause.circle" : "clock")
-                        .font(.caption.weight(.semibold))
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                }
-                if let next {
-                    Text(verbatim: PromptText(CantripTabMentions.plain(next.presentedText)).preview)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+            Group {
+                if isOneLine {
+                    HStack(spacing: 6) {
+                        Label(title, systemImage: icon)
+                            .font(.caption.weight(.semibold))
+                            .fixedSize()
+                        if let next {
+                            Text(verbatim: PromptText(CantripTabMentions.plain(next.presentedText)).preview)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 44)
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Label(title, systemImage: icon)
+                                .font(.caption.weight(.semibold))
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                        }
+                        if let next {
+                            Text(verbatim: PromptText(CantripTabMentions.plain(next.presentedText)).preview)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                        }
+                    }
+                    .padding(10)
                 }
             }
-            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
@@ -92,27 +126,37 @@ struct CantripQueueButton: View {
     @ViewBuilder
     private var sendNowButton: some View {
         if let next, let sendNow {
-            Button(action: sendNow) {
-                // The label keeps its width under the spinner so the row doesn't jump.
-                Label("Send now", systemImage: "arrow.up.circle")
-                    .font(.caption.weight(.semibold))
-                    .opacity(isSendingNow ? 0 : 1)
-                    .overlay {
-                        if isSendingNow {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
-                    }
-                    .frame(
-                        minWidth: 44, maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil,
-                        minHeight: 44
-                    )
+            Group {
+                if isOneLine {
+                    Button(action: sendNow) { sendNowLabel }
+                        .buttonStyle(.borderless)
+                } else {
+                    Button(action: sendNow) { sendNowLabel }
+                        .buttonStyle(.bordered)
+                }
             }
-            .buttonStyle(.bordered)
             .disabled(!canSendNow || isSendingNow)
             .accessibilityLabel(isSendingNow ? "Sending next queued message now" : "Send next queued message now")
             .accessibilityHint(PromptText(CantripTabMentions.plain(next.presentedText)).preview)
         }
+    }
+
+    private var sendNowLabel: some View {
+        // The label keeps its width under the spinner so the row doesn't jump.
+        Label("Send now", systemImage: "arrow.up.circle")
+            .font(.caption.weight(.semibold))
+            .opacity(isSendingNow ? 0 : 1)
+            .overlay {
+                if isSendingNow {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+            .frame(
+                minWidth: 44, maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil,
+                minHeight: 44
+            )
+            .padding(.horizontal, isOneLine ? 6 : 0)
     }
 }
 

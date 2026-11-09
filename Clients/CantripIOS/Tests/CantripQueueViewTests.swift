@@ -90,6 +90,24 @@ final class CantripQueueViewTests: XCTestCase {
         }
     }
 
+    func testCompactQueueRowIsOneLineUntilAccessibilitySizes() throws {
+        let supported = try session(sendNow: true)
+        for width in [320.0, 434] {
+            let regular = height(CantripQueueButton(session: supported, sendNow: {}) {}, width: width)
+            let compact = height(CantripQueueButton(session: supported, sendNow: {}, compact: true) {}, width: width)
+            XCTAssertGreaterThanOrEqual(compact, 44, "Send now keeps a 44 pt target at \(width)")
+            XCTAssertLessThanOrEqual(compact, 48, "One line at \(width)")
+            XCTAssertLessThan(compact, regular, "\(width)")
+        }
+        for size in [DynamicTypeSize.accessibility3, .accessibility5] {
+            XCTAssertEqual(
+                height(CantripQueueButton(session: supported, sendNow: {}, compact: true) {}, size: size),
+                height(CantripQueueButton(session: supported, sendNow: {}) {}, size: size),
+                accuracy: 0.5, "Large text keeps the two-line row at \(size)"
+            )
+        }
+    }
+
     private func configuredModel() async throws -> CantripRemoteModel {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [QueueViewRequestProtocol.self]

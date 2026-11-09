@@ -649,7 +649,10 @@ a sheet with every running watcher and its details. Cantrip Home moves this into
 its top-left **Background** button instead. When a subagent finishes,
 its card moves into its reply at the point it ended, after the paragraph that
 was being written. Each card shows the subagent name, status, its latest
-reasoning step, elapsed time and token count.
+reasoning step, elapsed time and token count. On a folded iPhone Duo, whose outer
+screen is short, a pinned card is one row (the name, then the current step and
+elapsed time, with **Stop**) until you tap it, the **Queued messages** card is one
+line with **Send now**, and the status line above the composer keeps to one line.
 Expand a card for its reasoning steps, the latest subagent message or an error,
 and tap **Stop** on a running or waiting card to stop just that subagent.
 
