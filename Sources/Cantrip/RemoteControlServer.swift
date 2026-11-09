@@ -3675,6 +3675,10 @@ private extension RemoteControlServer {
     .policy-rule{display:grid;gap:4px;padding:10px 0;border-top:1px solid var(--line)}.policy-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.policy-head strong{flex:1;min-width:140px;overflow-wrap:anywhere}.policy-rule .muted{overflow-wrap:anywhere}.policy-rule.off{opacity:.55}
     .policy-effect{font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;border:1px solid var(--line)}.policy-effect.deny{color:#b42318}.policy-effect.ask{color:#b54708}.policy-effect.allow{color:#067647}
     #policyEditor textarea{width:100%;min-height:90px;font:12px ui-monospace,monospace}#policyJSON{min-height:260px}#policyEditor button,#policyEditor select{min-height:44px}#policyEditor details{margin-top:12px}#policyEditor form{display:grid;gap:8px}
+    .privacy-badge{display:flex;align-items:flex-start;gap:5px;width:fit-content;max-width:100%;min-height:22px;margin-top:5px;padding:2px 8px;border:1px solid var(--line);border-radius:11px;color:var(--secondary);font-size:11px;font-weight:600;line-height:16px;cursor:default}.privacy-badge .privacy-label{min-width:0;overflow-wrap:anywhere}.privacy-badge.enforce{color:var(--text)}.privacy-badge.enforce.route-local{border-color:var(--accent);color:color-mix(in srgb,var(--accent) 80%,var(--text))}.privacy-slot{visibility:hidden}
+    .privacy-glyph{flex:none;width:12px;height:16px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}.policy-effect.privacy-route{display:inline-flex;align-items:center;gap:4px;color:var(--text)}.policy-effect.privacy-route .privacy-glyph{height:14px}
+    .privacy-gate{margin-top:16px;border-top:1px solid var(--line)}.privacy-gate h4{margin:16px 0 4px;font-size:13px}.privacy-controls,.privacy-classifier,.privacy-route{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}.privacy-route{padding:6px 0;border-top:1px solid var(--line)}.privacy-route>label{flex:1 1 180px;min-width:0;overflow-wrap:anywhere}.privacy-classifier>span{flex:1 1 220px;min-width:0;overflow-wrap:anywhere}
+    .privacy-gate select{flex:0 1 auto;width:auto;max-width:100%;height:auto;min-width:0;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:Canvas;color:var(--text);font-size:14px}.privacy-route select{flex:1 1 240px}#privacyTestResult:not(:empty),#privacyGateError:not(:empty){margin-top:6px;overflow-wrap:anywhere}#privacyTestResult.failed{color:var(--text)}
     #mcpEditor,#backendsEditor{width:min(calc(100% - 24px),760px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#mcpEditor::backdrop,#backendsEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor{width:min(calc(100% - 24px),640px);max-height:92vh;overflow:auto;padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#secretsEditor::backdrop{background:rgba(0,0,0,.35)}#secretsEditor button{min-height:44px}.secret-row{display:flex;gap:10px;align-items:baseline;padding:6px 0;border-top:1px solid var(--line)}.secret-row code{font-weight:600}
     #macSettingsEditor{width:min(calc(100% - 24px),680px);max-height:92vh;overflow:auto;padding:0 18px 18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#macSettingsEditor::backdrop{background:rgba(0,0,0,.35)}#macSettingsEditor button,#macSettingsEditor .backend-link{min-height:44px}#macSettingsEditor :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     .settings-top{position:sticky;top:0;z-index:2;background:Canvas}.settings-top .tasks-bar{position:static;padding:10px 0}.settings-pending{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 8px;padding:6px 10px;border:1px solid var(--orange);border-radius:10px;background:var(--surface);font-variant-numeric:tabular-nums}
@@ -3892,6 +3896,14 @@ private extension RemoteControlServer {
     <label>Hours, one per line (21:45-22:50)<textarea id="policyAddHours"></textarea></label>
     <label>Only in repositories, one per line<textarea id="policyAddRepos"></textarea></label>
     <div class="tab-actions"><button id="policyAddSave" type="submit" class="control primary">Add Rule</button></div></form></details>
+    <section id="privacyGate" class="privacy-gate hidden" aria-labelledby="privacyGateTitle"><h3 id="privacyGateTitle">Privacy Gate</h3>
+    <p class="muted">Decides where each Home chat message and scheduled Home task runs: on your own model server, in the cloud, or only after you approve it.</p>
+    <div class="privacy-controls"><label><input id="privacyGateEnabled" type="checkbox" data-focus-key="enabled"> On</label><label>Mode <select id="privacyMode" data-focus-key="mode"><option value="observe">Observe</option><option value="enforce">Enforce</option></select></label></div>
+    <p class="muted">Observe records what it would do and changes nothing. Enforce routes runs and removes private tools from cloud runs.</p><div id="privacyGateError" role="alert"></div>
+    <h4>Classifier</h4><div class="privacy-classifier"><span id="privacyClassifier"></span><button id="privacyTest" type="button" class="control" data-focus-key="test">Test connection</button></div>
+    <div id="privacyTestResult" class="muted" role="status" aria-live="polite"></div><p id="privacyLog" class="muted"></p>
+    <h4>Routes</h4><div class="privacy-route"><label for="privacyChatRoute">Home chat</label><select id="privacyChatRoute" data-focus-key="chat"></select></div><div id="privacyTasks"></div>
+    <h4>Rules</h4><p class="muted">The first rule that's on and matches decides; the classifier decides the rest.</p><div id="privacyRules"></div></section>
     <details><summary id="policyConflictsTitle">Imported rules a stricter rule overrides</summary><div id="policyConflicts"></div></details>
     <details><summary>Imported from each CLI</summary><div id="policyImports"></div></details>
     <details id="policyJSONBox"><summary>Edit the whole policy as JSON</summary><textarea id="policyJSON" spellcheck="false" aria-label="Policy JSON"></textarea>
@@ -4629,15 +4641,16 @@ private extension RemoteControlServer {
     const desktopBytes=value=>Uint8Array.from(atob(value),c=>c.charCodeAt(0));
     function desktopBase64(bytes){let result="";for(let i=0;i<bytes.length;i+=8192)result+=String.fromCharCode(...bytes.subarray(i,i+8192));return btoa(result)}
     let mcpState=null,mcpTab=null,mcpTimer=null;
-    let policyState=null,policySaving=false;
+    let policyState=null,policySaving=false,privacyTasks=null,privacyTest=null,privacyFocus=null;
     $("tabPolicy").onclick=()=>{if(tabSaving||movingTab)return;$("tabEditor").close();editingTab=null;$("policyError").textContent="";$("policyEditor").showModal();loadPolicy()};
-    $("policyDone").onclick=()=>$("policyEditor").close();$("policyReload").onclick=()=>loadPolicy();$("policyEditor").addEventListener("close",()=>{policyState=null});
-    async function loadPolicy(){try{policyState=await api("/api/v1/policy");$("policyError").textContent=policyState.loadError||""}catch(e){policyState=null;$("policyError").textContent=e.message||"The agent policy isn't available on this Mac."}renderPolicy()}
-    async function policyPost(body){if(!policyState||policySaving)return false;policySaving=true;
-      try{policyState=await api("/api/v1/policy",{method:"POST",body:JSON.stringify({...body,revision:policyState.policy.revision})});$("policyError").textContent="";return true}
-      catch(e){$("policyError").textContent=e.message||"That didn't save.";await loadPolicy();return false}finally{policySaving=false;renderPolicy()}}
+    $("policyDone").onclick=()=>$("policyEditor").close();$("policyReload").onclick=()=>{privacyTasks=null;loadPolicy()};$("policyEditor").addEventListener("close",()=>{policyState=null;privacyTasks=null;privacyTest=null;privacyFocus=null});
+    async function loadPolicy(){try{policyState=await api("/api/v1/policy");$("policyError").textContent=policyState.loadError||"";$("privacyGateError").textContent=""}catch(e){policyState=null;$("policyError").textContent=e.message||"The agent policy isn't available on this Mac."}renderPolicy()}
+    // A failed change reloads the policy, then shows why (in errorBox) so the reload doesn't clear it.
+    async function policyPost(body,errorBox="policyError"){if(!policyState||policySaving)return false;policySaving=true;
+      try{policyState=await api("/api/v1/policy",{method:"POST",body:JSON.stringify({...body,revision:policyState.policy.revision})});$("policyError").textContent="";$("privacyGateError").textContent="";return true}
+      catch(e){const message=e.message||"That didn't save.";await loadPolicy();$(errorBox).textContent=message;return false}finally{policySaving=false;renderPolicy()}}
     function policyLines(id){return $(id).value.split("\\n").map(s=>s.trim()).filter(Boolean)}
-    function renderPolicy(){const data=policyState,list=$("policyRules");list.replaceChildren();if(!data)return;const p=data.policy;
+    function renderPolicy(){const data=policyState,list=$("policyRules");list.replaceChildren();renderPrivacyGate(data);if(!data)return;const p=data.policy;
       $("policyEnabled").checked=p.enabled;$("policyEnabled").disabled=policySaving;$("policyFile").textContent=`Saved in ${data.file} · revision ${p.revision}`;
       for(const effect of ["deny","ask","allow"]){const rules=(p.rules||[]).filter(r=>r.effect===effect);if(!rules.length)continue;
         list.append(el("h3","",{deny:"Always blocked",ask:"Needs approval",allow:"Always allowed"}[effect]+` (${rules.length})`));
@@ -4656,13 +4669,74 @@ private extension RemoteControlServer {
       const imports=$("policyImports");imports.replaceChildren();for(const i of p.imports||[]){const row=el("div","policy-rule");
         row.append(el("strong","",`${i.source}: ${i.rules} rule(s) from ${i.file}`),el("span","muted",i.backup?`Backup: ${i.backup}`:"Nothing to back up"));imports.append(row)}
       if(!(p.imports||[]).length)imports.append(el("p","muted","Nothing imported yet."));
-      if(document.activeElement!==$("policyJSON"))$("policyJSON").value=JSON.stringify({enabled:p.enabled,rules:p.rules,projects:p.projects,privateTerms:p.privateTerms},null,2);
+      if(document.activeElement!==$("policyJSON"))$("policyJSON").value=JSON.stringify({enabled:p.enabled,rules:p.rules,projects:p.projects,privateTerms:p.privateTerms,privacyGate:p.privacyGate},null,2);
       $("policyAddSave").disabled=policySaving;$("policyJSONSave").disabled=policySaving}
     $("policyEnabled").onchange=()=>policyPost({enabled:$("policyEnabled").checked});
     $("policyAdd").onsubmit=async event=>{event.preventDefault();const rule={id:$("policyAddID").value.trim(),effect:$("policyAddEffect").value,reason:$("policyAddReason").value.trim()};
       for(const[key,id]of[["commands","policyAddCommands"],["paths","policyAddPaths"],["mcp","policyAddMCP"],["hours","policyAddHours"],["repos","policyAddRepos"]]){const v=policyLines(id);if(v.length)rule[key]=v}
       if(await policyPost({rule})){for(const id of["policyAddID","policyAddReason","policyAddCommands","policyAddPaths","policyAddMCP","policyAddHours","policyAddRepos"])$(id).value="";$("policyAddBox").open=false}};
     $("policyJSONSave").onclick=()=>{let policy;try{policy=JSON.parse($("policyJSON").value)}catch(e){$("policyError").textContent=`That isn't valid JSON: ${e.message}`;return}policyPost({policy})};
+    // Privacy Gate: where each Home chat message and scheduled Home task runs. Hidden for a Mac without it.
+    const privacyRouteChoices=[["auto","Decide each time"],["local","Always local"],["cloud","Always cloud, without private tools"],["cloudWithPrivateTools","Always cloud, with private tools"]];
+    const privacyRouteNames={local:"Local",cloud:"Cloud",redactApprove:"Ask first",offline:"Offline"};
+    const privacyDetectorNames={secret:"secrets",ssn:"Social Security numbers",card:"card numbers",account:"account numbers",email:"email addresses",phone:"phone numbers",address:"street addresses",name:"people's names"};
+    const privacyGlyphPaths={local:'<path d="M2.5 7.6 8 3l5.5 4.6M4 6.5V13h8V6.5M6.6 13V9.8h2.8V13"/>',cloud:'<path d="M5 12.5h6.5a2.5 2.5 0 0 0 .2-5A3.6 3.6 0 0 0 4.8 8 2.25 2.25 0 0 0 5 12.5z"/>',
+      redactApprove:'<path d="M2 8c1.5-2.7 3.6-4 6-4s4.5 1.3 6 4c-1.5 2.7-3.6 4-6 4s-4.5-1.3-6-4z"/><circle cx="8" cy="8" r="1.7"/><path d="M3 3l10 10"/>',offline:'<circle cx="8" cy="8" r="5.5" stroke-dasharray="2 2.2"/><path d="M4.5 11.5l7-7"/>'};
+    function privacyGlyph(route){const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");svg.setAttribute("viewBox","0 0 16 16");svg.setAttribute("aria-hidden","true");svg.setAttribute("class","privacy-glyph");svg.innerHTML=privacyGlyphPaths[route]||'<circle cx="8" cy="8" r="5.5"/>';return svg}
+    // The route badge under a prompt. A slot is an invisible one that holds the line until the decision arrives.
+    function privacyBadge(privacy,slot=false){const route=privacyRouteNames[privacy.route]?privacy.route:"",label=privacy.label||privacyRouteNames[route]||"Privacy check",badge=document.createElement("span"),text=document.createElement("span");
+      badge.className=`privacy-badge ${privacy.mode==="enforce"?"enforce":"observe"}${route?` route-${route}`:""}${slot?" privacy-slot":""}`;text.className="privacy-label";text.textContent=label;badge.append(privacyGlyph(route),text);
+      if(slot)badge.setAttribute("aria-hidden","true");else{badge.title=privacy.detail||label;badge.setAttribute("role","note");badge.setAttribute("aria-label",`Privacy Gate: ${label}${privacy.detail?`. ${privacy.detail}`:""}`)}return badge}
+    // Once a conversation has badges, the latest prompt without one is still being checked.
+    function privacyPendingID(messages){if(!messages.some(m=>m.privacy))return null;const last=messages.findLast(m=>m.role==="user");return last&&!last.privacy?last.id:null}
+    function privacyRouteSelect(select,value){if(!select.options.length)for(const[route,label]of privacyRouteChoices)select.append(new Option(label,route));select.value=privacyRouteChoices.some(([route])=>route===value)?value:"auto";select.disabled=policySaving;return select}
+    function privacyTaskRoute(gate,id){const tasks=gate.tasks||{};return tasks[id]??tasks[String(id).toUpperCase()]??tasks[String(id).toLowerCase()]??"auto"}
+    function privacyRuleSummary(rule){const parts=[];if((rule.detectors||[]).length)parts.push(`Finds ${rule.detectors.map(d=>privacyDetectorNames[d]||d).join(", ")}`);
+      if((rule.sources||[]).length)parts.push(`Names ${rule.sources.join(", ")}`);if(rule.privateTerms)parts.push("Finds your private terms");if(rule.repoWorkdir)parts.push("Work in a git repository");
+      if((rule.scope||[]).length)parts.push(`Looks at: ${rule.scope.join(", ")}`);return parts.join(" · ")}
+    function privacyClassifierText(gate,status){if(gate.classifier?.enabled===false)return `The classifier is off. Requests no rule covers take the default route (${privacyRouteNames[gate.defaultRoute]||gate.defaultRoute||"Cloud"}).`;
+      if(!status)return "";if(status.from==="none"||!status.address)return `No classifier: ${status.problem||"Cantrip couldn't find one."}`;
+      return `${status.model||"The server's model"} at ${status.address}${status.from==="privateLocal"?", from Private Local":""}`}
+    function privacyTestText(result){if(!result.ok)return `Didn't work: ${result.error||"the classifier didn't answer."}`;const cloud=result.probabilities?.cloud;
+      return `Answered in ${result.latencyMs??"?"} ms: ${privacyRouteNames[result.route]||result.route||"no route"}${typeof cloud==="number"?` · cloud probability ${Math.round(cloud*100)}%`:""}`}
+    async function loadPrivacyTasks(){const state=privacyTasks={loaded:false,tasks:[],error:""};
+      try{const data=await api("/api/v1/home/tasks");if(state!==privacyTasks)return;state.tasks=(data.tasks||[]).filter(task=>task?.id).map(task=>({id:task.id,title:task.title||"Untitled task"}))}
+      catch(e){if(state!==privacyTasks)return;state.error=e.message||"they didn't load."}
+      state.loaded=true;if($("policyEditor").open)renderPrivacyGate(policyState)}
+    async function testPrivacyClassifier(){if(privacyTest?.busy||!policyState)return;const state=privacyTest={busy:true,text:"Asking the classifier…",failed:false};renderPrivacyGate(policyState);
+      try{const result=await api("/api/v1/policy/privacy-test",{method:"POST"});if(state!==privacyTest)return;privacyTest={text:privacyTestText(result),failed:!result.ok}}
+      catch(e){if(state!==privacyTest)return;privacyTest={text:`Didn't work: ${e.message||"the test didn't run."}`,failed:true}}
+      privacyFocus="test";renderPrivacyGate(policyState)}
+    // Changes copy the section that was read and change one field; errors show in the section.
+    function privacyGatePost(change,key){const gate=policyState?.policy?.privacyGate;if(!gate)return;privacyFocus=key;if(policySaving){renderPrivacyGate(policyState);return}policyPost({privacyGate:{...gate,...change}},"privacyGateError")}
+    function privacyRoutePost(task,route,key){privacyFocus=key;if(policySaving){renderPrivacyGate(policyState);return}policyPost({privacyRoute:{task,route}},"privacyGateError")}
+    // Re-rendering replaces task pickers and rule switches: put focus back on the control that was changed.
+    function privacyRestoreFocus(){const key=privacyFocus,active=document.activeElement;if(!key||policySaving||!$("policyEditor").open)return;privacyFocus=null;
+      if(active&&active!==document.body&&active.isConnected&&!active.disabled)return;
+      [...$("privacyGate").querySelectorAll("[data-focus-key]")].find(node=>node.dataset.focusKey===key)?.focus()}
+    function renderPrivacyGate(data){const gate=data?.policy?.privacyGate;$("privacyGate").classList.toggle("hidden",!gate);if(!gate)return;if(!privacyTasks)loadPrivacyTasks();
+      const status=data.privacyClassifier,busy=Boolean(privacyTest?.busy);
+      $("privacyGateEnabled").checked=gate.enabled!==false;$("privacyMode").value=gate.mode==="enforce"?"enforce":"observe";$("privacyGateEnabled").disabled=policySaving;$("privacyMode").disabled=policySaving;
+      $("privacyClassifier").textContent=privacyClassifierText(gate,status);$("privacyLog").textContent=status?.log?`Each decision is logged in ${status.log} on the Mac.`:"";
+      $("privacyTest").disabled=busy;$("privacyTest").textContent=busy?"Testing…":"Test connection";$("privacyTestResult").textContent=privacyTest?.text||"";$("privacyTestResult").classList.toggle("failed",Boolean(privacyTest?.failed));
+      privacyRouteSelect($("privacyChatRoute"),gate.chat);
+      const tasks=$("privacyTasks");tasks.replaceChildren();
+      if(!privacyTasks.loaded)tasks.append(el("p","muted","Loading Home's tasks…"));
+      else{const rows=[...privacyTasks.tasks],known=new Set(rows.map(task=>String(task.id).toUpperCase()));
+        for(const id of Object.keys(gate.tasks||{}))if(!known.has(id.toUpperCase()))rows.push({id,title:privacyTasks.error?`Task ${id.slice(0,8)}`:"A task that no longer exists"});
+        if(privacyTasks.error)tasks.append(el("p","muted",`Home's tasks aren't available: ${privacyTasks.error}`));else if(!rows.length)tasks.append(el("p","muted","No Home tasks yet. Each task you schedule gets its own route here."));
+        for(const task of rows){const row=el("div","privacy-route"),label=el("label","",task.title),select=document.createElement("select"),key=`task:${task.id}`;select.id=`privacyTask-${task.id}`;label.htmlFor=select.id;select.dataset.focusKey=key;
+          privacyRouteSelect(select,privacyTaskRoute(gate,task.id));select.onchange=()=>privacyRoutePost(task.id,select.value,key);row.append(label,select);tasks.append(row)}}
+      const rules=$("privacyRules");rules.replaceChildren();
+      for(const rule of gate.rules||[]){const row=el("div",`policy-rule${rule.enabled===false?" off":""}`),head=el("div","policy-head"),chip=el("span",`policy-effect privacy-route route-${rule.route}`),on=el("label"),box=document.createElement("input"),key=`rule:${rule.id}`,summary=privacyRuleSummary(rule);
+        chip.append(privacyGlyph(rule.route),privacyRouteNames[rule.route]||rule.route);box.type="checkbox";box.checked=rule.enabled!==false;box.disabled=policySaving;box.dataset.focusKey=key;box.setAttribute("aria-label",`${rule.id} on`);
+        box.onchange=()=>privacyGatePost({rules:(gate.rules||[]).map(r=>r.id===rule.id?{...r,enabled:box.checked}:r)},key);on.append(box," On");head.append(el("strong","",rule.id),chip,on);row.append(head);if(summary)row.append(el("span","muted",summary));rules.append(row)}
+      if(!(gate.rules||[]).length)rules.append(el("p","muted","No rules: the classifier decides every request."));
+      privacyRestoreFocus()}
+    $("privacyGateEnabled").onchange=()=>privacyGatePost({enabled:$("privacyGateEnabled").checked},"enabled");
+    $("privacyMode").onchange=()=>privacyGatePost({mode:$("privacyMode").value},"mode");
+    $("privacyChatRoute").onchange=()=>privacyRoutePost(null,$("privacyChatRoute").value,"chat");
+    $("privacyTest").onclick=()=>testPrivacyClassifier();
     function el(tag,cls="",text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n}
     $("tabMCP").onclick=()=>{if(tabSaving||movingTab)return;mcpTab=editingTab;$("tabEditor").close();editingTab=null;$("mcpError").textContent="";$("mcpEditor").showModal();loadMCP()};
     $("mcpDone").onclick=()=>$("mcpEditor").close();$("mcpEditor").addEventListener("close",()=>{clearTimeout(mcpTimer);mcpState=null});
@@ -5530,12 +5604,12 @@ private extension RemoteControlServer {
       const pinned=[];if(!session){const empty=document.createElement("div");empty.className="empty";empty.textContent="No open sessions.";box.append(empty)}
       else{if(session.isLocalPrivate){const notice=document.createElement("p");notice.className="muted";notice.textContent="Private Local - saved on the Mac and available remotely. Self-hosted models; no cloud fallback. Configure the server in the tab menu.";box.append(notice)}
         if(session.child)box.append(childBanner(session));
-        const answered=new Set(session.messages.filter(m=>m.role==="handoff"&&m.handoffResult).map(m=>m.handoffResult.delegationID)),lines=threadLines(session.messages.filter(message=>drawsRow(message,answered)));
+        const answered=new Set(session.messages.filter(m=>m.role==="handoff"&&m.handoffResult).map(m=>m.handoffResult.delegationID)),lines=threadLines(session.messages.filter(message=>drawsRow(message,answered))),privacyPending=privacyPendingID(session.messages);
         for(const message of session.messages){const handoffs=(message.delegations||[]).filter(handoff=>!answered.has(handoff.id)),subagents=message.subagents||[],subagentIDs=new Set(subagents.map(agent=>agent.id)),activities=(message.activities||[]).filter(activity=>!subagentIDs.has(activity.id)),apps=message.apps||[],settled=subagents.filter(agent=>!subagentActive(agent));for(const agent of subagents)if(subagentActive(agent))pinned.push([agent,message.id]);for(const app of apps)box.append(mcpAppSlot(session.id,app));
           if(!drawsRow(message,answered))continue;if(message.role==="freshStart"){box.append(freshStartDivider(message));continue}const row=document.createElement("article"),line=lines.get(message.id);let link=null;row.className=`message ${message.role}`;row.dataset.messageId=message.id;if(line)row.classList.add(`thread-${line}`);
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
           if(message.thread&&message.role!=="user"){row.classList.add("threaded");link=threadQuote(session.id,message);row.append(link)}
-          appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);const replies=session.threadReplies?.[message.id];if(replies>0)row.append(threadRepliesButton(session.id,message,replies));if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
+          appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.privacy)row.append(privacyBadge(message.privacy));else if(message.id===privacyPending)row.append(privacyBadge({label:"Privacy check"},true));const replies=session.threadReplies?.[message.id];if(replies>0)row.append(threadRepliesButton(session.id,message,replies));if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
           if(message.role==="error"&&session.supportsStartFresh&&message.id===session.repeatedErrorMessageID)appendErrorRecovery(row,session);
           if(message.role==="error"&&session.continuableMessageIDs?.includes(message.id))appendContinue(row,session,message.id);
           if(canDeleteMessage(session,message))appendDeleteMessage(row,session,message);
@@ -5940,7 +6014,7 @@ private extension RemoteControlServer {
         const session=data.session||{},log=homeNode("div","bg-log"),messages=(session.messages||[]).slice(-24);
         if(!messages.length)log.append(homeNode("p","muted tasks-empty","The log is empty."));
         for(const message of messages){if(message.role!=="user"&&message.role!=="assistant")continue;const row=homeNode("article",`message ${message.role}`);row.dataset.messageId=message.id;
-          if(message.role==="user")row.append(homeNode("p","task-meta",(message.displayText||message.text||"").split("\\n")[0]));
+          if(message.role==="user"){row.append(homeNode("p","task-meta",(message.displayText||message.text||"").split("\\n")[0]));if(message.privacy)row.append(privacyBadge(message.privacy))}
           else appendReply(row,message,[],{id:state.sessionID,isLocalPrivate:false});log.append(row)}
         state.logNode=log;renderBackground();$("backgroundPanel").scrollTop=$("backgroundPanel").scrollHeight}
       catch(error){if(state===backgroundState)setText($("backgroundError"),`Couldn't load the log: ${error.message}`)}}
