@@ -306,9 +306,11 @@ and notes list are identical to the copy in an earlier message of the same
 Copilot session, the message carries a one-line note instead (with where to read
 it fresh). Memory snippets matched to the message always go. Everything goes
 whole again on a new session, after the history is compacted (a sharp drop in
-context size) and every 20 messages. Measured on two days of real Home logs in
-November 2026, this cuts a Home model call's input by a median of about 50,000
-tokens (13.5%). Other backends get every section each time.
+context size) and every 20 messages. Replayed on two days of real Home logs in
+November 2026, this cuts a Home model call's input by a median of about 38,000
+tokens (12.2%): about 15,000 from memory, 14,000 from tabs and handoffs, 7,600
+from the task index and 4,600 from background results. Other backends get every
+section each time.
 
 ## Rules, safety and approvals
 
