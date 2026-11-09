@@ -108,6 +108,85 @@ ask Cantrip's app for deny rules, allowing the call if Cantrip can't answer.
 Turn **Check every tab against the policy** off to go back to each backend's
 own rules; Cantrip Home and child tabs keep Home's rules either way.
 
+## Decide where Home requests run (Privacy Gate)
+
+Before a Cantrip Home chat message or a scheduled Home task goes to a model, the
+Privacy Gate decides where it should run:
+
+- **Local**: on your own model server. Home chat uses Private Local (no tools);
+  a scheduled task uses the Local Model backend pointed at the same server, with
+  tools.
+- **Cloud**: on the backend chosen in Settings.
+- **Ask first**: personal details that could be hidden. Until hiding exists,
+  enforce mode asks before sending: **Run locally**, **Send to cloud without
+  private tools** or **Don't send**.
+
+It runs in **Observe** mode by default: it records what it would do and shows it
+as a small badge under each Home request (**Would run locally · secrets**), and
+changes nothing. The run uses the same backend, prompt, MCP servers and tools,
+with no approval cards and no wait; the decision is made beside the send. Switch
+to **Enforce** in **Settings › Agent policy › Privacy Gate** (Mac, browser
+Remote, iPhone and Gateway Mac) when you're ready. Windows shows the badges.
+
+How it decides, first match wins:
+
+1. Home chat's or the task's own route: **Decide each time**, **Always local**,
+   **Always cloud, without private tools** or **Always cloud, with private
+   tools** (as before the gate, for runs that need your own data sources).
+2. Fixed rules, in about 10–40 ms: `secrets` (credentials anywhere in the
+   message) → local; `private-sources` (the request asks about mail, messages,
+   calendar, contacts, finances, documents, passwords or forms, or carries a Mail
+   or Messages attachment) → local; `personal-details` (Social Security, card or
+   account numbers, email addresses, phone numbers, street addresses, people's
+   names, or your `privateTerms`, in the request, earlier turns or retrieved
+   memory) → ask first; `code` (work in a git repository) → cloud. The
+   always-loaded core memory is left out: it goes with every message on every
+   backend, so it would flag everything.
+3. The classifier, for requests no rule decides: a model on your own server
+   (oMLX's `POST /v1/decisions`, by default Private Local's server and model)
+   reads the request and the latest earlier turn, three times with the options in
+   a different order, and Cantrip averages the answers. It says cloud only when
+   it's at least 90% sure; otherwise local, or ask first when it isn't sure. It
+   waits at most 2.5 s and never falls back to the cloud: Home chat asks, and a
+   scheduled task waits for the classifier (checking every minute, up to 4 hours)
+   in enforce mode. The classifier must be on this Mac, your network or your
+   tailnet, over HTTPS unless on this Mac, and never Cantrip's own model API;
+   redirects are refused.
+
+Once a Home chat request is routed local, the next three turns stay local too,
+because earlier turns go along with each new message. In enforce mode, cloud
+runs lose the `personal`, `homelab`, `bitwarden` and `forms` MCP servers and
+can't read `~/Cantrip Memory`, Messages or Mail (unless their route keeps
+private tools).
+
+Settings live in the policy file's `privacyGate` section (a file without it gets
+the defaults: on, observing). Each decision is logged in
+`~/.cache/Cantrip/privacy/decisions.jsonl` on the Mac (readable only by you):
+the route, the rule or the classifier's probabilities, what matched (kinds and
+counts, never values), timings, and what enforce mode would do. Prompt text is
+never logged; in observe mode it goes only to your classifier.
+
+### Review a week of observe data
+
+1. Run `cantrip privacy report` (or `--days 14`). It summarizes the routes, what
+   enforce mode would change, why (each rule, the classifier, your routes),
+   which detectors fired and where, each task's outcome, and the classifier's
+   speed and failures.
+2. Look at **What enforce mode does with them**. Every run listed as *run
+   locally*, *ask first* or *cloud without private tools* would change. If
+   Home chat or a daily task depends on cloud models with your private tools
+   (bills, follow-ups, briefings), give it **Always cloud, with private tools**
+   before enforcing.
+3. Check **Why**. A rule that fires on most requests (often `personal-details`
+   through names in earlier turns) asks too often: turn it off, narrow its
+   `scope`, or move it to local. **Detector hits** show which part of the
+   message matched (`@request`, `@earlier`, `@memory`, `@context`).
+4. Check the classifier line: a 95th percentile near 2.5 s or many unanswered
+   calls means requests would wait or ask. Answers just under the cloud
+   threshold are listed; raise or lower `cloudMinProbability` to match.
+5. Use **Test Connection** in Settings, then switch to **Enforce**. The badges
+   change from *Would…* to what happened.
+
 ## Choose automatic context
 
 Open Settings and review these switches before asking about sensitive work:

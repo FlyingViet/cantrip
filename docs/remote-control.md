@@ -189,15 +189,26 @@ as "Gemini 4 Argon" or "Opus models", `until`, `untilLabel`) and `revision`.
 
 `GET /api/v1/policy` returns the [agent policy](privacy-and-memory.md#set-what-agents-may-do)
 as `policy` (`revision`, `enabled`, `rules`, `projects`, `privateTerms`,
-`imports`, `conflicts`, `backstops`), `summaries` (a one-line description per
-rule ID), `file`, `loadError` and `namedCommands`. Every paired client can show
+`imports`, `conflicts`, `backstops`, `privacyGate`), `summaries` (a one-line description per
+rule ID), `file`, `loadError`, `namedCommands` and `privacyClassifier` (the
+[Privacy Gate](privacy-and-memory.md#decide-where-home-requests-run-privacy-gate)'s
+classifier: `address`, `model`, `from` = `own`, `privateLocal` or `none`,
+`problem`, `log`). Every paired client can show
 it; approvals for ask rules arrive as the usual input requests. `POST` takes the
 `revision` it read and one change: `{"enabled": true|false}`, `{"rule": {…}}`
 (adds or replaces a Mac-wide rule by `id`), `{"removeRule": "id"}`,
-`{"setRuleEnabled": {"id", "enabled"}}`, or `{"policy": {"enabled", "rules",
-"projects", "privateTerms"}}`. It returns the new snapshot; a stale revision
+`{"setRuleEnabled": {"id", "enabled"}}`, `{"policy": {"enabled", "rules",
+"projects", "privateTerms"}}` (a client that leaves out `privacyGate` keeps the
+Mac's), `{"privacyGate": {…}}` (the whole section), or `{"privacyRoute":
+{"task": UUID or null, "route": "auto"|"local"|"cloud"|"cloudWithPrivateTools"}}`
+(a task's or, with `null`, Home chat's own route). It returns the new snapshot; a stale revision
 gets `409`, an invalid rule `400` with the reason, an unknown rule `404`.
 Imports and the CLIs' deny lists stay under Cantrip's control.
+`POST /api/v1/policy/privacy-test` asks the classifier one made-up coding
+question and returns `ok`, `address`, `model`, `latencyMs`, `route`,
+`probabilities` and `error`. A Home request's user message carries the gate's
+decision as `privacy` (`route` = `local`, `cloud`, `redactApprove` or `offline`,
+`mode`, `applied`, `label`, `detail`), added a moment after the message appears.
 
 `POST` takes `{"revision", "entries": [{"backend", "model", "effort"}]}` to
 replace the chain (a model the backend lists and an effort that model takes;
