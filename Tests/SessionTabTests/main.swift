@@ -105,6 +105,7 @@ struct SessionTabTests {
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "home-handoffs" {
             try await testCantripHomeNewTabs()
+            try await testCantripHomeListsEveryOpenTab()
             try await testCantripHomeDoneWhen()
             return
         }
@@ -294,6 +295,7 @@ struct SessionTabTests {
         try await testCantripHomeHandoffResults()
         try await testCantripHomeDoneWhen()
         try await testCantripHomeNewTabs()
+        try await testCantripHomeListsEveryOpenTab()
         try testBuildQueue()
         try await testThreadTags()
         try testCantripHomeRunSummaries()
