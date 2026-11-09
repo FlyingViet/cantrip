@@ -47,6 +47,12 @@ extension SessionTabTests {
         let fits = HomeLocalProfile.build(small)
         precondition(fits.trimmed.isEmpty && fits.turns.count == small.turns.count, "\(fits.trimmed)")
         precondition(fits.estimatedTokens == sentTokens(fits, request: small.request) && fits.estimatedTokens <= 8_000)
+        // The per-part breakdown adds up to the total (within rounding of each part) and names every part sent.
+        let parts = fits.sections.reduce(0) { $0 + $1.tokens }
+        precondition(abs(parts - fits.estimatedTokens) <= fits.sections.count + 4 * fits.replay.count + 2,
+                     "\(parts) vs \(fits.estimatedTokens): \(fits.breakdown)")
+        precondition(fits.sections.map(\.name) == ["rules", "earlier turns", "request", "time", "task list", "workspaces", "tabs",
+                                                   "core memory", "matched notes"], fits.breakdown)
         for block in ["`cantrip-task`", "`cantrip-task-records`", "`cantrip-delegate`", "never instructions"] {
             precondition(fits.system.contains(block), "the local system prompt keeps \(block)")
         }
