@@ -435,6 +435,24 @@ export interface PromptUsage {
   latestContextTokens?: Int;
 }
 
+/** Where the Privacy Gate sent a prompt, or would have while observing. "offline": the privacy check couldn't run. */
+export type PrivacyRoute = "local" | "cloud" | "redactApprove" | "offline";
+
+/**
+ * A prompt's Privacy Gate route (`PrivacyBadge` on the Mac; user messages only). It's decided beside the send, so it can
+ * arrive a moment after the message; older Macs never send it.
+ */
+export interface PrivacyBadge {
+  route: PrivacyRoute | string;
+  mode: "observe" | "enforce" | string;
+  /** Enforce mode acted on it; false while observing. */
+  applied: boolean;
+  /** Short text for the badge ("Would run locally · secrets"). */
+  label: string;
+  /** The reason, rule or classifier probabilities and timing. */
+  detail: string;
+}
+
 /**
  * Image reference in a message, queued prompt or input request.
  * - User attachments: `"<UUID>/image-<1..4>.jpg"` → GET /sessions/<sid>/attachments/<id>[/thumbnail].
@@ -686,6 +704,8 @@ export interface RemoteMessage {
   author?: string;
   /** User messages with usage only. */
   promptUsage?: PromptUsage;
+  /** User messages only, when the Mac's Privacy Gate decided a route (possibly a moment after the message). */
+  privacy?: PrivacyBadge;
   delegations?: RemoteDelegation[];
   /** role === 'handoff' only. */
   handoffResult?: RemoteHandoffResult;

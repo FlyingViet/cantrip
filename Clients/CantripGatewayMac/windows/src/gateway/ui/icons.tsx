@@ -10,7 +10,7 @@ import {
   Eye, EyeOff, File, FileText, Film, Folder, FolderOpen, FolderPlus, Gauge, GitBranch, GripVertical, Hammer, History, Hourglass, House, Image,
   Images, Info, KeyRound, Layers, LayoutGrid, MapPin, Library, Link, ListChecks, ListOrdered, Lock, LogOut, MessagesSquare, Mic, Monitor,
   PanelLeft, Paperclip, Pause, Pencil, Play, Plus, Power, RadioTower, RotateCw, Rows3, Search, Send, Server, Settings,
-  Settings2, Shirt, ShieldCheck, SlidersHorizontal, Sparkles, Square, SquareArrowOutUpRight, Star, Terminal, Timer, Trash2,
+  Settings2, Shirt, ShieldCheck, ShieldOff, SlidersHorizontal, Sparkles, Square, SquareArrowOutUpRight, Star, Terminal, Timer, Trash2,
   TriangleAlert, Undo2, Unlink, UserRound, Volume2, Wifi, WifiOff, Wrench, X, Zap,
 } from "lucide";
 import type { IconNode } from "lucide";
@@ -22,7 +22,7 @@ const ICONS = {
   "ellipsis.circle": CircleEllipsis, ellipsis: Ellipsis, plus: Plus, "plus.circle": CirclePlus, house: House,
   "chevron.down": ChevronDown, "chevron.right": ChevronRight, "chevron.left": ChevronLeft, "chevron.up": ChevronUp,
   mic: Mic, waveform: AudioWaveform, "stop.fill": Square, "stop.circle": CircleStop, "lock.fill": Lock,
-  "lock.shield.fill": ShieldCheck, "sidebar.left": PanelLeft, "slider.horizontal.3": SlidersHorizontal,
+  "lock.shield.fill": ShieldCheck, "shield.slash": ShieldOff, "sidebar.left": PanelLeft, "slider.horizontal.3": SlidersHorizontal,
   "gauge.with.dots.needle.33percent": Gauge, "pause.circle": CirclePause, "play.circle": CirclePlay, play: Play, pause: Pause,
   hammer: Hammer, brain: Brain, tshirt: Shirt, "antenna.radiowaves.left.and.right": RadioTower, antenna: Antenna,
   "checkmark.circle": CircleCheck, "xmark.circle": CircleX, "exclamationmark.triangle": TriangleAlert, "arrow.up.circle": CircleArrowUp,
