@@ -107,6 +107,11 @@ struct SessionTabTests {
             try await testHomeLocalLive()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "home-tokens" {
+            try testHomeLocalProfile()
+            try testHomeRepeatedData()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "privacy" {
             try testHomeLocalProfile()
             try await testPrivacyGate()
@@ -306,6 +311,7 @@ struct SessionTabTests {
         try await testCantripHomeNewTabs()
         try await testCantripHomeListsEveryOpenTab()
         try testHomeLocalProfile()
+        try testHomeRepeatedData()
         try await testPrivacyGate()
         try testBuildQueue()
         try await testThreadTags()

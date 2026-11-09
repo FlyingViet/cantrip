@@ -300,6 +300,16 @@ Other backends, and council mode, still get the full protocol with every
 message. In October 2026 a Home message dropped from about 117,000 to about
 21,000 characters, memory included.
 
+On Copilot, data the conversation already holds isn't sent again: when the task
+index, the open tabs and handoffs, the background results or memory's core files
+and notes list are identical to the copy in an earlier message of the same
+Copilot session, the message carries a one-line note instead (with where to read
+it fresh). Memory snippets matched to the message always go. Everything goes
+whole again on a new session, after the history is compacted (a sharp drop in
+context size) and every 20 messages. Measured on two days of real Home logs in
+November 2026, this cuts a Home model call's input by a median of about 50,000
+tokens (13.5%). Other backends get every section each time.
+
 ## Rules, safety and approvals
 
 Home's rules and safety checks are enforced by Cantrip, not by the model's CLI,
