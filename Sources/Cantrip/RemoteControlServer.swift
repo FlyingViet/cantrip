@@ -1724,38 +1724,66 @@ final class RemoteControlServer {
                 guard !session.isCantripHomeBackground else {
                     throw SessionModelSettingsError(409, "Background runs use Cantrip Home's model. Change it in Home.")
                 }
-                if request.method == "GET" {
-                    let backend = session.modelSettingsBackend
-                    if request.query("refresh") == "true" {
-                        session.settings.refreshTabModels(for: backend)
-                    } else if session.modelCatalog.refreshError == nil {
-                        session.settings.refreshTabModelsIfNeeded(for: backend)
-                    }
-                } else if request.method == "POST" {
-                    guard let json, let revision = json["revision"] as? String,
-                          let inherit = json["usesDefaults"] as? NSNumber,
-                          CFGetTypeID(inherit) == CFBooleanGetTypeID() else {
+                // `?backend=Claude Code` (or `mac`): the settings this tab would have there, unsaved.
+                var preview: BackendKind?
+                if request.method == "POST" {
+                    guard let json, let revision = json["revision"] as? String else {
                         throw SessionModelSettingsError(400, "Provide revision and usesDefaults.")
                     }
-                    let selection: SessionModelSelection?
-                    if inherit.boolValue {
-                        guard Set(json.keys) == ["revision", "usesDefaults"] else {
-                            throw SessionModelSettingsError(400, "Do not include overrides when using Mac defaults.")
+                    // `backend`: one of the tab backends, or null for the Mac's; absent keeps it.
+                    var change = TabBackendChange.unchanged
+                    if let value = json["backend"] {
+                        if value is NSNull {
+                            change = .mac
+                        } else if let name = value as? String, let kind = BackendKind(rawValue: name) {
+                            change = .backend(kind)
+                        } else {
+                            throw SessionModelSettingsError(400, "backend must be a backend's name or null.")
                         }
-                        selection = nil
-                    } else {
-                        guard Set(json.keys) == ["revision", "usesDefaults", "model", "effort", "contextTier"],
-                              let model = json["model"] as? String, let effort = json["effort"] as? String,
-                              let tier = json["contextTier"] as? String else {
-                            throw SessionModelSettingsError(400, "Provide model, effort and contextTier strings.")
-                        }
-                        selection = SessionModelSelection(model: model, effort: effort, contextTier: tier)
                     }
-                    try session.updateModelSettings(selection, revision: revision)
+                    let fields = Set(json.keys).subtracting(["backend"])
+                    if fields == ["revision"], change != .unchanged {
+                        try session.updateModelSettings(nil, revision: revision, backend: change, keepsSelection: true)
+                    } else {
+                        guard let inherit = json["usesDefaults"] as? NSNumber, CFGetTypeID(inherit) == CFBooleanGetTypeID() else {
+                            throw SessionModelSettingsError(400, "Provide revision and usesDefaults.")
+                        }
+                        let selection: SessionModelSelection?
+                        if inherit.boolValue {
+                            guard fields == ["revision", "usesDefaults"] else {
+                                throw SessionModelSettingsError(400, "Do not include overrides when using Mac defaults.")
+                            }
+                            selection = nil
+                        } else {
+                            guard fields == ["revision", "usesDefaults", "model", "effort", "contextTier"],
+                                  let model = json["model"] as? String, let effort = json["effort"] as? String,
+                                  let tier = json["contextTier"] as? String else {
+                                throw SessionModelSettingsError(400, "Provide model, effort and contextTier strings.")
+                            }
+                            selection = SessionModelSelection(model: model, effort: effort, contextTier: tier)
+                        }
+                        try session.updateModelSettings(selection, revision: revision, backend: change)
+                    }
+                } else if request.method == "GET" {
+                    if let name = request.query("backend") {
+                        if name == "mac" {
+                            preview = session.isLocalPrivate ? nil : session.settings.backend
+                        } else if let kind = BackendKind(rawValue: name), AppSettings.tabBackends.contains(kind) {
+                            preview = kind
+                        } else {
+                            throw SessionModelSettingsError(400, "Ask about Copilot, Claude Code, Codex, Antigravity or mac.")
+                        }
+                    }
+                    let backend = AppSettings.tabModelBackend(for: preview ?? session.effectiveBackendKind)
+                    if request.query("refresh") == "true" {
+                        session.settings.refreshTabModels(for: backend)
+                    } else if session.settings.tabModelCatalog(for: backend).refreshError == nil {
+                        session.settings.refreshTabModelsIfNeeded(for: backend)
+                    }
                 } else {
                     throw SessionModelSettingsError(405, "method not allowed")
                 }
-                let data = try JSONEncoder().encode(session.modelSettingsSnapshot)
+                let data = try JSONEncoder().encode(session.modelSettingsSnapshot(on: preview))
                 send(status: 200, contentType: "application/json; charset=utf-8", body: data, on: connection)
             } catch let error as SessionModelSettingsError {
                 sendError(error.status, error.message, on: connection)
@@ -2830,6 +2858,9 @@ final class RemoteControlServer {
             "supportsQueuePlans": true,
             "supportsModelSettings": !session.isLocalPrivate && !session.isCantripHomeBackground,
             "modelSettingsRevision": session.modelSettingsRevision,
+            // The backend this tab runs on (its own, or the Mac's) and whether it chose its own.
+            "backend": session.effectiveBackendKind.rawValue,
+            "hasOwnBackend": session.tabMetadata.backend != nil,
             "workdir": session.workdir,
             "isStreaming": session.isStreaming,
             "canResume": session.canResume,

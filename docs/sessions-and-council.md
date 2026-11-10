@@ -12,8 +12,9 @@ yet available in the Windows app.
 3. Enter the task.
 4. Open another tab to work on something else while the first task runs.
 
-Each tab has its own conversation and terminal. Backend/model settings are
-shared; do not rely on switching tabs to restore a different configured model.
+Each tab has its own conversation and terminal. Tabs use the Mac's backend and
+models unless you give one its own in the tab's **Model Settings** (Backend,
+Model, Effort); other tabs keep theirs.
 
 **Command+1** selects the pinned **Remote** tab. **Command+2** selects the
 first local session, followed by **Command+3** through **Command+9** for later

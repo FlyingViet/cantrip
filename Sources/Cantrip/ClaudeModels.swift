@@ -104,15 +104,19 @@ extension AppSettings {
     /// Backends whose tabs can pick their own model and effort.
     static let tabModelBackends: Set<BackendKind> = [.copilot, .claudeCode, .antigravity, .codex]
 
-    /// The backend whose model list per-tab settings, Home and Home tasks use.
-    var tabModelBackend: BackendKind {
+    /// Backends a tab can run on instead of the Mac's, in the order pickers list them.
+    static let tabBackends: [BackendKind] = [.copilot, .claudeCode, .codex, .antigravity]
+
+    /// The backend whose model list a tab on `backend` uses (Copilot for the others).
+    static func tabModelBackend(for backend: BackendKind) -> BackendKind {
         switch backend {
-        case .claudeCode: return .claudeCode
-        case .antigravity: return .antigravity
-        case .codex: return .codex
+        case .claudeCode, .antigravity, .codex: return backend
         default: return .copilot
         }
     }
+
+    /// The backend whose model list per-tab settings, Home and Home tasks use.
+    var tabModelBackend: BackendKind { Self.tabModelBackend(for: backend) }
 
     /// Efforts `agy --effort` accepts for every model.
     static let antigravityEfforts = ["low", "medium", "high"]
