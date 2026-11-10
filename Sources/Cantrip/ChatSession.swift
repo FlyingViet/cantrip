@@ -434,7 +434,8 @@ final class ChatSession: ObservableObject {
     var isLocked: Bool {
         isLocalPrivate || isCantripHome || isCantripHomeBackground || tabMetadata.isLocked
     }
-    var effectiveBackendKind: BackendKind { isLocalPrivate ? .localModel : settings.backend }
+    /// The backend this tab runs on: its own (`SessionTabMetadata.backend`), else the Mac's.
+    var effectiveBackendKind: BackendKind { isLocalPrivate ? .localModel : tabMetadata.backend ?? settings.backend }
     /// Per-session working directory: backends, ! commands, and git
     /// actions all run here. A session becomes "the agent in this repo".
     @Published var workdir: String {
@@ -725,6 +726,15 @@ final class ChatSession: ObservableObject {
     /// while the run is on the Mac's own backend.
     private(set) var fallbackModel: FallbackRun?
 
+    /// The backups a run moves through at a usage limit: the Mac's chain, led by the Mac's own
+    /// backend when this tab runs on another one.
+    var fallbackChain: [FallbackEntry] {
+        let chain = settings.limitFallbackEntries
+        guard !isLocalPrivate, let own = tabMetadata.backend, own != settings.backend,
+              !chain.contains(where: { $0.kind == settings.backend && $0.model.isEmpty }) else { return chain }
+        return [FallbackEntry(backend: settings.backend.rawValue)] + chain
+    }
+
     /// The model settings this tab runs `kind` with on its own. Background runs use their task's
     /// model, or whatever the user picked for Home.
     private func ownModelSelection(for kind: BackendKind) -> SessionModelSelection? {
@@ -790,7 +800,7 @@ final class ChatSession: ObservableObject {
             return settings.fallbackRun(for: FallbackEntry(backend: entry.backend, model: tier.rawValue, effort: entry.effort))
         }
         let run = settings.fallbackRun(for: entry)
-        guard run.selection == nil, let kind = entry.kind, kind == (isLocalPrivate ? .localModel : settings.backend),
+        guard run.selection == nil, let kind = entry.kind, kind == effectiveBackendKind,
               AppSettings.fallbackModelBackends.contains(kind) else { return run }
         let defaults = settings.tabModelDefaults(for: kind)
         return FallbackRun(backend: kind, selection: SessionModelSelection(model: defaults.model, effort: defaults.effort, contextTier: ""),
@@ -810,7 +820,7 @@ final class ChatSession: ObservableObject {
         return ownRunSelection(for: kind)
     }
 
-    private func applyModelSelection() {
+    func applyModelSelection() {
         func selection(for kind: BackendKind) -> SessionModelSelection? { runSelection(for: kind) }
         if let backend = copilot as? CopilotBackend {
             let copilotSelection = selection(for: .copilot)
@@ -832,7 +842,7 @@ final class ChatSession: ObservableObject {
         codex.effortOverride = codexSelection.flatMap { $0.effort.isEmpty ? nil : $0.effort }
     }
 
-    private func saveTabMetadata(_ updated: SessionTabMetadata) throws {
+    func saveTabMetadata(_ updated: SessionTabMetadata) throws {
         if !isPrivate {
             // New, empty tabs need a transcript file to participate in tab
             // restoration. Renaming existing tabs must not rewrite their history.
@@ -1666,7 +1676,7 @@ final class ChatSession: ObservableObject {
     }
 
     func submitInputReply(_ text: String, id: UUID) throws {
-        let prompt = consumeStagedContext(onto: text, backendKind: runningBackendKind ?? settings.backend, consume: false)
+        let prompt = consumeStagedContext(onto: text, backendKind: runningBackendKind ?? effectiveBackendKind, consume: false)
         try respondInChat(id: id, text: prompt)
         attachments.removeAll()
         selectionContext = nil
@@ -1689,7 +1699,7 @@ final class ChatSession: ObservableObject {
     }
 
     var supportsRemoteImages: Bool {
-        !isLocalPrivate && settings.backend != .localModel && runningBackendKind != .localModel
+        !isLocalPrivate && effectiveBackendKind != .localModel && runningBackendKind != .localModel
     }
 
     /// Remote clients share the live session but must not consume context
@@ -1766,7 +1776,7 @@ final class ChatSession: ObservableObject {
     /// The tool-free router for this tab's backend (Auto routing, plans, Done when checks), on
     /// that backend's fast tier.
     var routerProvider: MessageRouter.Provider {
-        let kind = settings.backend == .localModel ? .localModel : runningBackendKind ?? settings.backend
+        let kind = runningBackendKind ?? effectiveBackendKind
         if kind == .localModel {
             return .local(baseURL: settings.localBaseURL, model: settings.localModel,
                           apiKey: settings.localAPIKey)
@@ -1821,7 +1831,7 @@ final class ChatSession: ObservableObject {
         // Bind staged attachments to this message before asynchronous routing.
         // A queued/remote send must never consume somebody else's next draft.
         if !isLocalPrivate, includesAmbientContext, wasBusy, !prompt.hasPrefix("!"), !prompt.hasPrefix("/") {
-            prompt = consumeStagedContext(onto: prompt, backendKind: runningBackendKind ?? settings.backend)
+            prompt = consumeStagedContext(onto: prompt, backendKind: runningBackendKind ?? effectiveBackendKind)
         }
         if mode == .auto, isStreaming, isWaitingOnBackgroundWatchers,
            currentRunMode == .single, !councilRunning,
@@ -1862,7 +1872,7 @@ final class ChatSession: ObservableObject {
         let generation = streamGeneration
         let revision = routingRevision
         let provider = routerProvider
-        let originalBackend = settings.backend
+        let originalBackend = effectiveBackendKind
         let originalWorkdir = workdir
         let originalPrivacy = isPrivate
         routingItemID = item.id
@@ -1896,7 +1906,7 @@ final class ChatSession: ObservableObject {
             guard !Task.isCancelled, self.routingRevision == revision else { return }
             self.routingTask = nil
             self.routingItemID = nil
-            guard self.settings.backend == originalBackend, self.workdir == originalWorkdir,
+            guard self.effectiveBackendKind == originalBackend, self.workdir == originalWorkdir,
                   self.isPrivate == originalPrivacy,
                   MessageRoutingPolicy.canApply(
                     originalGeneration: generation, currentGeneration: self.streamGeneration,
@@ -2370,12 +2380,12 @@ final class ChatSession: ObservableObject {
         }
 
         let requestedBackend = isLocalPrivate ? .localModel
-            : isResume ? (currentRunBackend ?? settings.backend) : settings.backend
+            : isResume ? (currentRunBackend ?? effectiveBackendKind) : effectiveBackendKind
         var backendKind = requestedBackend
         // A resumed run stays on the backup it moved to (after a relaunch, its backend's first entry).
         var target: FallbackEntry? = isResume && !isLocalPrivate ? currentRunFallback : nil
-        if isResume, !isLocalPrivate, target == nil, let kind = currentRunBackend, kind != settings.backend {
-            target = settings.limitFallbackEntries.first { $0.kind == kind } ?? FallbackEntry(backend: kind.rawValue)
+        if isResume, !isLocalPrivate, target == nil, let kind = currentRunBackend, kind != effectiveBackendKind {
+            target = fallbackChain.first { $0.kind == kind } ?? FallbackEntry(backend: kind.rawValue)
         }
         if let kind = target?.kind { backendKind = kind }
         // The chosen backend or its model is still at its usage limit: start on the fallback
@@ -2383,7 +2393,7 @@ final class ChatSession: ObservableObject {
         var limitNotice: String?
         let ownModel = ownModel(for: backendKind)
         if !isLocalPrivate, !isResume, let until = BackendLimitTracker.shared.limitedUntil(backendKind, model: ownModel),
-           let fallback = BackendFallback.next(after: backendKind, model: ownModel, chain: settings.limitFallbackEntries,
+           let fallback = BackendFallback.next(after: backendKind, model: ownModel, chain: fallbackChain,
                                                homeRun: isCantripHomeRun, model: chainModel),
            let fallbackKind = fallback.kind {
             limitNotice = (until == .distantFuture
@@ -2867,7 +2877,7 @@ final class ChatSession: ObservableObject {
         let searchIndex = settings.memorySearchIndex
         let privacy = isPrivate
         let directory = workdir
-        let configuredBackend = settings.backend
+        let configuredBackend = effectiveBackendKind
         statusText = "Preparing context..."
         preparationTask = Task { [weak self] in
             guard let self else { return }
@@ -2893,7 +2903,7 @@ final class ChatSession: ObservableObject {
                   self.isStreaming else { return }
             self.preparationTask = nil
             guard self.isPrivate == privacy, self.workdir == directory,
-                  (self.isLocalPrivate || self.settings.backend == configuredBackend),
+                  (self.isLocalPrivate || self.effectiveBackendKind == configuredBackend),
                   (self.isLocalPrivate || (self.settings.memoryEnabled && includeMemory) == memoryEnabled),
                   self.settings.memoryPath == path else {
                 self.cancel(keepQueue: true)
@@ -3084,7 +3094,7 @@ final class ChatSession: ObservableObject {
         // Councils are for planning and review — implementation is one
         // worker's job, and N models implementing in parallel is waste.
         if settings.councilScope == "planReview", Self.looksLikeExecution(prompt) {
-            Log.write("council: execution prompt — routed to the worker (\(settings.backend.rawValue))")
+            Log.write("council: execution prompt — routed to the worker (\(effectiveBackendKind.rawValue))")
             send(
                 prompt,
                 includesAmbientContext: includesAmbientContext,
@@ -3118,7 +3128,7 @@ final class ChatSession: ObservableObject {
         beginRun(
             prompt: prompt,
             mode: .council,
-            backends: members.map(\.label) + ["Chair: \(settings.backend.rawValue)"],
+            backends: members.map(\.label) + ["Chair: \(effectiveBackendKind.rawValue)"],
             backend: nil,
             includesAmbientContext: includesAmbientContext,
             queueItemID: queuedItem?.id
@@ -3245,7 +3255,7 @@ final class ChatSession: ObservableObject {
             guard let message = messages.first(where: { $0.id == entry.messageID }) else { return nil }
             return (message.author ?? entry.kind.rawValue, message.text)
         }
-        let chairLabel = settings.backendLabel(settings.backend)
+        let chairLabel = settings.backendLabel(effectiveBackendKind)
         statusText = "Chair (\(chairLabel)) synthesizing…"
         var message = ChatMessage(role: .assistant, text: "")
         message.author = "Verdict · \(chairLabel)"
@@ -3274,7 +3284,7 @@ final class ChatSession: ObservableObject {
         }
         synthesisPrompt += "\n)"
 
-        UsageTracker.shared.recordQuery(backend: settings.backend)
+        UsageTracker.shared.recordQuery(backend: effectiveBackendKind)
         let request = BackendRequest(prompt: synthesisPrompt, userMessage: prompt,
                                      previousTurns: [])
         activeBackend.send(request, workdir: workdir) { [weak self] event in
@@ -3969,7 +3979,7 @@ final class ChatSession: ObservableObject {
                 return FallbackEntry(backend: limited.rawValue, model: tier.rawValue)
             }
         }
-        return BackendFallback.next(after: limited, model: model, chain: settings.limitFallbackEntries,
+        return BackendFallback.next(after: limited, model: model, chain: fallbackChain,
                                     homeRun: isCantripHomeRun, model: chainModel)
     }
 
@@ -4134,7 +4144,7 @@ final class ChatSession: ObservableObject {
               let run = messages.first(where: { $0.id == messageID })?.runID else {
             return "That task can't be continued anymore."
         }
-        let localModel = isLocalPrivate || (run == currentRunID ? currentRunBackend : settings.backend) == .localModel
+        let localModel = isLocalPrivate || (run == currentRunID ? currentRunBackend : effectiveBackendKind) == .localModel
         guard localModel || NetworkMonitor.shared.isOnline else {
             return "The Mac is offline. Tap Continue once the network is back."
         }
@@ -4203,7 +4213,7 @@ final class ChatSession: ObservableObject {
     /// harness to inject it.
     private var backendKeepsSession: Bool {
         if isLocalPrivate { return false }
-        switch currentRunBackend ?? settings.backend {
+        switch currentRunBackend ?? effectiveBackendKind {
         case .claudeCode, .codex, .antigravity: return true
         // copilotRemote keeps its ACP session while the app runs, but an
         // interrupted turn's context isn't replayable — inject like the
@@ -4456,9 +4466,9 @@ final class ChatSession: ObservableObject {
                 let seats = settings.councilMembers
                     .map { $0.label.replacingOccurrences(of: " · ", with: " ") }
                     .joined(separator: " + ")
-                backendTag = "Council [\(seats)] chaired by \(settings.backend.rawValue)"
+                backendTag = "Council [\(seats)] chaired by \(effectiveBackendKind.rawValue)"
             } else {
-                backendTag = settings.backend.rawValue
+                backendTag = effectiveBackendKind.rawValue
             }
             MemoryStore.shared.logExchange(user: turnUserText(endingAt: userIdx),
                                            assistant: messages[assistantIdx].text,
@@ -4617,7 +4627,7 @@ final class ChatSession: ObservableObject {
             return
         }
         // Sending while offline would fail each queued message in turn; wait for the network.
-        if !isLocalPrivate, settings.backend != .localModel, !NetworkMonitor.shared.isOnline {
+        if !isLocalPrivate, effectiveBackendKind != .localModel, !NetworkMonitor.shared.isOnline {
             deliveryStatus = "Offline. Queued messages are sent when the network is back."
             guard !drainWaitsForNetwork else { return }
             drainWaitsForNetwork = true

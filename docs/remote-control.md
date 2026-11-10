@@ -118,15 +118,37 @@ The paired API advertises `isLocalPrivate`/`supportsPrivateLocalSettings`, with
 `api` is `"ollama"` or `"openai"`; a save that omits it (clients from before the
 choice) keeps the saved API, and so does a model list without `api`.
 
-## Per-tab model, effort and context window
+## Per-tab backend, model, effort and context window
 
 Choose **Model Settings** in the Mac/browser Remote tab's settings menu
 (the three dots). Cantrip Agent exposes the same controls in the chat menu and
 tab actions. On the host Mac, right-click a local tab and choose **Model
-Settings**. These controls apply to the Mac's **Copilot**, **Claude Code**,
-**Codex** or **Antigravity** backend with Council mode off; they do not
-reconfigure ACP servers. Claude Code, Codex and Antigravity tabs pick a model
-and effort (no context tier).
+Settings**. These controls apply to **Copilot**, **Claude Code**, **Codex** or
+**Antigravity** with Council mode off; they do not reconfigure ACP servers.
+Claude Code, Codex and Antigravity tabs pick a model and effort (no context tier).
+
+**Backend** picks what the tab runs on: the Mac's backend (the default), or
+Copilot, Claude Code, Codex or Antigravity for this tab alone. The model list
+switches to that backend's, with the model the tab last picked there. The next
+message runs on it and continues the conversation (the backend gets the recent
+history); at a usage limit the tab moves to the Mac's backend first, then the
+usage-limit backups. Cantrip Home always runs on the Mac's backend, and a tab's
+child tabs start on its backend.
+
+In the API, `GET .../model-settings` adds `backend` (the backend these settings
+are for), `ownBackend` (the tab's own, absent when it follows the Mac's),
+`macBackend`, and `backends`: each choice's `id` (the backend's name, such as
+`Claude Code`), `label`, `available` (false when its CLI isn't installed) and
+`note` (not installed, signed out, at its usage limit). `backends` is empty when
+the tab can't choose; `backendUnavailableReason` says why it can't change now
+(the tab is working, Council mode). `GET .../model-settings?backend=Claude%20Code` (or
+`?backend=mac`) returns the settings the tab would have on that backend without
+saving anything; its `revision` is still the tab's. `POST` takes an optional
+`backend` (a name, or `null` for the Mac's): with only `revision` it changes the
+backend and keeps the tab's model there, and with `usesDefaults` (and the model
+fields) it saves the backend and its model together, checked against that
+backend's models. Each session in the tab list also has `backend` (where it
+runs) and `hasOwnBackend`.
 
 Turn off **Use Mac defaults** to save a model, reasoning effort and context tier
 for just that tab. **Fast**, **Standard** and **Deep** lead the model list: a

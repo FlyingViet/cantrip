@@ -111,6 +111,12 @@ struct SessionTabTests {
             try await testHomeLocalLive()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "tab-backend" {
+            try await testSessionModelSettings()
+            try await testTabBackend()
+            try await testUsageLimitFallback()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "home-tokens" {
             try testHomeLocalProfile()
             try testHomeRepeatedData()
@@ -248,6 +254,7 @@ struct SessionTabTests {
         try await testAntigravityUsage()
         try await testCopilotModels()
         try await testSessionModelSettings()
+        try await testTabBackend()
         try await testStartFresh()
         try await testDeleteMessage()
         try await testHeadless()

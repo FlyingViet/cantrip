@@ -798,7 +798,7 @@ struct LauncherView: View {
 
     private var backendIcon: String {
         if session.isLocalPrivate { return "lock.shield.fill" }
-        switch settings.backend {
+        switch session.effectiveBackendKind {
         case .claudeCode: return "terminal"
         case .copilot: return "airplane"
         case .copilotRemote: return "antenna.radiowaves.left.and.right"
@@ -1609,7 +1609,7 @@ struct LauncherView: View {
                     .labelsHidden()
                     .fixedSize()
                     .help("Auto interprets your message; choose a mode to override it.")
-                    if settings.backend == .claudeCode {
+                    if session.effectiveBackendKind == .claudeCode {
                         keycap("⌥↩", "add context")
                     }
                     keycap("⌘↩", "interrupt")
@@ -1773,22 +1773,24 @@ struct LauncherView: View {
             return (try? session.privateLocalConfiguration())?.api == .openAI
                 ? "Private Local - OpenAI-compatible" : "Private Local - Ollama"
         }
-        switch settings.backend {
+        // The tab's own model on its backend, else the Mac's.
+        let own = session.ownModelSelection?.model.trimmingCharacters(in: .whitespaces) ?? ""
+        switch session.effectiveBackendKind {
         case .claudeCode:
-            let model = settings.claudeModel.trimmingCharacters(in: .whitespaces)
+            let model = own.isEmpty ? settings.claudeModel.trimmingCharacters(in: .whitespaces) : own
             return model.isEmpty ? "Claude Code" : "Claude Code · \(model)"
         case .copilot:
-            if let model = settings.effectiveCopilotModel {
+            if let model = own.isEmpty ? settings.effectiveCopilotModel : own {
                 return "Copilot · \(model)"
             }
             return "Copilot"
         case .copilotRemote:
             return "Copilot Remote · \(settings.acpAddress)"
         case .codex:
-            let model = settings.codexModel.trimmingCharacters(in: .whitespaces)
+            let model = own.isEmpty ? settings.codexModel.trimmingCharacters(in: .whitespaces) : own
             return model.isEmpty ? "Codex" : "Codex · \(settings.codexModelLabel(model))"
         case .antigravity:
-            let model = settings.agyModel.trimmingCharacters(in: .whitespaces)
+            let model = own.isEmpty ? settings.agyModel.trimmingCharacters(in: .whitespaces) : own
             return model.isEmpty ? "Antigravity" : "Antigravity · \(model)"
         case .localModel: return settings.localModel
         }

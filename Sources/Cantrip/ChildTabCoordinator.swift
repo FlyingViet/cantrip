@@ -167,6 +167,12 @@ final class ChildTabCoordinator {
         try? child.saveModelSelection(parent.tabMetadata.claudeModelSettings, for: .claudeCode)
         try? child.saveModelSelection(parent.tabMetadata.antigravityModelSettings, for: .antigravity)
         try? child.saveModelSelection(parent.tabMetadata.codexModelSettings, for: .codex)
+        if let backend = parent.tabMetadata.backend {
+            var metadata = child.tabMetadata
+            metadata.backend = backend
+            try? child.saveTabMetadata(metadata)
+            child.applyModelSelection()
+        }
         manager.placeChild(child, after: parent)
         parent.removeQueued(id: item.id)
         observeParent(parent)

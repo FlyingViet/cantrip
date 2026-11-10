@@ -105,7 +105,12 @@ be approved by the current action policy are denied rather than left hanging.
 5. Apply the choice to your next request; changing a picker does not rewrite
    an answer already being generated.
 
-On macOS, the backend and its defaults are shared app settings. Copilot,
+On macOS, the backend and its defaults are shared app settings. A tab can run on
+a backend of its own instead: pick **Copilot**, **Claude Code**, **Codex** or
+**Antigravity** under **Backend** in the tab's **Model Settings** (Cantrip Home
+always uses the Mac's). Its next message runs there and continues the same
+conversation with the recent history; at a usage limit it moves to the Mac's
+backend first, then the backups. Copilot,
 Claude Code, Codex and Antigravity tabs can override the model and effort
 (Copilot also the context tier) through **Model Settings** in
 the tab's context menu, Mac/browser Remote or Cantrip Agent. Overrides persist

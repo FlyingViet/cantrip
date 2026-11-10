@@ -27,6 +27,8 @@ struct SessionTabMetadata: Equatable {
     var codexModelSettings: SessionModelSelection?
     /// The sidebar section this tab is filed under; nil (or a deleted section) shows it under Tabs.
     var sectionID: UUID?
+    /// The backend this tab runs on; nil follows the Mac's (Settings › Backend).
+    var backend: BackendKind?
 
     mutating func rename(_ name: String) throws {
         let normalized = name.split(whereSeparator: \.isWhitespace).joined(separator: " ")
@@ -53,6 +55,8 @@ struct SessionTabMetadata: Equatable {
         result.claudeModelSettings = selection("claudeModelSettings")
         result.antigravityModelSettings = selection("antigravityModelSettings")
         result.codexModelSettings = selection("codexModelSettings")
+        result.backend = (value["backend"] as? String).flatMap(BackendKind.init(rawValue:))
+            .flatMap { AppSettings.tabBackends.contains($0) ? $0 : nil }
         return result
     }
 
@@ -78,6 +82,7 @@ struct SessionTabMetadata: Equatable {
         var value: [String: Any] = ["isLocked": isLocked]
         if let customTitle { value["customTitle"] = customTitle }
         if let sectionID { value["sectionID"] = sectionID.uuidString }
+        if let backend { value["backend"] = backend.rawValue }
         for (key, selection) in [("modelSettings", modelSettings), ("claudeModelSettings", claudeModelSettings),
                                  ("antigravityModelSettings", antigravityModelSettings),
                                  ("codexModelSettings", codexModelSettings)] {
