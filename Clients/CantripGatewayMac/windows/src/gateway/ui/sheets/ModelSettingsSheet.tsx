@@ -1,9 +1,9 @@
-// Model Settings (CantripSessionSettingsView, CantripPrivateLocalSettings.swift): a tab's model, effort
+// Model Settings (CantripSessionSettingsView, CantripPrivateLocalSettings.swift): a tab's backend, model, effort
 // and context window (CantripModelSettingsView, CantripModelSettings.swift), or the saved Private Local
 // tab's self-hosted server (CantripPrivateLocalSettingsView). Saves check the revision first and are
 // never retried: a lost reply may still have reached the Mac.
 import { Fragment, type JSX } from "preact";
-import { batch, useSignal } from "@preact/signals";
+import { batch, computed, signal, useSignal } from "@preact/signals";
 import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { api, pathComponent } from "../../api/client";
 import type {
@@ -14,9 +14,10 @@ import * as remote from "../../state/remote";
 import { FormRow, FormSection, Sheet, Spinner } from "../kit";
 import { Loading, StatusLabel, Warning, findSession, sleep, useAlive } from "./common";
 import {
-  DEFAULT_PRIVATE_CONFIGURATION, MODEL_REFRESH_POLLS, PRIVATE_LOCAL_APIS, capitalized, contextLabel, errorText, isUnsupported, modelInfo,
-  modelSettingsChange, modelValidationError, parseContextTokens, pickerChoices, privateModelChoices, privateModelsQuery,
-  privateServerFooter, privateURLField, selectModel, tokenLabel,
+  DEFAULT_PRIVATE_CONFIGURATION, MAC_BACKEND, MODEL_REFRESH_POLLS, PRIVATE_LOCAL_APIS, capitalized, contextLabel, errorText, isUnsupported,
+  modelInfo, modelSettingsQuery, modelSettingsSave, modelValidationError, parseContextTokens, pickerChoices, privateModelChoices,
+  privateModelsQuery, privateServerFooter, privateURLField, selectModel, tabBackendChoices, tabBackendName, tabBackendNote,
+  tabBackendValue, tokenLabel,
   usageFallbackAdd, usageFallbackAddable, usageFallbackEfforts, usageFallbackEntries, usageFallbackLabel, usageFallbackLimitNote,
   usageFallbackLimits, usageFallbackModelChange, usageFallbackModelOptions, usageFallbackMove, usageFallbackPerModel,
   usageFallbackRemove, usageFallbackStatus, writeFailure,
@@ -62,21 +63,46 @@ function Picker(props: { label: string; value: string; choices: Choice[]; disabl
 
 // MARK: Model settings
 
-function ModelSettings(props: { session: RemoteSessionSummary; onClose: () => void }): JSX.Element {
-  const { session, onClose } = props;
-  const settings = useSignal<ModelSettingsSnapshot | null>(null);
-  const selection = useSignal<ModelSelection>({ model: "", effort: "", contextTier: "" });
-  const usesDefaults = useSignal(true);
-  const loading = useSignal(false);
-  const saving = useSignal(false);
-  const error = useSignal<string | null>(null);
-  const alive = useAlive();
-  const defaultsID = useId();
+/** The sheet's draft and requests, kept out of the view so the flow runs without a page. The draft may show another
+ * backend's settings (`?backend=`, saving nothing); Save still checks the revision loaded with the tab's own. */
+export function modelSettingsState(session: RemoteSessionSummary) {
   const path = `/api/v1/sessions/${pathComponent(session.id)}/model-settings`;
+  /** The tab's settings as loaded: the revision and backend Save checks against. */
+  const saved = signal<ModelSettingsSnapshot | null>(null);
+  /** The draft backend's settings: its models, defaults and why they can't change. */
+  const settings = signal<ModelSettingsSnapshot | null>(null);
+  /** The Backend picker: `MAC_BACKEND` or a backend's id. */
+  const backend = signal(MAC_BACKEND);
+  const selection = signal<ModelSelection>({ model: "", effort: "", contextTier: "" });
+  const usesDefaults = signal(true);
+  const loading = signal(false);
+  /** Reading another backend's settings; the Backend picker stays enabled to pick again. */
+  const switching = signal(false);
+  const saving = signal(false);
+  const error = signal<string | null>(null);
+  let open = true;
+  /** Each load and backend switch takes the next number, so replies to older ones land nowhere. */
+  let generation = 0;
+  /** The picker value `settings` belong to, to go back to when a switch fails. */
+  let settled = MAC_BACKEND;
 
-  const fetchSettings = async (refreshModels = false): Promise<ModelSettingsSnapshot> => {
+  const backendChanged = computed(() => saved.value !== null && backend.value !== tabBackendValue(saved.value));
+  const validation = computed(() => {
+    const current = settings.value;
+    return usesDefaults.value || !current || current.unavailableReason ? null : modelValidationError(current, selection.value);
+  });
+  const canSave = computed(() => {
+    const current = settings.value;
+    if (!current || !saved.value || loading.value || switching.value || saving.value || remote.isMutating.value) return false;
+    // A backend whose models can't be chosen here is still saved as the tab's backend, without a model.
+    if (current.unavailableReason && !backendChanged.value) return false;
+    return !(backendChanged.value && current.backendUnavailableReason) && !validation.value;
+  });
+
+  /** The tab's settings, or the ones it would have on `asked` (null = its own backend). */
+  const fetchSettings = async (asked: string | null = null, refreshModels = false): Promise<ModelSettingsSnapshot> => {
     try {
-      return await api<ModelSettingsSnapshot>(path + (refreshModels ? "?refresh=true" : ""));
+      return await api<ModelSettingsSnapshot>(path + modelSettingsQuery(asked, refreshModels));
     } catch (failure) {
       if (!isUnsupported(failure)) throw failure;
       const latest = findSession(session.id) ?? session;
@@ -86,85 +112,164 @@ function ModelSettings(props: { session: RemoteSessionSummary; onClose: () => vo
     }
   };
 
+  /** The backend the draft shows when it isn't the tab's own, else null. */
+  const draftBackend = () => (backendChanged.value ? backend.value : null);
+
+  /** Re-reads while the catalog refreshes, then shows the latest models unless the tab changed elsewhere. */
+  const settle = async (first: ModelSettingsSnapshot, asked: string | null, current: () => boolean) => {
+    let value = first;
+    for (let attempt = 0; attempt < MODEL_REFRESH_POLLS && value.isRefreshing; attempt++) {
+      await sleep(1000);
+      if (!current()) return;
+      value = await fetchSettings(asked);
+      if (!current()) return;
+    }
+    // Do not silently rebase an edited form over another device's changes.
+    if (value.revision !== saved.value?.revision) {
+      error.value = "Model settings changed on another device. Reload before saving.";
+      return;
+    }
+    settings.value = value;
+    error.value = value.isRefreshing ? "Model lookup is still running. Reload in a moment." : null;
+  };
+
+  /** `replaceDraft` starts over from the tab's settings (and outdates a backend switch in flight); otherwise only the
+   * shown backend's models update. */
   const load = async (replaceDraft = false, refreshModels = false) => {
-    if (loading.value || saving.value) return;
-    loading.value = true;
+    if (loading.value || saving.value || (switching.value && !replaceDraft)) return;
+    const ticket = ++generation;
+    const current = () => open && ticket === generation;
+    const asked = replaceDraft ? null : draftBackend();
+    batch(() => { loading.value = true; switching.value = false; });
     try {
-      let value = await fetchSettings(refreshModels);
-      if (!alive.current) return;
-      if (replaceDraft || !settings.value) {
+      const value = await fetchSettings(asked, refreshModels);
+      if (!current()) return;
+      if (replaceDraft || !saved.value) {
+        settled = tabBackendValue(value);
         batch(() => {
+          saved.value = value;
+          backend.value = settled;
           selection.value = { ...value.selection };
           usesDefaults.value = value.usesDefaults;
           settings.value = value;
         });
       }
-      // Do not silently rebase an edited form over another device's changes.
-      const originalRevision = settings.value?.revision ?? value.revision;
-      for (let attempt = 0; attempt < MODEL_REFRESH_POLLS && value.isRefreshing; attempt++) {
-        await sleep(1000);
-        if (!alive.current) return;
-        value = await fetchSettings();
-        if (!alive.current) return;
-      }
-      if (value.revision !== originalRevision) {
-        error.value = "Model settings changed on another device. Reload before saving.";
-        return;
-      }
-      settings.value = value;
-      error.value = value.isRefreshing ? "Model lookup is still running. Reload in a moment." : null;
+      await settle(value, asked, current);
     } catch (failure) {
-      if (alive.current) error.value = errorText(failure);
+      if (current()) error.value = errorText(failure);
     } finally {
       loading.value = false;
     }
   };
 
-  useEffect(() => { void load(true); }, []);
+  /** Shows `value`'s models with the tab's own pick there (or the Mac's defaults); nothing is saved until Save. */
+  const chooseBackend = async (value: string) => {
+    if (loading.value || saving.value || !saved.value || value === backend.value) return;
+    const ticket = ++generation;
+    const current = () => open && ticket === generation;
+    batch(() => { backend.value = value; switching.value = true; error.value = null; });
+    try {
+      const first = await fetchSettings(value);
+      if (!current()) return;
+      settled = value;
+      batch(() => {
+        selection.value = { ...first.selection };
+        usesDefaults.value = first.usesDefaults;
+        settings.value = first;
+      });
+      await settle(first, value, current);
+    } catch (failure) {
+      if (!current()) return;
+      batch(() => { backend.value = settled; error.value = errorText(failure); });
+    } finally {
+      if (ticket === generation) switching.value = false;
+    }
+  };
 
-  const current = settings.value;
-  const draft = selection.value;
-  const info = modelInfo(current, draft);
-  const unavailable = current?.unavailableReason;
-  const validation = usesDefaults.value || !current ? null : modelValidationError(current, draft);
-  const message = error.value ?? unavailable ?? validation ?? current?.catalogError ?? null;
-  const busy = loading.value || saving.value;
-  const pickersDisabled = usesDefaults.value || !current || Boolean(unavailable);
-  const canSave = Boolean(current) && !busy && !remote.isMutating.value && !unavailable && !validation;
-
-  const save = async () => {
-    const snapshot = settings.value;
-    if (!snapshot || !canSave) return;
-    const change = modelSettingsChange(snapshot.revision, usesDefaults.value ? null : selection.value);
+  /** Saves are never retried: a lost reply may still have reached the Mac. True once the Mac took the change. */
+  const save = async (): Promise<boolean> => {
+    const tab = saved.value;
+    const draft = settings.value;
+    if (!tab || !draft || !canSave.value) return false;
+    const change = modelSettingsSave(tab, { backend: backend.value, settings: draft, selection: usesDefaults.value ? null : selection.value });
+    const asked = draftBackend();
     saving.value = true;
     try {
       await remote.mutate(async () => {
-        const latest = await fetchSettings();
+        const latest = await fetchSettings(asked);
         if (latest.revision !== change.revision) throw new Error("Model settings changed on another device. Reload before saving.");
-        if (latest.unavailableReason) throw new Error(latest.unavailableReason);
+        if ("backend" in change && latest.backendUnavailableReason) throw new Error(latest.backendUnavailableReason);
+        if ("usesDefaults" in change && latest.unavailableReason) throw new Error(latest.unavailableReason);
         await api<ModelSettingsSnapshot>(path, { method: "POST", body: change });
       });
-      void remote.refreshNow();
-      if (alive.current) onClose();
+      return true;
     } catch (failure) {
-      if (alive.current) error.value = writeFailure(failure) || "Model settings could not be saved.";
+      if (open) error.value = writeFailure(failure) || "Model settings could not be saved.";
+      return false;
     } finally {
       saving.value = false;
     }
   };
 
+  return {
+    saved, settings, backend, selection, usesDefaults, loading, switching, saving, error, backendChanged, validation, canSave,
+    load, chooseBackend, save,
+    /** The sheet closed: replies still in flight change nothing. */
+    close: () => { open = false; },
+  };
+}
+
+function ModelSettings(props: { session: RemoteSessionSummary; onClose: () => void }): JSX.Element {
+  const { session, onClose } = props;
+  const [state] = useState(() => modelSettingsState(session));
+  const { settings, selection, usesDefaults } = state;
+  const alive = useAlive();
+  const defaultsID = useId();
+
+  useEffect(() => {
+    void state.load(true);
+    return state.close;
+  }, []);
+
+  const current = settings.value;
+  const draft = selection.value;
+  const info = modelInfo(current, draft);
+  const unavailable = current?.unavailableReason;
+  const changed = state.backendChanged.value;
+  const switching = state.switching.value;
+  const backendChoices = tabBackendChoices(current, state.backend.value);
+  // A backend whose models can't be chosen here still saves (without a model), so its reason isn't an error then.
+  const message = state.error.value ?? current?.backendUnavailableReason ?? (changed ? null : unavailable)
+    ?? state.validation.value ?? current?.catalogError ?? null;
+  const busy = state.loading.value || state.saving.value;
+  const pickersDisabled = usesDefaults.value || !current || Boolean(unavailable) || switching;
+
+  const save = async () => {
+    if (!(await state.save())) return;
+    void remote.refreshNow();
+    if (alive.current) onClose();
+  };
+
   return (
-    <Sheet title="Model Settings" onClose={onClose} locked={saving.value}
+    <Sheet title="Model Settings" onClose={onClose} locked={state.saving.value}
       footer={<>
-        <button type="button" class="btn" disabled={saving.value} onClick={onClose}>Cancel</button>
-        <button type="button" class="btn primary" disabled={!canSave} onClick={() => void save()}>Save</button>
+        <button type="button" class="btn" disabled={state.saving.value} onClick={onClose}>Cancel</button>
+        <button type="button" class="btn primary" disabled={!state.canSave.value} onClick={() => void save()}>Save</button>
       </>}>
       <fieldset class="sh-fieldset" disabled={busy}>
         <FormSection footer="Only this tab changes. Save while idle; the next prompt uses the new settings and continues the same conversation. Long context may cost more.">
           <FormRow><span class="sh-headline truncate">{session.title}</span></FormRow>
+          {backendChoices ? (
+            <Picker label="Backend" value={state.backend.value} choices={backendChoices}
+              disabled={busy || Boolean(current?.backendUnavailableReason)}
+              onChange={(value) => void state.chooseBackend(value)} />
+          ) : null}
+          {changed ? (
+            <FormRow><span class="sh-footnote">{tabBackendNote(tabBackendName(current, state.backend.value))}</span></FormRow>
+          ) : null}
           <FormRow label={<label for={defaultsID}>Use Mac defaults</label>}>
             <input id={defaultsID} type="checkbox" role="switch" class="switch" checked={usesDefaults.value}
-              disabled={!current || Boolean(unavailable)}
+              disabled={!current || Boolean(unavailable) || switching}
               onChange={(event) => {
                 const inherited = event.currentTarget.checked;
                 batch(() => {
@@ -207,9 +312,9 @@ function ModelSettings(props: { session: RemoteSessionSummary; onClose: () => vo
         </div>
         <UsageFallbackSection />
         <FormSection>
-          <FormRow><button type="button" class="btn" onClick={() => void load(true)}>Reload settings</button></FormRow>
-          <FormRow><button type="button" class="btn" onClick={() => void load(false, true)}>Refresh models</button></FormRow>
-          {loading.value || current?.isRefreshing ? <FormRow><Loading text="Loading model options..." /></FormRow> : null}
+          <FormRow><button type="button" class="btn" onClick={() => void state.load(true)}>Reload settings</button></FormRow>
+          <FormRow><button type="button" class="btn" disabled={switching} onClick={() => void state.load(false, true)}>Refresh models</button></FormRow>
+          {state.loading.value || switching || current?.isRefreshing ? <FormRow><Loading text="Loading model options..." /></FormRow> : null}
         </FormSection>
       </fieldset>
     </Sheet>

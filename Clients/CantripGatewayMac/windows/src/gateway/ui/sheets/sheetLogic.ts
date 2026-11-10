@@ -170,6 +170,67 @@ export function modelSettingsChange(revision: string, selection: ModelSelection 
   return { revision, usesDefaults: false, model: selection.model, effort: selection.effort, contextTier: selection.contextTier };
 }
 
+// MARK: Tab backend (SessionModelSettingsView's Backend picker)
+
+/** The Backend picker's value for following the Mac's backend, as `?backend=` spells it. */
+export const MAC_BACKEND = "mac";
+
+/** The backend a tab's settings say it runs on: its own, else the Mac's (`MAC_BACKEND`). */
+export function tabBackendValue(settings: Pick<ModelSettingsSnapshot, "ownBackend"> | null | undefined): string {
+  return settings?.ownBackend ?? MAC_BACKEND;
+}
+
+/** The Backend picker's choices, or null to hide it (Cantrip Home, Macs before tab backends): the Mac's backend,
+ * then each backend with why it may not run; one whose CLI isn't installed can't be picked. */
+export function tabBackendChoices(settings: ModelSettingsSnapshot | null | undefined, selected = MAC_BACKEND):
+  { value: string; label: string; disabled?: boolean }[] | null {
+  if (!settings?.backends?.length) return null;
+  const choices = [
+    { value: MAC_BACKEND, label: settings.macBackend ? `Mac's backend (${settings.macBackend})` : "Mac's backend" },
+    ...settings.backends.map((choice) => ({
+      value: choice.id, label: choice.note ? `${choice.label} — ${choice.note}` : choice.label, disabled: !choice.available,
+    })),
+  ];
+  return choices.some((choice) => choice.value === selected) ? choices : [...choices, { value: selected, label: selected }];
+}
+
+/** The name of the backend a picker value runs on. */
+export function tabBackendName(settings: ModelSettingsSnapshot | null | undefined, value: string): string {
+  if (value === MAC_BACKEND) return settings?.macBackend ?? "the Mac's backend";
+  return settings?.backends?.find((choice) => choice.id === value)?.label ?? value;
+}
+
+/** Shown while the draft runs the tab on another backend than it does now. */
+export function tabBackendNote(name: string): string {
+  return `The next message runs on ${name} and continues this conversation with the recent history.`;
+}
+
+/** GET model-settings query: another backend's settings (`?backend=`, saving nothing) and/or a catalog refresh. */
+export function modelSettingsQuery(backend: string | null, refreshModels: boolean): string {
+  const parts = [
+    ...(backend === null ? [] : [`backend=${encodeURIComponent(backend)}`]),
+    ...(refreshModels ? ["refresh=true"] : []),
+  ];
+  return parts.length ? `?${parts.join("&")}` : "";
+}
+
+/** The sheet's edits: the backend picked, its settings as the Mac sent them, and the model (null = Mac defaults). */
+export interface ModelSettingsDraft {
+  backend: string;
+  settings: ModelSettingsSnapshot;
+  selection: ModelSelection | null;
+}
+
+/** POST body for Save, against the tab's settings as loaded (their revision, even when the draft shows another
+ * backend's). `backend` is sent only when the draft changes it (null = the Mac's); when the draft backend's models
+ * can't be chosen here (`unavailableReason`), only the backend is saved and the tab keeps its model there. */
+export function modelSettingsSave(saved: ModelSettingsSnapshot, draft: ModelSettingsDraft): ModelSettingsUpdateRequest {
+  if (draft.backend === tabBackendValue(saved)) return modelSettingsChange(saved.revision, draft.selection);
+  const backend = draft.backend === MAC_BACKEND ? null : draft.backend;
+  if (draft.settings.unavailableReason) return { revision: saved.revision, backend };
+  return { ...modelSettingsChange(saved.revision, draft.selection), backend };
+}
+
 /** The model settings sheet re-reads every second while the catalog refreshes, at most this many times. */
 export const MODEL_REFRESH_POLLS = 30;
 

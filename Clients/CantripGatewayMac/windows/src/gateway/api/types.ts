@@ -863,6 +863,10 @@ export interface RemoteSessionSummary {
   /** Always present (may be []). */
   pendingInputs: InputRequest[];
   modelSettingsRevision: string;
+  /** The backend this tab runs on: its own (Model Settings → Backend) or the Mac's. Absent on older hosts. */
+  backend?: string;
+  /** The tab chose its own backend instead of following the Mac's. Absent on older hosts. */
+  hasOwnBackend?: boolean;
   /** SHA-256 hex over the summary fields + message/queue mutation tokens. Use as `?revision=`. */
   historyRevision: string;
   /** UnixSeconds. Current run's start while working, else when the latest run finished (or transcript mtime). Omitted for Home/background sessions and tabs that never ran. */
@@ -1332,8 +1336,31 @@ export type UsageFallbackRequest =
   | { revision: string; backend: string }
   | { revision: string; resetLimits: true };
 
-/** GET/POST /api/v1/sessions/<id>/model-settings (`SessionModelSettingsSnapshot`). */
+/** A backend a tab can run on instead of the Mac's (`TabBackendChoice`). */
+export interface TabBackendChoice {
+  /** The backend's name, as the usage-fallback API spells it ("Claude Code"). */
+  id: string;
+  label: string;
+  /** False when its CLI isn't installed on the Mac. */
+  available: boolean;
+  /** Why it may not run now: not installed, signed out, at its usage limit. */
+  note?: string | null;
+}
+
+/** GET/POST /api/v1/sessions/<id>/model-settings (`SessionModelSettingsSnapshot`); GET `?backend=<id>` (or `mac`)
+ * returns the settings the tab would have on that backend, saving nothing (its `revision` stays the tab's). The
+ * backend fields are missing from Macs before tab backends. */
 export interface ModelSettingsSnapshot {
+  /** The backend these settings are for: the tab's, or the one asked about. */
+  backend?: string;
+  /** The tab's own backend; missing when it follows the Mac's. */
+  ownBackend?: string;
+  /** The Mac-wide backend. */
+  macBackend?: string;
+  /** What the tab can run on besides the Mac's backend; empty when it can't choose (Cantrip Home). */
+  backends?: TabBackendChoice[];
+  /** Why the backend can't change now (the tab is working, Council mode). */
+  backendUnavailableReason?: string;
   /** Effective selection (override or defaults). */
   selection: ModelSelection;
   /** Mac defaults. */
@@ -1351,19 +1378,31 @@ export interface ModelSettingsSnapshot {
   isRefreshing: boolean;
 }
 
-/** POST model-settings to use Mac defaults: exactly these keys. */
+/** A tab's backend in a model settings POST: a `TabBackendChoice` id, or null to follow the Mac's. Omitted keeps it. */
+export type TabBackendChange = string | null;
+
+/** POST model-settings to use Mac defaults: exactly these keys (`backend` only to change it). */
 export interface ModelSettingsUseDefaultsRequest {
   revision: string;
   usesDefaults: true;
+  backend?: TabBackendChange;
 }
 
-/** POST model-settings with an override: exactly these keys (strings, may be ""). */
+/** POST model-settings with an override: exactly these keys (strings, may be ""; `backend` only to change it),
+ * checked against the models of the backend the tab then runs on. */
 export interface ModelSettingsOverrideRequest extends ModelSelection {
   revision: string;
   usesDefaults: false;
+  backend?: TabBackendChange;
 }
 
-export type ModelSettingsUpdateRequest = ModelSettingsUseDefaultsRequest | ModelSettingsOverrideRequest;
+/** POST model-settings with only a backend: the tab runs the model it last picked there (or the Mac's). */
+export interface ModelSettingsBackendRequest {
+  revision: string;
+  backend: TabBackendChange;
+}
+
+export type ModelSettingsUpdateRequest = ModelSettingsUseDefaultsRequest | ModelSettingsOverrideRequest | ModelSettingsBackendRequest;
 
 /** `PrivateLocalAPI`: the wire API the self-hosted server speaks. */
 export type PrivateLocalAPI = "ollama" | "openai";
