@@ -299,6 +299,91 @@ final class CantripSubagentTests: XCTestCase {
         XCTAssertEqual(CantripPinnedSubagents.live(in: [messages[1]]), [])
     }
 
+    /// A watcher cached in an older reply (outside the Mac's recent window) finished on the Mac:
+    /// `backgroundTaskIDs` settles it, so the Background button and its Stop go away.
+    func testCachedFinishedWatcherSettlesFromBackgroundTaskIDs() async throws {
+        let client = client()
+        let model = CantripRemoteModel(urlSession: client)
+        let configured = await model.configure(
+            url: "https://cantrip.example", pairingToken: "unit-subagent-token", tailscaleOnly: true
+        )
+        XCTAssertTrue(configured, model.errorMessage ?? "Configuration failed")
+        func message(_ id: String, _ role: String, subagents: [[String: Any]]? = nil) -> [String: Any] {
+            var message: [String: Any] = ["id": id, "role": role, "text": id, "thinking": "", "activities": []]
+            message["subagents"] = subagents
+            return message
+        }
+        let watcher: [String: Any] = ["id": "call_watch", "agentID": "agent-watch", "name": "watch-build",
+                                      "agentType": "task", "background": true, "status": "running", "canCancel": true]
+        let side: [String: Any] = ["id": "call_side", "agentID": "agent-side", "name": "side-weather",
+                                   "agentType": "task", "background": true, "status": "idle", "canCancel": true]
+        var stage = 0
+        SubagentRequestProtocol.handler = { request in
+            let path = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? ""
+            var session: [String: Any] = [
+                "id": self.sessionID, "title": "Project", "workdir": "/tmp", "isStreaming": false,
+                "canResume": false, "councilMode": false, "queuedCount": 0, "supportsPagedHistory": true,
+                "historyStartID": "u1", "historyRevision": "r\(stage)",
+            ]
+            if stage == 0 {
+                session["messages"] = [message("u1", "user"), message("a1", "assistant", subagents: [watcher, side]),
+                                       message("u2", "user"), message("a2", "assistant")]
+                session["backgroundTaskIDs"] = ["call_watch", "call_side"]
+            } else {
+                // The watcher's reply left the window; the Mac still runs only the side request.
+                session["messages"] = [message("u2", "user"), message("a2", "assistant"),
+                                       message("u3", "user"), message("a3", "assistant")]
+                session["backgroundTaskIDs"] = ["call_side"]
+            }
+            if path == "/api/v1/sessions" {
+                session.removeValue(forKey: "messages")
+                return (200, try JSONSerialization.data(withJSONObject: ["sessions": [session]]))
+            }
+            // Becoming active also registers alerts and reports the app opening; those aren't under test.
+            guard path == "/api/v1/sessions/\(self.sessionID)" else { return (404, Data("{}".utf8)) }
+            return (200, try JSONSerialization.data(withJSONObject: ["session": session]))
+        }
+        addTeardownBlock { @MainActor in
+            model.setAppActive(false)
+            model.clearConfiguration()
+            client.invalidateAndCancel()
+            SubagentRequestProtocol.handler = nil
+        }
+
+        await model.selectSession(sessionID)
+        let live = CantripPinnedSubagents.liveBackground(in: model.selectedSession?.transcript ?? [])
+        XCTAssertEqual(live.map(\.id), ["call_watch", "call_side"])
+
+        stage = 1
+        model.setAppActive(true)
+        for _ in 0..<50 where model.selectedSession?.transcript.last?.id != "a3" {
+            await model.refreshNow()
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let transcript = model.selectedSession?.transcript ?? []
+        XCTAssertEqual(transcript.map(\.id), ["u1", "a1", "u2", "a2", "u3", "a3"], "the cached reply stays")
+        let cached = try XCTUnwrap(transcript.first { $0.id == "a1" }?.subagents)
+        XCTAssertEqual(cached.map(\.status), [.completed, .idle])
+        XCTAssertEqual(cached.map(\.canCancel), [false, true])
+        XCTAssertEqual(CantripPinnedSubagents.liveBackground(in: transcript).map(\.id), ["call_side"])
+    }
+
+    func testSettlingNeedsTheMacsList() throws {
+        var session = try JSONDecoder().decode(CantripRemoteSession.self, from: Data(#"""
+        {"id":"s","title":"Project","workdir":"/tmp","isStreaming":false,"canResume":false,"councilMode":false,
+         "queuedCount":0,"messages":[{"id":"a","role":"assistant","text":"","thinking":"","activities":[],
+           "subagents":[{"id":"w","agentID":"w","status":"running","background":true,"canCancel":true},
+                        {"id":"f","agentID":"f","status":"running","canCancel":true}]}]}
+        """#.utf8))
+        session.settleBackgroundAgents()
+        XCTAssertEqual(session.transcript.first?.subagents?.map(\.status), [.running, .running],
+                       "older Macs send no list: keep what they said")
+        session.backgroundTaskIDs = []
+        session.settleBackgroundAgents()
+        XCTAssertEqual(session.transcript.first?.subagents?.map(\.status), [.completed, .running],
+                       "only background agents settle; a foreground one ends with its reply")
+    }
+
     func testBackgroundTaskButtonScreenshotsAtPhoneWidth() async throws {
         let artifactDirectory = ProcessInfo.processInfo.environment["TEST_RUNNER_SUBAGENTS_ARTIFACT_DIR"]
         guard let artifactDirectory, !artifactDirectory.isEmpty else {

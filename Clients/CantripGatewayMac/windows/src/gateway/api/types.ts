@@ -939,6 +939,11 @@ export interface RemoteSessionSummary {
   backgroundInputCount?: Int;
   /** Background agents (watchers, parallel requests) still running in this tab; absent when none. */
   backgroundTaskCount?: Int;
+  /**
+   * Their `subagents[].id`s (`[]` when none); every tab but Home's, absent from older Macs. A cached older reply can
+   * still show a finished background agent running, so clients settle any not listed (state/backgroundAgents.ts).
+   */
+  backgroundTaskIDs?: string[];
   /** Home only: builds holding a slot in the Mac's build queue; absent while the queue is off. */
   buildsRunning?: Int;
   /** Home only: builds waiting for a slot. */

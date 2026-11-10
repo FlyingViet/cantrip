@@ -204,6 +204,13 @@ Each tab in `GET /api/v1/sessions` carries `backgroundTaskCount` while it has
 one running. Both are left out when no tab has one, and Home's own background
 conversations are never listed. A tab's last 40 messages are searched.
 
+Every tab except Home's also carries `backgroundTaskIDs`: the `subagents[].id`
+of each background agent still running there (`[]` when none). Clients keep
+older replies they paged in without fetching them again, so a watcher that
+finished after its reply left the recent window would otherwise stay "running"
+on that device. Clients show any background agent missing from this list as
+finished, without Stop.
+
 ## Background runs
 
 Each due run and local ingestion incident runs in its own hidden, single-use
