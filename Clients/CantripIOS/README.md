@@ -121,7 +121,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `DELETE /api/v1/sessions/{id}/queue/{promptID}`, `POST …/queue/{promptID}/send` | Remove a queued prompt, or Send now |
 | `POST /api/v1/sessions/{id}/queue/{promptID}/fork`, `POST …/children/{childID}/{action}` | Child tabs (`supportsChildTabs`): run a queued prompt in a child tab (`{session, childID}`; `409` with the reason when it can't), and a child card's actions (`open`, `requeue`, `discard`, `resolve`, `keepParent`, `keepChild`, `leave`, `retry`, `merge`); queued prompts carry `plan` (`supportsQueuePlans`), children `parentID` and `child`, the parent's card message `childResult` |
 | `/api/v1/sessions/{id}/input` | Answer approvals, questions and secure input |
-| `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename, lock and file in a section (`sectionID`), reorder, per-tab model settings |
+| `/api/v1/sessions/{id}/metadata`, `…/move`, `…/model-settings` | Rename, lock and file in a section (`sectionID`), reorder, per-tab backend and model settings |
 | `/api/v1/sections`, `/api/v1/sections/{id}` | Tab sections: list, add (`name`), rename or reorder (`PATCH name/position`), delete; only when the list has `supportsTabSections` |
 | `POST /api/v1/sessions/{id}/start-fresh` | Start Fresh (no body): the next prompt starts a new model session, history stays; `409` while the tab is busy or for Cantrip Home |
 | `POST /api/v1/sessions/{id}/resume` | Without a body, resumes the tab's paused run (`canResume`). With `{"messageID"}` (`supportsContinueFromMessage`), continues the failed run whose error row is in `continuableMessageIDs`; `409` with the reason while the tab works, while the Mac is offline, or when the row no longer offers it |
@@ -975,7 +975,13 @@ also applies. Updated native builds and a host reopen are required.
 ### Per-tab model settings
 
 Open **Chat menu > Model Settings**, or use **Model Settings** in a tab's
-actions, to change its model, reasoning effort and context window. **Model** opens a
+actions, to change its backend, model, reasoning effort and context window. **Backend** (on
+Macs that let a tab run on its own backend; not for Cantrip Home) is a menu: **Mac's backend**
+first, then Copilot, Claude Code, Codex and Antigravity. A backend not installed on the Mac is
+greyed out, and one that may not run now says why ("Signed out on the Mac"). Picking one saves
+at once: the next message runs there and continues the conversation with its recent history,
+the model list below switches to that backend's (with the model the tab last picked there),
+and at a usage limit the tab moves to the Mac's backend first. **Model** opens a
 picker: **Auto (Mac default)** first (it follows the Mac), then the tiers **Fast**,
 **Standard** and **Deep** with what each is for and the model it runs now, then the Mac's
 models grouped by the tier that lists them, each with its context window and Copilot's

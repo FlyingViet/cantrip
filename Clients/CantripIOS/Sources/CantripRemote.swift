@@ -2802,7 +2802,18 @@ struct CantripRemoteAPI {
         guard current.revision == change.revision else {
             throw CantripRemoteError.http(409, "Model settings changed on another device. Reload before saving.")
         }
-        if let reason = current.unavailableReason { throw CantripRemoteError.http(409, reason) }
+        // The Mac checks a backend change against the new backend's models (the current one may
+        // have none), so only the busy reason stops it here.
+        if change.backend != nil {
+            guard current.offersBackends else {
+                throw CantripRemoteError.http(409, current.backends == nil
+                    ? "Update Cantrip on the Mac to choose this tab's backend."
+                    : "This tab runs on the Mac's backend.")
+            }
+            if let reason = current.backendUnavailableReason { throw CantripRemoteError.http(409, reason) }
+        } else if let reason = current.unavailableReason {
+            throw CantripRemoteError.http(409, reason)
+        }
         return try JSONEncoder().encode(change)
     }
 

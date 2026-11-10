@@ -70,6 +70,20 @@ struct CantripModelTierOption: Decodable, Equatable, Identifiable {
     var note: String? = nil
 }
 
+/// A backend a tab can run on instead of the Mac's.
+struct CantripTabBackendChoice: Decodable, Equatable, Identifiable {
+    /// "Copilot", "Claude Code", "Codex" or "Antigravity": what a save sends as `backend`.
+    let id: String
+    let label: String
+    /// False when it isn't installed on the Mac.
+    let available: Bool
+    /// Why it may not run now: "Signed out on the Mac", "At its usage limit".
+    var note: String? = nil
+
+    /// The choice as the menu lists it: "Claude Code — Signed out on the Mac".
+    var menuLabel: String { note.map { "\(label) — \($0)" } ?? label }
+}
+
 struct CantripModelSettings: Decodable, Equatable {
     let selection: CantripModelSelection
     let defaults: CantripModelSelection
@@ -84,6 +98,55 @@ struct CantripModelSettings: Decodable, Equatable {
     let unavailableReason: String?
     let catalogError: String?
     let isRefreshing: Bool
+    /// The backend these settings are for ("Claude Code"); nil from Macs before tab backends.
+    var backend: String? = nil
+    /// The tab's own backend; nil when it follows the Mac's.
+    var ownBackend: String? = nil
+    /// The Mac-wide backend.
+    var macBackend: String? = nil
+    /// What the tab can run on besides the Mac's backend: empty when it can't choose (Cantrip
+    /// Home), nil from Macs before tab backends.
+    var backends: [CantripTabBackendChoice]? = nil
+    /// Why the backend can't change now (the tab is working, Council mode).
+    var backendUnavailableReason: String? = nil
+
+    /// The Backend picker's tag for following the Mac's backend; no backend has this name.
+    static let macBackendTag = "mac"
+
+    /// Whether the sheet offers a Backend picker: Macs with tab backends, for tabs that can choose.
+    var offersBackends: Bool { backends?.isEmpty == false }
+
+    /// The picker's current value: the tab's own backend, or `macBackendTag`.
+    var backendTag: String { ownBackend ?? Self.macBackendTag }
+
+    /// "Mac's backend (Copilot)".
+    var macBackendLabel: String { macBackend.map { "Mac's backend (\($0))" } ?? "Mac's backend" }
+
+    func backendChoice(_ id: String) -> CantripTabBackendChoice? { backends?.first { $0.id == id } }
+
+    /// The tab's own backend's note ("Claude Code: Signed out on the Mac"), nil when it follows
+    /// the Mac's or its backend can run.
+    var ownBackendNote: String? {
+        guard let ownBackend, let choice = backendChoice(ownBackend), let note = choice.note else { return nil }
+        return "\(choice.label): \(note)"
+    }
+
+    /// The Backend section's footer: who changes, where the next message runs and what a limit does.
+    var backendFooter: String {
+        let next = ownBackend.map { "The next message runs on \($0) and continues" }
+            ?? "Pick a backend and the next message runs there, continuing"
+        return "Only this tab changes. \(next) this conversation with the recent history; "
+            + "at a usage limit it moves to the Mac's backend first."
+    }
+
+    /// The change that moves the tab to the picker's `tag`; nil when it's already there or the
+    /// backend isn't installed on the Mac.
+    func backendChange(to tag: String) -> CantripModelSettingsChange? {
+        guard tag != backendTag else { return nil }
+        if tag == Self.macBackendTag { return CantripModelSettingsChange(revision: revision, backend: .mac) }
+        guard backendChoice(tag)?.available == true else { return nil }
+        return CantripModelSettingsChange(revision: revision, backend: .named(tag))
+    }
 
     func info(for selection: CantripModelSelection) -> CantripModelOption? {
         models.first { $0.id == (selection.model.isEmpty ? fileDefaultModel : selection.model) }
@@ -123,11 +186,20 @@ struct CantripModelSettings: Decodable, Equatable {
 }
 
 struct CantripModelSettingsChange: Encodable {
+    /// A tab's backend: the Mac's (`null` on the wire) or one of its own.
+    enum Backend: Equatable {
+        case mac
+        case named(String)
+    }
+
     let revision: String
-    let usesDefaults: Bool
+    /// Nil for a backend-only change, which keeps the model the tab last picked there.
+    let usesDefaults: Bool?
     let model: String?
     let effort: String?
     let contextTier: String?
+    /// Nil leaves the tab's backend as it is (the key is omitted).
+    let backend: Backend?
 
     init(revision: String, selection: CantripModelSelection?) {
         self.revision = revision
@@ -135,6 +207,34 @@ struct CantripModelSettingsChange: Encodable {
         model = selection?.model
         effort = selection?.effort
         contextTier = selection?.contextTier
+        backend = nil
+    }
+
+    /// `{revision, backend}`: switches the tab's backend only.
+    init(revision: String, backend: Backend) {
+        self.revision = revision
+        usesDefaults = nil
+        model = nil
+        effort = nil
+        contextTier = nil
+        self.backend = backend
+    }
+
+    private enum CodingKeys: String, CodingKey { case revision, usesDefaults, model, effort, contextTier, backend }
+
+    /// The Mac reads an absent `backend` as "unchanged" and `null` as "the Mac's", so the two must differ.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(revision, forKey: .revision)
+        try container.encodeIfPresent(usesDefaults, forKey: .usesDefaults)
+        try container.encodeIfPresent(model, forKey: .model)
+        try container.encodeIfPresent(effort, forKey: .effort)
+        try container.encodeIfPresent(contextTier, forKey: .contextTier)
+        switch backend {
+        case nil: break
+        case .mac: try container.encodeNil(forKey: .backend)
+        case .named(let name): try container.encode(name, forKey: .backend)
+        }
     }
 }
 
@@ -561,9 +661,10 @@ struct CantripUsageFallbackRow: View {
     }
 }
 
-/// A tab's model, effort and context window. Auto follows the Mac's default; a tier (Fast,
-/// Standard, Deep) runs the backend's model for it. Each change saves on the Mac at once, so the
-/// next prompt uses it. The usage-limit backups, for every tab, are in Settings › Models.
+/// A tab's backend, model, effort and context window. The backend follows the Mac's or is the
+/// tab's own; Auto follows the Mac's default model; a tier (Fast, Standard, Deep) runs the
+/// backend's model for it. Each change saves on the Mac at once, so the next prompt uses it. The
+/// usage-limit backups, for every tab, are in Settings › Models.
 struct CantripModelSettingsView: View {
     @ObservedObject var model: CantripRemoteModel
     let session: CantripRemoteSession
@@ -575,6 +676,8 @@ struct CantripModelSettingsView: View {
     @State private var saving = false
     @State private var error: String?
     @State private var showsAdvanced = false
+    /// The backend being saved, shown in the picker until the Mac's settings are read back.
+    @State private var pendingBackend: String?
 
     init(model: CantripRemoteModel, session: CantripRemoteSession, identity: UUID) {
         self.model = model
@@ -587,6 +690,17 @@ struct CantripModelSettingsView: View {
     private var shown: CantripModelSelection? { settings.map { $0.usesDefaults ? $0.defaults : $0.selection } }
     private var info: CantripModelOption? { shown.flatMap { settings?.info(for: $0) } }
     private var locked: Bool { settings == nil || settings?.unavailableReason != nil || saving || loading || model.isMutating }
+    private var backendLocked: Bool {
+        settings == nil || settings?.backendUnavailableReason != nil || saving || loading || model.isMutating
+    }
+
+    /// The bottom error, without a busy reason the Backend section already shows.
+    private var message: String? {
+        let unavailable = settings?.unavailableReason.flatMap {
+            settings?.offersBackends == true && $0 == settings?.backendUnavailableReason ? nil : $0
+        }
+        return error ?? unavailable ?? settings?.catalogError
+    }
 
     var body: some View {
         NavigationStack {
@@ -595,10 +709,11 @@ struct CantripModelSettingsView: View {
                     SettingsScopeLabel.thisTab()
                     Text(session.title).font(.headline)
                 }
+                backendSection
                 modelSection
                 effortSection
                 advancedSection
-                if let message = error ?? settings?.unavailableReason ?? settings?.catalogError {
+                if let message {
                     Section { Text(message).foregroundStyle(.orange).accessibilityIdentifier("modelSettings.error") }
                 }
                 if loading || settings?.isRefreshing == true {
@@ -621,6 +736,46 @@ struct CantripModelSettingsView: View {
         .task { await load(refreshModels: true) }
         .task { tiers = try? await model.modelTiers() }
         .onChange(of: model.usageIdentity) { _, _ in dismiss() }
+    }
+
+    /// The tab's backend: the Mac's, or one of its own. Picking one saves at once; the sections
+    /// below then list that backend's models. Hidden for Cantrip Home and on older Macs.
+    @ViewBuilder
+    private var backendSection: some View {
+        if let settings, settings.offersBackends {
+            let current = pendingBackend ?? settings.backendTag
+            Section {
+                Picker(selection: Binding(get: { current }, set: chooseBackend)) {
+                    Text(settings.macBackendLabel).tag(CantripModelSettings.macBackendTag)
+                    ForEach(settings.backends ?? []) { choice in
+                        // iOS menus skip `disabled` on an option; `selectionDisabled` greys it out.
+                        Text(choice.menuLabel)
+                            .tag(choice.id)
+                            .disabled(!choice.available)
+                            .selectionDisabled(!choice.available)
+                    }
+                    // A backend this app doesn't know yet stays selectable as the current value.
+                    if current != CantripModelSettings.macBackendTag, settings.backendChoice(current) == nil {
+                        Text(current).tag(current)
+                    }
+                } label: {
+                    Text("Backend")
+                } currentValueLabel: {
+                    Text(current == CantripModelSettings.macBackendTag
+                         ? settings.macBackendLabel : settings.backendChoice(current)?.label ?? current)
+                }
+                .pickerStyle(.menu)
+                .disabled(backendLocked)
+                .accessibilityIdentifier("modelSettings.backend")
+                if let reason = settings.backendUnavailableReason {
+                    Text(reason).foregroundStyle(.orange).accessibilityIdentifier("modelSettings.backendUnavailable")
+                } else if pendingBackend == nil, let note = settings.ownBackendNote {
+                    Text(note).foregroundStyle(.orange).accessibilityIdentifier("modelSettings.backendNote")
+                }
+            } footer: {
+                Text(settings.backendFooter)
+            }
+        }
     }
 
     private var modelSection: some View {
@@ -713,6 +868,25 @@ struct CantripModelSettingsView: View {
             defer { saving = false }
             if !(await model.updateModelSettings(id: session.id, change: change, identity: identity)) {
                 error = model.errorMessage ?? "Model settings could not be saved."
+            }
+            await load()
+        }
+    }
+
+    /// Moves the tab to the picker's `tag` on the Mac (keeping the model it last picked there),
+    /// then reads its settings on that backend back.
+    private func chooseBackend(_ tag: String) {
+        guard let settings, !saving, let change = settings.backendChange(to: tag) else { return }
+        saving = true
+        pendingBackend = tag
+        error = nil
+        Task {
+            defer {
+                saving = false
+                pendingBackend = nil
+            }
+            if !(await model.updateModelSettings(id: session.id, change: change, identity: identity)) {
+                error = model.errorMessage ?? "The backend could not be changed."
             }
             await load()
         }

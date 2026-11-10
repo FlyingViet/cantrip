@@ -25,6 +25,13 @@ private final class ModelSettingsRequestProtocol: URLProtocol {
     }
 }
 
+private let tabBackendChoices: [[String: Any]] = [
+    ["id": "Copilot", "label": "Copilot", "available": true],
+    ["id": "Claude Code", "label": "Claude Code", "available": true, "note": "Signed out on the Mac"],
+    ["id": "Codex", "label": "Codex", "available": true],
+    ["id": "Antigravity", "label": "Antigravity", "available": false, "note": "Not installed on the Mac"],
+]
+
 @MainActor
 final class CantripModelSettingsTests: XCTestCase {
     private let id = UUID().uuidString
@@ -647,6 +654,287 @@ final class CantripModelSettingsTests: XCTestCase {
         catch CantripRemoteError.authentication {}
     }
 
+    // MARK: Tab backends
+
+    /// A Mac with tab backends on Copilot: the tab on `own` (nil follows the Mac's), Claude Code
+    /// signed out and Antigravity not installed.
+    private func backendSnapshot(own: String? = nil, busy: String? = nil, reason: String? = nil,
+                                 backends: [[String: Any]] = tabBackendChoices) throws -> Data {
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: snapshot(reason: reason ?? busy)) as? [String: Any])
+        object["backend"] = own ?? "Copilot"
+        object["macBackend"] = "Copilot"
+        object["backends"] = backends
+        if let own { object["ownBackend"] = own }
+        if let busy { object["backendUnavailableReason"] = busy }
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    private func decode(_ data: Data) throws -> CantripModelSettings {
+        try JSONDecoder().decode(CantripModelSettings.self, from: data)
+    }
+
+    private func body(_ change: CantripModelSettingsChange) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(change)) as? [String: Any])
+    }
+
+    private func postedBody(_ request: URLRequest) throws -> [String: Any] {
+        let stream = try XCTUnwrap(request.httpBodyStream)
+        stream.open()
+        defer { stream.close() }
+        var bytes = [UInt8](repeating: 0, count: 2048)
+        let count = stream.read(&bytes, maxLength: bytes.count)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bytes.prefix(count))) as? [String: Any])
+    }
+
+    func testBackendKeysDecodeAndOlderMacsHideThePicker() throws {
+        let own = try decode(backendSnapshot(own: "Claude Code"))
+        XCTAssertEqual(own.backend, "Claude Code")
+        XCTAssertEqual(own.ownBackend, "Claude Code")
+        XCTAssertEqual(own.macBackend, "Copilot")
+        XCTAssertEqual(own.backends?.map(\.id), ["Copilot", "Claude Code", "Codex", "Antigravity"])
+        XCTAssertEqual(own.backends?.map(\.available), [true, true, true, false])
+        XCTAssertNil(own.backends?.first?.note)
+        XCTAssertNil(own.backendUnavailableReason)
+        XCTAssertTrue(own.offersBackends)
+        XCTAssertEqual(own.backendTag, "Claude Code")
+        XCTAssertEqual(own.backendChoice("Copilot")?.menuLabel, "Copilot")
+        XCTAssertEqual(own.backendChoice("Antigravity")?.menuLabel, "Antigravity — Not installed on the Mac")
+        XCTAssertEqual(own.ownBackendNote, "Claude Code: Signed out on the Mac")
+        XCTAssertEqual(own.backendFooter, "Only this tab changes. The next message runs on Claude Code and continues "
+                       + "this conversation with the recent history; at a usage limit it moves to the Mac's backend first.")
+
+        let busy = "Wait for this tab and its queued work to finish before changing model settings."
+        let following = try decode(backendSnapshot(busy: busy))
+        XCTAssertEqual(following.backend, "Copilot")
+        XCTAssertNil(following.ownBackend, "A tab that follows the Mac's backend has no ownBackend")
+        XCTAssertEqual(following.backendTag, CantripModelSettings.macBackendTag)
+        XCTAssertEqual(following.macBackendLabel, "Mac's backend (Copilot)")
+        XCTAssertNil(following.ownBackendNote)
+        XCTAssertEqual(following.backendUnavailableReason, busy)
+        XCTAssertTrue(following.backendFooter.hasPrefix("Only this tab changes. Pick a backend and the next message runs there"))
+
+        let home = try decode(backendSnapshot(backends: []))
+        XCTAssertEqual(home.backends, [])
+        XCTAssertFalse(home.offersBackends, "Cantrip Home keeps the Mac's backend: no picker")
+
+        let older = try decode(snapshot())
+        XCTAssertNil(older.backend)
+        XCTAssertNil(older.ownBackend)
+        XCTAssertNil(older.macBackend)
+        XCTAssertNil(older.backends)
+        XCTAssertNil(older.backendUnavailableReason)
+        XCTAssertFalse(older.offersBackends, "A Mac from before tab backends shows no picker")
+        XCTAssertEqual(older.macBackendLabel, "Mac's backend")
+    }
+
+    func testBackendChangeSendsNullForTheMacsAndOmitsItForModelChanges() throws {
+        let mac = try body(CantripModelSettingsChange(revision: "v1", backend: .mac))
+        XCTAssertEqual(Set(mac.keys), ["revision", "backend"])
+        XCTAssertTrue(mac["backend"] is NSNull, "null moves the tab back to the Mac's backend")
+        let raw = String(decoding: try JSONEncoder().encode(CantripModelSettingsChange(revision: "v1", backend: .mac)), as: UTF8.self)
+        XCTAssertTrue(raw.contains(#""backend":null"#), raw)
+
+        let named = try body(CantripModelSettingsChange(revision: "v1", backend: .named("Claude Code")))
+        XCTAssertEqual(Set(named.keys), ["revision", "backend"])
+        XCTAssertEqual(named["backend"] as? String, "Claude Code")
+        XCTAssertEqual(named["revision"] as? String, "v1")
+
+        let pick = try body(CantripModelSettingsChange(revision: "v1", selection: selection))
+        XCTAssertEqual(Set(pick.keys), ["revision", "usesDefaults", "model", "effort", "contextTier"],
+                       "A model change leaves the backend out, so the tab keeps it")
+        XCTAssertEqual(pick["usesDefaults"] as? Bool, false)
+        let auto = try body(CantripModelSettingsChange(revision: "v1", selection: nil))
+        XCTAssertEqual(Set(auto.keys), ["revision", "usesDefaults"])
+
+        let settings = try decode(backendSnapshot(own: "Codex"))
+        XCTAssertNil(settings.backendChange(to: "Codex"), "Picking the current backend saves nothing")
+        XCTAssertNil(settings.backendChange(to: "Antigravity"), "A backend not installed on the Mac can't be picked")
+        XCTAssertNil(settings.backendChange(to: "Unknown"))
+        XCTAssertEqual(settings.backendChange(to: CantripModelSettings.macBackendTag)?.backend, .mac)
+        XCTAssertEqual(settings.backendChange(to: "Claude Code")?.backend, .named("Claude Code"),
+                       "A signed-out backend can still be picked; its note says why it may not run")
+        XCTAssertEqual(settings.backendChange(to: "Claude Code")?.revision, "v1")
+        XCTAssertNil(try decode(backendSnapshot()).backendChange(to: CantripModelSettings.macBackendTag))
+    }
+
+    func testBackendSwitchPostsOnlyRevisionAndBackendAndBusyTabsNeverPost() async throws {
+        let model = try await model()
+        var methods: [String] = []
+        var posts: [[String: Any]] = []
+        // The Mac runs a backend without per-tab models: the model can't change here, the backend can.
+        var current = try backendSnapshot(reason: "Example CLI has no per-tab models. Choose Copilot, Claude Code, Codex or Antigravity for this tab.")
+        ModelSettingsRequestProtocol.handler = { request in
+            methods.append(request.httpMethod!)
+            XCTAssertEqual(request.url?.path, "/api/v1/sessions/\(self.id)/model-settings")
+            if request.httpMethod == "POST" {
+                let body = try self.postedBody(request)
+                posts.append(body)
+                return (200, try self.backendSnapshot(own: body["backend"] as? String))
+            }
+            return (200, current)
+        }
+        var saved = await model.updateModelSettings(id: id,
+            change: CantripModelSettingsChange(revision: "v1", backend: .named("Codex")), identity: model.usageIdentity)
+        XCTAssertTrue(saved, model.errorMessage ?? "")
+        XCTAssertEqual(methods, ["GET", "POST"])
+        XCTAssertEqual(Set(try XCTUnwrap(posts.last).keys), ["revision", "backend"])
+        XCTAssertEqual(posts.last?["backend"] as? String, "Codex")
+
+        current = try backendSnapshot(own: "Codex")
+        saved = await model.updateModelSettings(id: id,
+            change: CantripModelSettingsChange(revision: "v1", backend: .mac), identity: model.usageIdentity)
+        XCTAssertTrue(saved, model.errorMessage ?? "")
+        XCTAssertTrue(posts.last?["backend"] is NSNull)
+        XCTAssertEqual(posts.count, 2)
+
+        for (data, expected) in [
+            (try backendSnapshot(busy: "Turn Council mode off to choose this tab's backend and model."), "Council mode"),
+            (try backendSnapshot(backends: []), "runs on the Mac's backend"),
+            (try snapshot(), "Update Cantrip on the Mac"),
+        ] {
+            methods = []
+            current = data
+            saved = await model.updateModelSettings(id: id,
+                change: CantripModelSettingsChange(revision: "v1", backend: .named("Claude Code")), identity: model.usageIdentity)
+            XCTAssertFalse(saved)
+            XCTAssertEqual(methods, ["GET"], "\(expected): the backend must not be posted")
+            XCTAssertTrue(model.errorMessage?.contains(expected) == true, model.errorMessage ?? "no error")
+        }
+        XCTAssertEqual(posts.count, 2)
+    }
+
+    /// The Backend picker's UIKit menu button, found by its first choice.
+    private func backendMenu(in window: UIWindow) -> UIButton? {
+        func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
+        return descendants(window).compactMap { $0 as? UIButton }.first { button in
+            button.menu?.children.contains { ($0 as? UIAction)?.title.hasPrefix("Mac's backend") == true } == true
+        }
+    }
+
+    private func waitUntil(_ timeout: Duration = .seconds(5), _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition() {
+            guard ContinuousClock.now < deadline else { return XCTFail("Timed out") }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    func testBackendPickerSavesAtOnceAndSkipsBackendsNotInstalled() async throws {
+        let model = try await model()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let session = CantripRemoteSession(id: id, title: "Example project tab", workdir: "/tmp",
+            isStreaming: false, canResume: false, councilMode: false, queuedCount: 0, status: nil,
+            messages: nil, supportsImageAttachments: nil, queued: nil, supportsModelSettings: true)
+        var current = try backendSnapshot()
+        var posts: [[String: Any]] = []
+        ModelSettingsRequestProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                let body = try self.postedBody(request)
+                posts.append(body)
+                current = try self.backendSnapshot(own: body["backend"] as? String)
+            }
+            return (200, current)
+        }
+        let controller = UIHostingController(rootView: CantripModelSettingsView(
+            model: model, session: session, identity: model.usageIdentity))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        func actions() async throws -> [UIAction] {
+            var found: [UIAction] = []
+            try await waitUntil {
+                found = backendMenu(in: window)?.menu?.children.compactMap { $0 as? UIAction } ?? []
+                return !found.isEmpty
+            }
+            return found
+        }
+        func selected() async throws -> String? { try await actions().first { $0.state == .on }?.title }
+
+        var menu = try await actions()
+        XCTAssertEqual(menu.map(\.title), ["Mac's backend (Copilot)", "Copilot", "Claude Code — Signed out on the Mac",
+                                           "Codex", "Antigravity — Not installed on the Mac"])
+        XCTAssertEqual(menu.filter { $0.attributes.contains(.disabled) }.map(\.title),
+                       ["Antigravity — Not installed on the Mac"], "Only a backend not installed is greyed out")
+        let initial = try await selected()
+        XCTAssertEqual(initial, "Mac's backend (Copilot)")
+
+        try XCTUnwrap(menu.first { $0.title == "Codex" }).performWithSender(nil, target: nil)
+        try await waitUntil { posts.count == 1 }
+        XCTAssertEqual(Set(posts[0].keys), ["revision", "backend"], "Picking a backend saves only the backend")
+        XCTAssertEqual(posts[0]["backend"] as? String, "Codex")
+        try await waitUntil { (backendMenu(in: window)?.menu?.children.compactMap { $0 as? UIAction }
+            .first { $0.state == .on }?.title) == "Codex" }
+
+        menu = try await actions()
+        try XCTUnwrap(menu.first { $0.title == "Mac's backend (Copilot)" }).performWithSender(nil, target: nil)
+        try await waitUntil { posts.count == 2 }
+        XCTAssertTrue(posts[1]["backend"] is NSNull, "The Mac's backend is sent as null")
+        XCTAssertEqual(Set(posts[1].keys), ["revision", "backend"])
+        try await waitUntil { (backendMenu(in: window)?.menu?.children.compactMap { $0 as? UIAction }
+            .first { $0.state == .on }?.title) == "Mac's backend (Copilot)" }
+    }
+
+    /// Renders the sheet with its Backend section for review. Set TEST_RUNNER_TAB_BACKEND_ARTIFACT_DIR
+    /// (pass TEST_RUNNER_TEST_RUNNER_… to xcodebuild).
+    func testBackendSectionScreenshots() async throws {
+        let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_TAB_BACKEND_ARTIFACT_DIR"]
+        guard let directory, !directory.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_TAB_BACKEND_ARTIFACT_DIR to render the Backend section.")
+        }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let model = try await model()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let session = CantripRemoteSession(id: id, title: "Example project tab", workdir: "/tmp",
+            isStreaming: false, canResume: false, councilMode: false, queuedCount: 0, status: nil,
+            messages: nil, supportsImageAttachments: nil, queued: nil, supportsModelSettings: true)
+        var current = Data()
+        ModelSettingsRequestProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET", "Opening settings must not modify the Mac")
+            return (200, current)
+        }
+        func capture(_ name: String, _ data: Data, style: UIUserInterfaceStyle = .dark, width: CGFloat = 393,
+                     height: CGFloat = 852, size: DynamicTypeSize = .large) async throws {
+            current = data
+            let view = CantripModelSettingsView(model: model, session: session, identity: model.usageIdentity)
+                .dynamicTypeSize(size)
+            let controller = UIHostingController(rootView: view)
+            controller.overrideUserInterfaceStyle = style
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: width, height: height)
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            try await Task.sleep(for: .milliseconds(700))
+            controller.view.layoutIfNeeded()
+            func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
+            for scroll in descendants(controller.view).compactMap({ $0 as? UIScrollView }) where scroll.bounds.width > 0 {
+                XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width + 1, "\(name) scrolls sideways")
+            }
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let png = try XCTUnwrap(image.pngData())
+            try png.write(to: output.appendingPathComponent("tab-backend-\(name).png"))
+            let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+            attachment.name = "tab-backend-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        let own = try backendSnapshot(own: "Claude Code")
+        try await capture("dark", own)
+        try await capture("light", own, style: .light)
+        try await capture("follows-mac-dark", try backendSnapshot())
+        try await capture("busy-dark", try backendSnapshot(busy: "Turn Council mode off to choose this tab's backend and model."))
+        // The folded Duo beside its bar, a Duo pane, and the largest text on a narrow width.
+        try await capture("duo-folded-dark", own, width: 382)
+        try await capture("duo-pane-light", own, style: .light, width: 768, height: 1024)
+        try await capture("ax3-dark", own, width: 320, height: 1400, size: .accessibility3)
+        try await capture("older-mac-dark", try snapshot())
+    }
+
     private func privateSnapshot(revision: String = "private-v1", reason: String? = nil, api: String? = nil) throws -> Data {
         var configuration: [String: Any] = ["baseURL": "https://llm.example.ts.net/ollama", "model": "local:latest",
                                             "contextWindow": 8192, "systemPrompt": "Keep this conversation local."]
@@ -863,7 +1151,8 @@ final class CantripModelSettingsTests: XCTestCase {
                 return (200, try self.perModelFallback())
             }
             reads += 1
-            return (200, try self.snapshot())
+            // A tab on its own backend, signed out there: the Backend section's longest rows.
+            return (200, try self.backendSnapshot(own: "Claude Code"))
         }
         for width: CGFloat in [320, 768] {
             for size: DynamicTypeSize in [.large, .accessibility3] {
