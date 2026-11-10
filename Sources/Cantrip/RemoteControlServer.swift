@@ -3893,6 +3893,7 @@ private extension RemoteControlServer {
     </form></dialog>
     <dialog id="modelEditor" aria-labelledby="modelTitle"><form id="modelForm">
     <strong id="modelTitle">Model Settings</strong><span id="modelTabTitle"></span>
+    <label id="modelBackendLabel" class="hidden">Backend<select id="modelBackend" aria-describedby="modelBackendNote"></select></label><span id="modelBackendNote" class="muted hidden" role="status"></span>
     <label><input id="modelDefaults" type="checkbox">Use Mac defaults</label>
     <label>Model<select id="modelChoice"></select></label><label>Effort<select id="modelEffort"></select></label>
     <label>Context window<select id="modelContext"></select></label><span id="modelBudget" class="muted"></span>
@@ -4365,11 +4366,23 @@ private extension RemoteControlServer {
       if(draft.model&&!info)return "This model is no longer in the Mac's catalog.";
       if(draft.effort&&!info?.reasoningEfforts?.includes(draft.effort))return "Choose a supported effort or Model default.";
       if(draft.contextTier&&!info?.contextTiers?.includes(draft.contextTier))return "Choose a supported context window or CLI default.";return ""}
+    // The draft backend ("mac" follows the Mac's) isn't the saved one. Older Macs and Cantrip Home list no backends.
+    function modelBackendChanged(state){return Boolean(state.data?.backends?.length)&&state.backend!==state.savedBackend}
+    // A backend without per-tab models (the Mac's Local Model, say) saves only the backend.
+    function modelBackendOnly(state){return modelBackendChanged(state)&&Boolean(state.data.unavailableReason)&&!state.data.backendUnavailableReason}
     function modelTokens(value){return `${Number((value/(value>=1000000?1000000:value>=1000?1000:1)).toFixed(3))}${value>=1000000?"M":value>=1000?"k":""}`}
     function modelOptions(id,values,current,defaultLabel,label=value=>value){const select=$(id);select.replaceChildren();
       for(const value of [...new Set(["",...(values||[]),current])]){const option=document.createElement("option");option.value=value;option.textContent=value?label(value):defaultLabel;
         option.disabled=Boolean(value)&&!values?.includes(value);select.append(option)}select.value=current}
     function renderModelSettings(){const state=modelEditorState;if(!state)return;const info=state.data&&modelInfo(state),disabled=state.loading||state.saving,reason=state.data?.unavailableReason;
+      const backends=state.data?.backends||[],changed=modelBackendChanged(state),backendOnly=modelBackendOnly(state),backendReason=state.data?.backendUnavailableReason;
+      $("modelBackendLabel").classList.toggle("hidden",!backends.length);
+      if(backends.length){$("modelBackend").replaceChildren(...[{id:"mac",label:`Mac's backend (${state.data.macBackend})`,available:true},...backends].map(choice=>{
+          const option=document.createElement("option");option.value=choice.id;option.textContent=choice.note?`${choice.label} — ${choice.note}`:choice.label;option.disabled=!choice.available;return option}));
+        $("modelBackend").value=state.backend}
+      $("modelBackend").disabled=disabled||!backends.length||Boolean(backendReason);
+      const runsOn=state.backend==="mac"?state.data?.macBackend:backends.find(choice=>choice.id===state.backend)?.label||state.backend;
+      $("modelBackendNote").textContent=changed?`The next message runs on ${runsOn} and continues this conversation with the recent history.`:"";$("modelBackendNote").classList.toggle("hidden",!changed);
       $("modelDefaults").checked=state.usesDefaults;$("modelDefaults").disabled=disabled||!state.data||Boolean(reason);
       if(state.data){modelOptions("modelChoice",state.data.models.map(m=>m.id),state.draft.model,`CLI default (${state.data.fileDefaultModel||"Auto"})`,
           id=>{const tier=state.data.tiers?.find(item=>item.id===id);return tier?`${tier.label} — ${tier.modelLabel}${tier.effort?" · "+tier.effort:""}`:id});
@@ -4378,20 +4391,23 @@ private extension RemoteControlServer {
           const budget=tier==="default"?info?.defaultContextPromptTokens:tier==="long_context"?info?.longContextPromptTokens:null;return budget?`${name} - ${modelTokens(budget)} input`:name})}
       for(const id of ["modelChoice","modelEffort","modelContext"])$(id).disabled=disabled||!state.data||state.usesDefaults||Boolean(reason);
       $("modelBudget").textContent=info?.contextWindow?`Advertised maximum: ${modelTokens(info.contextWindow)} tokens. Tier values are input budgets, not total context.`:"";
-      $("modelError").textContent=state.loading?"Loading model options...":state.error||reason||(state.data&&modelValidation(state))||state.data?.catalogError||"";
-      $("modelSave").disabled=disabled||!state.data||Boolean(reason)||Boolean(state.data&&modelValidation(state))||state.needsReload;
+      const invalid=state.data&&!backendOnly&&modelValidation(state);
+      $("modelError").textContent=state.loading?"Loading model options...":state.error||backendReason||(backendOnly?"":reason)||invalid||state.data?.catalogError||"";
+      $("modelSave").disabled=disabled||!state.data||(Boolean(reason)&&!backendOnly)||Boolean(invalid)||state.needsReload;
       $("modelReload").disabled=disabled;$("modelRefresh").disabled=disabled;$("modelCancel").disabled=state.saving}
-    function editModelSettings(item){if(!item)return;if(item.isLocalPrivate){editPrivateSettings(item);return}modelEditorState={id:item.id,token,data:null,draft:null,usesDefaults:true,loading:false,saving:false,error:"",needsReload:false};
+    function editModelSettings(item){if(!item)return;if(item.isLocalPrivate){editPrivateSettings(item);return}modelEditorState={id:item.id,token,data:null,draft:null,usesDefaults:true,backend:"mac",savedBackend:"mac",loading:false,saving:false,error:"",needsReload:false};
       $("modelTabTitle").textContent=item.title;$("modelEditor").showModal();loadModelSettings(true);loadFallback();loadTiers()}
-    async function loadModelSettings(replaceDraft=false,refreshModels=false){const state=modelEditorState;if(!state||state.loading||state.saving)return;state.loading=true;renderModelSettings();
+    // `backend` shows the tab as it would be there (nothing saved; Save keeps the loaded revision). A reload without one returns to the saved backend.
+    async function loadModelSettings(replaceDraft=false,refreshModels=false,backend=null){const state=modelEditorState;if(!state||state.loading||state.saving)return;state.loading=true;if(backend)state.backend=backend;renderModelSettings();
       const current=()=>modelEditorState===state&&token===state.token;
-      try{let data=await api(`/api/v1/sessions/${state.id}/model-settings${refreshModels?"?refresh=true":""}`);if(!current())return;
-        const revision=replaceDraft?data.revision:state.data?.revision||data.revision;
+      const path=refresh=>{const query=[backend&&`backend=${encodeURIComponent(backend)}`,refresh&&"refresh=true"].filter(Boolean).join("&");return `/api/v1/sessions/${state.id}/model-settings${query?"?"+query:""}`};
+      try{let data=await api(path(refreshModels));if(!current())return;
+        const revision=replaceDraft&&!backend?data.revision:state.data?.revision||data.revision;
         for(let attempt=0;data.isRefreshing&&attempt<30;attempt++){await new Promise(resolve=>setTimeout(resolve,1000));if(!current())return;
-          data=await api(`/api/v1/sessions/${state.id}/model-settings`);if(!current())return}
+          data=await api(path(false));if(!current())return}
         if(data.revision!==revision)throw Error("Model settings changed on another device. Reload before saving.");
         if(data.isRefreshing)throw Error("Model lookup is still running. Reload in a moment.");
-        state.data=data;if(replaceDraft){state.draft={...data.selection};state.usesDefaults=data.usesDefaults}state.error="";state.needsReload=false}
+        state.data=data;if(replaceDraft){state.draft={...data.selection};state.usesDefaults=data.usesDefaults;if(!backend)state.backend=state.savedBackend=data.ownBackend??"mac"}state.error="";state.needsReload=false}
       catch(error){if(current()){state.error=`${error.message} Reload settings before saving.`;state.needsReload=true}}
       finally{if(current()){state.loading=false;renderModelSettings()}}}
     // The Mac-wide fallbacks save as soon as they change, apart from this tab's Save.
@@ -4498,15 +4514,18 @@ private extension RemoteControlServer {
     $("tierResetAll").onclick=()=>saveTiers({reset:true});
     $("modelCancel").onclick=()=>{if(modelEditorState?.saving)return;$("modelEditor").close();modelEditorState=null};
     $("modelEditor").addEventListener("cancel",event=>{if(modelEditorState?.saving)event.preventDefault();else modelEditorState=null});
-    $("modelReload").onclick=()=>loadModelSettings(true);$("modelRefresh").onclick=()=>loadModelSettings(!modelEditorState?.data,true);
+    $("modelReload").onclick=()=>loadModelSettings(true);$("modelRefresh").onclick=()=>{const state=modelEditorState;loadModelSettings(!state?.data,true,state&&modelBackendChanged(state)?state.backend:null)};
+    $("modelBackend").onchange=()=>{const state=modelEditorState;if(!state?.data||state.loading||state.saving){renderModelSettings();return}loadModelSettings(true,false,$("modelBackend").value)};
     $("modelDefaults").onchange=()=>{const state=modelEditorState;if(!state?.data)return;state.usesDefaults=$("modelDefaults").checked;if(state.usesDefaults)state.draft={...state.data.defaults};renderModelSettings()};
     $("modelChoice").onchange=()=>{const state=modelEditorState;if(!state?.data)return;state.draft.model=$("modelChoice").value;state.draft.effort="";
       state.draft.contextTier=modelInfo(state)?.contextTiers?.includes("default")?"default":"";renderModelSettings()};
     $("modelEffort").onchange=()=>{if(modelEditorState?.draft){modelEditorState.draft.effort=$("modelEffort").value;renderModelSettings()}};
     $("modelContext").onchange=()=>{if(modelEditorState?.draft){modelEditorState.draft.contextTier=$("modelContext").value;renderModelSettings()}};
     $("modelForm").onsubmit=async event=>{event.preventDefault();const state=modelEditorState;
-      if(!state?.data||state.loading||state.saving||state.needsReload||modelValidation(state)||token!==state.token)return;
-      const body={revision:state.data.revision,usesDefaults:state.usesDefaults,...(state.usesDefaults?{}:state.draft)};
+      if(!state?.data||state.loading||state.saving||state.needsReload||token!==state.token)return;const backendOnly=modelBackendOnly(state);if(!backendOnly&&modelValidation(state))return;
+      // `backend` only when it changed: a name, or null to follow the Mac's.
+      const backend=modelBackendChanged(state)?{backend:state.backend==="mac"?null:state.backend}:{};
+      const body=backendOnly?{revision:state.data.revision,...backend}:{revision:state.data.revision,usesDefaults:state.usesDefaults,...(state.usesDefaults?{}:state.draft),...backend};
       state.saving=true;renderModelSettings();
       try{await api(`/api/v1/sessions/${state.id}/model-settings`,{method:"POST",body:JSON.stringify(body)});
         if(modelEditorState===state&&token===state.token){$("modelEditor").close();modelEditorState=null;await refresh()}}

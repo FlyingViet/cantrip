@@ -341,8 +341,8 @@ extension SessionTabTests {
           if(path==="/api/v1/usage-fallback"){fallbackCalls.push(body);
             if(body?.entries)return Promise.resolve({...fallbackState,entries:body.entries,backends:body.entries.map(item=>item.backend),revision:`pm-${fallbackCalls.length}`});
             return Promise.resolve(body?{...fallback,backends:body.backends,backend:body.backends[0]??"",limited:[],revision:`fallback-${fallbackCalls.length}`}:fallback)}
-          calls.push({path,body});return Promise.resolve(response)}
-        function refresh(){return Promise.resolve()}
+          calls.push({path,body});return Promise.resolve(modelResponses[path]||response)}
+        let modelResponses={};function refresh(){return Promise.resolve()}
         \(source[start.lowerBound..<end.lowerBound])
         editModelSettings({id:"tab-a",title:"Fixture"});
         """)
@@ -355,6 +355,9 @@ extension SessionTabTests {
         """)
         precondition(context.evaluateScript("calls[1].path")!.toString() == "/api/v1/sessions/tab-a/model-settings")
         precondition(context.evaluateScript("calls[1].body.effort==='high' && calls[1].body.contextTier==='long_context'")!.toBool())
+        precondition(context.evaluateScript("""
+        $("modelBackendLabel").classList.hidden && $("modelBackendNote").classList.hidden && !("backend" in calls[1].body)
+        """)!.toBool(), "A Mac without tab backends hides the picker and saves as before")
         precondition(context.evaluateScript("modelTokens(1050000)")!.toString() == "1.05M")
         // The Mac-wide fallbacks load with the sheet, name the limited backend and save on change.
         precondition(context.evaluateScript("""
@@ -463,5 +466,115 @@ extension SessionTabTests {
         tierCalls.length===3 && tierCalls[1].choices.map(item=>item.model).join()==="model-a"
           && tierCalls[2].reset===true && tierCalls[2].tier==="deep" && tierCalls[2].revision==="tiers-2"
         """)!.toBool(), "Remove drops a model from the tier and Reset returns the cell to its defaults")
+
+        // The Backend picker: the Mac's backend first, then each backend with its note; ones that can't run are disabled.
+        context.evaluateScript("""
+        const tabBase={...response,backend:"Copilot",macBackend:"Copilot",backends:[{id:"Copilot",label:"Copilot",available:true},
+          {id:"Claude Code",label:"Claude Code",available:true,note:"Signed out on the Mac"},
+          {id:"Codex",label:"Codex",available:false,note:"Not installed on the Mac"},{id:"Antigravity",label:"Antigravity",available:true}]};
+        const claudePreview={...tabBase,backend:"Claude Code",usesDefaults:false,selection:{model:"model-c",effort:"high",contextTier:""},
+          defaults:{model:"",effort:"",contextTier:""},models:[{id:"model-c",reasoningEfforts:["high"],contextTiers:[]}],tiers:[],fileDefaultModel:"model-c"};
+        modelResponses={"/api/v1/sessions/tab-c/model-settings":tabBase,"/api/v1/sessions/tab-c/model-settings?backend=Claude%20Code":claudePreview,
+          "/api/v1/sessions/tab-c/model-settings?backend=Claude%20Code&refresh=true":claudePreview};
+        calls=[];editModelSettings({id:"tab-c",title:"Fixture"});
+        """)
+        precondition(context.evaluateScript("""
+        !$("modelBackendLabel").classList.hidden && $("modelBackend").value==="mac" && !$("modelBackend").disabled && $("modelBackendNote").classList.hidden
+          && $("modelBackend").children.map(option=>option.textContent).join("|")
+             ==="Mac's backend (Copilot)|Copilot|Claude Code — Signed out on the Mac|Codex — Not installed on the Mac|Antigravity"
+          && $("modelBackend").children.map(option=>option.disabled).join()==="false,false,false,true,false"
+        """)!.toBool(), "The picker lists the Mac's backend, then each backend with its note")
+        context.evaluateScript("""
+        $("modelBackend").value="Claude Code";$("modelBackend").onchange();
+        """)
+        precondition(context.evaluateScript("""
+        calls.length===2 && calls[1].path==="/api/v1/sessions/tab-c/model-settings?backend=Claude%20Code" && modelEditorState.backend==="Claude Code"
+          && modelEditorState.draft.model==="model-c" && modelEditorState.draft.effort==="high" && !modelEditorState.usesDefaults
+          && modelEditorState.data.revision==="revision-a" && $("modelChoice").children.map(option=>option.value).join()===",model-c"
+          && !$("modelChoice").disabled && !$("modelSave").disabled && !$("modelBackendNote").classList.hidden
+          && $("modelBackendNote").textContent==="The next message runs on Claude Code and continues this conversation with the recent history."
+        """)!.toBool(), "Choosing a backend previews its models and the tab's pick there, with the loaded revision")
+        context.evaluateScript("""
+        $("modelRefresh").onclick();
+        """)
+        precondition(context.evaluateScript("""
+        calls[2].path==="/api/v1/sessions/tab-c/model-settings?backend=Claude%20Code&refresh=true" && modelEditorState.draft.model==="model-c"
+        """)!.toBool(), "Refresh models refreshes the backend shown")
+        context.evaluateScript("""
+        $("modelForm").onsubmit({preventDefault(){}});
+        """)
+        precondition(context.evaluateScript("""
+        calls[3].path==="/api/v1/sessions/tab-c/model-settings" && modelEditorState===null && JSON.stringify(calls[3].body)
+          ===JSON.stringify({revision:"revision-a",usesDefaults:false,model:"model-c",effort:"high",contextTier:"",backend:"Claude Code"})
+        """)!.toBool(), "Save sends the new backend with its model")
+
+        // A tab on its own backend: Reload returns to it, an unchanged save has no backend, the Mac's is null.
+        context.evaluateScript("""
+        const ownBase={...claudePreview,ownBackend:"Claude Code"};
+        modelResponses={"/api/v1/sessions/tab-c/model-settings":ownBase,"/api/v1/sessions/tab-c/model-settings?backend=mac":tabBase};
+        calls=[];editModelSettings({id:"tab-c",title:"Fixture"});
+        """)
+        context.evaluateScript("""
+        $("modelBackend").value="mac";$("modelBackend").onchange();
+        """)
+        precondition(context.evaluateScript("""
+        calls[1].path==="/api/v1/sessions/tab-c/model-settings?backend=mac" && modelEditorState.usesDefaults && modelEditorState.draft.model==="model-a"
+          && $("modelBackendNote").textContent==="The next message runs on Copilot and continues this conversation with the recent history."
+        """)!.toBool(), "Choosing the Mac's backend previews it")
+        context.evaluateScript("""
+        $("modelReload").onclick();
+        """)
+        precondition(context.evaluateScript("""
+        calls[2].path==="/api/v1/sessions/tab-c/model-settings" && modelEditorState.backend==="Claude Code" && $("modelBackend").value==="Claude Code"
+          && modelEditorState.draft.model==="model-c" && $("modelBackendNote").classList.hidden
+        """)!.toBool(), "Reload settings returns to the saved backend")
+        context.evaluateScript("""
+        $("modelForm").onsubmit({preventDefault(){}});
+        """)
+        precondition(context.evaluateScript("""
+        JSON.stringify(calls[3].body)===JSON.stringify({revision:"revision-a",usesDefaults:false,model:"model-c",effort:"high",contextTier:""})
+        """)!.toBool(), "Without a backend change the body is unchanged")
+        context.evaluateScript("""
+        calls=[];editModelSettings({id:"tab-c",title:"Fixture"});
+        """)
+        context.evaluateScript("""
+        $("modelBackend").value="mac";$("modelBackend").onchange();
+        """)
+        context.evaluateScript("""
+        $("modelForm").onsubmit({preventDefault(){}});
+        """)
+        precondition(context.evaluateScript("""
+        JSON.stringify(calls[2].body)===JSON.stringify({revision:"revision-a",usesDefaults:true,backend:null})
+        """)!.toBool(), "Following the Mac's backend again saves backend null")
+
+        // The Mac on a backend without per-tab models: only the backend saves.
+        context.evaluateScript("""
+        modelResponses={"/api/v1/sessions/tab-c/model-settings":{...ownBase,macBackend:"Local Model"},"/api/v1/sessions/tab-c/model-settings?backend=mac":
+          {...tabBase,backend:"Local Model",macBackend:"Local Model",unavailableReason:"Local Model has no per-tab models."}};
+        calls=[];editModelSettings({id:"tab-c",title:"Fixture"});
+        """)
+        context.evaluateScript("""
+        $("modelBackend").value="mac";$("modelBackend").onchange();
+        """)
+        precondition(context.evaluateScript("""
+        $("modelBackend").children[0].textContent==="Mac's backend (Local Model)" && !$("modelSave").disabled && $("modelChoice").disabled
+          && $("modelDefaults").disabled && $("modelError").textContent===""
+          && $("modelBackendNote").textContent==="The next message runs on Local Model and continues this conversation with the recent history."
+        """)!.toBool(), "A backend without per-tab models can still be chosen")
+        context.evaluateScript("""
+        $("modelForm").onsubmit({preventDefault(){}});
+        """)
+        precondition(context.evaluateScript("""
+        JSON.stringify(calls[2].body)===JSON.stringify({revision:"revision-a",backend:null})
+        """)!.toBool(), "Saving it posts only the backend")
+
+        // A working tab can't change backend: the picker is disabled and says why.
+        context.evaluateScript("""
+        modelResponses={"/api/v1/sessions/tab-c/model-settings":{...ownBase,unavailableReason:"Wait for this tab.",backendUnavailableReason:"Wait for this tab."}};
+        calls=[];editModelSettings({id:"tab-c",title:"Fixture"});
+        """)
+        precondition(context.evaluateScript("""
+        $("modelBackend").disabled && $("modelBackend").value==="Claude Code" && $("modelError").textContent==="Wait for this tab." && $("modelSave").disabled
+        """)!.toBool(), "A busy tab's picker is disabled with the reason")
     }
 }
