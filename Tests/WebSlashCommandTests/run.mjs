@@ -350,5 +350,58 @@ same(mentions.currentMentions(), [], "deleting a mention's text drops its chip")
         "a rule that hands requests to the classifier says so, not its fallback route");
 }
 
+// Model Settings' Backend picker: shows another backend's settings unsaved; Save sends `backend` only when it changed.
+{
+    const elements = {}, calls = [];
+    const node = () => {
+        const classes = new Set();
+        return { children: [], value: "", textContent: "", disabled: false, checked: false, showModal() {}, close() {}, addEventListener() {},
+            classList: { toggle: (name, on) => { if (on) classes.add(name); else classes.delete(name) }, contains: name => classes.has(name) },
+            replaceChildren(...items) { this.children = items }, append(...items) { this.children.push(...items) } };
+    };
+    const blank = { model: "", effort: "", contextTier: "" };
+    const base = { selection: blank, defaults: blank, usesDefaults: true, revision: "r1", models: [{ id: "model-a", reasoningEfforts: [], contextTiers: [] }],
+        tiers: [], isRefreshing: false, backend: "Copilot", macBackend: "Copilot",
+        backends: [{ id: "Copilot", label: "Copilot", available: true }, { id: "Claude Code", label: "Claude Code", available: true, note: "Signed out on the Mac" },
+            { id: "Codex", label: "Codex", available: false, note: "Not installed on the Mac" }] };
+    const responses = { "": base, "?backend=Claude%20Code": { ...base, backend: "Claude Code", usesDefaults: false,
+        selection: { model: "model-c", effort: "high", contextTier: "" }, models: [{ id: "model-c", reasoningEfforts: ["high"], contextTiers: [] }] } };
+    const context = vm.createContext({ calls, responses, token: "t", setTimeout,
+        $: id => elements[id] || (elements[id] = node()), document: { createElement: () => node() }, refresh: async () => {},
+        api: async (path, options) => {
+            if (!path.startsWith("/api/v1/sessions/")) throw new Error("not in this test");
+            calls.push({ path, body: options ? JSON.parse(options.body) : null });
+            return responses[path.slice(path.indexOf("/model-settings") + "/model-settings".length).replace(/[?&]refresh=true$/, "")];
+        } });
+    vm.runInContext(templateSlice("    let modelEditorState", "    let editingTab"), context);
+    const run = code => vm.runInContext(code, context), settle = () => new Promise(resolve => setTimeout(resolve, 0)), $ = context.$;
+    run(`editModelSettings({id:"tab-a",title:"Fixture"})`);
+    await settle();
+    same([$("modelBackendLabel").classList.contains("hidden"), $("modelBackend").value, $("modelBackend").children.map(option => [option.textContent, option.disabled])],
+        [false, "mac", [["Mac's backend (Copilot)", false], ["Copilot", false], ["Claude Code — Signed out on the Mac", false], ["Codex — Not installed on the Mac", true]]],
+        "the picker follows the Mac's backend and lists each backend with its note");
+    $("modelBackend").value = "Claude Code"; $("modelBackend").onchange();
+    await settle();
+    same([calls.at(-1).path, run(`[modelEditorState.draft.model,modelEditorState.usesDefaults,modelEditorState.data.revision]`), $("modelBackendNote").textContent],
+        ["/api/v1/sessions/tab-a/model-settings?backend=Claude%20Code", ["model-c", false, "r1"],
+            "The next message runs on Claude Code and continues this conversation with the recent history."], "choosing a backend shows its models and the tab's pick there");
+    $("modelRefresh").onclick();
+    await settle();
+    same(calls.at(-1).path, "/api/v1/sessions/tab-a/model-settings?backend=Claude%20Code&refresh=true", "Refresh models refreshes the backend shown");
+    $("modelForm").onsubmit({ preventDefault() {} });
+    await settle();
+    same(calls.at(-1).body, { revision: "r1", usesDefaults: false, model: "model-c", effort: "high", contextTier: "", backend: "Claude Code" }, "Save sends the backend with its model");
+    responses[""] = { ...base, backend: "Claude Code", ownBackend: "Claude Code" };
+    responses["?backend=mac"] = { ...base, macBackend: "Local Model", unavailableReason: "Local Model has no per-tab models." };
+    run(`editModelSettings({id:"tab-a",title:"Fixture"})`);
+    await settle();
+    $("modelBackend").value = "mac"; $("modelBackend").onchange();
+    await settle();
+    same([$("modelSave").disabled, $("modelError").textContent], [false, ""], "a backend without per-tab models can still be chosen");
+    $("modelForm").onsubmit({ preventDefault() {} });
+    await settle();
+    same(calls.at(-1).body, { revision: "r1", backend: null }, "back to the Mac's backend without per-tab models saves only the backend");
+}
+
 console.log(failures === 0 ? `Web slash command tests passed (${passes})` : `${failures} web slash command tests failed`);
 process.exit(failures === 0 ? 0 : 1);
