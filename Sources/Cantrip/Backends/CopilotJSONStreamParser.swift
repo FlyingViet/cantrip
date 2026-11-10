@@ -34,6 +34,35 @@ struct CopilotJSONStreamParser {
         self.canCancelSubagents = canCancelSubagents
     }
 
+    /// Background agents still going, with what routes their later events to their cards. A watcher
+    /// started in one turn often finishes in a later one, after the next prompt replaced this parser.
+    struct BackgroundAgents {
+        fileprivate var activities: [String: ToolActivity] = [:]
+        fileprivate var agentParents: [String: String] = [:]
+        fileprivate var childParents: [String: String] = [:]
+        var isEmpty: Bool { activities.isEmpty }
+    }
+
+    func liveBackgroundAgents() -> BackgroundAgents {
+        var carried = BackgroundAgents()
+        carried.activities = activities.filter { _, activity in
+            activity.subagent.map { $0.background && $0.isActive } ?? false
+        }
+        guard !carried.isEmpty else { return carried }
+        carried.agentParents = agentParents.filter { carried.activities[$0.value] != nil }
+        carried.childParents = childParents.filter { step, _ in
+            path(to: step).map { carried.activities[$0[0]] != nil } ?? false
+        }
+        return carried
+    }
+
+    /// Keeps updating the previous turn's background agents (same runtime only: a new one has none).
+    mutating func adopt(_ carried: BackgroundAgents) {
+        activities.merge(carried.activities) { current, _ in current }
+        agentParents.merge(carried.agentParents) { current, _ in current }
+        childParents.merge(carried.childParents) { current, _ in current }
+    }
+
     mutating func consume(
         _ data: Data,
         onMalformedLine: (CopilotJSONStreamParserError, Data) -> Void

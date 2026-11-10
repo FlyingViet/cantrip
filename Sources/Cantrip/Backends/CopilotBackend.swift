@@ -301,7 +301,9 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         approvedScopes = []
         ready = false
         idle = false
+        let carried = process == nil ? nil : parser.liveBackgroundAgents()
         parser = CopilotJSONStreamParser(canCancelSubagents: true)
+        if let carried { parser.adopt(carried) }
         do {
             var command: [String: Any] = [
                 "kind": "start", "runID": id, "config": config.json, "prompt": request.prompt,

@@ -154,6 +154,40 @@ private func testBackgroundSubagentKeepsReporting() {
            "late completion metrics should reach the monitor")
 }
 
+/// A watcher launched in one turn often finishes in a later one, whose prompt started a new parser.
+private func testBackgroundSubagentFinishesInLaterTurn() {
+    var first = CopilotJSONStreamParser(canCancelSubagents: true)
+    _ = first.consume(Data("""
+    {"type":"tool.execution_start","id":"w1","data":{"toolCallId":"task-w","toolName":"task","arguments":{"description":"Watch build","agent_type":"task","name":"watch-build","mode":"background"}}}
+    {"type":"subagent.started","id":"w2","agentId":"agent-w","data":{"toolCallId":"task-w","agentName":"task","agentDisplayName":"watch-build","agentDescription":"Watch build","executionMode":"background"}}
+    {"type":"tool.execution_complete","id":"w3","data":{"toolCallId":"task-w","success":true,"result":{"content":"Agent started in background with agent_id: agent-w."}}}
+    {"type":"tool.execution_start","id":"w4","data":{"toolCallId":"sync-1","toolName":"task","arguments":{"description":"Explore","agent_type":"explore"}}}
+    {"type":"subagent.started","id":"w5","agentId":"agent-s","data":{"toolCallId":"sync-1","agentName":"explore","agentDisplayName":"Explore","agentDescription":"Explore"}}
+    {"type":"tool.execution_start","id":"w6","agentId":"agent-w","data":{"toolCallId":"sleep-1","toolName":"bash","arguments":{"command":"sleep 60"}}}
+
+    """.utf8)) { _, _ in expect(false, "first turn events should parse") }
+    let carried = first.liveBackgroundAgents()
+    expect(!carried.isEmpty, "a running watcher should carry into the next turn")
+
+    var later = CopilotJSONStreamParser(canCancelSubagents: true)
+    later.adopt(carried)
+    let events = later.consume(Data("""
+    {"type":"tool.execution_complete","id":"x1","agentId":"agent-w","data":{"toolCallId":"sleep-1","success":true,"result":{"content":"done"}}}
+    {"type":"subagent.completed","id":"x2","agentId":"agent-w","data":{"toolCallId":"task-w","agentName":"task","agentDisplayName":"watch-build","totalTokens":120}}
+    {"type":"subagent.completed","id":"x3","agentId":"agent-s","data":{"toolCallId":"sync-1","agentName":"explore","agentDisplayName":"Explore"}}
+
+    """.utf8)) { _, _ in expect(false, "later turn events should parse") }
+    let watcher = lastActivity(events, id: "task-w")
+    expect(watcher?.subagent?.status == .completed && watcher?.subagent?.canCancel == false,
+           "a carried watcher's completion should update its card")
+    expect(watcher?.children.first?.state == .succeeded, "a carried watcher's nested step should still update")
+    expect(lastActivity(events, id: "sync-1") == nil, "foreground agents stay with their own turn")
+
+    var fresh = CopilotJSONStreamParser(canCancelSubagents: true)
+    fresh.adopt(later.liveBackgroundAgents())
+    expect(fresh.liveBackgroundAgents().isEmpty, "finished watchers should not carry further")
+}
+
 private func testSubagentLiveProgress() {
     var parser = CopilotJSONStreamParser(canCancelSubagents: true)
     // Shapes captured from Copilot CLI 1.0.88 (background general-purpose agent).
@@ -554,6 +588,7 @@ testMalformedFinalLineIsReportedAndSkipped()
 testSDKMessagesAndUsage()
 testSubagentStepsNestUnderTask()
 testBackgroundSubagentKeepsReporting()
+testBackgroundSubagentFinishesInLaterTurn()
 testSubagentLiveProgress()
 testQueuedBackgroundSubagentShowsAtLaunch()
 testSubagentFailureAndNesting()
@@ -567,4 +602,4 @@ if failures > 0 {
     fputs("\(failures) Copilot parser test(s) failed\n", stderr)
     exit(1)
 }
-print("All 15 Copilot parser test groups passed (incl. MCP Apps)")
+print("All 16 Copilot parser test groups passed (incl. MCP Apps)")
