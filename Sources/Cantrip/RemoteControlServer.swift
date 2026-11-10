@@ -2894,9 +2894,12 @@ final class RemoteControlServer {
             result["deletedMessageIDs"] = session.deletedMessageIDs.map(\.uuidString)
         }
         // A tab's running background agents, for tab lists' "2 in background" (Home lists its own).
+        // `backgroundTaskIDs` names them (each a reply's `subagents[].id`): a client's cached copy of
+        // an older reply can still show a finished agent running, so clients settle any not listed.
         if !SessionManager.isCantripHomeReserved(session) {
-            let background = session.liveBackgroundAgents.count
-            if background > 0 { result["backgroundTaskCount"] = background }
+            let background = session.liveBackgroundAgents
+            if !background.isEmpty { result["backgroundTaskCount"] = background.count }
+            result["backgroundTaskIDs"] = background.map(\.id)
         }
         if session.isCantripHome {
             // Drives the Background button badge without fetching the run list.
@@ -4124,6 +4127,10 @@ private extension RemoteControlServer {
         let start=session.messages.length-120;
         if(session.messages[start].role!=="user"){const prompt=session.messages.slice(0,start).findLastIndex(m=>m.role==="user");if(prompt>=0)start=prompt}
         if(start>0)session={...session,messages:session.messages.slice(start),hasOlderMessages:true}}
+      // Older pages cached here are never fetched again: a background agent the Mac no longer runs (not in
+      // backgroundTaskIDs) shows as finished instead of running with a Stop the Mac answers "already finished".
+      if(Array.isArray(session.backgroundTaskIDs)){const running=new Set(session.backgroundTaskIDs),stale=a=>a.background&&(a.status==="queued"||a.status==="running"||a.status==="idle")&&!running.has(a.id);
+        if(session.messages.some(m=>m.subagents?.some(stale)))session={...session,messages:session.messages.map(m=>m.subagents?.some(stale)?{...m,subagents:m.subagents.map(a=>stale(a)?{...a,status:"completed",canCancel:false}:a)}:m)}}
       historyCache.delete(session.id);historyCache.set(session.id,session);while(historyCache.size>5){const id=historyCache.keys().next().value;historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}return session}
     function scheduleRefresh(){if(timer)clearTimeout(timer);timer=null;if(!token||document.hidden||uiNavigating)return;
       // Fast polling follows the open tab; other tabs' status still refreshes every 5 s.

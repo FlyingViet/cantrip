@@ -247,8 +247,14 @@ extension SessionTabTests {
                      && tabTasks[0]["tabTitle"] as? String == bassSession.title
                      && (tabTasks[0]["tasks"] as? [[String: Any]])?.map { $0["agentID"] as? String } == ["agent-tab-watch"]
                      && bassListed?["backgroundTaskCount"] as? Int == 1
-                     && (listing.1["home"] as? [String: Any])?["backgroundTaskCount"] == nil,
+                     && bassListed?["backgroundTaskIDs"] as? [String] == ["task-tab-watch"]
+                     && (listing.1["home"] as? [String: Any])?["backgroundTaskCount"] == nil
+                     && (listing.1["home"] as? [String: Any])?["backgroundTaskIDs"] == nil,
                      "only a tab's running background agents are listed and counted: \(tabTasks), \(String(describing: bassListed))")
+        let idleListing = try await call("/api/v1/sessions")
+        let bassIdle = (idleListing.1["sessions"] as? [[String: Any]])?.first { $0["id"] as? String == bassSession.id.uuidString }
+        precondition(bassIdle?["backgroundTaskCount"] == nil && bassIdle?["backgroundTaskIDs"] as? [String] == [],
+                     "a tab with no background agents says so, so clients settle stale cached ones")
         let busyHome = try await call("/api/v1/home")
         precondition((busyHome.1["session"] as? [String: Any])?["backgroundActiveCount"] as? Int == 3,
                      "Home's badge counts running and queued background work")

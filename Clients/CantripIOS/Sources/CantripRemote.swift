@@ -164,7 +164,7 @@ struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
     let model: String?
     let effort: String?
     let background: Bool
-    let status: CantripRemoteSubagentStatus
+    var status: CantripRemoteSubagentStatus
     let startedAt: TimeInterval?
     let finishedAt: TimeInterval?
     let intent: String?
@@ -173,11 +173,23 @@ struct CantripRemoteSubagent: Decodable, Equatable, Identifiable {
     let steps: Int
     let tokens: Int
     let error: String?
-    let canCancel: Bool
+    var canCancel: Bool
     let recentSteps: [CantripRemoteSubagentStep]
     let reasoning: [CantripRemoteReasoningStep]
     /// A finished card follows this many reply blocks; nil from hosts that don't place cards.
     let textBlock: Int?
+
+    /// A background agent this copy shows running that the Mac no longer lists as running.
+    func isStale(running: Set<String>) -> Bool {
+        background && status.isLive && !running.contains(id)
+    }
+
+    var settled: CantripRemoteSubagent {
+        var finished = self
+        finished.status = .completed
+        finished.canCancel = false
+        return finished
+    }
 
     private enum CodingKeys: String, CodingKey {
         case id, agentID, name, agentType, summary, model, effort, background, status
@@ -614,7 +626,7 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     let author: String?
     let activities: [CantripRemoteActivity]
     let apps: [CantripRemoteMCPAppSummary]?
-    let subagents: [CantripRemoteSubagent]?
+    var subagents: [CantripRemoteSubagent]?
     /// Reasoning split into titled steps; absent from Mac hosts before this field existed.
     var reasoning: [CantripRemoteReasoningStep]? = nil
     var displayText: String? = nil
@@ -651,6 +663,13 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var isHandoffResult: Bool { role == "handoff" }
     /// The divider Cantrip adds when a tab starts fresh; never a model reply.
     var isFreshStart: Bool { role == "freshStart" }
+
+    func settlingBackgroundAgents(running: Set<String>) -> CantripRemoteMessage {
+        guard let subagents, subagents.contains(where: { $0.isStale(running: running) }) else { return self }
+        var message = self
+        message.subagents = subagents.map { $0.isStale(running: running) ? $0.settled : $0 }
+        return message
+    }
 }
 
 struct CantripRemoteQueuedPrompt: Decodable, Equatable, Identifiable {
@@ -721,6 +740,9 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var backgroundInputCount: Int? = nil
     /// Background agents (watchers, parallel requests) still running in this tab; nil when none.
     var backgroundTaskCount: Int? = nil
+    /// Their `subagents[].id`s (`[]` when none); nil from older Macs. A cached older reply can still
+    /// show a finished background agent running, so any not listed is settled as finished.
+    var backgroundTaskIDs: [String]? = nil
     /// Cantrip Home only: builds holding a slot in the Mac's build queue. Nil while the queue is off.
     var buildsRunning: Int? = nil
     /// Cantrip Home only: builds waiting for a slot.
@@ -776,6 +798,16 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     /// Runs a parent's queued message in its own tab (and branch) until its work merges back.
     var isChildTab: Bool { parentID != nil }
     var lastActivityDate: Date? { lastActivityAt.map(Date.init(timeIntervalSince1970:)) }
+
+    /// Shows background agents the Mac no longer runs as finished. Replies paged in earlier are
+    /// kept without being fetched again, so a watcher that finished after its reply left the
+    /// recent window would otherwise stay "running" here, with a Stop the Mac answers "finished".
+    mutating func settleBackgroundAgents() {
+        guard let ids = backgroundTaskIDs, let current = messages else { return }
+        let running = Set(ids)
+        let settled = current.map { $0.settlingBackgroundAgents(running: running) }
+        if settled != current { messages = settled }
+    }
 }
 
 /// A task's schedule. Screens show the Mac's `summary` ("Last day of every month at 9:30 PM"),
@@ -5746,6 +5778,7 @@ final class CantripRemoteModel: ObservableObject {
             session.messages = Array(session.transcript.suffix(120))
             session.hasOlderMessages = true
         }
+        session.settleBackgroundAgents()
         detailCache[session.id] = session
         cacheOrder.removeAll { $0 == session.id }
         cacheOrder.append(session.id)

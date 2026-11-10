@@ -11,6 +11,7 @@ import type {
 } from "../api/types";
 import { bridge, type HostStatus } from "../bridge";
 import { deletedSet, isDeleted, withoutDeleted } from "./deleteMessage";
+import { settleBackgroundAgents } from "./backgroundAgents";
 import { movedSections } from "./sections";
 import { plainMentions, plainMentionsDeep, plainSession } from "./tabMentions";
 import { dropDeletedMessages, resetThreads } from "./threads";
@@ -273,6 +274,8 @@ export function apply(received: Detail, options: { keepOlder?: boolean } = {}): 
       next = { ...next, messages: next.messages.slice(-120), hasOlderMessages: true };
     }
   }
+  const settled = settleBackgroundAgents(next.messages, session.backgroundTaskIDs);
+  if (settled !== next.messages) next = { ...next, messages: settled };
   const map = new Map(details.value);
   map.delete(session.id);
   map.set(session.id, next);
@@ -342,7 +345,11 @@ export async function loadOlder(id: string, automatically = false): Promise<bool
     if (!received.length && data.session.hasOlderMessages !== false) throw new Error("The Mac sent an empty page.");
     expanded.add(id);
     const map = new Map(details.value);
-    map.set(id, { ...latest, messages: [...received, ...latest.messages], hasOlderMessages: data.session.hasOlderMessages === true });
+    map.set(id, {
+      ...latest,
+      messages: settleBackgroundAgents([...received, ...latest.messages], latest.backgroundTaskIDs),
+      hasOlderMessages: data.session.hasOlderMessages === true,
+    });
     details.value = map;
     setHistory(id, null);
     return true;

@@ -609,6 +609,21 @@ private func runTests() async throws {
         """)
         expect(context.evaluateScript("historyCache.get('d').messages.map(m=>m.id).join(',')")!.toString() == "1,3,5",
                "messages deleted on another device leave older pages loaded earlier")
+        context.evaluateScript("""
+        historyCache.clear();
+        const watcher={id:"w",agentID:"aw",background:true,status:"running",canCancel:true};
+        const side={id:"s",agentID:"as",background:true,status:"idle",canCancel:true};
+        const helper={id:"f",agentID:"af",background:false,status:"running",canCancel:true};
+        cacheSession({id:"e",historyStartID:"start",backgroundTaskIDs:["w","s"],
+          messages:[{id:"1",subagents:[watcher,side,helper]},{id:"2"}],hasOlderMessages:false},false);
+        cacheSession({id:"e",historyStartID:"start",backgroundTaskIDs:["s"],messages:[{id:"2"},{id:"3"}],hasOlderMessages:true});
+        """)
+        expect(context.evaluateScript("historyCache.get('e').messages[0].subagents.map(a=>a.status+':'+a.canCancel).join(',')")!
+                   .toString() == "completed:false,idle:true,running:true",
+               "a cached background agent the Mac no longer runs settles; running ones and foreground helpers stay")
+        context.evaluateScript(#"cacheSession({id:"e",historyStartID:"start",messages:[{id:"3"}],hasOlderMessages:true})"#)
+        expect(context.evaluateScript("historyCache.get('e').messages[0].subagents[1].status")!.toString() == "idle",
+               "older Macs send no list, so nothing settles")
 
         let apiStart = source.range(of: "    async function api(")!
         let apiEnd = source.range(of: "    function pair(", range: apiStart.upperBound..<source.endIndex)!
