@@ -299,7 +299,9 @@ match ([details](updating-and-troubleshooting.md#new-worktrees-reuse-installed-p
   the parent's next queued message). It checks the merge with
   `git merge-tree` first, which touches nothing, then runs
   `git merge --no-ff` into the parent's branch and removes the worktree and
-  branch. A merged child closes; its card still opens the conversation.
+  branch. A merged child closes; its card still opens the conversation. The
+  card moves to the end of the parent when the child reaches an outcome, and stays
+  in place after that, also when Cantrip restarts.
 - **Conflicts:** nothing is written. The card asks: **Keep both, then run the
   tests (Recommended)** queues a merge request in the parent tab, which resolves
   it and commits; **Keep main's version** or **Keep the child's version** merge

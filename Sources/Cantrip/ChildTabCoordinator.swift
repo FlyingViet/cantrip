@@ -38,6 +38,7 @@ final class ChildTabCoordinator {
     /// Picks up children and parents already open (after a relaunch) and their pending merges.
     func attach() {
         guard let manager else { return }
+        putCardsInFinishOrderOnce(manager.sessions)
         for session in manager.sessions { sessionOpened(session) }
         for record in store.records.values where record.state == .finished || record.state == .merging {
             queueMerge(record.id)
@@ -53,7 +54,7 @@ final class ChildTabCoordinator {
         let children = store.children(of: session.id)
         guard !children.isEmpty else { return }
         observeParent(session)
-        for record in children { updateCard(record, in: session) }
+        for record in children { updateCard(record, in: session, catchingUp: true) }
         for record in children where record.state == .finished || record.state == .merging {
             queueMerge(record.id)
         }
@@ -755,8 +756,10 @@ final class ChildTabCoordinator {
     /// The parent's card for `record`, posted at the end of the transcript (after a reply still
     /// streaming: cards aren't replies, so its text keeps going to the reply) and updated in place.
     /// When the child reaches an outcome (merged, a conflict, …) the card moves to the end, so the
-    /// result shows where it happened.
-    func updateCard(_ record: ChildTab, in parent: ChatSession) {
+    /// result shows where it happened. Catching up after a relaunch, a settled child's card that
+    /// isn't in the transcript left with older history (a relaunch restores a tab's latest 30
+    /// messages): posting it again would put an old result below newer messages.
+    func updateCard(_ record: ChildTab, in parent: ChatSession, catchingUp: Bool = false) {
         let record = store.record(record.id) ?? record
         if let index = parent.messages.lastIndex(where: { $0.childResult?.id == record.id }) {
             let previous = parent.messages[index].childResult
@@ -770,12 +773,64 @@ final class ChildTabCoordinator {
             } else {
                 parent.messages[index] = message
             }
+        } else if catchingUp, record.state.isSettled {
+            return
         } else {
             var message = ChatMessage(role: .handoff, text: record.fallbackText)
             message.childResult = record
             parent.messages.append(message)
         }
         parent.persistTranscript()
+    }
+
+    /// Marks that this Mac's open tabs had their child cards put back in order (below).
+    var cardOrderMarker: URL { store.url.deletingLastPathComponent().appendingPathComponent("child-cards-in-order") }
+
+    /// Until 2026-11, every relaunch posted again, at the end, each card its tab's restored
+    /// transcript no longer held, so old results piled up below newer messages. Once per Mac, each
+    /// open tab's settled cards go back to the order their children finished in.
+    func putCardsInFinishOrderOnce(_ sessions: [ChatSession]) {
+        guard !FileManager.default.fileExists(atPath: cardOrderMarker.path) else { return }
+        for session in sessions {
+            guard let ordered = Self.cardsInFinishOrder(session.messages) else { continue }
+            session.messages = ordered
+            session.persistTranscript()
+            Log.write("child-tabs: put \(session.id.uuidString.prefix(8))'s cards back in finish order")
+        }
+        try? FileManager.default.createDirectory(at: cardOrderMarker.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: cardOrderMarker.path, contents: Data())
+    }
+
+    /// `messages` with each settled child's card no later than any card whose child finished after
+    /// it, moving cards only earlier and leaving every other message in place; nil if already so.
+    static func cardsInFinishOrder(_ messages: [ChatMessage]) -> [ChatMessage]? {
+        var others: [ChatMessage] = []
+        var cards: [(message: ChatMessage, finished: Date, order: Int, slot: Int)] = []
+        for message in messages {
+            if let child = message.childResult, child.state.isSettled, let finished = child.finishedAt {
+                cards.append((message, finished, cards.count, others.count))
+            } else {
+                others.append(message)
+            }
+        }
+        guard cards.count > 1 else { return nil }
+        // From the latest-finished card back, a card goes no later than every card after it.
+        var latestSlot = Int.max
+        for index in cards.indices.sorted(by: { (cards[$0].finished, cards[$0].order) > (cards[$1].finished, cards[$1].order) }) {
+            latestSlot = min(latestSlot, cards[index].slot)
+            cards[index].slot = latestSlot
+        }
+        cards.sort { ($0.slot, $0.finished, $0.order) < ($1.slot, $1.finished, $1.order) }
+        var ordered: [ChatMessage] = []
+        var next = cards.startIndex
+        for slot in 0...others.count {
+            while next < cards.endIndex, cards[next].slot == slot {
+                ordered.append(cards[next].message)
+                next += 1
+            }
+            if slot < others.count { ordered.append(others[slot]) }
+        }
+        return ordered.map(\.id) == messages.map(\.id) ? nil : ordered
     }
 
     /// What the parent's model hears about its children with each message: a live line per child
