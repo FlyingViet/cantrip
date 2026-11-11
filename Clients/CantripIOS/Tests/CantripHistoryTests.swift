@@ -679,7 +679,7 @@ final class CantripHistoryTests: XCTestCase {
         XCTAssertEqual(model.selectedSession?.hasOlderMessages, true)
     }
 
-    func testFollowUpKeepsThreeExchangesThroughoutSendAndCompletion() async throws {
+    func testFollowUpKeepsEveryShownExchangeThroughoutSendAndCompletion() async throws {
         let model = try await model()
         var stage = 0
         var writes = 0
@@ -716,17 +716,36 @@ final class CantripHistoryTests: XCTestCase {
         let sent = await vm.sendRemote("Follow-up")
         XCTAssertTrue(sent, model.errorMessage ?? "")
         XCTAssertEqual(writes, 1)
-        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (2..<7).map(messageID))
-        XCTAssertEqual(vm.turns.filter { $0.role == .user }.count, 3)
-        XCTAssertEqual(Array(vm.turns.prefix(4).map(\.id)), previousTurnIDs,
+        // The open tab keeps what it showed: its oldest exchange doesn't drop out above a reader.
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (0..<7).map(messageID))
+        XCTAssertEqual(vm.turns.filter { $0.role == .user }.count, 4)
+        XCTAssertEqual(Array(vm.turns.dropFirst(2).prefix(4).map(\.id)), previousTurnIDs,
                        "Prior exchanges stay mounted when optimistic messages become authoritative")
         stage = 2
         await model.refreshNow()
         vm.syncRemoteTranscript()
-        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (2..<8).map(messageID))
-        XCTAssertEqual(vm.turns.count, 6)
-        XCTAssertTrue(publishedPromptCounts.allSatisfy { $0 == 3 },
-                      "Neither acknowledgement nor polling may collapse to just the latest response")
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (0..<8).map(messageID))
+        XCTAssertEqual(vm.turns.count, 8)
+        XCTAssertGreaterThanOrEqual(publishedPromptCounts.min() ?? 0, 3)
+        XCTAssertEqual(publishedPromptCounts, publishedPromptCounts.sorted(),
+                       "Neither acknowledgement nor polling may drop an exchange the tab has shown")
+    }
+
+    func testOpenTabKeepsShownMessagesAsNewOnesArrive() async throws {
+        let model = try await model()
+        var values = Array(0..<6)
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(revision: "r\(values.count)", values: values, older: true,
+                                  list: request.url!.path == "/api/v1/sessions", prompts: [0, 2, 4, 6, 8]))
+        }
+        model.setAppActive(true)
+        try await waitForRefresh(model)
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (0..<6).map(messageID))
+        values = Array(2..<10)
+        await model.refreshNow()
+        XCTAssertEqual(model.selectedSession?.transcript.map(\.id), (0..<10).map(messageID),
+                       "Two new exchanges leave the two oldest shown ones in place")
+        XCTAssertEqual(model.selectedSession?.hasOlderMessages, true)
     }
 
     func testPollThatFindsNothingNewPublishesNothing() async throws {
