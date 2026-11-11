@@ -1839,6 +1839,8 @@ private final class CantripLANRequest: @unchecked Sendable {
 
 private enum CantripHistoryWindow {
     static let recentExchanges = 3
+    /// The open tab keeps messages it has shown, up to this many, as new ones arrive.
+    static let maximumShownMessages = 150
 }
 
 struct CantripRemoteAPI {
@@ -5805,23 +5807,28 @@ final class CantripRemoteModel: ObservableObject {
             expandedHistory.remove(session.id)
             olderHistoryFailures.removeValue(forKey: session.id)
         }
+        var keepsShownMessages = false
         if mergeHistory, let previous = detailCache[session.id],
            let start = session.historyStartID, start == previous.historyStartID,
            let first = session.transcript.first?.id,
            let overlap = previous.transcript.firstIndex(where: { $0.id == first }) {
             session.messages = Array(previous.transcript.prefix(overlap)) + session.transcript
             session.hasOlderMessages = previous.hasOlderMessages
+            // New messages in the open tab don't push its oldest ones out of the recent window:
+            // the transcript would shrink above a reader who has scrolled up, moving what they read.
+            keepsShownMessages = session.id == selectedSessionID
+                && session.transcript.count <= CantripHistoryWindow.maximumShownMessages
         }
         // A message deleted on any device leaves every page held here, including older ones.
         CantripDeleteMessage.dropDeleted(from: &session)
-        if !expandedHistory.contains(session.id), session.supportsPagedHistory == true {
+        if !expandedHistory.contains(session.id), !keepsShownMessages, session.supportsPagedHistory == true {
             let bounded = Self.historySuffix(session.transcript, groups: CantripHistoryWindow.recentExchanges)
             if bounded.count < session.transcript.count {
                 session.messages = bounded
                 session.hasOlderMessages = true
             }
         }
-        if !expandedHistory.contains(session.id), session.supportsPagedHistory == true,
+        if !expandedHistory.contains(session.id), !keepsShownMessages, session.supportsPagedHistory == true,
            session.transcript.count > 120, !session.transcript.contains(where: { $0.role == "user" }) {
             session.messages = Array(session.transcript.suffix(120))
             session.hasOlderMessages = true
