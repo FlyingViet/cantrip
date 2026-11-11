@@ -3276,7 +3276,7 @@ final class CantripRemoteModel: ObservableObject {
     private var homeBuildsRefreshInFlight = false
     private var homeTaskOrderRevision = 0
     @Published private(set) var errorMessage: String?
-    @Published private(set) var isRefreshing = false
+    private(set) var isRefreshing = false
     @Published private(set) var isMutating = false
     @Published private(set) var videoUploadProgress: VideoUploadProgress?
     private var videoUploadTask: Task<Void, Error>?
@@ -5628,7 +5628,9 @@ final class CantripRemoteModel: ObservableObject {
             let listed = listing.sessions
             guard generation == configurationGeneration else { throw CancellationError() }
             guard revision == mutationRevision else { return }
-            sessions = listed
+            // A poll that finds nothing new publishes nothing: every change redraws the open
+            // conversation, and redrawing it every few seconds makes scrolling stutter.
+            if sessions != listed { sessions = listed }
             if homeSummary != listing.home { homeSummary = listing.home }
             let sections = listing.sections ?? []
             if tabSections != sections { tabSections = sections }
@@ -5636,7 +5638,7 @@ final class CantripRemoteModel: ObservableObject {
                 supportsTabSections = listing.supportsTabSections == true
             }
             if settingsRevision != listing.settingsRevision { settingsRevision = listing.settingsRevision }
-            errorMessage = nil
+            if errorMessage != nil { errorMessage = nil }
             syncLiveStatusPairing()
             liveStatus?.refreshIfDue(anyStreaming: listed.contains { $0.isStreaming }
                                     || selectedSession?.isStreaming == true)
@@ -5663,7 +5665,7 @@ final class CantripRemoteModel: ObservableObject {
             let chosenID = isHomeSelected ? requestedID : requestedID.flatMap { id in
                 listed.contains(where: { $0.id == id }) || id == unlistedSessionID ? id : nil
             } ?? listed.first?.id
-            selectedSessionID = chosenID
+            if selectedSessionID != chosenID { selectedSessionID = chosenID }
             if !isHomeSelected { regularSelectedSessionID = chosenID }
             if selectedSession?.id != chosenID {
                 selectedSession = chosenID.flatMap { detailCache[$0] }
@@ -5678,7 +5680,7 @@ final class CantripRemoteModel: ObservableObject {
                 let cachedRevision = selectedSession?.historyRevision
                 let listedRevision = listed.first { $0.id == chosenID }?.historyRevision
                 if let cachedRevision, cachedRevision == listedRevision {
-                    detailError = nil
+                    if detailError != nil { detailError = nil }
                 } else {
                     let key = "\(generation):\(revision):\(selection):\(chosenID)"
                     if detailRefreshKey != key {
@@ -5701,7 +5703,7 @@ final class CantripRemoteModel: ObservableObject {
                                       revision == self.mutationRevision, selection == self.selectionRevision,
                                       self.selectedSessionID == chosenID else { return }
                                 if let detail { self.apply(detail) }
-                                self.detailError = nil
+                                if self.detailError != nil { self.detailError = nil }
                             } catch is CancellationError {
                                 return
                             } catch {
@@ -5723,7 +5725,7 @@ final class CantripRemoteModel: ObservableObject {
                 }
             } else {
                 cancelDetailRefresh()
-                detailError = nil
+                if detailError != nil { detailError = nil }
             }
             if isHomeSelected { await refreshHomeData() }
             recoverTailscale()
@@ -5919,7 +5921,7 @@ final class CantripRemoteModel: ObservableObject {
         }
         let completedAt = Date()
         lastAuthenticatedAt = completedAt
-        connectionState = .connected
+        if connectionState != .connected { connectionState = .connected }
         if let selectedServerID { servers.markConnected(selectedServerID, at: completedAt) }
         refreshCompletionNotificationRegistration()
         staleTask?.cancel()

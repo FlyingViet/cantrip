@@ -143,7 +143,7 @@ struct HermesRunStatus: Decodable, Equatable, Sendable {
 /// One turn in the conversation. Assistant turns accumulate streamed text plus
 /// any tool activity the agent performed (rendered inline, Claude-Code style).
 /// `Codable` so the transcript survives app restarts.
-struct ChatTurn: Identifiable, Codable {
+struct ChatTurn: Identifiable, Codable, Equatable {
     var isLocalPrivate: Bool? = nil
     var id = UUID()
     let role: Role
@@ -211,7 +211,7 @@ struct ChatAction: Identifiable, Codable, Hashable {
 
 /// A single tool/skill the agent invoked during an assistant turn. `output` fills
 /// in when the result event arrives; `done` flips when the item completes.
-struct ToolActivity: Identifiable, Codable {
+struct ToolActivity: Identifiable, Codable, Equatable {
     let id: String          // the function_call item id from the stream
     var name: String
     var arguments: String = ""

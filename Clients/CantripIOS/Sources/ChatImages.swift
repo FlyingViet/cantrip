@@ -166,7 +166,8 @@ enum ChatMarkdownImages {
 struct ChatAssistantText: View {
     let text: String
     let images: [ChatMessageImage]
-    @ObservedObject var remote: CantripRemoteModel
+    /// Not observed: a reply's text redraws when it changes, not on every poll of the Mac.
+    let remote: CantripRemoteModel
     @Environment(\.openURL) private var openURL
     @Environment(\.cantripMentionLinks) private var mentionLinks
 
