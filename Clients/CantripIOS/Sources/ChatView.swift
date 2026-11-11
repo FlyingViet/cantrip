@@ -1031,7 +1031,13 @@ final class ChatViewModel: ObservableObject {
             activeRun = nil
             gatewayIdentity = nil
             conversationID = UUID().uuidString
-            turns = []
+            // A switch the remote already shows (the Mac's sidebar selects first) keeps its
+            // conversation on screen instead of blanking it until the select below returns.
+            if remote.selectedSession != nil, remote.isHomeSelected == (lane == .home) {
+                syncRemoteTranscript()
+            } else {
+                turns = []
+            }
             Task { [weak self] in
                 guard let self else { return }
                 if lane == .home {

@@ -139,6 +139,7 @@ targets:
       # Push-alert registration is iOS-only (no APNs environment on the Mac).
       - path: ../CantripIOS/Tests/CantripRoutingTests.swift
       - path: ../CantripIOS/Tests/CantripHistoryTests.swift
+      - path: ../CantripIOS/Tests/CantripTabSwitchTests.swift
       - path: ../CantripIOS/Tests/CantripMutationTests.swift
       - path: ../CantripIOS/Tests/CantripImageTransportTests.swift
       - path: ../CantripIOS/Tests/ServerProfilesTests.swift

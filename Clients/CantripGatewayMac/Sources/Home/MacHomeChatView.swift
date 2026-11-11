@@ -83,7 +83,7 @@ struct MacHomeChatView: View {
             }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
-        .navigationTitle(isTab ? remote.selectedSession?.title ?? "Tab" : "Chat")
+        .navigationTitle(isTab ? remote.selectedSession?.title ?? openingTab?.title ?? "Tab" : "Chat")
         .navigationSubtitle(subtitle)
         .onDrop(of: [.fileURL, .image], isTargeted: $isDropTargeted, perform: dropImages)
         .overlay {
@@ -172,12 +172,27 @@ struct MacHomeChatView: View {
 
     private var sideMargin: CGFloat { max(0, (size.width - Self.readableWidth) / 2) }
 
+    /// A tab picked in the sidebar whose conversation is still loading (none was cached), or has
+    /// loaded and not reached this view yet: never "No tab open" or an empty tab in between.
+    private var openingTab: CantripRemoteSession? {
+        guard isTab, vm.turns.isEmpty, let id = remote.selectedSessionID else { return nil }
+        if let session = remote.selectedSession {
+            return session.id == id && !session.transcript.isEmpty ? session : nil
+        }
+        return remote.sessions.first { $0.id == id }
+    }
+
     @ViewBuilder private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: emptyStateIcon)
                 .font(.system(size: 56))
                 .foregroundStyle(.tint)
-            if isTab, remote.isConfigured {
+            if isTab, remote.isConfigured, let opening = openingTab {
+                Text(opening.title).font(.title3.weight(.semibold))
+                if remote.detailError == nil {
+                    ProgressView().controlSize(.small).accessibilityLabel("Opening \(opening.title)")
+                }
+            } else if isTab, remote.isConfigured {
                 Text(remote.selectedSession?.title ?? "No tab open").font(.title3.weight(.semibold))
                 Text(remote.selectedSession == nil
                      ? "Choose a tab in the sidebar, or press ⌘T for a new one."

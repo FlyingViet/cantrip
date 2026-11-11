@@ -60,6 +60,7 @@ struct MacHomeWindow: View {
             }
         }
         .onAppear {
+            navigation.chat = vm
             setActive(scenePhase)
             remote.setFrontmost(NSApplication.shared.isActive)
             #if DEBUG
