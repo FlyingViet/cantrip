@@ -128,8 +128,9 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   shows the connection.
 - **Tabs:** selecting a tab shows its transcript and composer in place, with the cursor in the
   composer. The transcript opens at its latest message and stays there while the rest of it
-  arrives (the Mac's refresh, images loading), until you scroll up; loading older history in a
-  tab doesn't stop it following when you open that tab again. Typing while the sidebar list has
+  arrives (the Mac's refresh, images loading) and while a reply streams in, until you scroll up;
+  scrolling back to the end (or **Latest**) follows again, also after older history has loaded.
+  New messages never shrink the transcript above you, and a fast scroll to the end stays there. Typing while the sidebar list has
   focus goes to the composer instead of jumping to a tab by its first letter; the arrow keys
   still move through the list. The toolbar shows its
   name and **Working / Idle · folder**, with Stop, delivery (**Auto**) and **⋯** for the tab's

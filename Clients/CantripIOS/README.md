@@ -354,7 +354,8 @@ tabs and cards as text.
 Tap the conversation or session controls to dismiss the keyboard, or drag the
 conversation to dismiss it interactively. Chat stays at the latest message
 while following a reply, but scrolling up lets you read earlier messages
-without being pulled back down. Tap **Latest** to resume following.
+without being pulled back down. Tap **Latest**, or scroll back to the end, to resume
+following, also after older history has loaded.
 
 Long prompts use compact plain-text previews in Home, every tab and the
 queue. Tap **Read full prompt** to read bounded pages or **Copy all** for the

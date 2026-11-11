@@ -375,6 +375,23 @@ final class ChatTranscriptLayoutTests: XCTestCase {
                      "An unreachable target (clamped content) gives up after a few attempts")
     }
 
+    func testPrependAnchorLetsTheReaderScrollBackDown() {
+        var anchor = HistoryPrependAnchor()
+        func geometry(_ offset: CGFloat, _ height: CGFloat, revision: Int = 1) -> HistoryScrollGeometry {
+            HistoryScrollGeometry(height: height, offset: offset, topInset: 0, prependRevision: revision)
+        }
+        // An older page lands as the reader flicks back toward the latest message.
+        XCTAssertEqual(anchor.target(previous: geometry(200, 5_000, revision: 0), current: geometry(200, 9_000),
+                                     userIsScrolling: false, momentum: true), 4_200)
+        XCTAssertTrue(anchor.isRestoring)
+        XCTAssertNil(anchor.target(previous: geometry(200, 9_000), current: geometry(6_000, 9_000),
+                                   userIsScrolling: false, momentum: true),
+                     "Moving past the restored place toward the latest message is the reader's own scroll")
+        XCTAssertFalse(anchor.isRestoring)
+        XCTAssertNil(anchor.target(previous: geometry(6_000, 9_000), current: geometry(6_000, 9_000),
+                                   userIsScrolling: false), "and the view isn't pulled back up when it comes to rest")
+    }
+
     func testPrependAnchorHoldsThroughMomentumAndTheEdgeBounce() {
         var anchor = HistoryPrependAnchor()
         func geometry(_ offset: CGFloat, _ height: CGFloat, revision: Int = 1) -> HistoryScrollGeometry {
