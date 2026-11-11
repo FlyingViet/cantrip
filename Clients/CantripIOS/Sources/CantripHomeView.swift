@@ -821,6 +821,7 @@ struct CantripHomeTaskWorkspaceView: View {
             }
         }
         .navigationTitle(task?.title ?? "Task")
+        .pageBack(to: "Tasks")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -1033,6 +1034,7 @@ private struct CantripHomeTaskRecordDetailView: View {
             }
         }
         .navigationTitle(title)
+        .pageBack(to: task?.title ?? "Task")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: record?.values) { await followRecordCards() }
         .toolbar {

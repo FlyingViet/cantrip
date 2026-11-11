@@ -109,6 +109,8 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
 
 ## Using it
 
+- **Tasks:** a task opens its records, and a record its details; each shows a back button at
+  the top left, beside its title (⌘[ or Esc also goes back).
 - **Sidebar:** Pip shows Home's mood. Below Pip are Chat, Tasks and Artifacts, with
   badges for questions waiting and running tasks, then **Tabs · N**: every project tab on
   the Mac with a spinner while it works (or a question mark while it waits for you), an idle
