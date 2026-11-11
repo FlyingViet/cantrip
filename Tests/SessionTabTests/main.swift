@@ -133,6 +133,10 @@ struct SessionTabTests {
             try await testCantripHomeDoneWhen()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "child-tabs" {
+            try await testChildTabs()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "policy" {
             try await testAgentPolicyGate()
             try await testAgentPolicyRemote()

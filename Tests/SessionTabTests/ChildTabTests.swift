@@ -40,6 +40,7 @@ extension SessionTabTests {
         testChildTabResources()
         try await testChildTabResourceLocks()
         try testChildTabRecord()
+        try testChildTabCardsAfterRelaunch()
         try await testChildTabLifecycle()
         try await testChildTabAPI()
         try await testChildTabAutoFork()
@@ -299,6 +300,67 @@ extension SessionTabTests {
         precondition(ChildTabGit.conflictExcerpt(conflict, parentLabel: "feature/tabs") == "               struct Header {\nfeature/tabs + let title = \"Parent\"\nchild        + let title = \"Child\"\nchild        + let subtitle = \"New\"",
                      ChildTabGit.conflictExcerpt(conflict, parentLabel: "feature/tabs") ?? "nil")
         precondition(ChildTabGit.conflictExcerpt("no markers") == nil)
+    }
+
+    /// A relaunch restores a tab's latest 30 messages. Cards of children that settled before them
+    /// stay with the older history instead of being posted again below newer messages, and cards
+    /// earlier relaunches posted that way go back to the order their children finished in, once.
+    @MainActor
+    static func testChildTabCardsAfterRelaunch() throws {
+        let parentID = UUID()
+        let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        func record(_ title: String, _ state: ChildTab.State, finishedDay day: Double?) -> ChildTab {
+            var record = ChildTab(id: UUID(), parentID: parentID, queueItemID: UUID(), title: title, prompt: title,
+                                  parentTitle: "Parent", createdAt: start, updatedAt: start)
+            record.state = state
+            record.finishedAt = day.map { start.addingTimeInterval($0 * 86_400) }
+            return record
+        }
+        func card(_ record: ChildTab) -> ChatMessage {
+            var message = ChatMessage(role: .handoff, text: record.fallbackText)
+            message.childResult = record
+            return message
+        }
+        func names(_ messages: [ChatMessage]) -> [String] { messages.map { $0.childResult?.title ?? $0.text } }
+
+        let first = card(record("first", .merged, finishedDay: 1)), third = card(record("third", .merged, finishedDay: 3))
+        let early = card(record("early", .merged, finishedDay: 0.5)), second = card(record("second", .noChanges, finishedDay: 2))
+        let conflict = card(record("conflict", .conflict, finishedDay: 0.2)), latest = card(record("latest", .merged, finishedDay: 6))
+        let transcript = [ChatMessage(role: .assistant, text: "reply 0"), first, third,
+                          ChatMessage(role: .user, text: "ask 1"), ChatMessage(role: .assistant, text: "reply 1"),
+                          early, second, ChatMessage(role: .user, text: "ask 2"), conflict, latest]
+        let ordered = try requireChild(ChildTabCoordinator.cardsInFinishOrder(transcript))
+        precondition(names(ordered) == ["reply 0", "early", "first", "second", "third", "ask 1", "reply 1", "ask 2", "conflict", "latest"],
+                     "\(names(ordered))")
+        precondition(ChildTabCoordinator.cardsInFinishOrder(ordered) == nil, "already in order")
+
+        let files = FileManager.default
+        let folder = files.temporaryDirectory.appendingPathComponent("cantrip-child-cards-\(UUID().uuidString)", isDirectory: true)
+        defer { try? files.removeItem(at: folder) }
+        let store = ChildTabStore(url: folder.appendingPathComponent("child-tabs.json"))
+        let manager = SessionManager()
+        let coordinator = ChildTabCoordinator(manager: manager, store: store)
+        let parent = ChatSession(id: parentID, copilotBackend: ChildTabFixtureBackend())
+        defer { parent.cancel() }
+        // Relaunched: "first" stayed with older history, "live" still works, "latest" is in view.
+        let trimmed = record("trimmed", .merged, finishedDay: 1), live = record("live", .working, finishedDay: nil)
+        var shown = record("shown", .merged, finishedDay: 6)
+        for item in [trimmed, live, shown] { store.upsert(item) }
+        parent.messages = [ChatMessage(role: .user, text: "ask"), card(shown), ChatMessage(role: .assistant, text: "reply")]
+        coordinator.sessionOpened(parent)
+        precondition(names(parent.messages) == ["ask", "shown", "reply", "live"], "\(names(parent.messages))")
+        shown.summary = "Updated."
+        store.upsert(shown)
+        coordinator.sessionOpened(parent)
+        precondition(names(parent.messages) == ["ask", "shown", "reply", "live"]
+                     && parent.messages[1].childResult?.summary == "Updated.", "a card in view updates in place")
+
+        parent.messages = transcript
+        coordinator.putCardsInFinishOrderOnce([parent])
+        precondition(names(parent.messages) == names(ordered) && files.fileExists(atPath: coordinator.cardOrderMarker.path))
+        parent.messages = transcript
+        coordinator.putCardsInFinishOrderOnce([parent])
+        precondition(names(parent.messages) == names(transcript), "only once per Mac")
     }
 
     /// The whole flow in a real repository with scripted agents.
