@@ -155,6 +155,7 @@ struct MacHomeChatView: View {
                     onOpenTab: { navigation.openTab($0) },
                     threadLine: message.flatMap { threadLines[$0.id] }
                 )
+                .equatable()
                 .id(turn.id)
                 if let message, message.isPreview == true {
                     CantripMessageDetailsButton(

@@ -2218,6 +2218,7 @@ struct ChatView: View {
                     onOpenTab: vm.activeLane.usesCantripRemote ? CantripSwipeTaps.tap { openTab($0) } : nil,
                     threadLine: remoteMessage.flatMap { threadLines[$0.id] }
                 )
+                .equatable()
                 .id(turn.id)
                 if vm.activeLane.usesCantripRemote, let message = remoteMessage,
                    message.isPreview == true {
@@ -3863,10 +3864,12 @@ struct WaveformView: View {
     }
 }
 
-/// One transcript message; also used by Cantrip Gateway Mac's Home window.
-struct TurnView: View {
+/// One transcript message; also used by Cantrip Gateway Mac's Home window. It redraws only when
+/// what it shows changes (`Equatable`, applied with `.equatable()`), not on every poll of the Mac,
+/// so it doesn't observe `remote`; the parts that follow the Mac's live state observe it themselves.
+struct TurnView: View, Equatable {
     let turn: ChatTurn
-    @ObservedObject var remote: CantripRemoteModel
+    let remote: CantripRemoteModel
     var cantripSessionID: String?
     var remoteMessage: CantripRemoteMessage?
     var onAction: (ChatAction) -> Void = { _ in }
@@ -3920,11 +3923,8 @@ struct TurnView: View {
                         .foregroundStyle(.white)
                         .modifier(messageMenu(previewCornerRadius: 18))
                 }
-                if let message = remoteMessage, let sessionID = cantripSessionID,
-                   let count = threadReplies(of: message.id) {
-                    CantripThreadRepliesButton(count: count, promptID: message.id, prompt: message.presentedText,
-                                               sessionID: sessionID, remote: remote)
-                        .padding(.trailing, 6)
+                if let message = remoteMessage, let sessionID = cantripSessionID {
+                    TurnThreadReplies(remote: remote, message: message, sessionID: sessionID)
                 }
                 if let usage = remoteMessage?.promptUsage {
                     CantripPromptUsageLine(usage: usage)
@@ -4042,13 +4042,9 @@ struct TurnView: View {
                 if let err = turn.error {
                     Label(err, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.red)
-                    if turn.isContinuable == true, let session = remote.selectedSession,
-                       session.id == cantripSessionID, let messageID = remoteMessage?.id {
-                        CantripContinueButton(model: remote, session: session, messageID: messageID)
-                    }
-                    if turn.isRepeatedError == true, let session = remote.selectedSession,
-                       session.id == cantripSessionID {
-                        CantripRepeatedErrorActions(model: remote, session: session)
+                    if turn.isContinuable == true || turn.isRepeatedError == true, let sessionID = cantripSessionID {
+                        TurnErrorActions(remote: remote, sessionID: sessionID, messageID: remoteMessage?.id,
+                                         continuable: turn.isContinuable == true, repeated: turn.isRepeatedError == true)
                     }
                 }
             }
@@ -4062,12 +4058,11 @@ struct TurnView: View {
         !(turn.thinking?.isEmpty ?? true) || !turn.tools.isEmpty
     }
 
-    /// "N Replies" under a Home prompt whose thread other messages split up. The count comes with
-    /// the conversation, so prompts in older pages stay current too.
-    private func threadReplies(of messageID: String) -> Int? {
-        guard let session = remote.selectedSession, session.id == cantripSessionID,
-              let count = session.threadReplies?[messageID], count > 0 else { return nil }
-        return count
+    /// Actions (`onAction`, `onApproval`, `onOpenTab`) aren't compared: callers pass ones that
+    /// only reach long-lived models, so an older copy does the same thing.
+    static func == (lhs: TurnView, rhs: TurnView) -> Bool {
+        lhs.turn == rhs.turn && lhs.remoteMessage == rhs.remoteMessage && lhs.remote === rhs.remote
+            && lhs.cantripSessionID == rhs.cantripSessionID && lhs.threadLine == rhs.threadLine
     }
 
     /// Cantrip replies show reasoning steps; tool calls stay on the Mac.
@@ -4098,6 +4093,43 @@ struct TurnView: View {
         case "always": "Always Allow"
         case "deny": "Deny"
         default: choice.capitalized
+        }
+    }
+}
+
+/// "N Replies" under a Home prompt whose thread other messages split up. The count comes with
+/// the conversation, so prompts in older pages stay current too.
+private struct TurnThreadReplies: View {
+    @ObservedObject var remote: CantripRemoteModel
+    let message: CantripRemoteMessage
+    let sessionID: String
+
+    var body: some View {
+        if let session = remote.selectedSession, session.id == sessionID,
+           let count = session.threadReplies?[message.id], count > 0 {
+            CantripThreadRepliesButton(count: count, promptID: message.id, prompt: message.presentedText,
+                                       sessionID: sessionID, remote: remote)
+                .padding(.trailing, 6)
+        }
+    }
+}
+
+/// Continue, or Start Fresh and Change Model, under a failed Cantrip reply in the open tab.
+private struct TurnErrorActions: View {
+    @ObservedObject var remote: CantripRemoteModel
+    let sessionID: String
+    let messageID: String?
+    let continuable: Bool
+    let repeated: Bool
+
+    var body: some View {
+        if let session = remote.selectedSession, session.id == sessionID {
+            if continuable, let messageID {
+                CantripContinueButton(model: remote, session: session, messageID: messageID)
+            }
+            if repeated {
+                CantripRepeatedErrorActions(model: remote, session: session)
+            }
         }
     }
 }

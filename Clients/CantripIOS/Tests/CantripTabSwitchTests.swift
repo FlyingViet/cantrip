@@ -175,4 +175,19 @@ final class CantripTabSwitchTests: XCTestCase {
         vm.switchLane(to: .cantrip)
         XCTAssertTrue(vm.turns.isEmpty)
     }
+
+    /// Rows redraw when what they show changes, not every time the Mac is polled.
+    func testATranscriptRowIsEqualUntilItsContentChanges() {
+        let remote = CantripRemoteModel(urlSession: URLSession(configuration: .ephemeral))
+        var turn = ChatTurn(role: .assistant, text: "Example reply")
+        let row = TurnView(turn: turn, remote: remote, cantripSessionID: "tab")
+        XCTAssertEqual(row, TurnView(turn: turn, remote: remote, cantripSessionID: "tab", onAction: { _ in }))
+        turn.text += " that streams on"
+        XCTAssertNotEqual(row, TurnView(turn: turn, remote: remote, cantripSessionID: "tab"))
+        turn.streaming = true
+        XCTAssertNotEqual(TurnView(turn: ChatTurn(id: turn.id, role: .assistant, text: turn.text), remote: remote),
+                          TurnView(turn: turn, remote: remote))
+        XCTAssertNotEqual(row, TurnView(turn: ChatTurn(id: turn.id, role: .assistant, text: "Example reply"), remote: remote,
+                                        cantripSessionID: "other"))
+    }
 }

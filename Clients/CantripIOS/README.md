@@ -469,8 +469,9 @@ the selected server and cleared when its configuration changes.
 
 Unchanged session revisions skip conversation downloads entirely. Foreground
 polling waits 1.5 seconds while any tab is working/queued or recovering, and
-5 seconds while idle. Unexpanded transcripts roll forward to the latest three
-exchanges, with up to five tabs cached. Older history loaded by scrolling
+5 seconds while idle; a poll that finds nothing new changes nothing on screen, and a
+message redraws only when its own content changes. Unexpanded transcripts roll forward
+to the latest three exchanges, with up to five tabs cached. Older history loaded by scrolling
 stays expanded through polling and cached-tab selection.
 Ungrouped legacy pages retain the 120-message cache limit; unpaged legacy
 snapshots remain intact so their older messages do not become inaccessible. Lightweight

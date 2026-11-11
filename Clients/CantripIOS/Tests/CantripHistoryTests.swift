@@ -729,6 +729,23 @@ final class CantripHistoryTests: XCTestCase {
                       "Neither acknowledgement nor polling may collapse to just the latest response")
     }
 
+    func testPollThatFindsNothingNewPublishesNothing() async throws {
+        let model = try await model()
+        HistoryRequestProtocol.handler = { request in
+            (200, try self.session(values: Array(0..<6), older: true,
+                                  list: request.url!.path == "/api/v1/sessions", prompts: [0, 2, 4]))
+        }
+        model.setAppActive(true)
+        try await waitForRefresh(model)
+        await model.refreshNow()
+        var changes = 0
+        let observation = model.objectWillChange.sink { changes += 1 }
+        defer { observation.cancel() }
+        await model.refreshNow()
+        await model.refreshNow()
+        XCTAssertEqual(changes, 0, "an unchanged poll must not redraw the open conversation")
+    }
+
     func testUnpagedLegacyHostKeepsAllExchangesAccessible() async throws {
         let model = try await model()
         HistoryRequestProtocol.handler = { request in
