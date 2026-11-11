@@ -25,14 +25,37 @@ struct ChatTranscriptScrollView<Content: View>: View {
     @State private var holdsLatest = true
     #endif
 
+    /// The transcript's end. The Mac scrolls to it through a `ScrollViewProxy`: setting
+    /// `position` to the bottom edge does nothing while it already reads "bottom" (as it does when
+    /// a transcript opens, and after each follow), and macOS 26 doesn't hold the end on its own.
+    static var endID: String { "chat.transcript.end" }
+
     var body: some View {
+        ScrollViewReader { proxy in
+            transcript(proxy)
+        }
+    }
+
+    private func transcript(_ proxy: ScrollViewProxy) -> some View {
         ScrollView {
-            // Lazy height estimates drift with long Markdown replies and replaced
-            // optimistic messages. Measure the transcript before anchoring its end.
-            VStack(alignment: .leading, spacing: ChatTranscriptLayout.rowSpacing, content: content)
-                .scrollTargetLayout()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
+            VStack(spacing: 0) {
+                // Lazy height estimates drift with long Markdown replies and replaced
+                // optimistic messages. Measure the transcript before anchoring its end.
+                #if os(macOS)
+                // No scroll targets: `position` then tracks the reader's offset, not the row at
+                // the top, which SwiftUI would scroll back to when the transcript changes. A fast
+                // scroll reports that row late, so a reply arriving mid-scroll pulled the reader back.
+                VStack(alignment: .leading, spacing: ChatTranscriptLayout.rowSpacing, content: content)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                #else
+                VStack(alignment: .leading, spacing: ChatTranscriptLayout.rowSpacing, content: content)
+                    .scrollTargetLayout()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                #endif
+                Color.clear.frame(height: 1).id(Self.endID)
+            }
         }
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
@@ -73,7 +96,7 @@ struct ChatTranscriptScrollView<Content: View>: View {
             }
         }
         .onChange(of: scrollRequest) { _, _ in
-            scrollToLatest()
+            scrollToLatest(proxy)
         }
         #if os(iOS)
         // The bottom anchor leaves a transcript at its top when it starts shorter than the
@@ -81,7 +104,7 @@ struct ChatTranscriptScrollView<Content: View>: View {
         // before its full transcript arrives), so move a reader who follows it to the end.
         .onScrollGeometryChange(for: TranscriptFollowSample.self) { TranscriptFollowSample($0) } action: { _, current in
             guard current.isAwayFromBottom, canFollow else { return }
-            followToLatest()
+            followToLatest(proxy)
         }
         // A tab's first transcript can finish laying out while the tab slides in, without any
         // geometry callback, so settle on the end a few times as it opens (unless the reader or
@@ -117,21 +140,21 @@ struct ChatTranscriptScrollView<Content: View>: View {
         .onScrollGeometryChange(for: HistoryScrollSample.self) { HistoryScrollSample($0) } action: { previous, current in
             if HistoryScrollSample.readerMovedUp(previous: previous, current: current) { holdsLatest = false }
             guard HistoryScrollSample.keepsLatestVisible(previous: previous, current: current, holdingLatest: holdsLatest),
-                  prependAnchor == nil, !scrollPhase.isFingerDriven else { return }
-            followToLatest()
+                  !prependAnchorState.isRestoring, !scrollPhase.isFingerDriven else { return }
+            followToLatest(proxy)
         }
         // The first layout can also finish short of the end without any geometry callback, so
         // settle on the end a few times as the transcript opens.
         .task {
             for delay in [150, 350, 900, 2000] {
                 guard (try? await Task.sleep(for: .milliseconds(delay))) != nil else { return }
-                if holdsLatest, canFollow { position.scrollTo(edge: .bottom) }
+                if holdsLatest, canFollow { toLatest(proxy) }
             }
         }
         #endif
         .overlay(alignment: .bottomTrailing) {
             if !followsBottom {
-                Button(action: scrollToLatest) {
+                Button { scrollToLatest(proxy) } label: {
                     Label("Latest", systemImage: "arrow.down")
                 }
                 .buttonStyle(.borderedProminent)
@@ -141,27 +164,37 @@ struct ChatTranscriptScrollView<Content: View>: View {
         }
     }
 
-    private func scrollToLatest() {
+    private func scrollToLatest(_ proxy: ScrollViewProxy) {
         followsBottom = true
         #if os(macOS)
         holdsLatest = true
         #endif
-        position.scrollTo(edge: .bottom)
+        toLatest(proxy)
     }
 
-    private var canFollow: Bool { followsBottom && !userIsScrolling && prependAnchor == nil }
+    private func toLatest(_ proxy: ScrollViewProxy) {
+        #if os(macOS)
+        proxy.scrollTo(Self.endID, anchor: .bottom)
+        #else
+        position.scrollTo(edge: .bottom)
+        #endif
+    }
+
+    /// Older history that has finished loading doesn't stop the transcript following its end again
+    /// once the reader is back there; only the moment its anchor is being restored does.
+    private var canFollow: Bool { followsBottom && !userIsScrolling && !prependAnchorState.isRestoring }
 
     /// A `scrollTo` issued mid-transition (a tab sliding in) can be dropped, so check again shortly
     /// after and re-apply until the end is actually showing.
-    private func followToLatest() {
-        position.scrollTo(edge: .bottom)
+    private func followToLatest(_ proxy: ScrollViewProxy) {
+        toLatest(proxy)
         follow.generation += 1
         let generation = follow.generation
         Task { @MainActor in
             for delay in [120, 250, 500] {
                 guard (try? await Task.sleep(for: .milliseconds(delay))) != nil,
                       generation == follow.generation, follow.distanceFromBottom > 1, canFollow else { return }
-                position.scrollTo(edge: .bottom)
+                toLatest(proxy)
             }
         }
     }
@@ -298,6 +331,8 @@ struct HistoryScrollGeometry: Equatable {
 struct HistoryPrependAnchor {
     private var pending: (offset: CGFloat, height: CGFloat, attempts: Int)?
     private static let maximumAttempts = 4
+
+    var isRestoring: Bool { pending != nil }
     /// About a second of frames: enough to outlast deceleration and the edge bounce.
     private static let maximumMomentumAttempts = 60
 
@@ -312,6 +347,12 @@ struct HistoryPrependAnchor {
         }
         guard var restoring = pending else { return nil }
         let offset = restoring.offset + current.height - restoring.height
+        // Past the restored place toward the latest message is the reader's own scroll (momentum
+        // and the top edge's bounce only pull the other way): leave them there.
+        if current.offset > offset + 24 {
+            pending = nil
+            return nil
+        }
         if abs(offset - current.offset) < 0.5 {
             if !momentum { pending = nil }
             return nil
