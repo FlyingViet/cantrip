@@ -3195,6 +3195,14 @@ struct CantripRemoteAPI {
     }
 }
 
+/// A switch `CantripRemoteModel.showSession` or `showHome` has shown and still has to load.
+struct CantripSelectionLoad: Equatable {
+    /// The tab; nil for Cantrip Home.
+    fileprivate let id: String?
+    fileprivate let selection: Int
+    fileprivate let revision: Int
+}
+
 @MainActor
 final class CantripRemoteModel: ObservableObject {
     @Published var modelSettingsSession: CantripRemoteSession?
@@ -4014,22 +4022,35 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     func selectSession(_ id: String) async {
-        guard id != selectedSessionID || selectedSession?.id != id else { return }
+        guard let load = showSession(id) else { return }
+        await loadSession(load)
+    }
+
+    /// The switch itself, in the caller's update: selects `id` and shows its last copy (if one is
+    /// cached) while `loadSession` fetches it, so a list's highlight and the conversation change
+    /// together. Nil when `id` is already showing or loading.
+    func showSession(_ id: String) -> CantripSelectionLoad? {
+        guard id != selectedSessionID || (selectedSession?.id != id && selectingSessionID != id) else { return nil }
         isHomeSelected = false
         regularSelectedSessionID = id
         unlistedSessionID = sessions.contains(where: { $0.id == id }) ? nil : id
         cancelDetailRefresh()
         selectionRevision += 1
-        let selection = selectionRevision
-        let revision = mutationRevision
         selectingSessionID = id
-        defer {
-            if selection == selectionRevision { selectingSessionID = nil }
-        }
         selectedSessionID = id
         selectedSession = detailCache[id]
         detailError = nil
         transcriptRevision += 1
+        return CantripSelectionLoad(id: id, selection: selectionRevision, revision: mutationRevision)
+    }
+
+    /// Fetches the tab `showSession` switched to; a later switch makes it a no-op.
+    func loadSession(_ load: CantripSelectionLoad) async {
+        guard let id = load.id else { return }
+        let selection = load.selection, revision = load.revision
+        defer {
+            if selection == selectionRevision { selectingSessionID = nil }
+        }
         do {
             let detail = try await performHistoryRead { api in
                 try await api.session(id: id)
@@ -4082,17 +4103,29 @@ final class CantripRemoteModel: ObservableObject {
     }
 
     func selectHome() async {
-        if isHomeSelected, selectedSession?.isCantripHome == true { return }
+        guard let load = showHome() else { return }
+        await loadHome(load)
+    }
+
+    /// Selects Cantrip Home in the caller's update, showing its last copy (if one is cached) while
+    /// `loadHome` fetches it. Nil when Home is already showing.
+    func showHome() -> CantripSelectionLoad? {
+        if isHomeSelected, selectedSession?.isCantripHome == true { return nil }
         if !isHomeSelected { regularSelectedSessionID = selectedSessionID }
         cancelDetailRefresh()
         selectionRevision += 1
-        let selection = selectionRevision
-        let revision = mutationRevision
         isHomeSelected = true
-        selectedSessionID = nil
-        selectedSession = nil
+        let cached = homeSummary.flatMap { detailCache[$0.id] }.flatMap { $0.isCantripHome == true ? $0 : nil }
+        selectedSessionID = cached?.id
+        selectedSession = cached
         detailError = nil
         transcriptRevision += 1
+        return CantripSelectionLoad(id: nil, selection: selectionRevision, revision: mutationRevision)
+    }
+
+    /// Fetches Home after `showHome`; a later switch makes it a no-op.
+    func loadHome(_ load: CantripSelectionLoad) async {
+        let selection = load.selection, revision = load.revision
         do {
             let detail = try await performHistoryRead { api in
                 try await api.homeSession()
@@ -5609,6 +5642,8 @@ final class CantripRemoteModel: ObservableObject {
                                     || selectedSession?.isStreaming == true)
             var publicIDs = Set(listed.map(\.id))
             if isHomeSelected, let selectedSessionID { publicIDs.insert(selectedSessionID) }
+            // Home is never listed, but its last copy shows at once when it's opened again.
+            if let homeID = homeSummary?.id { publicIDs.insert(homeID) }
             if !isHomeSelected, let unlistedSessionID, unlistedSessionID == selectedSessionID {
                 publicIDs.insert(unlistedSessionID)
             }

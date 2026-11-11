@@ -38,6 +38,8 @@ final class MacHomeNavigation: ObservableObject {
     var terminalFocused = false
     private weak var env: HermesEnv?
     private weak var remote: CantripRemoteModel?
+    /// The window's conversation: a switch updates it in the same update as the sidebar.
+    weak var chat: ChatViewModel?
 
     /// Project tabs open in Home's detail pane; the lane records which one is showing.
     func attach(env: HermesEnv, remote: CantripRemoteModel) {
@@ -54,8 +56,18 @@ final class MacHomeNavigation: ObservableObject {
         switchedWithListKeys = Self.isListNavigation(NSApp.currentEvent)
         closeAll()
         showingDirectLocal = false
+        // The highlight, the tab and its last copy change in this update (the fresh copy loads
+        // after); switching a beat later made the sidebar bounce back to the previous row.
         if isTabOpen {
-            Task { await remote.selectSession(id) }
+            if let load = remote.showSession(id) {
+                chat?.syncRemoteTranscript()
+                Task { await remote.loadSession(load) }
+            }
+        } else if let chat, !chat.sending, chat.activeLane == env.executionLane {
+            let load = remote.showSession(id)
+            env.select(.cantrip)
+            chat.switchLane(to: .cantrip)
+            if let load { Task { await remote.loadSession(load) } }
         } else {
             // Also retargets a tab switch still waiting for Home's send to finish.
             remote.prepareToOpenTab(id)
@@ -82,7 +94,15 @@ final class MacHomeNavigation: ObservableObject {
         switchedWithListKeys = Self.isListNavigation(NSApp.currentEvent)
         showingDirectLocal = false
         if let section { self.section = section }
-        if let env, env.executionLane != .home { env.select(.home) }
+        guard let env, env.executionLane != .home else { return }
+        if let remote, let chat, !chat.sending, chat.activeLane == env.executionLane {
+            let load = remote.showHome()
+            env.select(.home)
+            chat.switchLane(to: .home)
+            if let load { Task { await remote.loadHome(load) } }
+        } else {
+            env.select(.home)
+        }
     }
 
     func createTab() {

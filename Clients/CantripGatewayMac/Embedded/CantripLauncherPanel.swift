@@ -156,6 +156,7 @@ struct MacLauncherPanelView: View {
         .modifier(MacHomeSheets(remote: remote, voice: voice, navigation: navigation, vm: vm,
                                 usageModel: usageModel, directLocal: directLocal))
         .onAppear {
+            navigation.chat = vm
             vm.setAppActive(true)
             if env.executionLane != vm.activeLane { vm.switchLane(to: env.executionLane) }
             vm.syncRemoteTranscript()
