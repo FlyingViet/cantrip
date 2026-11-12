@@ -133,6 +133,10 @@ struct SessionTabTests {
             try await testCantripHomeDoneWhen()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "handoffs" {
+            try await testHandoffReport()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "child-tabs" {
             try await testChildTabs()
             return
@@ -322,6 +326,7 @@ struct SessionTabTests {
         try await testAntigravityModels()
         try await testAntigravityIntermediateSteps()
         try await testCantripHomeHandoffResults()
+        try await testHandoffReport()
         try await testCantripHomeDoneWhen()
         try await testCantripHomeNewTabs()
         try await testCantripHomeListsEveryOpenTab()

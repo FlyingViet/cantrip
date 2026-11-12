@@ -384,6 +384,31 @@ never instructions. Questions live in `~/.cache/Cantrip/tab-asks.json`. Each
 tab's agent process gets `CANTRIP_TAB_ID`, which is how `tab ask` knows who
 asks.
 
+### See where handoffs went
+
+`cantrip handoffs [--days N] [--json]` lists where work handed off from
+Cantrip Home went over the last 7 days (up to 30), newest first, for dashboards
+such as Opsboard. It's read-only and answers in a few milliseconds.
+
+- **Handoffs:** from Home's chat, a Home background run or an incident, with
+  the tab it was handed to, the child tab its request moved into (if any), the
+  tab working on it now, its status (`queued`, `running`, `completed`,
+  `failed`, `cancelled`, or `unknown` when Home stopped following it before it
+  finished), whether it needs your answer, its Done when check, and its place
+  in the tab's queue while it waits.
+- **Tabs:** every open tab with its state (`idle`, `busy`, `needsInput`) and
+  how many messages it has queued.
+- **Child tabs** from that time, open or closed, with their parent, state and
+  status line, and why each exists: a Home handoff, auto-fork, or Run in Child
+  Tab (`unknown` for child tabs started before Cantrip recorded it).
+
+It shows titles, Home's labels and states only: never prompts, replies,
+outcomes, questions or Done when notes. Private and Private Local tabs, and any
+handoff or child tab that names one, are left out. Home's chat keeps only its
+latest messages after a restart and the Background list its latest runs, so
+Cantrip also keeps each handoff's metadata for 30 days in
+`~/.cache/Cantrip/home/handoff-log.json`; a tab made private drops out of it.
+
 ### Mention a tab
 
 Type `@` at the start of a word in any message box, in a tab or in Cantrip

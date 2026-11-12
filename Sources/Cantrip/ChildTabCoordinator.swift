@@ -120,7 +120,8 @@ final class ChildTabCoordinator {
         var record = ChildTab(id: childID, parentID: parent.id, queueItemID: item.id, title: title, prompt: item.text,
                               parentTitle: parent.title, touches: plan?.touches ?? [], createdAt: Date(),
                               updatedAt: Date())
-        if automatically { record.autoStarted = true }
+        // false: Run in Child Tab (records from before this have neither).
+        record.autoStarted = automatically
         let parentWorkdir = parent.workdir
         let planRepo = plan?.repo
         let activity = ChildTabRepositories.recentActivityTexts(in: parent)

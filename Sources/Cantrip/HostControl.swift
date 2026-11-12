@@ -31,6 +31,8 @@ final class HostControl {
                     "outbox": MacNotices.outboxID, "seq": notices.seq, "notices": notices.entries]
         case "tab":
             return TabInsight.handle(request, manager: manager)
+        case "handoffs":
+            return HandoffReport.snapshot(manager: manager, days: request["days"] as? Int ?? HandoffReport.defaultDays)
         case "mcp":
             return mcp(request)
         case "api":

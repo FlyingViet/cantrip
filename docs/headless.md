@@ -92,6 +92,7 @@ encrypted TLS-PSK listener.
 | `cantrip doctor` | Check the host, Remote, the backend CLI and Tailscale |
 | `cantrip cleanup [--dry-run] [--list] [--json]` | Remove unused agent sessions and worktrees now ([details](updating-and-troubleshooting.md#free-up-disk-space)) |
 | `cantrip tab list` / `read ID` / `ask ID "question"` / `reply ASK_ID` | Look into other tabs ([details](sessions-and-council.md#look-into-other-tabs)) |
+| `cantrip handoffs [--days N] [--json]` | Where Home's handoffs went, with open tabs and recent child tabs ([details](sessions-and-council.md#see-where-handoffs-went)) |
 | `cantrip api [--json]` / `api key new` / `api key clear` | The OpenAI-compatible API: where it listens, its backends, calls per consumer, and its proxy key ([details](backends.md#serve-your-backends-to-other-apps-openai-compatible-api)) |
 
 Settings use the same names as `~/.cantriprc`. Common ones: `backend`,

@@ -58,7 +58,7 @@ struct ChildTab: Codable, Equatable, Identifiable {
     /// The outcome the parent's model last heard about (optional: older records lack it). A later
     /// outcome (stopped, then merged) is told again.
     var reportedState: State?
-    /// Started by auto-fork rather than Run in Child Tab (optional: older records lack it).
+    /// true: started by auto-fork; false: by Run in Child Tab (optional: older records lack it).
     var autoStarted: Bool?
     /// Queued requests that depend on this one, moved from the parent's queue to run after it here.
     var followUps: [String]?

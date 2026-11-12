@@ -516,6 +516,7 @@ final class CantripHomeDelegations {
             if let target = manager.sessions.first(where: { $0.id == id }) { observe(target) }
         }
         if statusChanged { home.persistTranscript() }
+        HandoffReport.sync(manager: manager, runs: store.backgroundRuns, childStore: childStore, now: now)
     }
 
     /// Posts a handoff's result card into Home's chat, or brings its existing card up to date.
