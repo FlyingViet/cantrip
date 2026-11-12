@@ -225,6 +225,46 @@ extension SessionTabTests {
         delay = 0
         slow.classifier.taskTimeoutMs = 100
         precondition(!slow.validationErrors().isEmpty, "a bounded task timeout")
+        try testPrivacyClassifierInput()
+    }
+
+    /// Home chat's classifier reads the request, the user's earlier messages and the start of the
+    /// latest reply within chatInputCharacters (so it answers within the chat timeout); tasks keep
+    /// their input.
+    static func testPrivacyClassifierInput() throws {
+        let classifier = PrivacyClassifierSettings()
+        precondition(classifier.chatInputCharacters == 1200 && classifier.maxInputCharacters == 3000 && classifier.timeoutMs == 2500)
+        let reply = String(repeating: "The release notes cover the parser and the build cache. ", count: 90)
+        let conversation = PrivacyGate.classifierConversation([
+            ConversationTurn(user: "Draft the release notes", assistant: "An old reply that stays out."),
+            ConversationTurn(user: " Plan the release notes ", assistant: reply),
+        ])
+        let opening = String(reply.trimmingCharacters(in: .whitespaces).prefix(PrivacyGate.classifierReplyCharacters))
+        precondition(conversation == "Draft the release notes\n\nPlan the release notes\n" + opening,
+                     "the user's messages, and only the start of the latest reply: \(conversation)")
+        precondition(PrivacyGate.classifierConversation([]).isEmpty)
+        var chat = privacyRequest("Now shorten it.", earlier: "Plan the release notes\n" + reply)
+        chat.classifierEarlier = conversation
+        precondition(PrivacyGate.classifierInput(chat, settings: classifier)
+                     == "Now shorten it.\n\n(Earlier in this conversation: " + conversation + ")",
+                     "the request, then the conversation as the classifier reads it")
+        chat.classifierEarlier = String(repeating: "older message ", count: 300) + "\n\nthe newest message"
+        let crowded = PrivacyGate.classifierInput(chat, settings: classifier)
+        precondition(crowded.hasPrefix("Now shorten it.") && crowded.hasSuffix("the newest message)")
+                     && crowded.count <= classifier.chatInputCharacters, "the newest earlier messages fit: \(crowded.count)")
+        chat.request = String(repeating: "a pasted log line ", count: 200)
+        let long = PrivacyGate.classifierInput(chat, settings: classifier)
+        precondition(long.count <= classifier.chatInputCharacters && long.contains("(Earlier in this conversation: "),
+                     "a long request leaves room for the conversation: \(long.count)")
+        var task = privacyRequest("Delete build folders older than 14 days.", earlier: "Earlier run\n" + reply,
+                                  kind: .homeTask, task: UUID())
+        task.classifierEarlier = "Earlier run"
+        let taskInput = PrivacyGate.classifierInput(task, settings: classifier)
+        precondition(taskInput.contains("The release notes cover") && taskInput.count > classifier.chatInputCharacters
+                     && taskInput.count <= classifier.maxInputCharacters, "tasks read as before: \(taskInput.count)")
+        var tight = PrivacyGateSettings()
+        tight.classifier.chatInputCharacters = 100
+        precondition(!tight.validationErrors().isEmpty, "a bounded chat input")
     }
 
     static func decisionsReply(_ orders: [[(String, Double)]]) -> Data {
@@ -401,8 +441,13 @@ extension SessionTabTests {
         // The classifier: answers with these local and cloud probabilities, or not at all, after an optional delay.
         var answer: (local: Double, cloud: Double, delay: UInt64, fails: Bool) = (0.02, 0.96, 0, false)
         var calls = 0
+        var inputs: [String] = []
         gate.classifier = PrivacyClassifier(transport: { request in
             calls += 1
+            if let body = request.httpBody, let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+               let input = object["input"] as? String {
+                inputs.append(input)
+            }
             let current = answer
             if current.delay > 0 { try await Task.sleep(nanoseconds: current.delay) }
             if current.fails { throw URLError(.cannotConnectToHost) }
@@ -483,6 +528,26 @@ extension SessionTabTests {
         let permissions = try FileManager.default.attributesOfItem(atPath: gate.logURL.path)[.posixPermissions] as? Int
         precondition(permissions == 0o600, "the decision log is private: \(String(describing: permissions))")
         precondition(gate.report(days: 7).contains("2 decisions"), gate.report(days: 7))
+
+        // A follow-up after a long reply: the classifier reads the request, the earlier request and
+        // the start of the reply, and the log keeps how many characters it read.
+        home = newHome()
+        _ = try await turn("Plan the release notes for version two.")
+        let longReply = String(repeating: "A long reply about the release notes. ", count: 110)
+        cloudBackend.sink?(.textDelta(longReply))
+        cloudBackend.sink?(.done)
+        try await waitForJournalTest { !home.isStreaming }
+        inputs.removeAll()
+        let followUp = try await turn("Now shorten it.")
+        _ = try await badge(of: followUp.id)
+        let followUpInput = try requireHome(inputs.last)
+        let replyStart = String(longReply.trimmingCharacters(in: .whitespaces).prefix(PrivacyGate.classifierReplyCharacters))
+        precondition(followUpInput == "Now shorten it.\n\n(Earlier in this conversation: Plan the release notes for version two.\n"
+                     + replyStart + ")", "only the start of the reply: \(followUpInput.count) characters")
+        try await finish(cloudBackend)
+        let followUpRecord = try requireHome(gate.records(since: Date().addingTimeInterval(-60)).last)
+        precondition(followUpRecord.classifierChars == followUpInput.count && followUpRecord.source == "classifier",
+                     "\(followUpRecord)")
 
         // Enforce: a secret runs locally; the cloud backend never sees it.
         section.mode = .enforce

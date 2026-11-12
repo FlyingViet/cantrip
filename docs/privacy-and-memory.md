@@ -159,8 +159,14 @@ How it decides, first match wins:
    details and private terms anywhere) is read as these two rules.
 3. The classifier, for requests no rule decides: a model on your own server
    (oMLX's `POST /v1/decisions`, by default Private Local's server and model)
-   reads the request and the latest earlier turn, three times with the options in
-   a different order, and Cantrip averages the answers. It says cloud only when
+   reads the request three times with the options in a different order, and
+   Cantrip averages the answers. In Home chat it also reads your earlier
+   messages and the first 300 characters of the latest reply, up to 1,200
+   characters in all (`chatInputCharacters`), because the server reads every new
+   character before it answers and whole replies took it past 2.5 s. A
+   scheduled task's request goes with its latest earlier turn, up to 3,000
+   characters (`maxInputCharacters`). Rules still check the whole earlier turns.
+   It says cloud only when
    it's at least 80% sure (`cloudMinProbability`); otherwise local, or ask first
    when it isn't sure, never the cloud.
    Its instructions say coding, writing, general knowledge, questions about the
@@ -186,7 +192,8 @@ Settings live in the policy file's `privacyGate` section (a file without it gets
 the defaults: on, observing). Each decision is logged in
 `~/.cache/Cantrip/privacy/decisions.jsonl` on the Mac (readable only by you):
 the route, the rule or the classifier's probabilities, what matched (kinds and
-counts, never values), timings, and what enforce mode would do. Prompt text is
+counts, never values), timings, how many characters the classifier read, and
+what enforce mode would do. Prompt text is
 never logged; in observe mode it goes only to your classifier.
 
 ### Review a week of observe data

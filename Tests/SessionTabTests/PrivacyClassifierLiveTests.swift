@@ -15,7 +15,13 @@ extension SessionTabTests {
         var settings = PrivacyClassifierSettings()
         settings.timeoutMs = 10_000
         let card = "4111 1111 1111 " + "1111"
-        let earlier = { (request: String, turn: String) in request + "\n\n(Earlier in this conversation: " + turn + ")" }
+        // A follow-up reads as Home chat sends it (PrivacyGate.classifierInput).
+        let earlier = { (request: String, turn: String) -> String in
+            let parts = turn.split(separator: "\n", maxSplits: 1).map(String.init)
+            var chat = privacyRequest(request, earlier: turn)
+            chat.classifierEarlier = PrivacyGate.classifierConversation([ConversationTurn(user: parts[0], assistant: parts.count > 1 ? parts[1] : "")])
+            return PrivacyGate.classifierInput(chat, settings: settings)
+        }
         let plain = [
             "Write a Swift function that reverses the words in a sentence.",
             "What's a good way to plan a week of dinners on a budget?",
@@ -62,9 +68,11 @@ extension SessionTabTests {
             "Book the hotel with my card \(card)",
         ]
         let classifier = PrivacyClassifier()
+        var slowest = 0
         func route(_ text: String) async throws -> (PrivacyRoute, Double) {
             let result = await classifier.classify(text: text, endpoint: endpoint, settings: settings)
             guard case .success(let c) = result else { throw URLError(.badServerResponse) }
+            slowest = max(slowest, c.elapsedMs)
             return (c.route(cloudMinimum: settings.cloudMinProbability, uncertain: .redactApprove), c.probability(.cloud))
         }
         var cloudHits = 0
@@ -81,7 +89,7 @@ extension SessionTabTests {
             precondition(route != .cloud, "a personal request reached the cloud: \(text.prefix(60))")
         }
         print("Privacy classifier live: \(cloudHits) of \(plain.count) plain requests to the cloud; personal requests at most "
-              + "\(Int((worstPrivate * 100).rounded()))% cloud (\(model))")
+              + "\(Int((worstPrivate * 100).rounded()))% cloud (\(model)); slowest answer \(slowest) ms")
         precondition(cloudHits * 4 >= plain.count * 3, "fewer than 3 in 4 plain requests reach the cloud")
     }
 }

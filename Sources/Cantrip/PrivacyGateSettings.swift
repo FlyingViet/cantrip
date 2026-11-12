@@ -184,8 +184,12 @@ struct PrivacyClassifierSettings: Codable, Equatable {
     /// guesses toward the cloud: local, or ask first.
     var cloudMinProbability = 0.8
     var cacheMinutes = 60
-    /// The request and the latest earlier turn are cut to this many characters.
+    /// Scheduled tasks: the request and the latest earlier turn are cut to this many characters.
     var maxInputCharacters = 3000
+    /// Home chat: the request, the user's earlier messages and the start of the latest reply are
+    /// cut to this many. The server reads every new character before it answers (about 1.2 s plus
+    /// 0.4 ms a character), so this keeps chat within `timeoutMs`.
+    var chatInputCharacters = 1200
 
     init() {}
 
@@ -201,6 +205,7 @@ struct PrivacyClassifierSettings: Codable, Equatable {
         cloudMinProbability = try c.decodeIfPresent(Double.self, forKey: .cloudMinProbability) ?? d.cloudMinProbability
         cacheMinutes = try c.decodeIfPresent(Int.self, forKey: .cacheMinutes) ?? d.cacheMinutes
         maxInputCharacters = try c.decodeIfPresent(Int.self, forKey: .maxInputCharacters) ?? d.maxInputCharacters
+        chatInputCharacters = try c.decodeIfPresent(Int.self, forKey: .chatInputCharacters) ?? d.chatInputCharacters
     }
 }
 
@@ -302,6 +307,7 @@ struct PrivacyGateSettings: Codable, Equatable {
         if !(1...6).contains(c.rotations) { errors.append("Ask the classifier 1-6 times.") }
         if !(0.5...1).contains(c.cloudMinProbability) { errors.append("The cloud threshold must be 0.5-1.") }
         if !(200...20_000).contains(c.maxInputCharacters) { errors.append("Send the classifier 200-20000 characters.") }
+        if !(200...20_000).contains(c.chatInputCharacters) { errors.append("Send the classifier 200-20000 characters of Home chat.") }
         if !c.baseURL.isEmpty, let problem = PrivacyHostCheck.problem(with: c.baseURL) { errors.append(problem) }
         if !(0...20).contains(stickyTurns) { errors.append("Stay local for 0-20 turns.") }
         if ownerNames.count > 20 || ownerNames.contains(where: { $0.count > 80 }) {
