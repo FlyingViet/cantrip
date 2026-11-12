@@ -16,6 +16,8 @@ struct PrivacyDecision: Equatable {
     var rulesMs = 0
     var classifierMs: Int?
     var classifierError: String?
+    /// Characters of request and conversation the classifier was given.
+    var classifierChars: Int?
     /// The decision before "stays local" applied.
     var underlying: PrivacyRoute?
     /// The run's own route, when it has one.
@@ -84,6 +86,8 @@ struct PrivacyDecisionRecord: Codable, Equatable {
     var applied: Bool
     var promptChars: Int
     var underlying: String?
+    /// Characters the classifier read (optional: older lines lack it).
+    var classifierChars: Int? = nil
 }
 
 /// What a cloud run in enforce mode may not touch. Backends read it before each tool call.
@@ -163,11 +167,40 @@ final class PrivacyGate: @unchecked Sendable {
 
     // MARK: Deciding
 
-    /// The text the classifier reads: the request, then the latest earlier turn.
-    static func classifierInput(_ request: PrivacyGateRequest, limit: Int) -> String {
+    /// The text the classifier reads. Home chat: the request, then the user's earlier messages and
+    /// the start of the latest reply (`classifierConversation`, newest kept), within
+    /// `chatInputCharacters`. Whole replies filled the budget on every chat, and the server reads
+    /// each new character before it answers, so chat ran past its timeout. Rules still scan the
+    /// whole earlier turns, and a private turn keeps the next ones local. Tasks: the request and
+    /// the latest earlier turn within `maxInputCharacters`.
+    static func classifierInput(_ request: PrivacyGateRequest, settings: PrivacyClassifierSettings) -> String {
+        switch request.kind {
+        case .homeChat:
+            return classifierInput(request.request, earlier: request.classifierEarlier, limit: settings.chatInputCharacters)
+        case .homeTask:
+            return classifierInput(request.request, earlier: request.earlier, limit: settings.maxInputCharacters)
+        }
+    }
+
+    /// How much of the latest reply Home chat's classifier reads: enough for a follow-up such as
+    /// "ok, draft a reply" to carry what it answers.
+    static let classifierReplyCharacters = 300
+
+    /// The user's messages of `turns`, oldest first, with the start of the latest reply.
+    static func classifierConversation(_ turns: [ConversationTurn]) -> String {
+        var parts = turns.map { $0.user.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if let last = turns.last, !parts.isEmpty {
+            let reply = last.assistant.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !reply.isEmpty { parts[parts.count - 1] += "\n" + String(reply.prefix(classifierReplyCharacters)) }
+        }
+        return parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    /// The request (up to two thirds of `limit`), then the end of `earlier` in the room left.
+    static func classifierInput(_ request: String, earlier: String, limit: Int) -> String {
         let budget = max(200, limit)
-        let ask = String(request.request.trimmingCharacters(in: .whitespacesAndNewlines).prefix(budget * 2 / 3))
-        let earlier = request.earlier.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ask = String(request.trimmingCharacters(in: .whitespacesAndNewlines).prefix(budget * 2 / 3))
+        let earlier = earlier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !earlier.isEmpty else { return String(ask.prefix(budget)) }
         let room = budget - ask.count - 40
         guard room > 100 else { return ask }
@@ -218,7 +251,7 @@ final class PrivacyGate: @unchecked Sendable {
     /// `fallback`: the rule that handed over, which decides when no classifier is set up.
     private func classify(_ request: PrivacyGateRequest, settings: PrivacyGateSettings, into decision: inout PrivacyDecision,
                           fallback: PrivacyGateRule? = nil) async {
-        let input = Self.classifierInput(request, limit: settings.classifier.maxInputCharacters)
+        let input = Self.classifierInput(request, settings: settings.classifier)
         switch PrivacyClassifierEndpoint.resolve(settings.classifier, privateLocal: privateLocal()) {
         case .failure(.notConfigured(let why)):
             if let fallback {
@@ -239,6 +272,7 @@ final class PrivacyGate: @unchecked Sendable {
             decision.reason = error.message
             return
         case .success(let endpoint):
+            decision.classifierChars = input.count
             let key = Self.cacheKey(request, input: input, endpoint: endpoint)
             if let hit = cached(key, minutes: settings.classifier.cacheMinutes) {
                 decision.probabilities = hit.probabilities
@@ -372,7 +406,8 @@ final class PrivacyGate: @unchecked Sendable {
             pRedact: decision.probabilities?[.redactApprove], rulesMs: decision.rulesMs, classifierMs: decision.classifierMs,
             classifierError: decision.classifierError, totalMs: totalMs, backend: request.backend,
             privateTools: privateTools, enforce: enforcement.rawValue, applied: applied,
-            promptChars: request.message.count, underlying: decision.underlying?.rawValue)
+            promptChars: request.message.count, underlying: decision.underlying?.rawValue,
+            classifierChars: decision.classifierChars)
         append(record)
         Log.write("privacy: \(request.kind.rawValue)\(request.taskTitle.map { " “\($0.prefix(40))”" } ?? "") "
                   + "\(settings.mode.rawValue) -> \(record.route) (\(record.source)\(record.rule.map { " \($0)" } ?? "")), "

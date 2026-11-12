@@ -12,6 +12,7 @@ struct PrivacyGateRequest {
     /// Identifies the Home conversation (for staying local) or the task (for the cache).
     var conversationKey: String
     var request: String
+    /// Earlier turns, the user's messages with the replies: rules scan all of it.
     var earlier: String
     /// The whole message about to be sent.
     var message: String
@@ -19,6 +20,9 @@ struct PrivacyGateRequest {
     var backend: String
     /// MCP servers the run can use.
     var mcpServers: [String] = []
+    /// What Home chat's classifier reads of the conversation: the user's own earlier messages and
+    /// how the latest reply begins (`PrivacyGate.classifierConversation`).
+    var classifierEarlier = ""
 }
 
 // MARK: - Rules

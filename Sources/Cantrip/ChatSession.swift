@@ -2608,7 +2608,8 @@ final class ChatSession: ObservableObject {
     private func privacyGateRequest(kind: PrivacyGateRequest.Kind, prompt: String, prepared: String,
                                     previousTurns: [ConversationTurn], backendKind: BackendKind) -> PrivacyGateRequest {
         let taskID = kind == .homeTask ? cantripHomeTask?.id : nil
-        let earlier = previousTurns.suffix(3).map { $0.user + "\n" + $0.assistant }.joined(separator: "\n\n")
+        let turns = previousTurns.suffix(3)
+        let earlier = turns.map { $0.user + "\n" + $0.assistant }.joined(separator: "\n\n")
         let configured = CantripHomeTaskTools.configuredServers()
         let servers = kind == .homeTask ? configured.filter { !CantripHomeTaskTools.disabledServers(configured: configured).contains($0) }
             : configured
@@ -2617,7 +2618,8 @@ final class ChatSession: ObservableObject {
             taskTitle: taskID.flatMap { id in CantripHomeStore.shared.tasks.first { $0.id == id }?.title },
             conversationKey: taskID.map { "task:\($0.uuidString)" } ?? Self.privacyHomeConversationKey,
             request: prompt, earlier: earlier, message: prepared, workdir: workdir,
-            backend: backendKind.rawValue, mcpServers: servers)
+            backend: backendKind.rawValue, mcpServers: servers,
+            classifierEarlier: PrivacyGate.classifierConversation(Array(turns)))
     }
 
     /// Records what the gate would do, beside a run that has already been sent unchanged.

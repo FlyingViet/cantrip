@@ -808,9 +808,11 @@ enum CantripCLI {
             title = "Test task"
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw usage }
+        // `--earlier` stands for the earlier turns the rules scan, and in Home chat for what the
+        // classifier reads of them (cut to chatInputCharacters).
         let request = PrivacyGateRequest(
             kind: kind, taskID: taskID, taskTitle: title, conversationKey: "privacy-test:\(UUID().uuidString)",
-            request: text, earlier: earlier, message: text, workdir: "", backend: "test")
+            request: text, earlier: earlier, message: text, workdir: "", backend: "test", classifierEarlier: earlier)
         let gate = PrivacyGate.shared
         let settings = gate.settings
         let started = Date()
@@ -843,6 +845,7 @@ enum CantripCLI {
             object["hint"] = decision.hint
             object["probabilities"] = odds(decision.probabilities)
             object["classifierMs"] = decision.classifierMs
+            object["classifierChars"] = decision.classifierChars ?? opinion?.classifierChars
             object["classifierError"] = decision.classifierError
             if let opinion {
                 var alone: [String: Any] = ["route": opinion.route?.rawValue ?? "offline"]
@@ -863,7 +866,8 @@ enum CantripCLI {
               + "\(meanings[enforcement] ?? enforcement.rawValue).")
         print("Why: \(decision.reason)")
         if let probabilities = decision.probabilities {
-            print("Classifier: \(describe(probabilities))\(decision.classifierMs.map { " in \($0) ms" } ?? "").")
+            print("Classifier: \(describe(probabilities))\(decision.classifierMs.map { " in \($0) ms" } ?? "")"
+                  + "\(decision.classifierChars.map { ", reading \($0) characters" } ?? "").")
         }
         if let opinion {
             if let probabilities = opinion.probabilities {
