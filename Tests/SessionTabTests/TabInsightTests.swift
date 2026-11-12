@@ -213,6 +213,7 @@ extension SessionTabTests {
         parent.submitRemote("Write the notes file", mode: .queue)
         let item = try requireInsight(parent.queued.last)
         let child = try await manager.childTabs.fork(parentID: parent.id, itemID: item.id)
+        precondition(ChildTabStore.shared.record(child.id)?.autoStarted == false, "Run in Child Tab is recorded as such")
         let childBackend = try requireInsight(backends[child.id])
         try await waitForJournalTest { childBackend.prompts.count == 1 }
         childBackend.sink?(.activity(ToolActivity(

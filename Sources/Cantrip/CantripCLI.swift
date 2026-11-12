@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "weather", "build-queue", "privacy", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "handoffs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "weather", "build-queue", "privacy", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 
@@ -18,6 +18,7 @@ enum CantripCLI {
             case "cleanup": return cleanup(Array(arguments.dropFirst()))
             case "seed-worktree": return try seedWorktree(Array(arguments.dropFirst()))
             case "tab", "tabs": return try tab(Array(arguments.dropFirst()))
+            case "handoffs": return try handoffs(Array(arguments.dropFirst()))
             case "sim": return try sim(Array(arguments.dropFirst()))
             case "mcp": return try mcp(Array(arguments.dropFirst()))
             case "api": try api(Array(arguments.dropFirst()))
@@ -131,6 +132,11 @@ enum CantripCLI {
           --wait SECONDS          How long to wait for the reply (default 300; 0 returns at once)
       cantrip tab reply ASK_ID [--wait SECONDS]
                                   The reply to an earlier question
+      cantrip handoffs [--days N] [--json]
+                                  Where handed-off work went (default: 7 days, up to 30): Home chat, background-run
+                                  and incident handoffs with the tab, child tab and status of each, open tabs, and
+                                  recent child tabs. Read-only; titles and states only (no prompts or replies), and
+                                  private tabs are never shown
       cantrip "question"          Ask the active backend (pipe input: cat log | cantrip "why?")
     """
 
@@ -205,6 +211,33 @@ enum CantripCLI {
         case .reply(let askID, let wait):
             return try awaitReply(try request(["command": "tab", "action": "reply", "askID": askID]), wait: wait)
         }
+        return 0
+    }
+
+    /// `cantrip handoffs [--days N] [--json]`: options in any order.
+    static func parseHandoffs(_ arguments: [String]) throws -> (days: Int, json: Bool) {
+        let usage = Failure(message: "Usage: cantrip handoffs [--days N] [--json] (N from 1 to \(HandoffReport.maximumDays)).", code: 2)
+        var days = HandoffReport.defaultDays, json = false
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--json": json = true
+            case "--days":
+                index += 1
+                guard index < arguments.count, let value = Int(arguments[index]),
+                      (1...HandoffReport.maximumDays).contains(value) else { throw usage }
+                days = value
+            default: throw usage
+            }
+            index += 1
+        }
+        return (days, json)
+    }
+
+    static func handoffs(_ arguments: [String]) throws -> Int32 {
+        let options = try parseHandoffs(arguments)
+        let reply = try request(["command": "handoffs", "days": options.days])
+        if options.json { printJSON(reply) } else { print(HandoffReport.text(reply)) }
         return 0
     }
 
@@ -643,7 +676,7 @@ enum CantripCLI {
             // Builds before these commands read any request without "text" as a bad query, and
             // builds before `tab` don't know it. A command no build knows keeps its own error.
             let older = error == "bad request"
-                || error.hasPrefix("Unknown command.") && object["command"] as? String == "tab"
+                || error.hasPrefix("Unknown command.") && ["tab", "handoffs"].contains(object["command"] as? String ?? "")
             throw Failure(message: older
                           ? "The running Cantrip is an older build without `cantrip \(object["command"] ?? "")`. Restart it to use the current one."
                           : error)
