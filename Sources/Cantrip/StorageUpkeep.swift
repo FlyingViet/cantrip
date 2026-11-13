@@ -158,14 +158,20 @@ enum StorageUpkeep {
         var bytesByCategory: [String: Int64]?
         /// Free space fell under the low-disk threshold and started this run.
         var lowDisk: Bool?
+        /// Screenshots replaced by a placeholder in the transcripts of idle sessions that stay
+        /// (`trimKeptSession`), how many transcripts that was and how much smaller they got.
+        var transcriptImagesTrimmed: Int?
+        var transcriptsTrimmed: Int?
+        var transcriptBytesTrimmed: Int64?
 
         enum Category: String, CaseIterable {
-            case sessions, worktrees, worktreeBuildOutput, agentBuildFolders, checkoutBuildOutput,
+            case sessions, transcriptImages, worktrees, worktreeBuildOutput, agentBuildFolders, checkoutBuildOutput,
                  orphanedBuildFolders, packageCaches, simulators
 
             var label: String {
                 switch self {
                 case .sessions: return "unused sessions"
+                case .transcriptImages: return "screenshots in kept sessions' transcripts"
                 case .worktrees: return "worktrees"
                 case .worktreeBuildOutput: return "build output in worktrees"
                 case .agentBuildFolders: return "agents' DerivedData and package clones"
@@ -180,12 +186,13 @@ enum StorageUpkeep {
         var worktreeBytesRemoved: Int64 { worktreesRemoved.reduce(0) { $0 + $1.bytes } }
         var worktreeOutputBytesRemoved: Int64 { (worktreeOutputRemoved ?? []).reduce(0) { $0 + $1.bytes } }
         var bytesRemoved: Int64 {
-            sessionBytesRemoved + worktreeBytesRemoved + worktreeOutputBytesRemoved + (simulators?.bytesRemoved ?? 0)
-                + (caches?.bytesRemoved ?? 0)
+            sessionBytesRemoved + (transcriptBytesTrimmed ?? 0) + worktreeBytesRemoved + worktreeOutputBytesRemoved
+                + (simulators?.bytesRemoved ?? 0) + (caches?.bytesRemoved ?? 0)
         }
 
         func categoryBytes() -> [String: Int64] {
-            var bytes: [Category: Int64] = [.sessions: sessionBytesRemoved, .worktrees: worktreeBytesRemoved,
+            var bytes: [Category: Int64] = [.sessions: sessionBytesRemoved, .transcriptImages: transcriptBytesTrimmed ?? 0,
+                                            .worktrees: worktreeBytesRemoved,
                                             .worktreeBuildOutput: worktreeOutputBytesRemoved,
                                             .simulators: simulators?.bytesRemoved ?? 0]
             for removal in caches?.removed ?? [] {
@@ -209,6 +216,12 @@ enum StorageUpkeep {
             let worktrees = worktreesRemoved.count == 1 ? "1 worktree" : "\(worktreesRemoved.count) worktrees"
             var parts: [String] = []
             if sessionsRemoved > 0 { parts.append("\(sessions) (\(StorageUpkeep.format(sessionBytesRemoved)))") }
+            if let images = transcriptImagesTrimmed, images > 0 {
+                let shots = images == 1 ? "1 screenshot" : "\(images.formatted()) screenshots"
+                let count = transcriptsTrimmed ?? 0
+                let from = count == 1 ? "1 kept session's transcript" : "\(count.formatted()) kept sessions' transcripts"
+                parts.append("\(shots) from \(from) (\(StorageUpkeep.format(transcriptBytesTrimmed ?? 0)))")
+            }
             if !worktreesRemoved.isEmpty { parts.append("\(worktrees) (\(StorageUpkeep.format(worktreeBytesRemoved)))") }
             if let output = worktreeOutputRemoved, !output.isEmpty {
                 let folders = output.count == 1 ? "1 build output folder" : "\(output.count) build output folders"
@@ -437,13 +450,25 @@ enum StorageUpkeep {
         let verb = dryRun ? "would remove" : "removed"
         // In a dry run these are still on disk; they don't hold their sessions back.
         let removedWorktrees = Set(report.worktreesRemoved.map { resolved($0.path) })
+        let checkedFile = c.stateDirectory.appendingPathComponent(transcriptCheckFile)
+        var checked = (try? JSONDecoder().decode([String: String].self, from: Data(contentsOf: checkedFile))) ?? [:]
+        var present: Set<String> = []
+        defer {
+            let kept = checked.filter { present.contains($0.key) }
+            if !dryRun, let data = try? JSONEncoder().encode(kept) { try? data.write(to: checkedFile, options: .atomic) }
+        }
         for name in names.sorted() {
             // Session folders are named by lowercase UUID; anything else isn't a session.
             guard UUID(uuidString: name)?.uuidString.lowercased() == name else { continue }
             let folder = c.sessionRoot.appendingPathComponent(name, isDirectory: true)
             guard isRealDirectory(folder) else { continue }
+            present.insert(name)
             func keep(_ reason: SessionKeep) { report.sessionsKept[reason.rawValue, default: 0] += 1 }
-            if let reason = protections.reason(for: name) { keep(reason); continue }
+            func trim(idleSince: Date?) {
+                trimKeptSession(folder, idleSince: idleSince, cutoff: cutoff, now: c.now, processes: processes,
+                                dryRun: dryRun, checked: &checked, report: &report, log: log)
+            }
+            if let reason = protections.reason(for: name) { keep(reason); trim(idleSince: nil); continue }
             guard let scan = scanSession(folder, cutoff: cutoff, removedWorktrees: removedWorktrees) else {
                 keep(.recent); continue
             }
@@ -451,7 +476,7 @@ enum StorageUpkeep {
                 keep(.inUse); continue
             }
             if scan.worktrees > 0 || scan.repositories.contains(where: { hasUnsavedWork($0.url, bare: $0.bare, git: c.git) }) {
-                keep(.unsavedWork); continue
+                keep(.unsavedWork); trim(idleSince: scan.newest); continue
             }
             let idle = Int(c.now.timeIntervalSince(scan.newest) / 86_400)
             let line = "session \(name) \(verb): \(format(scan.bytes)), idle \(idle) days, "
@@ -466,6 +491,136 @@ enum StorageUpkeep {
             report.sessionBytesRemoved += scan.bytes
             log(line)
         }
+    }
+
+    // MARK: - Screenshots in kept sessions
+
+    /// Remembers, per session, the transcript size and date last found with nothing left to trim.
+    static let transcriptCheckFile = "storage-transcripts.json"
+    /// A 1x1 transparent PNG: what a trimmed screenshot becomes.
+    static let transcriptPlaceholder = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP4//8/AAX+Av6n1qTCAAAAAElFTkSuQmCC"
+    static let transcriptPlaceholderNote = " (image removed to save space)"
+
+    struct TranscriptTrim {
+        var images = 0
+        var bytes: Int64 = 0
+    }
+
+    /// A session that stays (a tab's, one a note names, one with unsaved git work) keeps every screenshot its agent
+    /// viewed inside its transcript. Once it has been idle past the retention window and nothing uses it, those go.
+    static func trimKeptSession(_ folder: URL, idleSince: Date?, cutoff: Date, now: Date, processes: ProcessSnapshot,
+                                dryRun: Bool, checked: inout [String: String], report: inout Report,
+                                log: (String) -> Void) {
+        let name = folder.lastPathComponent
+        let file = folder.appendingPathComponent("events.jsonl")
+        func stamp() -> String? {
+            guard let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+                  let size = values.fileSize, let date = values.contentModificationDate else { return nil }
+            return "\(size):\(date.timeIntervalSince1970)"
+        }
+        guard let before = stamp(), checked[name] != before,
+              let newest = idleSince ?? lastChange(folder, before: cutoff),
+              !lockOwners(folder).contains(where: processes.isAlive), !processes.uses(folder.path) else { return }
+        let trim: TranscriptTrim
+        do {
+            trim = try trimTranscriptImages(file, dryRun: dryRun)
+        } catch {
+            report.errors.append("Session \(name) transcript: \(error.localizedDescription)")
+            return
+        }
+        if trim.images > 0 {
+            report.transcriptImagesTrimmed = (report.transcriptImagesTrimmed ?? 0) + trim.images
+            report.transcriptsTrimmed = (report.transcriptsTrimmed ?? 0) + 1
+            report.transcriptBytesTrimmed = (report.transcriptBytesTrimmed ?? 0) + trim.bytes
+            let shots = trim.images == 1 ? "1 screenshot" : "\(trim.images) screenshots"
+            log("session \(name) \(dryRun ? "would trim" : "trimmed") \(shots) from its transcript: \(format(trim.bytes)), "
+                + "idle \(Int(now.timeIntervalSince(newest) / 86_400)) days, \(sessionLabel(folder))")
+        }
+        if !dryRun || trim.images == 0 { checked[name] = stamp() }
+    }
+
+    /// The newest change in a folder, or nil when anything in it changed at or after `cutoff`.
+    static func lastChange(_ folder: URL, before cutoff: Date) -> Date? {
+        let keys: [URLResourceKey] = [.contentModificationDateKey]
+        guard let own = try? folder.resourceValues(forKeys: Set(keys)).contentModificationDate, own < cutoff,
+              let walker = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: keys, options: [],
+                                                          errorHandler: { _, _ in true }) else { return nil }
+        var newest = own
+        for case let url as URL in walker {
+            guard let date = try? url.resourceValues(forKeys: Set(keys)).contentModificationDate else { continue }
+            if date >= cutoff { return nil }
+            newest = max(newest, date)
+        }
+        return newest
+    }
+
+    struct TranscriptChanged: LocalizedError {
+        var errorDescription: String? { "it changed while being trimmed; left as it was" }
+    }
+
+    /// Replaces the images a Copilot CLI transcript stores (`session.binary_asset` events: the base64 of every image
+    /// the agent viewed) with a 1x1 PNG. Each event keeps its id, parent and asset id, so the session still resumes;
+    /// the file and its folder keep their dates, so the session doesn't look recently used.
+    static func trimTranscriptImages(_ file: URL, dryRun: Bool) throws -> TranscriptTrim {
+        let fm = FileManager.default
+        let attributes = try fm.attributesOfItem(atPath: file.path)
+        let data = try Data(contentsOf: file, options: .alwaysMapped)
+        let marker = Data("\"session.binary_asset\"".utf8)
+        var trim = TranscriptTrim()
+        guard data.range(of: marker) != nil else { return trim }
+        let pixelBytes = Data(base64Encoded: transcriptPlaceholder)?.count ?? 0
+        var output = Data()
+        var start = data.startIndex
+        while start < data.endIndex {
+            let newline = data[start...].firstIndex(of: 0x0A)
+            let line = data[start..<(newline ?? data.endIndex)]
+            var replacement: Data?
+            if line.prefix(200).range(of: marker) != nil,
+               var event = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
+               event["type"] as? String == "session.binary_asset",
+               var asset = event["data"] as? [String: Any], asset["type"] as? String == "image",
+               let image = asset["data"] as? String, image != transcriptPlaceholder {
+                asset["data"] = transcriptPlaceholder
+                asset["mimeType"] = "image/png"
+                asset["byteLength"] = pixelBytes
+                asset["description"] = ((asset["description"] as? String) ?? "Image") + transcriptPlaceholderNote
+                event["data"] = asset
+                if let encoded = try? JSONSerialization.data(withJSONObject: event, options: [.withoutEscapingSlashes]),
+                   encoded.count < line.count {
+                    replacement = encoded
+                    trim.images += 1
+                    trim.bytes += Int64(line.count - encoded.count)
+                }
+            }
+            output.append(replacement ?? Data(line))
+            if let newline {
+                output.append(0x0A)
+                start = data.index(after: newline)
+            } else {
+                start = data.endIndex
+            }
+        }
+        guard !dryRun, trim.images > 0 else { return trim }
+        let folder = file.deletingLastPathComponent()
+        let folderDate = try? folder.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        let partial = folder.appendingPathComponent(".events.jsonl.trim-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: partial) }
+        try output.write(to: partial)
+        // A runtime that started writing meanwhile wins; the next run tries again.
+        let current = try fm.attributesOfItem(atPath: file.path)
+        guard (current[.size] as? NSNumber) == (attributes[.size] as? NSNumber),
+              (current[.modificationDate] as? Date) == (attributes[.modificationDate] as? Date) else {
+            throw TranscriptChanged()
+        }
+        if let permissions = attributes[.posixPermissions] {
+            try? fm.setAttributes([.posixPermissions: permissions], ofItemAtPath: partial.path)
+        }
+        guard rename(partial.path, file.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        if let date = attributes[.modificationDate] as? Date {
+            try? fm.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
+        }
+        if let folderDate { try? fm.setAttributes([.modificationDate: folderDate], ofItemAtPath: folder.path) }
+        return trim
     }
 
     /// What started a session, for the removal log: its producer and the start of its name.

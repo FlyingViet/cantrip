@@ -354,6 +354,15 @@ sessions and worktrees daily**.
   remote has. This covers every Copilot CLI session on the Mac, including other
   tools' (such as a gateway that calls `copilot -p`) and Terminal sessions you
   could otherwise resume.
+- **Screenshots in sessions that stay**: every image an agent views is also
+  saved inside its session's transcript (`events.jsonl`). Once a session that
+  stays (a tab's, one a note names, one holding unsaved git work) has had no
+  changes for the same number of days and nothing uses it, each stored image
+  becomes a 1×1 placeholder. The transcript keeps every event and its ids, so
+  the session can still be resumed (without seeing those images), and the
+  files keep their dates, so the session's age doesn't change. Your chat
+  history in Cantrip is not affected. `~/.cache/Cantrip/storage-transcripts.json`
+  remembers transcripts with nothing left to trim, so they aren't read again.
 - **Worktrees** are removed only when they are inside a session folder,
   `~/.cache/Cantrip/` (child tabs' `worktrees/` included, and worktrees of a
   submodule's own repository) or a temporary folder, unlocked, unused, not an
