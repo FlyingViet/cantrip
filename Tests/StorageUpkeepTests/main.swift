@@ -434,6 +434,79 @@ do {
     expect(again?.sessionsRemoved == 0 && again?.worktreesRemoved.isEmpty == true, "a second run removes nothing")
 }
 
+// MARK: - Screenshots in kept sessions' transcripts
+
+do {
+    let base = root.appendingPathComponent("transcripts")
+    let sessions = base.appendingPathComponent("session-state")
+    let monthAgo = realNow.addingTimeInterval(-30 * 86_400)
+    let image = String(repeating: "QUJD", count: 5_000)
+    let userLine = #"{"type":"user.message","data":{"content":"look at \/tmp\/a.png"},"id":"e0"}"#
+    let assetLine = #"{"type":"session.binary_asset","data":{"assetId":"sha256:abc","type":"image","mimeType":"image/jpeg","byteLength":15000,"data":"\#(image)","description":"Image file at path /tmp/a.png"},"id":"e1","timestamp":"2026-10-01T00:00:00.000Z","parentId":"p0"}"#
+    let toolLine = #"{"type":"tool.execution_complete","data":{"assetId":"sha256:abc"},"id":"e2","parentId":"e1"}"#
+    let transcript = [userLine, assetLine, toolLine].joined(separator: "\n") + "\n"
+    func shotSession(age: Date, setup: (URL) -> Void = { _ in }) -> URL {
+        let folder = sessions.appendingPathComponent(UUID().uuidString.lowercased())
+        write("id: x\ncwd: /tmp\nclient_name: test\nname: shots\n", to: folder.appendingPathComponent("workspace.yaml"))
+        write(transcript, to: folder.appendingPathComponent("events.jsonl"))
+        setup(folder)
+        let items = (fm.enumerator(at: folder, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? []) + [folder]
+        for item in items.sorted(by: { $0.pathComponents.count > $1.pathComponents.count }) {
+            try? fm.setAttributes([.modificationDate: age], ofItemAtPath: item.path)
+        }
+        return folder
+    }
+    func modified(_ url: URL) -> Date { (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast }
+    let idleTab = shotSession(age: monthAgo)
+    let recentTab = shotSession(age: realNow)
+    let busyTab = shotSession(age: monthAgo) { write("\(getpid())", to: $0.appendingPathComponent("inuse.\(getpid()).lock")) }
+    let outputs = base.appendingPathComponent("outputs.json")
+    let ids = [idleTab, recentTab, busyTab].map { "\"\($0.lastPathComponent)\"" }.joined(separator: ",")
+    write(#"{"version":1,"backfilled":true,"sessions":{"TAB":[\#(ids)]}}"#, to: outputs)
+    let shots = StorageUpkeep.Configuration(
+        sessionRoot: sessions, outputFolders: outputs, memoryVault: nil, repositoryParents: [], worktreeSearchRoots: [],
+        agentRoots: [sessions], stateDirectory: base, sessionRetention: 14 * 86_400, now: realNow,
+        processes: { StorageUpkeep.ProcessSnapshot(workingDirectories: [], commandLines: []) }
+    )
+    let events = idleTab.appendingPathComponent("events.jsonl")
+
+    let dry = StorageUpkeep.perform(shots, dryRun: true)
+    expect(dry?.transcriptImagesTrimmed == 1 && (try? String(contentsOf: events, encoding: .utf8)) == transcript,
+           "a dry run counts the screenshot without changing the transcript: \(dry?.transcriptImagesTrimmed ?? 0)")
+    expect(!exists(base.appendingPathComponent(StorageUpkeep.transcriptCheckFile)), "a dry run saves no check record")
+
+    var lines: [String] = []
+    let report = StorageUpkeep.perform(shots, dryRun: false, log: { lines.append($0) })
+    expect(report?.sessionsKept["tab"] == 3 && report?.sessionsRemoved == 0, "tab sessions stay: \(report?.sessionsKept ?? [:])")
+    expect(report?.transcriptImagesTrimmed == 1 && report?.transcriptsTrimmed == 1 && (report?.transcriptBytesTrimmed ?? 0) > 15_000,
+           "only the idle, unused session's screenshot goes: \(report?.transcriptImagesTrimmed ?? 0)")
+    expect((report?.bytesByCategory?["transcriptImages"] ?? 0) > 0
+           && report?.summary.contains("1 screenshot from 1 kept session's transcript") == true,
+           "reported by kind and in the summary: \(report?.summary ?? "")")
+    expect(lines.contains { $0.hasPrefix("session \(idleTab.lastPathComponent) trimmed 1 screenshot") }, "the trim is logged")
+    let after = ((try? String(contentsOf: events, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+    expect(after.count == 3 && after[0] == userLine && after[2] == toolLine, "other events are untouched")
+    let asset = after.count == 3 ? (try? JSONSerialization.jsonObject(with: Data(after[1].utf8))) as? [String: Any] : nil
+    let payload = asset?["data"] as? [String: Any]
+    expect(payload?["data"] as? String == StorageUpkeep.transcriptPlaceholder && payload?["mimeType"] as? String == "image/png"
+           && payload?["assetId"] as? String == "sha256:abc" && asset?["id"] as? String == "e1"
+           && asset?["parentId"] as? String == "p0"
+           && (payload?["description"] as? String)?.hasSuffix(StorageUpkeep.transcriptPlaceholderNote) == true,
+           "the image becomes the placeholder and the event keeps its ids: \(payload ?? [:])")
+    expect(abs(modified(events).timeIntervalSince(monthAgo)) < 1 && abs(modified(idleTab).timeIntervalSince(monthAgo)) < 1,
+           "the transcript and its folder keep their dates")
+    for folder in [recentTab, busyTab] {
+        expect((try? String(contentsOf: folder.appendingPathComponent("events.jsonl"), encoding: .utf8)) == transcript,
+               "a recent or in-use session's transcript is left alone")
+    }
+    expect(!((try? fm.contentsOfDirectory(atPath: idleTab.path)) ?? []).contains { $0.contains("trim-") },
+           "no partial file is left behind")
+    let again = StorageUpkeep.perform(shots, dryRun: false)
+    let record = (try? String(contentsOf: base.appendingPathComponent(StorageUpkeep.transcriptCheckFile), encoding: .utf8)) ?? ""
+    expect(again?.transcriptImagesTrimmed == nil && record.contains(idleTab.lastPathComponent),
+           "a second run trims nothing and remembers the checked transcript")
+}
+
 // MARK: - Same-run removal with the real clock
 
 do {
