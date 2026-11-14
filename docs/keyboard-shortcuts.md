@@ -28,6 +28,15 @@
 | Terminal **Up/Down** | Browse command history |
 | Terminal **Control+C** | Interrupt the active manual command or agent run |
 
+### Home window (Window mode)
+
+| Keys | Action |
+|---|---|
+| **Return** | Send the message |
+| **Shift+Return** or **Option+Return** | Start a new line |
+| **Command+Left/Right**, **Command+Up/Down** | Move to the start/end of the line, or of the message |
+| **Option+Left/Right** | Move by word; add **Shift** to any of these to select |
+
 `Option` is the key marked `option` or `alt`; `Command` is the key beside the
 spacebar marked with the command symbol. Shortcuts for local sessions do not
 describe controls inside the embedded Remote web client.

@@ -137,7 +137,8 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
   actions, Resume, voice mode and **Back to Home**. ⌘1–⌘3 or any Home section returns.
   **Start Fresh** (also in the Tab menu) keeps the tab and its messages but starts the next
   prompt in a new model session; a repeated error offers it, and **Change Model**, in place.
-- **Chat:** Return sends; Option-Return adds a line. Drag images onto the chat to
+- **Chat:** Return sends; Shift-Return or Option-Return adds a line, and ⌘/⌥-arrows move
+  through the text as in any Mac text field. Drag images onto the chat to
   attach them, or press ⌘V in the message box with a copied screenshot, photo, video or
   Finder file (copied text still pastes as text). Questions from Cantrip appear above the composer.
 - **Delete a message:** right-click a prompt or an error in Home's chat or a tab and choose
@@ -219,7 +220,7 @@ example on a laptop with [Ollama](https://ollama.com) or
 2. Open **Local Model**, then **Set Up…** (or the sliders button in the toolbar).
 3. Enter the server address, for example `http://127.0.0.1:11434`, or `http://127.0.0.1:11234`
    for `mlx-serve --serve --host 127.0.0.1`. Click **Load Models**, pick one, and **Save**.
-4. Type in the composer. Return sends, Option-Return adds a line, and the stop button ends a
+4. Type in the composer. Return sends, Shift-Return or Option-Return adds a line, and the stop button ends a
    reply early.
 
 The trade-off: this conversation exists only on this Mac. It doesn't go through Cantrip, it
