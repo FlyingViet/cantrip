@@ -233,6 +233,18 @@ final class HostServices {
         // Daily cleanup of agent session folders and worktrees nothing uses anymore.
         StorageUpkeepStatus.shared.postsMacNotifications = postsMacNotifications
         StorageUpkeepStatus.shared.start()
+        // Muse (opt-in): login loss, feed results and missed feed runs alert the user; the feed
+        // listener reads feed chats only while Muse is on.
+        let postsMuseNotices = postsMacNotifications
+        let museNotify: (String, String) -> Void = { [weak remoteControlServer] title, body in
+            remoteControlServer?.notifyNotice(title: title, body: body, kind: "muse")
+            guard postsMuseNotices else { return }
+            MacNotices.post(MacNotice(id: UUID().uuidString, title: title, body: body))
+        }
+        MuseConnector.shared.notify = museNotify
+        MuseFeeds.shared.notify = museNotify
+        MuseFeeds.shared.start()
+        MuseConnector.shared.settingsChanged()
 
         if let recoveryReport {
             manager.active.messages.append(ChatMessage(

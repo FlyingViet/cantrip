@@ -656,6 +656,9 @@ enum SettingsManifest {
         var duoOS = field("simulatorPoolDuoOS", .text, "iPhone Duo iOS version", help: "When a lease names none.")
         duoOS.placeholder = "Newest"
 
+        // Muse
+        let museFields = Self.museFields(s, field: field, on: on)
+
         var pages: [SettingsPageSpec] = [
             SettingsPageSpec(id: "macs", title: "Macs", sections: [
                 SettingsSection(id: "remote", title: "Remote control",
@@ -697,6 +700,9 @@ enum SettingsManifest {
                                 footer: "Skills live in Cantrip's skills library; `cantrip skills` lists them and which backends see each.",
                                 fields: [field("skillsAutoLink", .toggle, "Link new skills automatically",
                                                help: "When a skill in the library is added, changed or removed, Cantrip links it for every backend about a minute later, as `cantrip skills sync` does. A skill with a value that looks like a credential stays unlinked.")]),
+                SettingsSection(id: "muse", title: "Muse",
+                                footer: "Start a message with @muse in Home or any tab to send it to your Muse. Feeds are set up from Home and approved by you. `cantrip muse` shows the status, feeds and log.",
+                                fields: museFields),
             ]),
             SettingsPageSpec(id: "home", title: "Home & tabs", sections: [
                 SettingsSection(id: "home", title: "Cantrip Home", fields: [homeOn, parallel]),
@@ -1071,6 +1077,74 @@ enum SettingsManifest {
 
     // MARK: - Actions
 
+    /// Muse's switch, status, setup steps and feeds. Feed actions are `museFeed.<action>.<id>`.
+    static func museFields(_ s: AppSettings, field: (String, SettingsField.Kind, String, String?) -> SettingsField,
+                           on: (String) -> (key: String, values: [SettingValue])) -> [SettingsField] {
+        let status = MuseConnector.shared.status
+        var fields = [field("museEnabled", .toggle, "Muse",
+                            "Your Meta Muse agent, through muse-cli. Only messages that start with @muse are sent to it, and its reply shows in that chat. Feeds you approve add Muse's results to Home tasks. Muse runs on Meta's servers and may train on what you send unless you turn that off in Muse.")]
+        var demo = field("museDemo", .toggle, "Demo account (made-up data)",
+                         "muse-cli's demo: no login, no network. Try @muse and feeds before connecting your account.")
+        demo.visibleWhen = on("museEnabled")
+        fields.append(demo)
+        guard s.museEnabled else { return fields }
+        let problem: [MuseStatus.State] = [.loginNeeded, .broken, .offline, .notInstalled]
+        fields.append(SettingsField(key: "museStatus", kind: .info, label: "Status", value: .string(status.summary),
+                                    tone: problem.contains(status.state) ? "error" : nil))
+        if status.state == .loginNeeded || status.state == .notInstalled {
+            fields.append(SettingsField(key: "museSetup", kind: .info, label: "To connect",
+                                        value: .string(status.state == .notInstalled ? MuseStatus.installSteps : MuseStatus.loginSteps)))
+        }
+        fields.append(SettingsField(key: "museCheckNow", kind: .action, label: "Check Now"))
+        let feeds = MuseFeeds.shared.feeds
+        if feeds.isEmpty {
+            fields.append(SettingsField(key: "museFeeds", kind: .info, label: "Feeds",
+                                        value: .string("None yet. Ask Cantrip Home for a tracker Muse fills, like new apartment listings every day.")))
+        }
+        for feed in feeds {
+            fields.append(SettingsField(key: "museFeedStatus.\(feed.id)", kind: .info, label: "Feed · \(feed.title)",
+                                        value: .string(feed.statusLine), tone: feed.state == .failed ? "error" : nil))
+            switch feed.state {
+            case .pendingApproval, .failed:
+                var approve = SettingsField(key: "museFeed.approve.\(feed.id)", kind: .action, label: "Set Up “\(feed.title)” in Muse…")
+                approve.confirmation = "Cantrip starts a Muse chat for this feed and sends this once:\n\n" + feed.setupMessage
+                fields.append(approve)
+            case .active:
+                fields.append(SettingsField(key: "museFeed.pause.\(feed.id)", kind: .action, label: "Pause “\(feed.title)”"))
+            case .paused:
+                fields.append(SettingsField(key: "museFeed.resume.\(feed.id)", kind: .action, label: "Resume “\(feed.title)”"))
+            }
+            var remove = SettingsField(key: "museFeed.remove.\(feed.id)", kind: .action, label: "Remove “\(feed.title)” Feed…")
+            remove.destructive = true
+            remove.confirmation = "Cantrip stops reading it. Its records stay, and its chat and job stay in Muse (delete them there)."
+            fields.append(remove)
+        }
+        return fields
+    }
+
+    private static func performMuseFeed(_ key: String) async throws -> [String: Any] {
+        let parts = key.split(separator: ".", maxSplits: 2).map(String.init)
+        guard parts.count == 3 else { throw SettingsManifestError(status: 422, message: "There's no action \(key).") }
+        let feeds = MuseFeeds.shared
+        do {
+            switch parts[1] {
+            case "approve":
+                try await feeds.approve(parts[2])
+                return ["message": "Set up in Muse. Its results arrive as records."]
+            case "pause": try feeds.setPaused(parts[2], true); return ["message": "Paused."]
+            case "resume": try feeds.setPaused(parts[2], false); return ["message": "Resumed."]
+            case "remove": try feeds.remove(parts[2]); return ["message": "Removed. Its records stay."]
+            default: throw SettingsManifestError(status: 422, message: "There's no action \(key).")
+            }
+        } catch let error as CantripHomeError {
+            throw SettingsManifestError(status: error.status, message: error.message)
+        } catch let error as SettingsManifestError {
+            throw error
+        } catch {
+            throw SettingsManifestError(status: 502, message: error.localizedDescription)
+        }
+    }
+
     private static func perform(_ key: String, settings s: AppSettings, local: Bool) async throws -> [String: Any] {
         let fields = pages(s, local: local).flatMap { $0.sections.flatMap(\.fields) }
         guard let field = fields.first(where: { $0.key == key && $0.kind == .action }) else {
@@ -1149,6 +1223,11 @@ enum SettingsManifest {
             ScreenCapture.shared.requestAccess()
             try? MacAttention.shared.openSettings(.screenRecording)
             return [:]
+        case "museCheckNow":
+            let status = await MuseConnector.shared.check()
+            return ["message": status.summary]
+        case _ where key.hasPrefix("museFeed."):
+            return try await performMuseFeed(key)
         case "openAccessibilitySettings":
             if !AXIsProcessTrusted() {
                 let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary

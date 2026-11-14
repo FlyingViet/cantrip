@@ -116,6 +116,11 @@ A task can list other tasks in `runsAfter` (for example a morning briefing that
 reviews the trackers): it starts after their runs due at or before it finish,
 or 30 minutes after its own time at the latest.
 
+A tracker can be filled by your Muse: ask Home for one, approve its setup
+message, and Muse's results arrive as checked records of its workspace. A task
+that lists a feed in `museFeeds` gets that feed's new records on each run,
+marked as untrusted data. [Muse feeds](muse.md#feeds-muses-results-as-records)
+
 A task runs on Home's model unless it has its own `model` (and optionally
 `effort`), set by asking Home, for example to move a simple tracker to a cheaper
 model. The ID must be one the model picker offers for Home's backend (Copilot

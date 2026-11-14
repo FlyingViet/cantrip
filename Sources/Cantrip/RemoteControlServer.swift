@@ -925,6 +925,8 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/usage-fallback"
                 || request.path == "/api/v1/policy"
                 || request.path == "/api/v1/policy/privacy-test"
+                || request.path == "/api/v1/muse"
+                || request.path.hasPrefix("/api/v1/muse/")
                 || request.path == "/api/v1/model-tiers"
                 || request.path == "/api/v1/mcp"
                 || request.path == "/api/v1/backends"
@@ -1164,6 +1166,10 @@ final class RemoteControlServer {
                 enabled: AppSettings.shared.openAIEndpointEnabled,
                 listening: AppSettings.shared.openAIEndpointListeningPort)
             sendEncoded(on: connection) { try JSONEncoder().encode(snapshot) }
+            return
+        }
+        if request.path == "/api/v1/muse" || request.path.hasPrefix("/api/v1/muse/") {
+            handleMuse(request, on: connection)
             return
         }
         if request.path == "/api/v1/policy/privacy-test" {
@@ -2130,7 +2136,7 @@ final class RemoteControlServer {
                             // A paired client's queued message may auto-fork, like one sent with Auto.
                             else {
                                 let client = RemoteClientMessage(location: await location?.named())
-                                session.submitRemote(prompt, mode: mode, autoForkEligible: true, client: client)
+                                session.submitRemote(prompt, mode: mode, autoForkEligible: true, client: client, fromUser: true)
                             }
                             sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
                         } catch let error as InputRequestError {
@@ -2173,13 +2179,13 @@ final class RemoteControlServer {
                             sendError(409, "The session closed before the message could be sent.", on: connection)
                             return
                         }
-                        session.submitRemote(prompt, mode: mode, autoForkEligible: true, client: client)
+                        session.submitRemote(prompt, mode: mode, autoForkEligible: true, client: client, fromUser: true)
                         sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
                     }
                     return
                 } else {
                     session.submitRemote(prompt, mode: mode, autoForkEligible: true,
-                                         client: RemoteClientMessage(location: location))
+                                         client: RemoteClientMessage(location: location), fromUser: true)
                 }
             } catch let error as RemoteClientLocation.Invalid {
                 sendError(400, error.localizedDescription, on: connection)
@@ -6187,3 +6193,53 @@ enum RemoteLANStatusText {
             : "Direct address: \(direct.joined(separator: " or ")). Add it to a Cantrip Agent or Gateway Mac profile with this Mac's pairing token; Tailscale subnet routes reach it away from home."
     }
 }
+
+// MARK: - Muse
+
+extension RemoteControlServer {
+    /// `GET /api/v1/muse`: Muse's status and feeds (never a credential). `POST /api/v1/muse/check`
+    /// checks the login now; `POST /api/v1/muse/feeds/<id>/poll` reads that feed's chat now.
+    /// Setting feeds up, pausing and removing them are Settings actions (`museFeed.*`).
+    func handleMuse(_ request: HTTPRequest, on connection: RemoteRequestConnection) {
+        let parts = request.path.split(separator: "/").dropFirst(3).map(String.init)
+        Task { @MainActor in
+            switch (request.method, parts) {
+            case ("GET", []):
+                self.sendJSON(Self.museSnapshot(), on: connection)
+            case ("POST", ["check"]):
+                _ = await MuseConnector.shared.check()
+                self.sendJSON(Self.museSnapshot(), on: connection)
+            case ("POST", let path) where path.count == 3 && path[0] == "feeds" && path[2] == "poll":
+                guard MuseFeeds.shared.feed(path[1]) != nil else { self.sendError(404, "No such Muse feed.", on: connection); return }
+                let outcomes = await MuseFeeds.shared.tick(force: true, only: path[1])
+                var body = Self.museSnapshot()
+                body["outcomes"] = outcomes
+                self.sendJSON(body, on: connection)
+            default:
+                self.sendError(request.method == "GET" || request.method == "POST" ? 404 : 405, "not found", on: connection)
+            }
+        }
+    }
+
+    @MainActor
+    static func museSnapshot() -> [String: Any] {
+        let status = MuseConnector.shared.status
+        var statusObject: [String: Any] = ["state": status.state.rawValue, "label": status.summary, "demo": status.demo]
+        statusObject["checkedAt"] = status.checkedAt.map(ISODate.string(from:))
+        statusObject["account"] = status.account
+        let feeds: [[String: Any]] = MuseFeeds.shared.feeds.map { feed in
+            var object: [String: Any] = [
+                "id": feed.id, "title": feed.title, "taskID": feed.taskID.uuidString, "state": feed.state.rawValue,
+                "statusLine": feed.statusLine, "lastSeq": feed.lastSeq, "dedupeField": feed.dedupeField,
+                "added": feed.stats.added, "updated": feed.stats.updated, "unchanged": feed.stats.unchanged,
+                "rejectedItems": feed.stats.rejectedItems, "ignoredMessages": feed.stats.ignoredMessages,
+            ]
+            object["lastResultAt"] = feed.lastResultAt.map(ISODate.string(from:))
+            object["lastError"] = feed.lastError
+            return object
+        }
+        return ["enabled": AppSettings.shared.museEnabled, "demo": AppSettings.shared.museDemo,
+                "status": statusObject, "feeds": feeds, "loginSteps": MuseStatus.loginSteps]
+    }
+}
+

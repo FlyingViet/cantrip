@@ -71,6 +71,10 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   card per reply with the elapsed time, an estimate from earlier runs and the
   result, its earlier steps folded into a one-line summary. The Mac, Cantrip
   Agent, both Gateways and the browser Remote draw them. [Cards](docs/cards.md)
+- **Muse:** start a message with @muse in Home or any tab to send it to your
+  Meta Muse (opt-in, through muse-cli); the Privacy Gate holds mail, texts,
+  finance, contacts and location first. Feeds you approve turn Muse's own
+  scheduled results into checked Home task records. [Muse](docs/muse.md)
 - **Child tabs:** an independent queued message runs (on its own for Auto
   delivery, paired devices and Home handoffs, several at once within the caps
   and the Mac's resources) in a nested tab with its own git branch; work that
@@ -154,6 +158,7 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 | `cantrip tab list` / `read ID` / `ask ID "question"` | List tabs with their child tabs, read a tab's recent turns (read-only), or ask a tab and print its reply | [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs) |
 | `cantrip handoffs [--days N] [--json]` | Where work handed off from Cantrip Home went: the tab, child tab and status of each handoff, plus open tabs and recent child tabs (read-only, titles and states only) | [See where handoffs went](docs/sessions-and-council.md#see-where-handoffs-went) |
 | `cantrip privacy report [--days N]` / `test ["<text>"] [--task <id>]` | Summarize where the Privacy Gate routed (or would route) Home chat and Home tasks, test its classifier, or see how a request you write would be routed (nothing is logged) | [Privacy Gate](docs/privacy-and-memory.md#decide-where-home-requests-run-privacy-gate) |
+| `cantrip muse status` / `feeds` / `log [N]` | Muse's login state, its feeds, and what Cantrip sent to and read from it (read-only, never message text) | [Muse](docs/muse.md#commands) |
 | `cantrip daemon start` | Run Cantrip in the background now and at every login (no windows) | [Headless](docs/headless.md#commands) |
 | `cantrip daemon stop` | Stop it and don't start it at login | [Headless](docs/headless.md#commands) |
 | `cantrip daemon restart` | Restart it (installs a staged update) | [Headless](docs/headless.md#commands) |

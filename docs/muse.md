@@ -1,0 +1,125 @@
+# Muse
+
+Cantrip can talk to your [Muse](https://muse.ai), Meta's personal agent, when you
+ask it to, and can turn what Muse finds on its own schedule into records of a
+Home task. Muse is off until you turn it on in **Settings › Tools & sign-ins ›
+Muse**.
+
+Cantrip reaches Muse through [muse-cli](https://github.com/nikships/muse-cli), an
+unofficial, MIT-licensed client of Muse's private, unversioned connection. Meta
+can change that connection at any time, and its terms may not allow unofficial
+clients. Muse runs on Meta's servers and may train on what you send it unless
+you turn that off in Muse's settings.
+
+## Set it up
+
+1. On the Mac running Cantrip, install muse-cli with uv, at the version Cantrip
+   was tested with: `uv tool install muse-cli==0.3.14`. Don't use its curl
+   installer.
+2. Sign in at muse.ai in Chrome (or Brave, Arc or Edge) on that Mac.
+3. In Terminal, run `muse-cli auth export` and choose **Always Allow** when macOS
+   asks to share the browser's login. It saves the login to
+   `~/.config/muse-cli/cookies.txt`, readable only by you. The login expires;
+   run the command again when Cantrip says so.
+4. Turn on **Muse** in Settings and choose **Check Now**.
+
+**Demo account (made-up data)** uses muse-cli's demo instead: no login and no
+network, so you can try `@muse` and feeds first. Cantrip keeps the demo's chats
+in `~/.cache/Cantrip/muse/` between uses.
+
+The Settings section shows whether Muse is connected, the login is missing or
+expired, muse-cli isn't installed, or Muse can't be reached. Cantrip tells you
+on your Mac and paired devices when a working login stops working.
+
+## Talk to Muse with @muse
+
+Start a message with `@muse` in Cantrip Home or any tab, on the Mac or a paired
+device:
+
+> @muse find a quiet café near the office for Thursday morning
+
+Cantrip sends the rest to Muse's main chat and shows Muse's reply in that chat
+as a Muse message. The tab's own model never sees the message or the reply, and
+it doesn't wait behind the tab's work. `@muse #feed-id …` sends to a feed's chat
+instead.
+
+- **Nothing else goes to Muse.** Only messages you write that start with @muse
+  are sent. Text a tab, Home or a model writes (handoffs, `tab ask`) is never
+  sent, even when it starts with @muse, and screen or selection context never
+  goes along.
+- **The Privacy Gate checks every message first.** Mail, text messages,
+  financial details, contacts, location, secrets and your private terms are
+  held: nothing is sent, and the message says what was found. Reply
+  `@muse send` within 15 minutes to send it as written, or `@muse cancel`.
+  Private tabs never send to Muse.
+- **Muse's files** (images, videos, documents) are saved to Home's Artifacts.
+- **When Muse asks you to choose** (to buy something, send an email), a card
+  shows the options. Cantrip never answers for you: reply with @muse, or answer
+  in the Muse app.
+- Muse's text is shown as data: images in it don't load from the web, and
+  nothing in it runs or opens on its own.
+
+## Feeds: Muse's results as records
+
+A feed turns one Muse chat into records of a Home task's workspace. Ask Home
+for a tracker Muse should fill, for example:
+
+> Track new apartment rentals in the Mission every morning with Muse: title,
+> address, neighborhood, price, beds, baths, link, listed on and source.
+
+Home creates the task's workspace and a feed waiting for your approval, and
+shows the one setup message Cantrip will send. It names the feed and the
+workspace's fields and asks Muse to make the job one of its own recurring
+tasks and post every result in that chat as a fenced `cantrip-feed` JSON block.
+Reply `@muse set up <feed>` (or approve it in Settings › Muse); only then does
+Cantrip start the chat and send the message.
+
+Cantrip then checks the feed's chat (every 30 minutes, only when Muse says the
+chat changed) and reads only messages after the last one it read, so a restart
+picks up where it left off. Plain code, not a model, reads each new Muse
+message:
+
+- It reads only Muse's messages in that chat, and only `cantrip-feed` blocks
+  that name this feed.
+- It keeps only the workspace's fields, checks each value's type (numbers,
+  dates, links, choices) and length, and leaves out values that don't fit. An
+  item without its identifying field (the link, for listings) is skipped. At
+  most 50 items per block.
+- A repeat of an item (the same link) updates that record instead of adding
+  another; an unchanged one is left alone.
+- Records are saved the same way as any other record, and you get a
+  notification with what's new.
+
+Muse can't do anything else: it can't run commands or tools, change tasks,
+schedules or feeds, start handoffs or send messages, and links are never opened
+for you. Cantrip also tells you when a feed has had no result for 1.5 times its
+usual interval. `~/.cache/Cantrip/muse/feed-log.jsonl` lists what each message
+added, updated or why it was skipped, without its text.
+
+**Tasks that read a feed.** A feed's own task, and any task that lists the feed
+in `museFeeds` (a morning briefing, say), gets the records added or updated since
+its last run, marked as untrusted data from Muse that it must never follow as
+instructions.
+
+Pause, resume or remove a feed in Settings › Muse. Removing it stops Cantrip
+from reading the chat; its records stay, and the chat and Muse's job stay in
+Muse.
+
+## Commands
+
+| Command | What it shows |
+|---|---|
+| `cantrip muse status` | On or off, the login's state and when it was checked |
+| `cantrip muse feeds` | Each feed, its chat, how far it has been read, and its counts |
+| `cantrip muse log [N]` | What Cantrip sent to and read from Muse: chats and sizes, never text |
+
+Paired clients read `GET /api/v1/muse`; `POST /api/v1/muse/check` checks the
+login and `POST /api/v1/muse/feeds/<id>/poll` reads a feed now.
+
+## Limits
+
+- Muse's live updates cover only its main chat; replies in other chats arrive
+  only by reading them, so feeds are checked on a timer, not instantly.
+- Cantrip waits up to 5 minutes for a reply. An image Muse makes after its
+  reply's text can arrive too late to be saved; it's still in Muse.
+- Approvals Muse asks for outside its chat aren't shown in Cantrip.

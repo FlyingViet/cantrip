@@ -122,6 +122,10 @@ struct SessionTabTests {
             try testHomeRepeatedData()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "muse" {
+            try await testMuse()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "privacy" {
             try testHomeLocalProfile()
             try await testPrivacyGate()
@@ -338,6 +342,7 @@ struct SessionTabTests {
         try testHomeLocalProfile()
         try testHomeRepeatedData()
         try await testPrivacyGate()
+        try await testMuse()
         try testBuildQueue()
         try await testThreadTags()
         try testCantripHomeRunSummaries()

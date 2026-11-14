@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "handoffs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "weather", "build-queue", "privacy", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "handoffs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "weather", "build-queue", "privacy", "muse", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 
@@ -29,6 +29,7 @@ enum CantripCLI {
             case "weather": try weather(Array(arguments.dropFirst()))
             case "build-queue": return try buildQueue(Array(arguments.dropFirst()))
             case "privacy": return try privacy(Array(arguments.dropFirst()))
+            case "muse": return try muse(Array(arguments.dropFirst()))
             default: print(usage)
             }
             return 0
@@ -89,6 +90,7 @@ enum CantripCLI {
                                   for simulatorPoolIdleMinutes, delete members the pool no longer keeps once free,
                                   and old temporary copies; prints the space freed
       cantrip build-queue         Builds running and waiting for a slot (buildQueueEnabled, buildQueueSlots)
+      cantrip muse [status|feeds|log]  Muse: login state, feeds and what was sent or read (read-only)
       cantrip privacy report [--days N]
                                   What the Privacy Gate decided for Home chat and Home tasks (default: 7 days):
                                   routes, what enforce mode would change, rules, detector hits and classifier speed
@@ -717,6 +719,46 @@ enum CantripCLI {
     /// `cantrip weather [PLACE]`: the same forecast, from the same 10-minute cache, as the weather
     /// card of a reply naming that place, so a model's numbers match its card.
     /// `cantrip privacy report|test`: reads this Mac's decision log (never prompt text).
+    /// `cantrip muse status|feeds|log [N]`: read-only; Muse's state files, never a credential.
+    static func muse(_ arguments: [String]) throws -> Int32 {
+        let directory = MuseConnector.directory
+        switch arguments.first ?? "status" {
+        case "status":
+            let status = (try? Data(contentsOf: directory.appendingPathComponent("status.json")))
+                .flatMap { try? JSONDecoder.iso.decode(MuseStatus.self, from: $0) }
+            let enabled = UserDefaults.standard.bool(forKey: "museEnabled")
+            print("Muse: \(enabled ? "on" : "off")\(UserDefaults.standard.bool(forKey: "museDemo") ? " (demo account)" : "")")
+            if let status {
+                print("Status: \(status.summary)" + (status.checkedAt.map { " (checked \(ISODate.string(from: $0)))" } ?? ""))
+                if status.state == .loginNeeded { print(MuseStatus.loginSteps) }
+                if status.state == .notInstalled { print(MuseStatus.installSteps) }
+            } else {
+                print("Status: not checked yet")
+            }
+            return 0
+        case "feeds":
+            let feeds = (try? Data(contentsOf: directory.appendingPathComponent("feeds.json")))
+                .flatMap { try? JSONDecoder.iso.decode([MuseFeed].self, from: $0) } ?? []
+            if feeds.isEmpty { print("No Muse feeds.") }
+            for feed in feeds {
+                print("\(feed.id) · \(feed.title) (task \(feed.taskID.uuidString)): \(feed.statusLine)")
+                print("    chat \(feed.sessionID ?? "none yet"), read through message \(feed.lastSeq), dedupe by \(feed.dedupeField); "
+                      + "\(feed.stats.rejectedItems) items rejected, \(feed.stats.ignoredMessages) messages ignored")
+            }
+            return 0
+        case "log":
+            let count = arguments.count > 1 ? Int(arguments[1]) ?? 40 : 40
+            for name in ["activity.log", "feed-log.jsonl"] {
+                let text = (try? String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8)) ?? ""
+                print("== \(name)")
+                print(text.split(separator: "\n").suffix(count).joined(separator: "\n"))
+            }
+            return 0
+        default:
+            throw Failure(message: "Usage: cantrip muse [status | feeds | log [N]]", code: 64)
+        }
+    }
+
     static func privacy(_ arguments: [String]) throws -> Int32 {
         switch arguments.first ?? "report" {
         case "report":

@@ -112,7 +112,7 @@ final class VoiceTurns {
     var home: () -> ChatSession? = { nil }
     /// Sends the words to Home, queued so the turn waits for its own reply; tests replace it.
     var submit: (ChatSession, String) -> Void = { session, text in
-        session.submitRemote(text, mode: .queue, autoForkEligible: false)
+        session.submitRemote(text, mode: .queue, autoForkEligible: false, fromUser: true)
     }
     var now: () -> Date = Date.init
     private(set) var turns: [UUID: VoiceTurn] = [:]

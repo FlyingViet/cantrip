@@ -48,6 +48,8 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var privacy: PrivacyBadge?
     /// Builds, test runs and uploads this reply's commands ran, each shown as a live card.
     var builds: [BuildRun] = []
+    /// An `@muse` exchange (role `handoff`, author "Muse"): Muse's words, never a model turn.
+    var muse: MuseExchange?
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
     /// `freshStart`: the Start Fresh divider; turns above it are never sent to the model.
     enum Role: String, Codable { case user, assistant, error, handoff, freshStart }
@@ -58,7 +60,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
-        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards, builds, privacy
+        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards, builds, privacy, muse
     }
 }
 
@@ -149,6 +151,7 @@ extension ChatMessage {
         placeCard = try? container.decodeIfPresent(PlaceCard.self, forKey: .placeCard)
         weatherCard = try? container.decodeIfPresent(WeatherCard.self, forKey: .weatherCard)
         cards = (try? container.decodeIfPresent([CardDocument].self, forKey: .cards)) ?? []
+        muse = try? container.decodeIfPresent(MuseExchange.self, forKey: .muse)
         // A saved build still running was cut off (Cantrip restarted): nothing will finish it.
         builds = ((try? container.decodeIfPresent([BuildRun].self, forKey: .builds)) ?? []).map { build in
             var build = build
@@ -158,7 +161,7 @@ extension ChatMessage {
         if (try? container.decodeIfPresent(Bool.self, forKey: .freshStart)) == true {
             role = .freshStart
         } else {
-            role = handoffResult == nil && childResult == nil ? storedRole : .handoff
+            role = handoffResult == nil && childResult == nil && muse == nil ? storedRole : .handoff
         }
         if role == .assistant, text.contains("](conversation://") {
             activities = AntigravitySubagentTranscript.reconstructedActivities(fromText: text)
@@ -193,6 +196,7 @@ extension ChatMessage {
         try container.encodeIfPresent(weatherCard, forKey: .weatherCard)
         if !cards.isEmpty { try container.encode(cards, forKey: .cards) }
         if !builds.isEmpty { try container.encode(builds, forKey: .builds) }
+        try container.encodeIfPresent(muse, forKey: .muse)
     }
 }
 
@@ -1620,7 +1624,7 @@ final class ChatSession: ObservableObject {
             catch { deliveryStatusForInput(error.localizedDescription) }
             return
         }
-        receive(text, mode: mode, includesAmbientContext: true)
+        receive(text, mode: mode, includesAmbientContext: true, fromUser: true)
     }
 
     /// A message typed into Cantrip's panel while the background agents run the tabs: it runs like
@@ -1707,11 +1711,13 @@ final class ChatSession: ObservableObject {
     /// `autoForkEligible`: a paired client's queued message, which auto-fork may start in a
     /// child tab like one sent with Auto delivery.
     /// `client`: a message from a paired device's composer, with the location it shared (if any).
+    /// `fromUser`: typed by the user on a paired device (the messages API, voice), not written by
+    /// a tab, Home or a model (`tab ask`, handoffs). Only the user's messages may reach Muse.
     func submitRemote(_ text: String, mode: MessageDeliveryMode = .auto, autoForkEligible: Bool = false,
-                      client: RemoteClientMessage? = nil) {
+                      client: RemoteClientMessage? = nil, fromUser: Bool = false) {
         if let client { rememberClientMessage(client, text: text) }
         let before = autoForkEligible ? Set(queued.map(\.id)) : []
-        receive(text, mode: mode, includesAmbientContext: false)
+        receive(text, mode: mode, includesAmbientContext: false, fromUser: fromUser)
         guard autoForkEligible, mode == .queue else { return }
         for item in queued where !before.contains(item.id) { noteAutoDelivered(item.id) }
     }
@@ -1808,13 +1814,19 @@ final class ChatSession: ObservableObject {
         }
     }
 
-    private func receive(_ text: String, mode: MessageDeliveryMode, includesAmbientContext: Bool) {
+    private func receive(_ text: String, mode: MessageDeliveryMode, includesAmbientContext: Bool, fromUser: Bool = false) {
         if let privateStorageError {
             tabActionError = privateStorageError
             return
         }
         var prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
+        // The user's `@muse …` goes to Muse, never to this tab's model, queue or router. Text a tab,
+        // Home or a model wrote that starts with @muse is an ordinary message: it never reaches Muse.
+        if fromUser, receiveMuseMention(prompt) { return }
+        if !fromUser, MuseMention.parse(prompt) != nil {
+            Log.write("muse: @muse text in tab \(id.uuidString.prefix(8)) didn't come from the user; not sent to Muse")
+        }
         invalidateRouting()
         deliveryStatus = nil
         let wasBusy = isStreaming || !queued.isEmpty || autoResumePending

@@ -3691,6 +3691,22 @@ struct MessageRow: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
             .accessibilityElement(children: .combine)
+        case .handoff where message.muse != nil:
+            // An @muse exchange: the request, then Muse's reply (its own words, shown as data).
+            VStack(alignment: .leading, spacing: 6) {
+                Label(MuseExchange.author, systemImage: "sparkles")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                MarkdownContent(text: message.text)
+                    .textSelection(.enabled)
+                if !message.cards.isEmpty {
+                    CardDocumentStack(cards: message.cards, links: [])
+                        .padding(.top, 2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Muse")
         case .handoff where message.childResult != nil && childAction != nil:
             if let child = message.childResult, let childAction {
                 ChildTabCard(record: child, isOpen: childTabOpen, action: childAction)

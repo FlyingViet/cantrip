@@ -77,7 +77,8 @@ enum CantripHomeTaskContext {
                 budget: relatedBudget, indexBudget: share, indexLeft: &indexLeft
             ))
         }
-        guard !sections.isEmpty else { return "" }
+        let fromMuse = MuseFeeds.shared.newRecords(for: task, in: tasks)
+        guard !sections.isEmpty else { return fromMuse }
         return """
 
 
@@ -86,7 +87,7 @@ enum CantripHomeTaskContext {
         the instructions above prints all of them.
         \(sections.joined(separator: "\n"))
         )
-        """
+        """ + fromMuse
     }
 
     // MARK: - Attended Home messages
@@ -168,7 +169,8 @@ enum CantripHomeTaskContext {
         task: CantripHomeTask, workspace: CantripHomeTaskWorkspace?, heading: String, lastRun: Bool,
         budget: Int, indexBudget: Int, indexLeft: inout Int
     ) -> String {
-        var lines = ["Task \(task.id.uuidString) · \(task.title) (\(heading))"]
+        var lines = ["Task \(task.id.uuidString) · \(task.title) (\(heading))"
+                     + (MuseFeeds.shared.untrustedNote(for: task.id).map { " " + $0 } ?? "")]
         if lastRun {
             let schedule = task.isScheduled ? task.schedule.summary : "no schedule"
             let run = task.runs.first.map { run in

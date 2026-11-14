@@ -38,6 +38,12 @@ enum RemoteHistory {
         }
         if let handoff = message.handoffResult { result["handoffResult"] = handoff.snapshot }
         if let child = message.childResult { result["childResult"] = child.snapshot }
+        if let muse = message.muse {
+            // `@muse` exchange: role handoff, author Muse; `text` is what to show.
+            var exchange: [String: Any] = ["state": muse.state.rawValue, "chat": muse.chat]
+            exchange["findings"] = muse.findings
+            result["muse"] = exchange
+        }
         let reasoning = ReasoningStep.steps(from: message.reasoningBlocks)
         if !reasoning.isEmpty {
             result["reasoning"] = reasoning.enumerated().map { $1.snapshot(number: $0 + 1) }

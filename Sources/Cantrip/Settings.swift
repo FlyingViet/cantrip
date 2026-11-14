@@ -360,6 +360,20 @@ final class AppSettings: ObservableObject {
     @Published var childTabsAutoFork: Bool {
         didSet { d.set(childTabsAutoFork, forKey: "childTabsAutoFork") }
     }
+    /// Muse (the user's Meta Muse agent, through muse-cli): `@muse` messages and feeds. Off by default.
+    @Published var museEnabled: Bool {
+        didSet {
+            d.set(museEnabled, forKey: "museEnabled")
+            if oldValue != museEnabled { Task { @MainActor in MuseConnector.shared.settingsChanged() } }
+        }
+    }
+    /// Muse with muse-cli's made-up demo account instead of the real one (no login, no network).
+    @Published var museDemo: Bool {
+        didSet {
+            d.set(museDemo, forKey: "museDemo")
+            if oldValue != museDemo { Task { @MainActor in MuseConnector.shared.settingsChanged() } }
+        }
+    }
     /// Child tabs one tab may run at once (`ChildTabCapacity`).
     @Published var childTabsPerParentLimit: Int {
         didSet {
@@ -880,6 +894,8 @@ final class AppSettings: ObservableObject {
             "agyMemoryConsolidation": agyMemoryConsolidation,
             "interfaceMode": interfaceMode.rawValue,
             "childTabsAutoFork": childTabsAutoFork,
+            "museEnabled": museEnabled,
+            "museDemo": museDemo,
             "childTabsPerParentLimit": childTabsPerParentLimit,
             "childTabsOverallLimit": childTabsOverallLimit,
             "buildQueueEnabled": buildQueueEnabled,
@@ -1025,6 +1041,8 @@ final class AppSettings: ObservableObject {
             applied.append("interfaceMode")
         }
         bool("childTabsAutoFork") { self.childTabsAutoFork = $0 }
+        bool("museEnabled") { self.museEnabled = $0 }
+        bool("museDemo") { self.museDemo = $0 }
         int("childTabsPerParentLimit", 1...ChildTabCapacity.maximumPerParent) { self.childTabsPerParentLimit = $0 }
         int("childTabsOverallLimit", 1...ChildTabCapacity.maximumOverall) { self.childTabsOverallLimit = $0 }
         bool("buildQueueEnabled") { self.buildQueueEnabled = $0 }
@@ -1233,6 +1251,8 @@ final class AppSettings: ObservableObject {
             ? true : d.bool(forKey: "copilotAllowSubagents")
         childTabsAutoFork = d.object(forKey: "childTabsAutoFork") == nil
             ? true : d.bool(forKey: "childTabsAutoFork")
+        museEnabled = d.bool(forKey: "museEnabled")
+        museDemo = d.bool(forKey: "museDemo")
         let storedPerParent = d.integer(forKey: "childTabsPerParentLimit")
         childTabsPerParentLimit = storedPerParent == 0
             ? ChildTabCapacity.defaultPerParent : min(max(storedPerParent, 1), ChildTabCapacity.maximumPerParent)
