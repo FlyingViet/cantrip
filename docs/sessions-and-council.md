@@ -290,6 +290,23 @@ match ([details](updating-and-troubleshooting.md#new-worktrees-reuse-installed-p
   gets `~/.cache/Cantrip/worktrees/<id>` on `cantrip/child/<title>-<id>`,
   branched from the parent's HEAD and locked so storage cleanup skips it.
   Without a repository the child shares the folder and has nothing to merge.
+- **Checkout behind its upstream:** when the parent's checkout is behind the
+  branch it tracks (Cantrip fetches it when the child starts), the child
+  starts from that remote branch instead, for example `origin/master`, because
+  the checkout isn't a current copy of it. A checkout that stays put on purpose,
+  such as a project's live runtime folder, can be pinned with
+  `git config cantrip.childTabs remote` (`local` pins the usual merge). When
+  such a child finishes, Cantrip fetches again, rebases its commits onto the
+  remote branch in the child's own worktree and pushes them there, fast-forward
+  only and never forced. If the branch moved before the push landed, it
+  fetches, rebases and pushes again, up to 3 times, then the card says so.
+  It doesn't wait for the parent to be idle, and never changes the parent's
+  checkout, index or branches. The card reads *Pushed to origin/master · 3
+  files +40 −2*, and the parent's model is told the work is on the remote,
+  not in its checkout. A rebase conflict asks like a merge conflict; **Keep
+  both** asks the parent to finish the rebase in the child's worktree, and
+  Cantrip pushes it when the parent's turn ends. A checkout that is current
+  but has uncommitted edits keeps the usual merge.
 - **Watch and steer:** open the child from its card or the tab list to watch
   it, send messages or answer its questions. The parent's model can steer it
   too, with `tab ask --steer` (see [Look into other tabs](#look-into-other-tabs)).

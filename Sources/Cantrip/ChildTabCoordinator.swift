@@ -130,14 +130,16 @@ final class ChildTabCoordinator {
         let branch = ChildTabGit.branchName(title: title, id: childID)
         forking[itemID] = parentID
         defer { forking[itemID] = nil }
-        let created = try await Task.detached(priority: .userInitiated) { () throws -> (root: String, subpath: String, base: (baseCommit: String, baseBranch: String?), seeded: [String])? in
+        let created = try await Task.detached(priority: .userInitiated) { () throws -> (root: String, subpath: String, base: (baseCommit: String, baseBranch: String?), remote: String?, landing: String, seeded: [String])? in
             guard let repo = Self.repository(workdir: parentWorkdir, planRepo: planRepo, activity: activity,
                                              worktreesRoot: worktreesRoot) else { return nil }
-            let base = try ChildTabGit.createWorktree(repo: repo.root, branch: branch, path: path)
+            // A checkout that isn't a current copy of its upstream: start from the upstream and push there.
+            let landing = ChildTabGit.landing(repo.root)
+            let base = try ChildTabGit.createWorktree(repo: repo.root, branch: branch, path: path, from: landing.target)
             // Copy-on-write clones of the parent's installed packages, so the child doesn't fetch them again.
             let sources = [repo.root] + BuildCaches.checkouts(of: repo.root).filter { $0 != repo.root }
             let seeded = BuildCaches.seed(worktree: path, from: sources).seeded
-            return (repo.root, repo.subpath, base, seeded)
+            return (repo.root, repo.subpath, base, landing.target?.remote, landing.reason, seeded)
         }.value
         // The tab may have started the message, or closed, while git worked.
         guard manager.sessions.contains(where: { $0 === parent }), parent.queued.contains(where: { $0.id == itemID }) else {
@@ -155,6 +157,7 @@ final class ChildTabCoordinator {
             record.branch = branch
             record.baseCommit = created.base.baseCommit
             record.baseBranch = created.base.baseBranch
+            record.remote = created.remote
             if !created.seeded.isEmpty { record.seededFolders = created.seeded }
             workdir = created.subpath.isEmpty ? path : (path as NSString).appendingPathComponent(created.subpath)
         }
@@ -182,6 +185,7 @@ final class ChildTabCoordinator {
         updateCard(record, in: parent)
         Log.write("child-tabs: \(automatically ? "auto-forked" : "forked") \"\(title)\" from \(parent.id.uuidString.prefix(8))"
                   + (record.branch.map { " on \($0)" } ?? " (no repository)")
+                  + (created.map { record.remote != nil ? "; from and to \(record.target) (\($0.landing))" : "; merges locally (\($0.landing))" } ?? "")
                   + (record.seededFolders.map { "; cloned \($0.joined(separator: ", "))" } ?? ""))
         child.startChildTask(item.text, preamble: brief(for: record, parent: parent))
         for follower in following {
@@ -205,7 +209,13 @@ final class ChildTabCoordinator {
     /// The hidden instructions the child starts with: where to work and how it ends.
     func brief(for record: ChildTab, parent: ChatSession) -> String {
         var lines = ["(You are a child tab of the Cantrip tab “\(parent.title)”, started to handle one queued request in parallel. Work only on the request below."]
-        if let repo = record.repoRoot, let worktree = record.worktree, let branch = record.branch {
+        if let repo = record.repoRoot, let worktree = record.worktree, let branch = record.branch, record.remote != nil {
+            let target = record.target
+            lines.append("Repository: \(repo). Your own checkout is \(worktree), on branch \(branch), started from the latest \(target) (\(record.baseCommit?.prefix(9) ?? "HEAD")) because \(repo)'s own checkout isn't a current copy of it. Edit, build and test only in your checkout; don't change files, branches or git state in \(repo). Commit your work on \(branch) and run the tests that cover it before you finish: Cantrip then rebases it onto the latest \(target) and pushes it there (fast-forward only), so don't push yourself. Uncommitted changes in the parent's checkout aren't in yours.")
+            if let seeded = record.seededFolders, !seeded.isEmpty {
+                lines.append("Already installed in your checkout (copy-on-write clones of the parent's or another checkout's): \(seeded.joined(separator: ", ")). Skip a fresh install unless you change a lockfile.")
+            }
+        } else if let repo = record.repoRoot, let worktree = record.worktree, let branch = record.branch {
             let base = record.baseBranch ?? "the parent's branch"
             lines.append("Repository: \(repo). Your own checkout is \(worktree), on branch \(branch) (from \(base) at \(record.baseCommit?.prefix(9) ?? "HEAD")). Edit, build and test only there. The parent tab is working in \(repo), so don't change files there. Commit your work on \(branch); Cantrip merges it into \(base) when you finish. Uncommitted changes in the parent's checkout aren't in yours.")
             if let seeded = record.seededFolders, !seeded.isEmpty {
@@ -373,15 +383,17 @@ final class ChildTabCoordinator {
         manager?.sessions.first { $0.id == record.parentID }
     }
 
-    /// One merge at a time; each waits until its parent is idle (a closed parent counts) and its
-    /// child isn't running again.
+    /// One merge at a time; each waits until its child isn't running again and, when it merges
+    /// into the parent's checkout (or the parent was asked to resolve it), until its parent is idle
+    /// (a closed parent counts). One that pushes leaves the parent's checkout alone, so it doesn't wait.
     private func pumpMerges() {
         guard !mergeRunning else { return }
         guard let index = pendingMerges.firstIndex(where: { entry in
             guard let record = store.record(entry.id) else { return true }
             let parentBusy = parent(of: record)?.isStreaming ?? false
             let childBusy = manager?.sessions.first { $0.id == record.id }?.isStreaming ?? false
-            return !parentBusy && !childBusy
+            let needsIdleParent = record.remote == nil || record.resolveRequested
+            return !(parentBusy && needsIdleParent) && !childBusy
         }) else { return }
         let entry = pendingMerges.remove(at: index)
         guard var record = store.record(entry.id),
@@ -393,7 +405,8 @@ final class ChildTabCoordinator {
         record.state = .merging
         save(record)
         let parent = self.parent(of: record)
-        parent?.childMergeHold = true
+        // A push while the parent works doesn't hold its queue; its next message hears the outcome.
+        if parent?.isStreaming != true { parent?.childMergeHold = true }
         mergeRunning = true
         mergingParent = record.parentID
         let snapshot = record
@@ -421,6 +434,8 @@ final class ChildTabCoordinator {
         if record.state != .merging { record.resolveRequested = false }
         save(record)
         Log.write("child-tabs: \"\(record.title)\" -> \(record.state.rawValue)"
+                  + (record.mergeCommit.map { record.state == .merged ? " at \($0.prefix(9))" : "" } ?? "")
+                  + (record.state == .merged && record.remote != nil ? " on \(record.target)" : "")
                   + (record.note.map { ": \($0.prefix(200))" } ?? ""))
         if record.state.isSettled { archive(record) }
         if Self.isWaiting(record) { scheduleWaitingRetry() }
@@ -493,11 +508,22 @@ final class ChildTabCoordinator {
             }
             let base = record.baseBranch ?? "the current branch"
             let files = record.conflictFiles.joined(separator: ", ")
-            parent.submitRemote("""
-            Merge child tab “\(record.title)” (branch \(branch)) into \(base) in \(repo). Git found a conflict in \(files). \
-            Resolve it, keeping both sides' changes where both added code, run the tests that cover those files, \
-            then commit the merge. Don't delete the branch or its worktree; Cantrip removes them.
-            """, mode: .queue)
+            if let remote = record.remote, let worktree = record.worktree {
+                let target = record.target
+                parent.submitRemote("""
+                Rebase child tab “\(record.title)” (branch \(branch)) onto \(target): git found a conflict in \(files). \
+                Work only in the child's checkout \(worktree), not in \(repo)'s own checkout: run \
+                `git fetch \(remote) \(base) && git rebase \(target)` there, resolve the conflict keeping both sides' changes \
+                where both added code, run the tests that cover those files, and finish the rebase. Don't push, and don't \
+                delete the branch or its worktree; Cantrip pushes it to \(target) and removes them.
+                """, mode: .queue)
+            } else {
+                parent.submitRemote("""
+                Merge child tab “\(record.title)” (branch \(branch)) into \(base) in \(repo). Git found a conflict in \(files). \
+                Resolve it, keeping both sides' changes where both added code, run the tests that cover those files, \
+                then commit the merge. Don't delete the branch or its worktree; Cantrip removes them.
+                """, mode: .queue)
+            }
             record.state = .merging
             record.resolveRequested = true
             record.note = nil
@@ -916,6 +942,8 @@ final class ChildTabCoordinator {
 enum ChildTabMerge {
     /// How a waiting child retries (`ChildTabCoordinator.waitingRetryInterval`).
     static let retryNote = "Cantrip tries again every 2 minutes and when the parent finishes a turn."
+    /// Tries a push again this many times when the remote branch moved meanwhile.
+    static let pushAttempts = 3
 
     static func fileList(_ files: [String]) -> String {
         let shown = files.prefix(4).joined(separator: ", ")
@@ -923,6 +951,7 @@ enum ChildTabMerge {
     }
 
     static func perform(_ record: ChildTab, option: String? = nil) -> ChildTab {
+        if let remote = record.remote { return performRemote(record, remote: remote, option: option) }
         var record = record
         guard let repo = record.repoRoot, let branch = record.branch, let base = record.baseCommit else {
             record.state = .noChanges
@@ -1002,8 +1031,93 @@ enum ChildTabMerge {
         return record
     }
 
+    /// A child that started from its remote branch: its commits are rebased onto that branch's
+    /// latest commit in its own worktree and pushed there (fast-forward only, again after a fresh
+    /// fetch if the branch moved meanwhile). The parent's checkout, index and branches are never
+    /// touched; git runs in the child's worktree, apart from removing it afterwards.
+    static func performRemote(_ record: ChildTab, remote: String, option: String?) -> ChildTab {
+        var record = record
+        guard let repo = record.repoRoot, let branch = record.branch, let base = record.baseCommit,
+              let baseBranch = record.baseBranch else {
+            record.state = .noChanges
+            return record
+        }
+        let target = ChildTabGit.RemoteBranch(remote: remote, branch: baseBranch)
+        guard let worktree = record.worktree, FileManager.default.fileExists(atPath: worktree) else {
+            record.state = .unmerged
+            record.note = "Its checkout is gone, so Cantrip can't rebase \(branch) onto \(target.name). Push it yourself, or Discard."
+            return record
+        }
+        if let operation = ChildTabGit.operationInProgress(worktree) {
+            record.state = .finished
+            record.note = "Waiting: \(operation) is unfinished in the child's checkout \(worktree). \(retryNote)"
+            return record
+        }
+        if let failure = unsaved(record, ChildTabGit.commitLeftovers(worktree: worktree, title: record.title)) {
+            return failure
+        }
+        guard ChildTabGit.branchExists(repo, branch) else {
+            record.state = .unmerged
+            record.note = "Its branch \(branch) is gone, so there's nothing to push."
+            return record
+        }
+        record.files = ChildTabGit.numstat(repo: worktree, base: base, branch: branch)
+        if ChildTabGit.commitsAhead(repo: worktree, base: base, branch: branch) == 0 {
+            guard ChildTabGit.cleanup(repo: repo, worktree: worktree, branch: branch, force: false) else {
+                return kept(record)
+            }
+            record.state = .noChanges
+            record.note = nil
+            return record
+        }
+        for attempt in 1...pushAttempts {
+            let fetchError = ChildTabGit.fetch(worktree, target)
+            guard ChildTabGit.commit(worktree, target.trackingRef) != nil else {
+                record.state = .unmerged
+                record.note = "Cantrip couldn't fetch \(target.name): \(fetchError ?? "no such branch"). Choose Try Again."
+                return record
+            }
+            if ChildTabGit.isAncestor(worktree, branch, of: target.trackingRef) {
+                // Already there (pushed before, or by the parent while resolving).
+                return merged(record, commit: ChildTabGit.commit(worktree, branch), repo: repo, branch: branch, landed: true)
+            }
+            switch ChildTabGit.rebase(worktree: worktree, onto: target.trackingRef, option: option, parentLabel: target.name) {
+            case .rebased:
+                break
+            case .conflict(let files, let excerpt):
+                record.state = .conflict
+                record.conflictFiles = files
+                record.conflictExcerpt = excerpt
+                record.cleanFileCount = max(0, record.files.count - files.count)
+                record.note = nil
+                return record
+            case .failed(let text):
+                record.state = .unmerged
+                record.note = "Git couldn't rebase \(branch) onto \(target.name): \(text)"
+                return record
+            }
+            record.files = ChildTabGit.numstat(repo: worktree, base: target.trackingRef, branch: branch)
+            switch ChildTabGit.push(worktree: worktree, branch: branch, to: target) {
+            case .pushed:
+                return merged(record, commit: ChildTabGit.commit(worktree, branch), repo: repo, branch: branch, landed: true)
+            case .rejected(let text):
+                guard attempt < pushAttempts else {
+                    record.state = .unmerged
+                    record.note = "\(target.name) kept moving: \(pushAttempts) pushes were rejected (\(text.prefix(160))). Choose Try Again."
+                    return record
+                }
+            case .failed(let text):
+                record.state = .unmerged
+                record.note = "Cantrip couldn't push to \(target.name): \(text). Choose Try Again."
+                return record
+            }
+        }
+        return record
+    }
+
     /// After the parent was asked to resolve a conflict: merged now, still waiting, or back to the question.
     static func checkResolution(_ record: ChildTab, parentDone: Bool) -> ChildTab {
+        if record.remote != nil { return checkRemoteResolution(record, parentDone: parentDone) }
         var record = record
         guard let repo = record.repoRoot, let branch = record.branch else { return perform(record) }
         let mergedByParent = ChildTabGit.branchExists(repo, branch) && ChildTabGit.isMerged(repo: repo, branch: branch)
@@ -1025,6 +1139,22 @@ enum ChildTabMerge {
         return record
     }
 
+    /// The parent was asked to rebase the child's branch in the child's worktree: once it's done
+    /// (no rebase left unfinished there), Cantrip pushes it, rebasing again if the remote moved.
+    private static func checkRemoteResolution(_ record: ChildTab, parentDone: Bool) -> ChildTab {
+        var record = record
+        guard let worktree = record.worktree, FileManager.default.fileExists(atPath: worktree) else { return perform(record) }
+        if let operation = ChildTabGit.operationInProgress(worktree) {
+            if parentDone {
+                record.state = .conflict
+                record.resolveRequested = false
+                record.note = "\(operation.prefix(1).uppercased() + operation.dropFirst()) is unfinished in \(worktree). Finish it there, or choose again."
+            }
+            return record
+        }
+        return parentDone ? perform(record) : record
+    }
+
     /// When committing the child's leftovers failed: the record stopped for the user, its work kept.
     private static func unsaved(_ record: ChildTab, _ leftovers: ChildTabGit.Leftovers) -> ChildTab? {
         guard case .failed(let reason) = leftovers else { return nil }
@@ -1044,9 +1174,10 @@ enum ChildTabMerge {
         return record
     }
 
-    private static func merged(_ record: ChildTab, commit: String?, repo: String, branch: String) -> ChildTab {
+    private static func merged(_ record: ChildTab, commit: String?, repo: String, branch: String,
+                               landed: Bool = false) -> ChildTab {
         var record = record
-        guard ChildTabGit.cleanup(repo: repo, worktree: record.worktree, branch: branch, force: false) else {
+        guard ChildTabGit.cleanup(repo: repo, worktree: record.worktree, branch: branch, force: false, landed: landed) else {
             return kept(record)
         }
         record.mergeCommit = commit

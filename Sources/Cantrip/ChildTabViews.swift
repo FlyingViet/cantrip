@@ -133,7 +133,7 @@ struct ChildTabCard: View {
     }
 
     private var question: some View {
-        let base = record.baseBranch ?? "the parent's branch"
+        let base = record.target
         let files = record.conflictFiles.prefix(4).joined(separator: ", ")
             + (record.conflictFiles.count > 4 ? " and \(record.conflictFiles.count - 4) more" : "")
         let clean = record.cleanFileCount
@@ -203,7 +203,7 @@ struct ChildTabCard: View {
     }
 
     private var options: [(String, String)] {
-        let base = record.baseBranch.map { "\($0)'s" } ?? "the parent's"
+        let base = record.targetBranch.map { "\($0)'s" } ?? "the parent's"
         return [("resolve", "Keep Both, Then Run the Tests (Recommended)"), ("keepParent", "Keep \(base) Version"),
                 ("keepChild", "Keep the Child's Version"), ("leave", "Leave It Unmerged; I'll Look")]
             .filter { record.actions.contains($0.0) }
@@ -257,7 +257,7 @@ struct ChildTabBanner: View {
                 .foregroundStyle(ChildTabColors.lane)
                 .accessibilityHidden(true)
             Text(verbatim: "Child tab of \(record.parentTitle)"
-                 + (record.branch.map { " · \($0) → \(record.baseBranch ?? "the parent's branch")" } ?? "")
+                 + (record.branch.map { " · \($0) → \(record.target)" } ?? "")
                  + " · \(record.statusLine)")
                 .foregroundStyle(.secondary)
                 .lineLimit(2)

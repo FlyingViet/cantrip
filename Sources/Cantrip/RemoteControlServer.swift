@@ -2898,7 +2898,7 @@ final class RemoteControlServer {
             var child: [String: Any] = ["state": record.state.rawValue, "title": record.title,
                                         "parentTitle": record.parentTitle, "statusLine": record.statusLine]
             child["branch"] = record.branch
-            child["baseBranch"] = record.baseBranch
+            child["baseBranch"] = record.targetBranch
             child["repoName"] = record.repoName
             result["child"] = child
         }

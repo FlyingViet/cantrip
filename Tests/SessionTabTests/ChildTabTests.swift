@@ -42,6 +42,7 @@ extension SessionTabTests {
         try testChildTabRecord()
         try testChildTabCardsAfterRelaunch()
         try await testChildTabLifecycle()
+        try await testChildTabRemoteLanding()
         try await testChildTabAPI()
         try await testChildTabAutoFork()
         try await testHomeHandoffChildTabs()
@@ -794,6 +795,285 @@ extension SessionTabTests {
         precondition(haikuStatus == "Done · no repository to merge" && !isOpen(haiku))
         let leftovers = (try? files.contentsOfDirectory(atPath: coordinator.worktreesRoot.path)) ?? []
         precondition(leftovers.isEmpty, "every worktree was removed: \(leftovers)")
+    }
+
+    /// A parent checkout that isn't a current copy of its upstream (behind it, with uncommitted
+    /// work, like a project's live runtime folder): its children start from the upstream branch and
+    /// land there by rebase and push, and the parent's checkout, index and branches never change.
+    /// A clean, current clone still merges locally.
+    @MainActor
+    static func testChildTabRemoteLanding() async throws {
+        let settings = AppSettings.shared
+        let saved = (settings.backend, settings.memoryEnabled, settings.voiceMode,
+                     settings.childTabsPerParentLimit, settings.childTabsOverallLimit)
+        settings.backend = .copilot
+        settings.memoryEnabled = false
+        settings.voiceMode = false
+        settings.childTabsPerParentLimit = 3
+        settings.childTabsOverallLimit = 3
+        defer {
+            (settings.backend, settings.memoryEnabled, settings.voiceMode,
+             settings.childTabsPerParentLimit, settings.childTabsOverallLimit) = saved
+        }
+        let files = FileManager.default
+        let scratch = files.temporaryDirectory.appendingPathComponent("cantrip-child-remote-\(UUID().uuidString)", isDirectory: true).path
+        try files.createDirectory(atPath: scratch, withIntermediateDirectories: true)
+        defer { try? files.removeItem(atPath: scratch) }
+        @discardableResult
+        func git(_ arguments: String..., in directory: String) -> String {
+            let result = ChildTabGit.run(directory, arguments, timeout: 30)
+            precondition(result?.succeeded == true, "git \(arguments.joined(separator: " ")): \(result?.error ?? "timed out")")
+            return result?.output ?? ""
+        }
+        func write(_ text: String, _ path: String) throws { try text.write(toFile: path, atomically: true, encoding: .utf8) }
+        func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+        func identify(_ directory: String) {
+            git("config", "user.name", "Child Tab Test", in: directory)
+            git("config", "user.email", "child-tabs@example.com", in: directory)
+        }
+        let origin = scratch + "/origin.git", writer = scratch + "/writer", project = scratch + "/project"
+        try files.createDirectory(atPath: origin, withIntermediateDirectories: true)
+        git("init", "-q", "--bare", "-b", "main", in: origin)
+        git("clone", "-q", origin, writer, in: scratch)
+        identify(writer)
+        try write("one\ntwo\nthree\n", writer + "/a.txt")
+        git("add", "-A", in: writer)
+        git("commit", "-q", "-m", "Start", in: writer)
+        git("push", "-q", "origin", "main", in: writer)
+        /// Someone else pushes to origin/main; returns the new tip.
+        @discardableResult
+        func pushFromWriter(_ file: String, _ text: String, _ message: String) throws -> String {
+            git("fetch", "-q", "origin", in: writer)
+            git("reset", "-q", "--hard", "origin/main", in: writer)
+            try write(text, writer + "/" + file)
+            git("add", "-A", in: writer)
+            git("commit", "-q", "-m", message, in: writer)
+            git("push", "-q", "origin", "main", in: writer)
+            return git("rev-parse", "HEAD", in: writer)
+        }
+        /// The bare remote, named explicitly (git refuses to discover bare repositories).
+        @discardableResult
+        func originGit(_ arguments: String...) -> String {
+            let result = ChildTabGit.run(scratch, ["--git-dir=" + origin] + arguments, timeout: 30)
+            precondition(result?.succeeded == true, "git \(arguments.joined(separator: " ")): \(result?.error ?? "timed out")")
+            return result?.output ?? ""
+        }
+        func originTip() -> String { originGit("rev-parse", "main") }
+        git("clone", "-q", origin, project, in: scratch)
+        identify(project)
+        let projectRoot = try requireChild(ChildTabGit.toplevel(project))
+
+        // Deciding: clean and current, or current with uncommitted edits, merges locally; behind its
+        // upstream, or set to remote, pushes; set to local, or without an upstream, merges locally.
+        precondition(ChildTabGit.landing(project).target == nil && ChildTabGit.landing(project).reason == "main is current with origin/main",
+                     ChildTabGit.landing(project).reason)
+        try write("one\ntwo\nthree\nparent wip\n", project + "/a.txt")
+        try write("draft\n", project + "/wip.txt")
+        precondition(ChildTabGit.landing(project).target == nil, "uncommitted edits alone keep the local merge")
+        let moved = try pushFromWriter("c.txt", "from elsewhere\n", "Elsewhere")
+        let behind = ChildTabGit.landing(project)
+        precondition(behind.target == ChildTabGit.RemoteBranch(remote: "origin", branch: "main")
+                     && behind.reason == "main is 1 commit behind origin/main", behind.reason)
+        git("config", ChildTabGit.landingKey, "local", in: project)
+        precondition(ChildTabGit.landing(project).target == nil && ChildTabGit.landing(project).reason == "cantrip.childTabs is local")
+        git("config", "--unset", ChildTabGit.landingKey, in: project)
+        let pinned = scratch + "/pinned"
+        git("clone", "-q", origin, pinned, in: scratch)
+        git("config", ChildTabGit.landingKey, "remote", in: pinned)
+        precondition(ChildTabGit.landing(pinned).target?.name == "origin/main" && ChildTabGit.landing(pinned).reason == "cantrip.childTabs is remote")
+        let loose = scratch + "/loose"
+        try files.createDirectory(atPath: loose, withIntermediateDirectories: true)
+        git("init", "-q", "-b", "main", in: loose)
+        identify(loose)
+        git("commit", "-q", "--allow-empty", "-m", "Start", in: loose)
+        precondition(ChildTabGit.landing(loose).target == nil && ChildTabGit.landing(loose).reason == "main has no upstream")
+
+        /// Everything about the parent's checkout a child must not change.
+        func parentState() -> String {
+            let refs = git("for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", in: project)
+                .split(separator: "\n").filter { !$0.hasPrefix("refs/heads/" + ChildTabGit.branchPrefix) }
+            return [git("rev-parse", "HEAD", in: project), git("status", "--porcelain", "--untracked-files=all", in: project),
+                    git("diff", "--cached", in: project), git("diff", in: project), refs.joined(separator: "\n"),
+                    git("stash", "list", in: project)].joined(separator: "\n--\n")
+        }
+        let before = parentState()
+
+        let store = ChildTabStore.shared
+        let manager = SessionManager()
+        let coordinator: ChildTabCoordinator = manager.childTabs
+        var backends: [UUID: ChildTabFixtureBackend] = [:]
+        coordinator.makeSession = { id in
+            let backend = ChildTabFixtureBackend()
+            let session = ChatSession(id: id, copilotBackend: backend)
+            backends[session.id] = backend
+            return session
+        }
+        coordinator.worktreesRoot = URL(fileURLWithPath: scratch + "/worktrees", isDirectory: true)
+        let parentBackend = ChildTabFixtureBackend()
+        let parent = ChatSession(copilotBackend: parentBackend)
+        parent.workdir = project
+        try parent.updateTab(name: "Live project")
+        manager.sessions.append(parent)
+        manager.select(parent.id)
+        defer { for session in manager.sessions { session.cancel() } }
+        func fork(_ text: String, from parent: ChatSession) async throws -> (ChatSession, ChildTabFixtureBackend, String) {
+            parent.submitRemote(text, mode: .queue)
+            let item = try requireChild(parent.queued.last)
+            let child = try await coordinator.fork(parentID: parent.id, itemID: item.id)
+            return (child, try requireChild(backends[child.id]), store.record(child.id)?.worktree ?? "")
+        }
+        func record(_ child: ChatSession) throws -> ChildTab { try requireChild(store.record(child.id)) }
+        func isOpen(_ child: ChatSession) -> Bool { manager.sessions.contains { $0.id == child.id } }
+
+        // 1. Behind and dirty: the child starts from origin/main (not the parent's old HEAD) and,
+        // although origin/main moves meanwhile and the parent is still working, lands there.
+        parent.submitRemote("Keep working on the live folder", mode: .queue)
+        try await waitForJournalTest { parentBackend.prompts.count == 1 }
+        let (changelog, changelogBackend, changelogTree) = try await fork("Add a changelog", from: parent)
+        var current = try record(changelog)
+        precondition(current.remote == "origin" && current.baseBranch == "main" && current.baseCommit == moved
+                     && current.target == "origin/main" && current.snapshot["baseBranch"] as? String == "origin/main",
+                     "it starts from the latest origin/main: \(current)")
+        precondition(read(changelogTree + "/c.txt") == "from elsewhere\n" && read(changelogTree + "/a.txt") == "one\ntwo\nthree\n"
+                     && !files.fileExists(atPath: changelogTree + "/wip.txt"), "the parent's old HEAD and edits aren't in it")
+        try await waitForJournalTest { changelogBackend.prompts.count == 1 }
+        let brief = changelogBackend.prompts[0]
+        precondition(brief.contains("started from the latest origin/main") && brief.contains("don't push yourself")
+                     && brief.contains("pushes it there (fast-forward only)"), brief)
+        try write("v1\n", changelogTree + "/CHANGELOG.md")
+        git("add", "CHANGELOG.md", in: changelogTree)
+        git("commit", "-q", "-m", "Add a changelog", in: changelogTree)
+        let meanwhile = try pushFromWriter("d.txt", "meanwhile\n", "Meanwhile")
+        changelogBackend.finish("Summary: Added a changelog.")
+        try await waitForJournalTest { store.record(changelog.id)?.state == .merged }
+        current = try record(changelog)
+        precondition(parent.isStreaming && !parent.childMergeHold, "it pushed without waiting for the parent")
+        precondition(current.mergeCommit == originTip() && originGit("rev-parse", "main^") == meanwhile
+                     && originGit("log", "-1", "--format=%s", "main") == "Add a changelog"
+                     && originGit("show", "main:CHANGELOG.md") == "v1", "rebased onto the moved origin/main and pushed")
+        precondition(current.statusLine == "Pushed to origin/main · 1 file +1 −0", current.statusLine)
+        precondition(current.contextLine.contains("It's on origin/main on the remote; project's own checkout wasn't changed."), current.contextLine)
+        precondition(!ChildTabGit.branchExists(projectRoot, current.branch ?? "") && !files.fileExists(atPath: changelogTree) && !isOpen(changelog))
+        precondition(parentState() == before, "the parent's checkout, index and branches didn't change")
+
+        // 2. A rebase conflict: the card asks, the worktree is left as it was, nothing is pushed;
+        // the parent resolves it in the child's checkout and Cantrip pushes.
+        let (greeting, greetingBackend, greetingTree) = try await fork("Change the greeting", from: parent)
+        let greetingRemote = try record(greeting).remote
+        precondition(greetingRemote == "origin")
+        try await waitForJournalTest { greetingBackend.prompts.count == 1 }
+        try write("child line\ntwo\nthree\n", greetingTree + "/a.txt")
+        git("commit", "-q", "-am", "Child greeting", in: greetingTree)
+        let childCommit = git("rev-parse", "HEAD", in: greetingTree)
+        let writerTip = try pushFromWriter("a.txt", "writer line\ntwo\nthree\n", "Writer greeting")
+        greetingBackend.finish("Summary: Changed the greeting.")
+        try await waitForJournalTest { store.record(greeting.id)?.state == .conflict }
+        current = try record(greeting)
+        precondition(current.conflictFiles == ["a.txt"] && current.conflictExcerpt == "origin/main + writer line\nchild       + child line",
+                     current.conflictExcerpt ?? "nil")
+        precondition(ChildTabGit.operationInProgress(greetingTree) == nil && git("rev-parse", "HEAD", in: greetingTree) == childCommit
+                     && originTip() == writerTip, "the rebase was aborted and nothing was pushed")
+        try coordinator.perform("resolve", childID: greeting.id)
+        parentBackend.finish("Still working.")
+        try await waitForJournalTest { parentBackend.prompts.count == 2 }
+        let resolve = parentBackend.prompts[1]
+        precondition(resolve.contains("Rebase child tab “Change the greeting”") && resolve.contains(greetingTree)
+                     && resolve.contains("git rebase origin/main") && resolve.contains("Don't push"), resolve)
+        precondition(ChildTabGit.run(greetingTree, ["rebase", "origin/main"])?.succeeded == false
+                     && ChildTabGit.operationInProgress(greetingTree) == "a rebase")
+        try write("writer line\nchild line\ntwo\nthree\n", greetingTree + "/a.txt")
+        git("add", "a.txt", in: greetingTree)
+        git("-c", "core.editor=true", "rebase", "--continue", in: greetingTree)
+        parentBackend.finish("Rebased it, keeping both lines.")
+        try await waitForJournalTest { store.record(greeting.id)?.state == .merged }
+        precondition(originGit("show", "main:a.txt") == "writer line\nchild line\ntwo\nthree"
+                     && originGit("rev-parse", "main^") == writerTip && !isOpen(greeting))
+        precondition(parentState() == before)
+
+        // 3. A rejected push (origin/main moved between the fetch and the push): fetched, rebased and
+        // pushed again. Past the limit, the card says so; Try Again pushes.
+        let hooks = scratch + "/hooks", moves = scratch + "/moves", limit = scratch + "/moves-limit"
+        try files.createDirectory(atPath: hooks, withIntermediateDirectories: true)
+        try write("""
+        #!/bin/sh
+        # After Cantrip's rebase rewrites the child's commits, someone else pushes (up to the limit).
+        cat > /dev/null
+        unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+        n=$(cat "\(moves)" 2>/dev/null || echo 0)
+        [ "$n" -ge "$(cat "\(limit)")" ] && exit 0
+        echo $((n + 1)) > "\(moves)"
+        git -C "\(writer)" fetch -q origin && git -C "\(writer)" reset -q --hard origin/main \\
+          && echo "move $n" >> "\(writer)/moves.txt" && git -C "\(writer)" add moves.txt \\
+          && git -C "\(writer)" commit -q -m "Move $n" && git -C "\(writer)" push -q origin main
+        """, hooks + "/post-rewrite")
+        try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hooks + "/post-rewrite")
+        git("config", "core.hooksPath", hooks, in: project)
+        defer { _ = ChildTabGit.run(project, ["config", "--unset", "core.hooksPath"]) }
+        try write("1", limit)
+        parent.submitRemote("Watch the pushes", mode: .queue)
+        try await waitForJournalTest { parentBackend.prompts.count == 3 }
+        let (readme, readmeBackend, readmeTree) = try await fork("Write the readme", from: parent)
+        try await waitForJournalTest { readmeBackend.prompts.count == 1 }
+        try write("hello\n", readmeTree + "/README.md")
+        git("add", "README.md", in: readmeTree)
+        git("commit", "-q", "-m", "Write the readme", in: readmeTree)
+        try pushFromWriter("e.txt", "e\n", "Before the readme lands")
+        readmeBackend.finish("Summary: Wrote the readme.")
+        try await waitForJournalTest { store.record(readme.id)?.state == .merged }
+        precondition(read(moves) == "1\n" && originGit("log", "-1", "--format=%s", "main^") == "Move 0"
+                     && originGit("show", "main:README.md") == "hello", "pushed on the second try, after the move")
+
+        try write("99", limit)
+        let (license, licenseBackend, licenseTree) = try await fork("Add a license", from: parent)
+        try await waitForJournalTest { licenseBackend.prompts.count == 1 }
+        try write("MIT\n", licenseTree + "/LICENSE")
+        git("add", "LICENSE", in: licenseTree)
+        git("commit", "-q", "-m", "Add a license", in: licenseTree)
+        try pushFromWriter("f.txt", "f\n", "Before the license lands")
+        licenseBackend.finish("Summary: Added a license.")
+        try await waitForJournalTest { store.record(license.id)?.state == .unmerged }
+        current = try record(license)
+        precondition(read(moves) == "4\n" && current.note?.hasPrefix("origin/main kept moving: 3 pushes were rejected") == true
+                     && current.actions == ["retry", "discard", "open"],
+                     current.note ?? "nil")
+        precondition(ChildTabGit.run(scratch, ["--git-dir=" + origin, "cat-file", "-e", "main:LICENSE"])?.succeeded == false, "nothing was forced")
+        try write("4", limit)
+        try coordinator.perform("retry", childID: license.id)
+        try await waitForJournalTest { store.record(license.id)?.state == .merged }
+        precondition(originGit("show", "main:LICENSE") == "MIT" && originGit("log", "-1", "--format=%s", "main^") == "Move 3")
+        precondition(parentState() == before, "still untouched after rebases, pushes and retries")
+        parentBackend.finish("Done.")
+
+        // 4. A clean, current clone keeps the local merge (no push).
+        let fresh = scratch + "/fresh"
+        git("clone", "-q", origin, fresh, in: scratch)
+        identify(fresh)
+        let freshBackend = ChildTabFixtureBackend()
+        let freshParent = ChatSession(copilotBackend: freshBackend)
+        freshParent.workdir = fresh
+        try freshParent.updateTab(name: "Current project")
+        manager.sessions.append(freshParent)
+        freshParent.submitRemote("Work on it", mode: .queue)
+        try await waitForJournalTest { freshBackend.prompts.count == 1 }
+        let (notes, notesBackend, notesTree) = try await fork("Add notes", from: freshParent)
+        current = try record(notes)
+        precondition(current.remote == nil && current.baseBranch == "main" && current.target == "main"
+                     && current.snapshot["baseBranch"] as? String == "main")
+        try await waitForJournalTest { notesBackend.prompts.count == 1 }
+        precondition(notesBackend.prompts[0].contains("Cantrip merges it into main when you finish"))
+        try write("notes\n", notesTree + "/notes.txt")
+        git("add", "notes.txt", in: notesTree)
+        git("commit", "-q", "-m", "Add notes", in: notesTree)
+        let tipBefore = originTip()
+        notesBackend.finish("Summary: Added notes.")
+        try await waitForJournalTest { store.record(notes.id)?.state == .finished }
+        freshBackend.finish("Worked on it.")
+        try await waitForJournalTest { store.record(notes.id)?.state == .merged }
+        current = try record(notes)
+        precondition(current.statusLine == "Merged into main · 1 file +1 −0" && read(fresh + "/notes.txt") == "notes\n"
+                     && git("log", "-1", "--format=%s", in: fresh) == "Merge child tab: Add notes" && originTip() == tipBefore,
+                     "merged into the clone's main, nothing pushed")
+        print("Child tabs: remote landing (behind, dirty, moved, conflict, rejected push) and local merge passed")
     }
 
     /// The Remote API: capability flags, plans on queue rows, fork, child metadata, card actions.

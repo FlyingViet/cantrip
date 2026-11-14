@@ -35,9 +35,15 @@ struct ChildTab: Codable, Equatable, Identifiable {
     var repoRoot: String?
     var worktree: String?
     var branch: String?
-    /// The parent checkout's branch when the child started; the merge goes there.
+    /// The parent checkout's branch when the child started; the merge goes there. With `remote`,
+    /// the branch on that remote instead.
     var baseBranch: String?
     var baseCommit: String?
+    /// Set when the parent's checkout wasn't a current copy of its upstream (or the repository
+    /// asks for it): the child started from `remote`/`baseBranch` and lands by rebasing onto it and
+    /// pushing there, never touching the parent's checkout. Nil: merged into the parent's checkout
+    /// (optional: older records lack it).
+    var remote: String?
     var touches: [String] = []
     var state: State = .working
     var summary = ""
@@ -71,6 +77,13 @@ struct ChildTab: Codable, Equatable, Identifiable {
     var added: Int { files.reduce(0) { $0 + $1.added } }
     var removed: Int { files.reduce(0) { $0 + $1.removed } }
     var repoName: String? { repoRoot.map { ($0 as NSString).lastPathComponent } }
+    /// Where its work lands: "origin/master" when it pushes, else the parent's branch.
+    var target: String {
+        if let remote, let baseBranch { return "\(remote)/\(baseBranch)" }
+        return baseBranch ?? "the parent's branch"
+    }
+    /// What clients show as the branch it lands on (`baseBranch` in the API): its target, or nil.
+    var targetBranch: String? { baseBranch == nil ? nil : target }
 
     /// What the card offers in this state (`POST …/children/{id}/{action}`).
     var actions: [String] {
@@ -87,14 +100,17 @@ struct ChildTab: Codable, Equatable, Identifiable {
     }
 
     var statusLine: String {
-        let base = baseBranch ?? "the parent's branch"
+        let base = target
+        let pushes = remote != nil
         switch state {
         case .working: return "Working"
         case .needsInput: return "Needs your answer"
-        case .finished: return note ?? "Done; merges into \(base) when the parent tab is idle"
-        case .merging: return resolveRequested ? "The parent tab is resolving the merge" : "Merging into \(base)"
+        case .finished:
+            return note ?? (pushes ? "Done; pushes to \(base)" : "Done; merges into \(base) when the parent tab is idle")
+        case .merging:
+            return resolveRequested ? "The parent tab is resolving the merge" : (pushes ? "Pushing to \(base)" : "Merging into \(base)")
         case .merged:
-            return "Merged into \(base) · \(files.count) \(files.count == 1 ? "file" : "files") +\(added) −\(removed)"
+            return "\(pushes ? "Pushed to" : "Merged into") \(base) · \(files.count) \(files.count == 1 ? "file" : "files") +\(added) −\(removed)"
         case .conflict:
             return "Merge conflict · \(conflictFiles.count) of \(conflictFiles.count + cleanFileCount) files"
         case .unmerged: return note ?? "Not merged"
@@ -124,6 +140,9 @@ struct ChildTab: Codable, Equatable, Identifiable {
     var contextLine: String {
         let files = self.files.prefix(6).map(\.path).joined(separator: ", ")
         var line = "[Child tab “\(title)” (\(prompt.prefix(120))…): \(statusLine)."
+        if remote != nil, state == .merged, let repoName {
+            line += " It's on \(target) on the remote; \(repoName)'s own checkout wasn't changed."
+        }
         if !summary.isEmpty { line += " \(summary.prefix(400))" }
         if !files.isEmpty { line += " Files: \(files)." }
         return line + "]"
@@ -143,7 +162,7 @@ struct ChildTab: Codable, Equatable, Identifiable {
     /// it has touched so far. Nil once it has an outcome (`contextLine` tells that once).
     func liveStatusLine(activity: String? = nil, question: String? = nil, touched: [String] = []) -> String? {
         guard isLive else { return nil }
-        let base = baseBranch ?? "your branch"
+        let base = remote == nil ? (baseBranch ?? "your branch") : target
         func clean(_ text: String, _ limit: Int) -> String {
             let line = text.split(whereSeparator: \.isNewline).joined(separator: " ")
                 .trimmingCharacters(in: .whitespaces)
@@ -159,9 +178,12 @@ struct ChildTab: Codable, Equatable, Identifiable {
             if let question, !question.isEmpty { line += ": \(clean(question, 160))" }
         case .finished:
             line += note.map { "done; \(clean($0, 160))" }
-                ?? "done, waiting to merge into \(base) (Cantrip merges it when this tab is idle)"
+                ?? (remote != nil
+                    ? "done, waiting to push to \(base) (Cantrip rebases and pushes it; your checkout isn't changed)"
+                    : "done, waiting to merge into \(base) (Cantrip merges it when this tab is idle)")
         case .merging:
-            line += resolveRequested ? "you were asked to resolve its merge conflict" : "merging into \(base)"
+            line += resolveRequested ? "you were asked to resolve its merge conflict"
+                : (remote != nil ? "pushing to \(base)" : "merging into \(base)")
         case .conflict:
             let files = conflictFiles.prefix(4).joined(separator: ", ")
             line += "merge conflict in \(files.isEmpty ? "some files" : files); the user picks how to merge on its card"
@@ -188,7 +210,8 @@ struct ChildTab: Codable, Equatable, Identifiable {
         ]
         result["repoName"] = repoName
         result["branch"] = branch
-        result["baseBranch"] = baseBranch
+        result["baseBranch"] = targetBranch
+        result["remote"] = remote
         result["mergeCommit"] = mergeCommit.map { String($0.prefix(9)) }
         result["conflictExcerpt"] = conflictExcerpt
         result["note"] = note
@@ -330,10 +353,83 @@ enum ChildTabGit {
         return branchPrefix + (slug.isEmpty ? "task" : String(slug.prefix(40))) + "-" + id.uuidString.prefix(6).lowercased()
     }
 
-    /// Creates `branch` at the repository's HEAD, checked out in a locked worktree at `path`.
-    static func createWorktree(repo: String, branch: String, path: String) throws -> (baseCommit: String, baseBranch: String?) {
-        guard let base = head(repo) else { throw ChildTabError.git("This repository has no commits yet, so a child tab can't branch from it.") }
-        let baseBranch = currentBranch(repo)
+    /// A branch on a remote, e.g. origin/master.
+    struct RemoteBranch: Equatable {
+        let remote: String
+        let branch: String
+        var name: String { "\(remote)/\(branch)" }
+        var trackingRef: String { "refs/remotes/\(remote)/\(branch)" }
+    }
+
+    /// Per-repository setting (`git config cantrip.childTabs`): `remote` always starts children
+    /// from the upstream branch and pushes them there; `local` always merges into the checkout.
+    static let landingKey = "cantrip.childTabs"
+
+    /// The commit `ref` names, or nil.
+    static func commit(_ repo: String, _ ref: String) -> String? {
+        guard let result = run(repo, ["rev-parse", "-q", "--verify", ref + "^{commit}"], timeout: 10), result.succeeded,
+              !result.output.isEmpty else { return nil }
+        return result.output
+    }
+
+    static func isAncestor(_ repo: String, _ ancestor: String, of descendant: String) -> Bool {
+        run(repo, ["merge-base", "--is-ancestor", ancestor, descendant], timeout: 30)?.succeeded == true
+    }
+
+    /// `branch`'s upstream on a remote (not a local one), from git's branch settings.
+    static func upstream(_ repo: String, branch: String) -> RemoteBranch? {
+        guard let result = run(repo, ["for-each-ref", "--format=%(upstream:remotename) %(upstream:remoteref)",
+                                      "refs/heads/\(branch)"], timeout: 10), result.succeeded else { return nil }
+        let fields = result.output.split(separator: " ").map(String.init)
+        guard fields.count == 2, fields[0] != ".", fields[1].hasPrefix("refs/heads/") else { return nil }
+        return RemoteBranch(remote: fields[0], branch: String(fields[1].dropFirst("refs/heads/".count)))
+    }
+
+    /// Updates `target`'s remote-tracking ref; the checkout, index and local branches stay as they are.
+    /// Nil when it worked, else git's message.
+    @discardableResult
+    static func fetch(_ repo: String, _ target: RemoteBranch, timeout: TimeInterval = 120) -> String? {
+        let refspec = "+refs/heads/\(target.branch):\(target.trackingRef)"
+        guard let result = run(repo, ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", target.remote, refspec],
+                               timeout: timeout) else { return "git fetch didn't finish" }
+        return result.succeeded ? nil : String((result.error.isEmpty ? result.output : result.error).prefix(300))
+    }
+
+    /// Where a child of `repo` starts and lands: nil for the checkout's HEAD and a merge into it,
+    /// or the checkout's upstream branch, which the child starts from and is pushed to. The
+    /// upstream when `cantrip.childTabs` is `remote`, or (unset) when the checkout is behind it after
+    /// a fetch: then the checkout isn't a current copy, and work merged there would start old and
+    /// land where nothing ships from. `reason` says why, for the log.
+    static func landing(_ repo: String) -> (target: RemoteBranch?, reason: String) {
+        guard let branch = currentBranch(repo) else { return (nil, "the checkout isn't on a branch") }
+        let setting = run(repo, ["config", "--get", landingKey], timeout: 10)?.output.lowercased() ?? ""
+        if setting == "local" { return (nil, "\(landingKey) is local") }
+        var target = upstream(repo, branch: branch)
+        if target == nil, setting == "remote", run(repo, ["remote", "get-url", "origin"], timeout: 10)?.succeeded == true {
+            target = RemoteBranch(remote: "origin", branch: branch)
+        }
+        guard let target else { return (nil, "\(branch) has no upstream") }
+        // A child waits on this, so a slow network falls back to the last fetch.
+        let fetchError = fetch(repo, target, timeout: 30)
+        guard let tracking = commit(repo, target.trackingRef) else {
+            return (nil, "\(target.name) isn't available (\(fetchError ?? "no such branch"))")
+        }
+        if setting == "remote" { return (target, "\(landingKey) is remote") }
+        let behind = commitsAhead(repo: repo, base: "HEAD", branch: tracking)
+        guard behind > 0 else { return (nil, "\(branch) is current with \(target.name)") }
+        return (target, "\(branch) is \(behind) \(behind == 1 ? "commit" : "commits") behind \(target.name)")
+    }
+
+    /// Creates `branch` at the repository's HEAD (or at `target`'s fetched tip), checked out in a
+    /// locked worktree at `path`.
+    static func createWorktree(repo: String, branch: String, path: String,
+                               from target: RemoteBranch? = nil) throws -> (baseCommit: String, baseBranch: String?) {
+        let start = target.map { commit(repo, $0.trackingRef) } ?? head(repo)
+        guard let base = start else {
+            throw ChildTabError.git(target.map { "\($0.name) isn't available, so a child tab can't branch from it." }
+                                    ?? "This repository has no commits yet, so a child tab can't branch from it.")
+        }
+        let baseBranch = target?.branch ?? currentBranch(repo)
         try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
                                                 withIntermediateDirectories: true)
         guard let added = run(repo, ["worktree", "add", "-b", branch, path, base], timeout: 180) else {
@@ -509,9 +605,72 @@ enum ChildTabGit {
         return files
     }
 
-    /// Removes the worktree and the branch. Without `force` (Discard), a worktree with uncommitted
-    /// changes stays, locked, with its branch; false then.
-    @discardableResult
+    enum RebaseOutcome: Equatable {
+        case rebased
+        case conflict(files: [String], excerpt: String?)
+        case failed(String)
+    }
+
+    /// Rebases the branch checked out in `worktree` (a child's own) onto `onto`. A conflict is
+    /// read, then the rebase is aborted, so the worktree is as it was. `option` as for `merge`:
+    /// in a rebase, `ours` is `onto`'s side (the parent's) and `theirs` the child's commits.
+    static func rebase(worktree: String, onto: String, option: String? = nil, parentLabel: String) -> RebaseOutcome {
+        var arguments = ["rebase", "--no-autostash", "--no-update-refs"]
+        if let option { arguments += ["-X", option] }
+        arguments.append(onto)
+        func abortIfRebasing() {
+            if operationInProgress(worktree) == "a rebase" { run(worktree, ["rebase", "--abort"], timeout: 60) }
+        }
+        guard var result = run(worktree, arguments, timeout: 300) else {
+            abortIfRebasing()
+            return .failed("Git didn't finish the rebase.")
+        }
+        var text = result.error + "\n" + result.output
+        if !result.succeeded, text.contains("Please tell me who you are") || text.contains("auto-detect email") {
+            abortIfRebasing()
+            guard let retried = run(worktree, ["-c", "user.name=Cantrip", "-c", "user.email=cantrip@localhost"] + arguments,
+                                    timeout: 300) else {
+                abortIfRebasing()
+                return .failed("Git didn't finish the rebase.")
+            }
+            result = retried
+            text = result.error + "\n" + result.output
+        }
+        if result.succeeded { return .rebased }
+        defer { abortIfRebasing() }
+        if operationInProgress(worktree) == "a rebase",
+           let unmerged = run(worktree, ["diff", "--name-only", "--diff-filter=U"], timeout: 30), unmerged.succeeded,
+           !unmerged.output.isEmpty {
+            let files = unmerged.output.split(separator: "\n").map(String.init)
+            let excerpt = files.first.flatMap { try? String(contentsOfFile: (worktree as NSString).appendingPathComponent($0), encoding: .utf8) }
+                .flatMap { conflictExcerpt($0, parentLabel: parentLabel) }
+            return .conflict(files: files, excerpt: excerpt)
+        }
+        return .failed(String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300)))
+    }
+
+    enum PushOutcome: Equatable {
+        case pushed
+        /// Not a fast-forward: the remote branch moved since the fetch.
+        case rejected(String)
+        case failed(String)
+    }
+
+    /// Pushes `branch` to `target` as a fast-forward; never forced.
+    static func push(worktree: String, branch: String, to target: RemoteBranch) -> PushOutcome {
+        let refspec = "refs/heads/\(branch):refs/heads/\(target.branch)"
+        guard let result = run(worktree, ["push", "--porcelain", target.remote, refspec], timeout: 300) else {
+            return .failed("git push didn't finish")
+        }
+        if result.succeeded { return .pushed }
+        let text = (result.error + "\n" + result.output).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.contains("[remote rejected]"),
+           text.contains("[rejected]") || text.contains("non-fast-forward") || text.contains("fetch first") {
+            return .rejected(String(text.prefix(300)))
+        }
+        return .failed(String(text.prefix(300)))
+    }
+
     /// Whether `worktree` is clean and has initialized submodules that keep nothing of their own:
     /// no commit checked out, on a branch or stashed that their remotes don't have.
     static func submodulesKeepNothing(_ worktree: String) -> Bool {
@@ -524,7 +683,11 @@ enum ChildTabGit {
         return own.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    static func cleanup(repo: String, worktree: String?, branch: String?, force: Bool) -> Bool {
+    /// Removes the worktree and the branch. Without `force` (Discard), a worktree with uncommitted
+    /// changes stays, locked, with its branch; false then. `landed`: the branch is on its remote
+    /// branch (pushed), so it's deleted though the parent's checkout doesn't contain it.
+    @discardableResult
+    static func cleanup(repo: String, worktree: String?, branch: String?, force: Bool, landed: Bool = false) -> Bool {
         if let worktree, FileManager.default.fileExists(atPath: worktree) {
             if !force, isDirty(worktree) { return false }
             run(repo, ["worktree", "unlock", worktree], timeout: 15)
@@ -540,7 +703,7 @@ enum ChildTabGit {
         }
         if worktree != nil { run(repo, ["worktree", "prune"], timeout: 30) }
         if let branch, branch.hasPrefix(branchPrefix) {
-            run(repo, ["branch", force ? "-D" : "-d", branch], timeout: 30)
+            run(repo, ["branch", force || landed ? "-D" : "-d", branch], timeout: 30)
         }
         return true
     }
