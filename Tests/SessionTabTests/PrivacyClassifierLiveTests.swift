@@ -42,6 +42,12 @@ extension SessionTabTests {
             "What are good interview questions about distributed systems?",
             earlier("And in Kotlin?", "Write a Swift function that reverses the words in a sentence.\nHere's a version using split and reversed."),
         ]
+        // Short definition questions that scored 67-79% cloud in real Home chats (Nov 13), written generically.
+        let definitions = [
+            "what is ClickHouse",
+            "what is hedging",
+            "what is the LLM gateway running on",
+        ]
         let personal = [
             "Summarize my doctor's email about my test results",
             earlier("What should I ask her at the follow-up?", "Summarize my doctor's email about my test results\n"
@@ -75,21 +81,30 @@ extension SessionTabTests {
             slowest = max(slowest, c.elapsedMs)
             return (c.route(cloudMinimum: settings.cloudMinProbability, uncertain: .redactApprove), c.probability(.cloud))
         }
-        var cloudHits = 0
+        func percent(_ value: Double) -> String { String(format: "%.1f%%", value * 100) }
+        var plainScores: [Double] = []
+        var definitionScores: [Double] = []
         var worstPrivate = 0.0
-        for text in plain {
+        for text in plain + definitions {
             let (route, cloud) = try await route(text)
-            if route == .cloud { cloudHits += 1 }
-            print("\(route == .cloud ? "ok " : "-- ") plain    -> \(route.rawValue) (cloud \(Int((cloud * 100).rounded()))%) \(text.prefix(60).replacingOccurrences(of: "\n", with: " "))")
+            if definitions.contains(text) { definitionScores.append(cloud) } else { plainScores.append(cloud) }
+            print("\(route == .cloud ? "ok " : "-- ") plain    -> \(route.rawValue) (cloud \(percent(cloud))) \(text.prefix(60).replacingOccurrences(of: "\n", with: " "))")
         }
         for text in personal {
             let (route, cloud) = try await route(text)
             worstPrivate = max(worstPrivate, cloud)
-            print("\(route != .cloud ? "ok " : "BAD") personal -> \(route.rawValue) (cloud \(Int((cloud * 100).rounded()))%) \(text.prefix(60).replacingOccurrences(of: "\n", with: " "))")
+            print("\(route != .cloud ? "ok " : "BAD") personal -> \(route.rawValue) (cloud \(percent(cloud))) \(text.prefix(60).replacingOccurrences(of: "\n", with: " "))")
             precondition(route != .cloud, "a personal request reached the cloud: \(text.prefix(60))")
         }
-        print("Privacy classifier live: \(cloudHits) of \(plain.count) plain requests to the cloud; personal requests at most "
-              + "\(Int((worstPrivate * 100).rounded()))% cloud (\(model)); slowest answer \(slowest) ms")
+        let threshold = settings.cloudMinProbability
+        let cloudHits = plainScores.filter { $0 >= threshold }.count
+        for check in Set([0.8, threshold]).sorted(by: >) {
+            print("At \(Int((check * 100).rounded()))%: \(plainScores.filter { $0 >= check }.count) of \(plainScores.count) plain and "
+                  + "\(definitionScores.filter { $0 >= check }.count) of \(definitionScores.count) definition questions to the cloud")
+        }
+        print("Privacy classifier live: \(cloudHits) of \(plain.count) plain requests to the cloud at \(percent(threshold)); personal requests at most "
+              + "\(percent(worstPrivate)) cloud (\(model)); slowest answer \(slowest) ms")
         precondition(cloudHits * 4 >= plain.count * 3, "fewer than 3 in 4 plain requests reach the cloud")
+        precondition(worstPrivate < threshold, "a personal request reached the cloud threshold")
     }
 }

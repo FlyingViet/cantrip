@@ -167,7 +167,7 @@ How it decides, first match wins:
    scheduled task's request goes with its latest earlier turn, up to 3,000
    characters (`maxInputCharacters`). Rules still check the whole earlier turns.
    It says cloud only when
-   it's at least 80% sure (`cloudMinProbability`); otherwise local, or ask first
+   it's at least 75% sure (`cloudMinProbability`); otherwise local, or ask first
    when it isn't sure, never the cloud.
    Its instructions say coding, writing, general knowledge, questions about the
    assistant itself and routine work on your computer aren't private; requests

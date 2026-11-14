@@ -181,8 +181,9 @@ struct PrivacyClassifierSettings: Codable, Equatable {
     /// The question is asked this many times with the options in a different order, and averaged.
     var rotations = 3
     /// Cloud only when the averaged probability of "cloud" is at least this. Below it the gate never
-    /// guesses toward the cloud: local, or ask first.
-    var cloudMinProbability = 0.8
+    /// guesses toward the cloud: local, or ask first. 0.75 (Nov 14): plain Home chats scored 75-79%
+    /// when the conversation before them read personal; personal requests stay at or below 22%.
+    var cloudMinProbability = 0.75
     var cacheMinutes = 60
     /// Scheduled tasks: the request and the latest earlier turn are cut to this many characters.
     var maxInputCharacters = 3000
