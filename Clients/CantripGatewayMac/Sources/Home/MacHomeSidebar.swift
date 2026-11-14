@@ -47,12 +47,14 @@ struct MacHomeSidebar: View {
                         .accessibilityIdentifier("home.section.\(section.rawValue)")
                 }
             }
+            .collapsible(false)
             Section {
                 MacDirectLocalRow()
                     .tag(MacHomeDestination.directLocal)
             } header: {
                 Text("On This Mac")
             }
+            .collapsible(false)
             if let groups = CantripTabGrouping.groups(remote.sessions, sections: remote.tabSections) {
                 ForEach(groups) { group in
                     sectionedTabs(group)
@@ -68,6 +70,7 @@ struct MacHomeSidebar: View {
                 } header: {
                     tabsHeader
                 }
+                .collapsible(false)
             }
             if remote.supportsTabSections {
                 Section {
@@ -75,6 +78,7 @@ struct MacHomeSidebar: View {
                         .selectionDisabled()
                         .help("Add an empty section. Drop tabs on its header or use Move to Section.")
                 }
+                .collapsible(false)
             }
         }
         .listStyle(.sidebar)
@@ -213,6 +217,9 @@ struct MacHomeSidebar: View {
             }
             .accessibilityIdentifier("sidebar.section.\(group.id)")
         }
+        // Cantrip draws each header's own caret (left) and +: without this, macOS 26 adds its own
+        // hover collapse chevron at the right of sidebar section headers, a second caret.
+        .collapsible(false)
     }
 
     private var selectedTabID: String? {
