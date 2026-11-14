@@ -308,9 +308,11 @@ match ([details](updating-and-troubleshooting.md#new-worktrees-reuse-installed-p
   with that side winning the conflicting lines; **Leave it unmerged** keeps the
   branch for later (**Try Again** or **Discard**). If uncommitted edits in the
   parent's checkout touch the same files, or a merge, rebase, cherry-pick or
-  revert is unfinished there, the merge waits and tries again after the
-  parent's next turn (**Discard** drops a waiting child whose work is already in
-  elsewhere); Cantrip never aborts work it didn't start. While a merge
+  revert is unfinished there, the merge waits; the card names the files in
+  the way (*Waiting: uncommitted changes in Cantrip (README.md) block the
+  merge*). It tries again every 2 minutes and when the parent finishes a turn
+  (**Discard** drops a waiting child whose work is already in elsewhere);
+  Cantrip never aborts work it didn't start. While a merge
   runs (seconds), new messages to the parent wait in its queue.
 - **Your work is kept:** a child's worktree is deleted only once everything in
   it is committed and merged (or you choose **Discard**). If Cantrip can't

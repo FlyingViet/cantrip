@@ -615,14 +615,20 @@ extension SessionTabTests {
         tidyBackend.finish("Summary: Tidied alpha.")
         try await waitForJournalTest { store.record(tidy.id)?.state == .finished }
         try write("alpha\nparent beta\ngamma\n", repo + "/b.txt")
+        // Waiting merges retry on a timer too, not only after the parent's next turn.
+        ChildTabCoordinator.waitingRetryInterval = 200_000_000
+        defer { ChildTabCoordinator.waitingRetryInterval = 120_000_000_000 }
         parentBackend.finish("Docs updated.")
         try await waitForJournalTest { store.record(tidy.id)?.note?.hasPrefix("Waiting: uncommitted changes in child-demo") == true }
         current = try record(tidy)
+        precondition(current.note == "Waiting: uncommitted changes in child-demo (b.txt) block the merge. " + ChildTabMerge.retryNote,
+                     "the note names the blocking file: \(current.note ?? "nil")")
         precondition(current.state == .finished && current.actions == ["retry", "discard", "open"] && current.statusLine == current.note)
         precondition(read(repo + "/b.txt") == "alpha\nparent beta\ngamma\n", "the parent's edits stay")
         git("checkout", "--", "b.txt")
-        try coordinator.perform("retry", childID: tidy.id)
         try await waitForJournalTest { store.record(tidy.id)?.state == .merged }
+        ChildTabCoordinator.waitingRetryInterval = 120_000_000_000
+        precondition(!parent.isStreaming && parentBackend.prompts.count == 6, "it merged on the timer, with the parent idle")
         precondition(read(repo + "/b.txt") == "alpha!\nparent beta\n", "the child's uncommitted edit was committed and merged")
         precondition(git("log", "-1", "--format=%s", "HEAD^2") == "Tidy alpha")
 

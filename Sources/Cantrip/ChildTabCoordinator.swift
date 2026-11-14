@@ -420,8 +420,27 @@ final class ChildTabCoordinator {
         record = result
         if record.state != .merging { record.resolveRequested = false }
         save(record)
-        Log.write("child-tabs: \"\(record.title)\" -> \(record.state.rawValue)")
+        Log.write("child-tabs: \"\(record.title)\" -> \(record.state.rawValue)"
+                  + (record.note.map { ": \($0.prefix(200))" } ?? ""))
         if record.state.isSettled { archive(record) }
+        if Self.isWaiting(record) { scheduleWaitingRetry() }
+    }
+
+    /// How often a merge that waits (uncommitted changes in the way, or an unfinished merge or
+    /// rebase) is tried again, besides when its parent finishes a turn. Tests shorten it.
+    static var waitingRetryInterval: UInt64 = 120_000_000_000
+    private var waitingRetry: Task<Void, Never>?
+
+    static func isWaiting(_ record: ChildTab) -> Bool { record.state == .finished && record.note != nil }
+
+    private func scheduleWaitingRetry() {
+        guard waitingRetry == nil else { return }
+        waitingRetry = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.waitingRetryInterval)
+            guard let self, !Task.isCancelled else { return }
+            self.waitingRetry = nil
+            for record in self.store.records.values where Self.isWaiting(record) { self.queueMerge(record.id) }
+        }
     }
 
     private func releaseHold(_ parentID: UUID) {
@@ -895,6 +914,14 @@ final class ChildTabCoordinator {
 
 /// The merge itself, off the main actor. Returns the record with its new state.
 enum ChildTabMerge {
+    /// How a waiting child retries (`ChildTabCoordinator.waitingRetryInterval`).
+    static let retryNote = "Cantrip tries again every 2 minutes and when the parent finishes a turn."
+
+    static func fileList(_ files: [String]) -> String {
+        let shown = files.prefix(4).joined(separator: ", ")
+        return files.count > 4 ? "\(shown) and \(files.count - 4) more" : shown
+    }
+
     static func perform(_ record: ChildTab, option: String? = nil) -> ChildTab {
         var record = record
         guard let repo = record.repoRoot, let branch = record.branch, let base = record.baseCommit else {
@@ -953,12 +980,18 @@ enum ChildTabMerge {
         switch ChildTabGit.merge(repo: repo, branch: branch, message: "Merge child tab: \(record.title)", option: option) {
         case .merged(let commit):
             return merged(record, commit: commit, repo: repo, branch: branch)
-        case .blockedByLocalChanges:
+        case .blockedByLocalChanges(let text):
+            var files = ChildTabGit.blockingFiles(text)
+            if files.isEmpty {
+                let merging = Set(record.files.map(\.path))
+                files = ChildTabGit.changedFiles(repo, limit: 500).filter(merging.contains)
+            }
             record.state = .finished
-            record.note = "Waiting: uncommitted changes in \(name) touch the same files. Cantrip tries again after the parent's next turn."
+            record.note = "Waiting: uncommitted changes in \(name)"
+                + (files.isEmpty ? " touch the same files" : " (\(fileList(files))) block the merge") + ". \(retryNote)"
         case .busy(let operation):
             record.state = .finished
-            record.note = "Waiting: \(operation) is unfinished in \(name). Cantrip tries again after the parent's next turn."
+            record.note = "Waiting: \(operation) is unfinished in \(name). \(retryNote)"
         case .conflict:
             record.state = .conflict
             record.note = "Git still found a conflict."

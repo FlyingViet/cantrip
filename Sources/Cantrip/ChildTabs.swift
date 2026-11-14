@@ -498,6 +498,17 @@ enum ChildTabGit {
         return .failed(String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300)))
     }
 
+    /// The files git named as blocking a merge ("…would be overwritten by merge:" then one per
+    /// tab-indented line).
+    static func blockingFiles(_ text: String) -> [String] {
+        var files: [String] = []
+        for line in text.components(separatedBy: "\n") where line.hasPrefix("\t") {
+            let path = line.trimmingCharacters(in: .whitespaces)
+            if !path.isEmpty, !files.contains(path) { files.append(path) }
+        }
+        return files
+    }
+
     /// Removes the worktree and the branch. Without `force` (Discard), a worktree with uncommitted
     /// changes stays, locked, with its branch; false then.
     @discardableResult
