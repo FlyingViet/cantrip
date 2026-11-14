@@ -185,7 +185,7 @@ extension SessionTabTests {
         close.probabilities = [.cloud: 0.72, .local: 0.2, .redactApprove: 0.08]
         close.route = .redactApprove
         gate.record(close, request: named, settings: section, applied: false, totalMs: 1)
-        precondition(gate.report(days: 1).contains("1 answers were 60-79% cloud: just under the cloud threshold (80%)."),
+        precondition(gate.report(days: 1).contains("1 answers were 55-74% cloud: just under the cloud threshold (75%)."),
                      gate.report(days: 1))
 
         // The owner's own name and Home's data alone are no hint at all.
@@ -303,10 +303,12 @@ extension SessionTabTests {
                      && unsure.route(cloudMinimum: 0.9, uncertain: .cloud) == .redactApprove
                      && PrivacyClassification(probabilities: [.local: 0.8, .cloud: 0.1], answered: 3, elapsedMs: 1)
                         .route(cloudMinimum: 0.9, uncertain: .redactApprove) == .local)
-        // The default threshold is 80%: 0.85 goes to the cloud, 0.79 doesn't, and still never by guessing.
+        // The default threshold is 75%: 0.85 and 0.76 go to the cloud, 0.74 doesn't, and still never by guessing.
         let threshold = PrivacyClassifierSettings().cloudMinProbability
-        let unsureBelow = PrivacyClassification(probabilities: [.cloud: 0.79, .local: 0.12, .redactApprove: 0.09], answered: 3, elapsedMs: 1)
-        precondition(threshold == 0.8 && unsure.route(cloudMinimum: threshold, uncertain: .redactApprove) == .cloud
+        let unsureAbove = PrivacyClassification(probabilities: [.cloud: 0.76, .local: 0.14, .redactApprove: 0.1], answered: 3, elapsedMs: 1)
+        let unsureBelow = PrivacyClassification(probabilities: [.cloud: 0.74, .local: 0.16, .redactApprove: 0.1], answered: 3, elapsedMs: 1)
+        precondition(threshold == 0.75 && unsure.route(cloudMinimum: threshold, uncertain: .redactApprove) == .cloud
+                     && unsureAbove.route(cloudMinimum: threshold, uncertain: .redactApprove) == .cloud
                      && unsureBelow.route(cloudMinimum: threshold, uncertain: .redactApprove) == .redactApprove
                      && unsureBelow.route(cloudMinimum: threshold, uncertain: .cloud) == .redactApprove, "threshold \(threshold)")
         // Refusals are left out of the average; all refused is an error.
@@ -363,7 +365,7 @@ extension SessionTabTests {
         let decoder = AgentPolicyStore.decoder
         // A file from before the gate: on and observing.
         let old = try decoder.decode(AgentPolicyDocument.self, from: Data(#"{"version":1,"rules":[]}"#.utf8))
-        precondition(old.privacyGate.classifier.cloudMinProbability == 0.8, "the default cloud threshold")
+        precondition(old.privacyGate.classifier.cloudMinProbability == 0.75, "the default cloud threshold")
         let strict = try decoder.decode(AgentPolicyDocument.self, from: Data(#"{"privacyGate":{"classifier":{"cloudMinProbability":0.9}}}"#.utf8))
         precondition(strict.privacyGate.classifier.cloudMinProbability == 0.9, "a saved threshold is kept")
         precondition(old.privacyGate == PrivacyGateSettings() && old.privacyGate.enabled && old.privacyGate.mode == .observe
