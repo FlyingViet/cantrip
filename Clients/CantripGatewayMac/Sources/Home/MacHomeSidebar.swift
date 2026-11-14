@@ -47,30 +47,28 @@ struct MacHomeSidebar: View {
                         .accessibilityIdentifier("home.section.\(section.rawValue)")
                 }
             }
-            .collapsible(false)
             Section {
+                Text("On This Mac")
+                    .foregroundStyle(.tertiary)
+                    .modifier(MacSidebarHeaderRow())
                 MacDirectLocalRow()
                     .tag(MacHomeDestination.directLocal)
-            } header: {
-                Text("On This Mac")
             }
-            .collapsible(false)
             if let groups = CantripTabGrouping.groups(remote.sessions, sections: remote.tabSections) {
                 ForEach(groups) { group in
                     sectionedTabs(group)
                 }
             } else {
                 Section {
+                    tabsHeader
+                        .modifier(MacSidebarHeaderRow())
                     tabRows(remote.sessions)
                     if remote.sessions.isEmpty, remote.isConfigured {
                         Text("No tabs yet")
                             .foregroundStyle(.secondary)
                             .selectionDisabled()
                     }
-                } header: {
-                    tabsHeader
                 }
-                .collapsible(false)
             }
             if remote.supportsTabSections {
                 Section {
@@ -78,7 +76,6 @@ struct MacHomeSidebar: View {
                         .selectionDisabled()
                         .help("Add an empty section. Drop tabs on its header or use Move to Section.")
                 }
-                .collapsible(false)
             }
         }
         .listStyle(.sidebar)
@@ -157,6 +154,7 @@ struct MacHomeSidebar: View {
     @ViewBuilder private func sectionedTabs(_ group: CantripTabGrouping.Group) -> some View {
         let collapsed = collapse.isCollapsed(group.id, scope: remote.tabSectionScope)
         Section {
+            sectionHeader(group, collapsed: collapsed)
             tabRows(CantripTabGrouping.visible(group, collapsed: collapsed, selectedID: selectedTabID))
             if group.sessions.isEmpty, !collapsed {
                 Text(group.section == nil ? "No unfiled tabs" : "Drop a tab on this header, or use Move to Section")
@@ -164,62 +162,64 @@ struct MacHomeSidebar: View {
                     .foregroundStyle(.tertiary)
                     .selectionDisabled()
             }
-        } header: {
-            HStack(spacing: 4) {
-                Button {
-                    collapse.toggle(group.id, scope: remote.tabSectionScope)
-                } label: {
-                    CantripTabSectionTitle(group: group, collapsed: collapsed)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help((collapsed ? "Show this section's tabs" : "Hide this section's idle tabs")
-                      + (group.section == nil ? "" : ". Drag onto another section to reorder."))
-                Button {
-                    if let section = group.section {
-                        Task { if let id = await remote.createTab(inSection: section.id) { navigation.openTab(id) } }
-                    } else {
-                        navigation.createTab()
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                        .frame(width: 20, height: 20)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .disabled(!remote.isConfigured || remote.isMutating)
-                .help(group.section == nil ? "New Tab (⌘T)" : "New Tab in \(group.name)")
-                .accessibilityLabel(group.section == nil ? "New Tab" : "New Tab in \(group.name)")
-                .accessibilityIdentifier(group.section == nil ? "sidebar.newTab" : "sidebar.newTab.\(group.id)")
-            }
-            .contextMenu {
-                CantripTabSectionMenu(model: remote, group: group, onNewTab: group.section.map { section in
-                    { Task { if let id = await remote.createTab(inSection: section.id) { navigation.openTab(id) } } }
-                })
-            }
-            .modifier(MacSectionDragSource(sectionID: group.section?.id, prefix: Self.sectionDragPrefix))
-            // Dropping a tab on a section's header files it there; dropping a section moves it.
-            .onDrop(of: [.plainText], isTargeted: Binding(
-                get: { dropTarget == group.id },
-                set: { targeted in
-                    if targeted { dropTarget = group.id } else if dropTarget == group.id { dropTarget = nil }
-                }
-            )) { providers in
-                drop(providers, onto: group)
-            }
-            .background {
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.accentColor.opacity(0.15))
-                    .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) }
-                    .opacity(dropTarget == group.id ? 1 : 0)
-                    .allowsHitTesting(false)
-            }
-            .accessibilityIdentifier("sidebar.section.\(group.id)")
         }
-        // Cantrip draws each header's own caret (left) and +: without this, macOS 26 adds its own
-        // hover collapse chevron at the right of sidebar section headers, a second caret.
-        .collapsible(false)
+    }
+
+    private func sectionHeader(_ group: CantripTabGrouping.Group, collapsed: Bool) -> some View {
+        HStack(spacing: 4) {
+            Button {
+                collapse.toggle(group.id, scope: remote.tabSectionScope)
+            } label: {
+                CantripTabSectionTitle(group: group, collapsed: collapsed)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help((collapsed ? "Show this section's tabs" : "Hide this section's idle tabs")
+                  + (group.section == nil ? "" : ". Drag onto another section to reorder."))
+            Button {
+                if let section = group.section {
+                    Task { if let id = await remote.createTab(inSection: section.id) { navigation.openTab(id) } }
+                } else {
+                    navigation.createTab()
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .disabled(!remote.isConfigured || remote.isMutating)
+            .help(group.section == nil ? "New Tab (⌘T)" : "New Tab in \(group.name)")
+            .accessibilityLabel(group.section == nil ? "New Tab" : "New Tab in \(group.name)")
+            .accessibilityIdentifier(group.section == nil ? "sidebar.newTab" : "sidebar.newTab.\(group.id)")
+        }
+        .contextMenu {
+            CantripTabSectionMenu(model: remote, group: group, onNewTab: group.section.map { section in
+                { Task { if let id = await remote.createTab(inSection: section.id) { navigation.openTab(id) } } }
+            })
+        }
+        .modifier(MacSectionDragSource(sectionID: group.section?.id, prefix: Self.sectionDragPrefix))
+        // Dropping a tab on a section's header files it there; dropping a section moves it.
+        .onDrop(of: [.plainText], isTargeted: Binding(
+            get: { dropTarget == group.id },
+            set: { targeted in
+                if targeted { dropTarget = group.id } else if dropTarget == group.id { dropTarget = nil }
+            }
+        )) { providers in
+            drop(providers, onto: group)
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color.accentColor.opacity(0.15))
+                .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor, lineWidth: 2) }
+                .opacity(dropTarget == group.id ? 1 : 0)
+                .allowsHitTesting(false)
+        }
+        .accessibilityIdentifier("sidebar.section.\(group.id)")
+        .modifier(MacSidebarHeaderRow())
     }
 
     private var selectedTabID: String? {
@@ -249,6 +249,7 @@ struct MacHomeSidebar: View {
     private var tabsHeader: some View {
         HStack(spacing: 4) {
             Text("Tabs · \(remote.sessions.count)")
+                .foregroundStyle(.tertiary)
             Spacer(minLength: 4)
             let working = CantripHomeTabCounts.working(in: remote.sessions)
             if working > 0 {
@@ -259,6 +260,7 @@ struct MacHomeSidebar: View {
                 navigation.createTab()
             } label: {
                 Image(systemName: "plus")
+                    .foregroundStyle(.secondary)
                     .frame(width: 20, height: 20)
                     .contentShape(Rectangle())
             }
@@ -409,5 +411,19 @@ private struct MacSectionDragSource: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// A sidebar section's header, drawn as the section's first row rather than as the List's section
+/// header. Cantrip.app links against the macOS 14 SDK, and for such apps macOS treats every sidebar
+/// section header as collapsible: on hover it adds its own collapse button at the right edge, which
+/// squeezes the header (the + jumps left) and stays clickable even when `.collapsible(false)` hides
+/// it. As a row there is nothing for the system to add. Same size and colour as a section header.
+private struct MacSidebarHeaderRow: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(.subheadline.weight(.semibold))
+            .selectionDisabled()
+            .accessibilityAddTraits(.isHeader)
     }
 }
