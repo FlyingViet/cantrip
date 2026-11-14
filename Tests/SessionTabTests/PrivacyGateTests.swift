@@ -233,7 +233,7 @@ extension SessionTabTests {
     /// their input.
     static func testPrivacyClassifierInput() throws {
         let classifier = PrivacyClassifierSettings()
-        precondition(classifier.chatInputCharacters == 1200 && classifier.maxInputCharacters == 3000 && classifier.timeoutMs == 2500)
+        precondition(classifier.chatInputCharacters == 900 && classifier.maxInputCharacters == 3000 && classifier.timeoutMs == 2500)
         let reply = String(repeating: "The release notes cover the parser and the build cache. ", count: 90)
         let conversation = PrivacyGate.classifierConversation([
             ConversationTurn(user: "Draft the release notes", assistant: "An old reply that stays out."),

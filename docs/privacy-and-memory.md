@@ -161,7 +161,7 @@ How it decides, first match wins:
    (oMLX's `POST /v1/decisions`, by default Private Local's server and model)
    reads the request three times with the options in a different order, and
    Cantrip averages the answers. In Home chat it also reads your earlier
-   messages and the first 300 characters of the latest reply, up to 1,200
+   messages and the first 300 characters of the latest reply, up to 900
    characters in all (`chatInputCharacters`), because the server reads every new
    character before it answers and whole replies took it past 2.5 s. A
    scheduled task's request goes with its latest earlier turn, up to 3,000

@@ -188,8 +188,9 @@ struct PrivacyClassifierSettings: Codable, Equatable {
     var maxInputCharacters = 3000
     /// Home chat: the request, the user's earlier messages and the start of the latest reply are
     /// cut to this many. The server reads every new character before it answers (about 1.2 s plus
-    /// 0.4 ms a character), so this keeps chat within `timeoutMs`.
-    var chatInputCharacters = 1200
+    /// 0.4 ms a character on an idle Studio), so this keeps chat within `timeoutMs` with room for
+    /// a busier server: real chats at 1,100-1,200 characters took 2.4-2.5 s.
+    var chatInputCharacters = 900
 
     init() {}
 
