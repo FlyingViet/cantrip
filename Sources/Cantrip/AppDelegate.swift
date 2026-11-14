@@ -40,47 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         // Main menu: invisible for accessory apps, but REQUIRED for standard
         // keyboard shortcuts (⌘C/⌘V/⌘X/⌘A/⌘Z) to route to the text field.
-        let mainMenu = NSMenu()
-
-        let appMenuItem = NSMenuItem()
-        let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "New Conversation", action: #selector(newConversation), keyEquivalent: "n")
-        appMenu.addItem(withTitle: "New Session", action: #selector(newSessionAction), keyEquivalent: "t")
-        appMenu.addItem(withTitle: "Reset Panel Size", action: #selector(resetPanelSize), keyEquivalent: "")
-        appMenu.addItem(withTitle: "Close Tab", action: #selector(closeCurrentSession), keyEquivalent: "w")
-        appMenu.addItem(withTitle: "Previous Tab",
-                        action: #selector(selectPreviousSession),
-                        keyEquivalent: "\u{F702}")
-        appMenu.addItem(withTitle: "Next Tab",
-                        action: #selector(selectNextSession),
-                        keyEquivalent: "\u{F703}")
-        appMenu.addItem(.separator())
-        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettingsWindow), keyEquivalent: ",")
-        settingsItem.target = self
-        appMenu.addItem(settingsItem)
-        appMenu.addItem(withTitle: "Export Settings to ~/.cantriprc",
-                        action: #selector(exportSettings), keyEquivalent: "")
-        appMenu.addItem(withTitle: "Import Settings from ~/.cantriprc",
-                        action: #selector(importSettings), keyEquivalent: "")
-        appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Quit Cantrip",
-                        action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        appMenuItem.submenu = appMenu
-        mainMenu.addItem(appMenuItem)
-
-        let editMenuItem = NSMenuItem()
-        let editMenu = NSMenu(title: "Edit")
-        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
-        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
-        editMenu.addItem(.separator())
-        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
-        editMenuItem.submenu = editMenu
-        mainMenu.addItem(editMenuItem)
-
-        NSApp.mainMenu = mainMenu
+        NSApp.mainMenu = Self.mainMenu(settingsTarget: self)
 
         // Menu bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -221,30 +181,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             .sink { [weak self] _ in self?.markActiveTabSeen() }
             .store(in: &cancellables)
 
-        // Local key monitor: ⌘V image-paste, and ⌘←/⌘→ cursor jumps
-        // (borderless panels don't always deliver ⌘-arrows to the editor).
+        // Local key monitor: ⌘V image-paste, and ⌘-arrows (borderless panels don't always
+        // deliver them to the editor).
         pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self,
                   self.panel.isKeyWindow,
                   event.modifierFlags.contains(.command) else { return event }
 
-            // ⌘← / ⌘→: with text in the field → jump cursor to start/end
-            // (⇧ extends selection); with an empty field → switch tabs.
-            if event.keyCode == 123 || event.keyCode == 124 {
-                let editor = self.panel.firstResponder as? NSTextView
-                if let editor, !editor.string.isEmpty {
-                    let shift = event.modifierFlags.contains(.shift)
-                    switch (event.keyCode, shift) {
-                    case (123, false): editor.moveToBeginningOfDocument(nil)
-                    case (123, true): editor.moveToBeginningOfDocumentAndModifySelection(nil)
-                    case (124, false): editor.moveToEndOfDocument(nil)
-                    default: editor.moveToEndOfDocumentAndModifySelection(nil)
-                    }
-                } else {
-                    event.keyCode == 123 ? self.manager.selectPrevious()
-                                         : self.manager.selectNext()
-                }
-                return nil // consumed
+            let editor = self.panel.firstResponder as? NSTextView
+            switch Self.commandArrow(keyCode: event.keyCode, modifiers: event.modifierFlags,
+                                     text: editor?.string, composing: editor?.hasMarkedText() ?? false) {
+            case .edit:
+                editor?.interpretKeyEvents([event])
+                return nil
+            case .previousTab:
+                self.manager.selectPrevious()
+                return nil
+            case .nextTab:
+                self.manager.selectNext()
+                return nil
+            case .pass:
+                break
             }
 
             // ⌘V with an image on the clipboard → attach it.
@@ -317,6 +274,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc func selectNextSession() {
         manager.selectNext()
+    }
+
+    /// The main menu. Its key equivalents reach the menu before any text field, so none of them may
+    /// use a key that moves or edits text: Previous/Next Tab once took ⌘←/⌘→, so the caret couldn't
+    /// move to a line's ends in the Home window. Tabs switch with ⌘⇧[ / ⌘⇧] and, in the panel's
+    /// empty field, ⌘←/⌘→ (`commandArrow`).
+    static func mainMenu(settingsTarget: AnyObject) -> NSMenu {
+        let mainMenu = NSMenu()
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "New Conversation", action: #selector(AppDelegate.newConversation), keyEquivalent: "n")
+        appMenu.addItem(withTitle: "New Session", action: #selector(AppDelegate.newSessionAction), keyEquivalent: "t")
+        appMenu.addItem(withTitle: "Reset Panel Size", action: #selector(AppDelegate.resetPanelSize), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Close Tab", action: #selector(AppDelegate.closeCurrentSession), keyEquivalent: "w")
+        appMenu.addItem(withTitle: "Previous Tab", action: #selector(AppDelegate.selectPreviousSession), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Next Tab", action: #selector(AppDelegate.selectNextSession), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(AppDelegate.openSettingsWindow), keyEquivalent: ",")
+        settingsItem.target = settingsTarget
+        appMenu.addItem(settingsItem)
+        appMenu.addItem(withTitle: "Export Settings to ~/.cantriprc",
+                        action: #selector(AppDelegate.exportSettings), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Import Settings from ~/.cantriprc",
+                        action: #selector(AppDelegate.importSettings), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit Cantrip",
+                        action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+        return mainMenu
+    }
+
+    /// Keys a text field uses to move or delete: arrows, Home/End, Page Up/Down and both deletes.
+    static let textNavigationKeys: Set<String> = [
+        "\u{F700}", "\u{F701}", "\u{F702}", "\u{F703}", "\u{F729}", "\u{F72B}", "\u{F72C}", "\u{F72D}",
+        "\u{8}", "\u{7F}", "\u{F728}",
+    ]
+
+    enum CommandArrow: Equatable { case edit, previousTab, nextTab, pass }
+
+    /// What a ⌘-arrow does in the panel. With text in the field it moves the caret through the
+    /// standard key bindings, as in any Mac text field (⌘←/⌘→ to the ends of the line, ⌘↑/⌘↓ to the
+    /// ends of the message, ⇧ extends the selection); in an empty field ⌘←/⌘→ switch tabs. Other
+    /// modifiers, other keys and text being composed (an input method) pass through.
+    static func commandArrow(keyCode: UInt16, modifiers: NSEvent.ModifierFlags, text: String?,
+                             composing: Bool) -> CommandArrow {
+        guard [123, 124, 125, 126].contains(keyCode),
+              modifiers.intersection([.command, .option, .control]) == .command, !composing else { return .pass }
+        if let text, !text.isEmpty { return .edit }
+        switch keyCode {
+        case 123: return .previousTab
+        case 124: return .nextTab
+        default: return .pass
+        }
     }
 
     private func notifyIfHidden(for finished: ChatSession) {

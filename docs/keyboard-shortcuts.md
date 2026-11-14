@@ -19,8 +19,9 @@
 | **Command+1** | Select the pinned Remote tab |
 | **Command+2** through **Command+9** | Select local sessions, starting with the first at Command+2 |
 | **Command+Shift+[** / **Command+Shift+]** | Previous/next tab |
-| **Command+Left/Right** | With input text: move to start/end; with an empty editor: switch tabs |
-| **Command+Shift+Left/Right** | Extend selection to the start/end of the input |
+| **Command+Left/Right** | With input text: move to the start/end of the line; with an empty editor: switch tabs |
+| **Command+Up/Down** | Move to the start/end of the prompt |
+| **Command+Shift+arrows** | Extend the selection the same way |
 | **Command+V** | Paste text, or attach a supported clipboard image/file |
 | **@** at the start of a word | Suggest tabs to mention; **Up/Down** choose, **Return** or **Tab** picks, **Escape** closes the list |
 | **Escape** | Hide panel and overlays; does not cancel a run |
