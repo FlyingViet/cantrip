@@ -306,3 +306,20 @@ final class MacComposerFocusTests: XCTestCase {
         XCTAssertFalse(navigation.terminalWantsFocus, "Only opening it moves the cursor")
     }
 }
+
+/// Shift-Return adds a line in Mac composers; Return alone and other combinations keep their meaning.
+final class ComposerNewlineKeyTests: XCTestCase {
+    func testShiftReturnAddsALine() {
+        func adds(_ flags: NSEvent.ModifierFlags, key: UInt16 = 36, composing: Bool = false) -> Bool {
+            MacComposerNewlineKeys.addsLine(keyCode: key, modifiers: flags, composing: composing)
+        }
+        XCTAssertTrue(adds(.shift))
+        XCTAssertTrue(adds(.shift, key: 76), "Shift-Enter on a keypad")
+        XCTAssertTrue(adds([.shift, .capsLock]))
+        XCTAssertFalse(adds([]), "Return sends")
+        XCTAssertFalse(adds(.option), "Option-Return adds a line natively")
+        XCTAssertFalse(adds([.shift, .command]))
+        XCTAssertFalse(adds(.shift, key: 48), "Shift-Tab moves focus")
+        XCTAssertFalse(adds(.shift, composing: true), "an input method keeps its keys")
+    }
+}

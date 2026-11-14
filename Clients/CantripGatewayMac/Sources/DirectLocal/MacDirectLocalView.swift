@@ -169,8 +169,9 @@ struct MacDirectLocalView: View {
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .disabled(!chat.isConfigured)
+                .macComposerNewlineKeys(focused: composerFocused)
                 .onSubmit(send)
-                .help("Return sends. Option-Return adds a new line.")
+                .help("Return sends. Shift-Return or Option-Return adds a new line.")
                 .accessibilityLabel("Message to the local model")
                 .accessibilityIdentifier("directLocal.message")
         } trailing: {

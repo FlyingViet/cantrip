@@ -684,8 +684,9 @@ struct MacHomeChatView: View {
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, minHeight: 44)
             .disabled(!destinationReady || !composerAcceptsText || vm.sending || submittingRemote)
+            .macComposerNewlineKeys(focused: composerFocused)
             .onSubmit(sendText)
-            .help("Return sends. Option-Return adds a new line. Type / for this tab's commands and skills, @ to mention another tab. Paste attaches copied photos, videos and files.")
+            .help("Return sends. Shift-Return or Option-Return adds a new line. Type / for this tab's commands and skills, @ to mention another tab. Paste attaches copied photos, videos and files.")
             .composerPaste(isEnabled: !imagePickerDisabled && !importingImages) {
                 composerPaste = ComposerPasteRequest(providers: $0)
             }

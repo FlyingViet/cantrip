@@ -1,9 +1,67 @@
 import AppKit
 import SwiftUI
 
+/// Shift-Return (and Shift-Enter on a keypad) adds a new line in a Mac composer, as Option-Return
+/// does and as in Messages and Slack; Return alone still sends (`onSubmit`). A key monitor, because
+/// the composer's field editor submits Return before SwiftUI's `onKeyPress` sees it. Active only
+/// while the composer has focus, for keys in its window; text being composed with an input method
+/// keeps its keys.
+struct MacComposerNewlineKeys: NSViewRepresentable {
+    var isActive: Bool
+
+    /// Whether a Return with these modifiers adds a line (Option-Return already does natively).
+    static func addsLine(keyCode: UInt16, modifiers: NSEvent.ModifierFlags, composing: Bool) -> Bool {
+        [36, 76].contains(keyCode) && !composing
+            && modifiers.intersection([.shift, .option, .control, .command]) == .shift
+    }
+
+    func makeNSView(context: Context) -> MonitorView { MonitorView() }
+
+    func updateNSView(_ view: MonitorView, context: Context) { view.setActive(isActive) }
+
+    static func dismantleNSView(_ view: MonitorView, coordinator: ()) { view.setActive(false) }
+
+    final class MonitorView: NSView {
+        private var monitor: Any?
+
+        func setActive(_ active: Bool) {
+            if active, monitor == nil {
+                monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                    guard let window = self?.window, event.window === window,
+                          let editor = window.firstResponder as? NSTextView,
+                          MacComposerNewlineKeys.addsLine(keyCode: event.keyCode, modifiers: event.modifierFlags,
+                                                          composing: editor.hasMarkedText())
+                    else { return event }
+                    editor.insertNewlineIgnoringFieldEditor(nil)
+                    return nil
+                }
+            } else if !active, let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil { setActive(false) }
+        }
+    }
+}
+
+extension View {
+    /// Shift-Return adds a line in this composer while `focused` (`MacComposerNewlineKeys`).
+    func macComposerNewlineKeys(focused: Bool) -> some View {
+        background {
+            MacComposerNewlineKeys(isActive: focused)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
 /// Routes Up/Down, Tab, Return and Escape to the composer's "/" suggestions while they show. Only
-/// unmodified keys in this window are taken, so Option-Return still adds a new line, Shift-Tab
-/// still moves focus, and text being composed with an input method keeps its keys.
+/// unmodified keys in this window are taken, so Shift- and Option-Return still add a new line,
+/// Shift-Tab still moves focus, and text being composed with an input method keeps its keys.
 struct MacSlashKeyMonitor: NSViewRepresentable {
     var isActive: Bool
     /// Returns true when the list used the key; false lets the text field handle it as usual.
