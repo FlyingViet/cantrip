@@ -102,7 +102,7 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
     /// The sandbox and approval policy Codex runs under for `access`.
     static func threadPolicy(_ access: Access) -> (sandbox: String, approval: String) {
         switch access {
-        case .readOnly: return ("read-only", "untrusted")
+        case .readOnly, .guardrail(.answerOnly): return ("read-only", "untrusted")
         case .full: return ("danger-full-access", "never")
         // Codex runs reads it knows are safe on its own and asks about everything else.
         case .policy: return ("danger-full-access", "untrusted")

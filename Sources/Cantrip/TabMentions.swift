@@ -354,7 +354,7 @@ enum TabMentions {
         }
         var guidance = "Look into a mentioned tab with `\(command) tab read <ID>` (read-only)"
         if anyOpen {
-            guidance += "; when only that tab can answer, ask it: `\(command) tab ask <ID> \"question\"` (it runs as a turn there)"
+            guidance += "; when only that tab can answer, ask it: `\(command) tab ask <ID> \"question\"` (a temporary read-only copy of it answers)"
         }
         guidance += "."
         if session.isCantripHome {

@@ -16,6 +16,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
     /// per session and survives compaction; each message then carries only that turn's data.
     var homeProtocol: String?
     var readOnly = false
+    /// Tools on or off whatever Settings say (a `tab ask` question's child: on, its guardrail decides).
+    var allowToolsOverride: Bool?
     /// Receives each CLI session ID this backend runs on (called on the backend queue).
     var onAgentSession: ((String) -> Void)?
     private let settings = AppSettings.shared
@@ -243,7 +245,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             model: modelOverride ?? settings.copilotModel,
             effort: effortOverride ?? settings.copilotEffort,
             contextTier: contextTierOverride ?? settings.copilotContextTier,
-            allowTools: settings.copilotAllowTools || settings.allowActions,
+            allowTools: allowToolsOverride ?? (settings.copilotAllowTools || settings.allowActions),
             readOnly: readOnly, autoApprove: settings.allowActions,
             // Runs that hide the subagent tools also skip the subagent guidance.
             allowSubagents: settings.copilotAllowSubagents && excludedTools?.contains("task") != true,

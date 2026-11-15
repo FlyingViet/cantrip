@@ -50,6 +50,10 @@ struct SessionTabTests {
                 try await testAgentPolicyLive()
                 return
             }
+            if ProcessInfo.processInfo.environment["CANTRIP_TABASK_LIVE_TEST"] == "1" {
+                try await testTabAskLive()
+                return
+            }
             if ProcessInfo.processInfo.environment["CANTRIP_CODEX_LIVE_TEST"] == "1" {
                 try await testCodexLive()
                 return
@@ -120,6 +124,10 @@ struct SessionTabTests {
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "home-tokens" {
             try testHomeLocalProfile()
             try testHomeRepeatedData()
+            return
+        }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "tab-ask" {
+            try await testTabInsight()
             return
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "muse" {

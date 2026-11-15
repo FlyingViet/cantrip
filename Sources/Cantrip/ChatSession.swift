@@ -3416,11 +3416,48 @@ final class ChatSession: ObservableObject {
         return false
     }
 
-    private func completedConversationTurns() -> [ConversationTurn] {
+    /// What a `tab ask` question's temporary child is given: the finished turns and, while this
+    /// tab works, the turn it's on (its request, steps so far and words so far).
+    struct QuestionContext {
+        struct Current {
+            var request: String
+            var steps: [ToolActivity]
+            var reply: String
+            var startedAt: Date?
+        }
+        var turns: [ConversationTurn]
+        var current: Current?
+        var queued: [String]
+    }
+
+    func questionContext() -> QuestionContext {
+        var end = messages.count
+        var current: QuestionContext.Current?
+        if isStreaming, var start = messages.lastIndex(where: { $0.role == .user }) {
+            // Queued messages combined into one run are one request.
+            while start > 0, messages[start - 1].role == .user, let run = messages[start].runID,
+                  messages[start - 1].runID == run {
+                start -= 1
+            }
+            let running = messages[start...]
+            let replies = running.filter { $0.role == .assistant }
+            current = .init(
+                request: running.filter { $0.role == .user }.map(\.text).joined(separator: "\n\n"),
+                steps: replies.flatMap(\.activities),
+                reply: replies.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n"),
+                startedAt: currentRunStartedAt
+            )
+            end = start
+        }
+        return QuestionContext(turns: completedConversationTurns(upTo: end), current: current,
+                               queued: queued.map(\.text))
+    }
+
+    private func completedConversationTurns(upTo end: Int? = nil) -> [ConversationTurn] {
         var turns: [ConversationTurn] = []
         var pendingUser: String?
         var previous: ChatMessage?
-        for message in messages {
+        for message in messages.prefix(end ?? messages.count) {
             // Result cards hold tab output for the user, not Home's own words.
             if message.role == .handoff { continue }
             defer { previous = message }

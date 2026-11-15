@@ -4,6 +4,9 @@ import Foundation
 /// present; scheduled tasks and incidents run unattended in hidden sessions.
 enum CantripHomeGuardrail: String {
     case attended, unattended
+    /// A `tab ask` question's temporary child: it may look (read files, run read-only commands)
+    /// and nothing else, and never waits for the user (`TabAskPolicy`).
+    case answerOnly
 }
 
 /// The approval setting the user chose in Cantrip for the backend running Home. Cantrip's blocked

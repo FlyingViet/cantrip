@@ -38,6 +38,18 @@ enum AgentPolicyGate {
             return .deny(reason: reason, by: "Privacy Gate")
         }
         let document = policy ?? store.current()
+        // A question's temporary child only looks; nobody is there to approve anything.
+        if guardrail == .answerOnly {
+            if let reason = TabAskPolicy.denial(for: request) {
+                Log.write("tab-ask policy: denied \(request.kind.rawValue): \((request.command.isEmpty ? request.tool ?? "" : request.command).prefix(160))")
+                return .deny(reason: reason, by: "Answer-only question")
+            }
+            if document.enabled {
+                let user = document.evaluate(request, context: context ?? .current(workdir: workdir))
+                if user.verdict == .deny { return .deny(reason: user.denial, by: "Cantrip policy (\(user.ruleID))") }
+            }
+            return .allow(by: "Answer-only question")
+        }
         // Home's rules are the stricter layer: its refusals come first in Home and child tabs.
         var home: CantripHomeActionDecision?
         if let guardrail {

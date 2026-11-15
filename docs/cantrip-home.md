@@ -83,9 +83,10 @@ To answer what a tab or child tab is doing, or why it did something, Home reads
 the tab's recent conversation itself (`tab read <tab ID>`, read-only) instead
 of guessing or searching source code. Each open tab in Home's data carries its
 ID, whose child tab it is, and its newest child tabs with their states. When
-only the tab itself can answer, Home can ask it (`tab ask`): the question runs
-as a turn in that tab and the reply comes back to Home as an *Answer from …*
-card. Change work still goes through handoffs. Private, Private Local and
+only the tab itself can answer, Home can ask it (`tab ask`): a temporary
+read-only copy of the tab answers at once, even while the tab works, and is
+deleted after, so the tab's history doesn't change; the reply comes back to
+Home as an *Answer from …* card. Change work still goes through handoffs. Private, Private Local and
 Home's own background conversations are never readable. See
 [Look into other tabs](sessions-and-council.md#look-into-other-tabs).
 

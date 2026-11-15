@@ -1540,7 +1540,8 @@ API:
 
 When a tab's model or Cantrip Home asks another tab something with `cantrip tab
 ask` (see [Look into other tabs](sessions-and-council.md#look-into-other-tabs)),
-the question is an ordinary user message in the tab asked, and the asker gets a
+a temporary read-only copy of the tab asked answers it (a parent's `--steer` is
+an ordinary user message in its child instead), and the asker gets a
 card: a message with role `handoff` and `handoffResult` (the same object as
 Home's handoff results) with `kind: "ask"`, `tabID`/`tabTitle` of the tab asked,
 `summary` = the question and `detail` = its status, then the reply (up to 2,000

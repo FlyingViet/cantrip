@@ -129,8 +129,10 @@ enum CantripCLI {
           --turns N | --all       How many turns (default 3)
           --full                  Whole messages instead of their start and end
       cantrip tab ask ID "question"
-                                  Ask a tab: it runs as a turn there (in its queue if busy) and prints the reply
-          --steer                 From a parent to its running child: deliver like Auto (may join its current step)
+                                  Ask a tab: a temporary read-only copy of it answers at once, even while it
+                                  works, and is deleted after (the tab's history doesn't change); prints the reply
+          --steer                 From a parent to its running child: a message in its run, delivered like Auto
+                                  (may join its current step), instead of a temporary copy
           --wait SECONDS          How long to wait for the reply (default 300; 0 returns at once)
       cantrip tab reply ASK_ID [--wait SECONDS]
                                   The reply to an earlier question

@@ -3,9 +3,11 @@ import Combine
 
 /// Looking into other tabs on demand (`cantrip tab list|read`) and asking one a question
 /// (`cantrip tab ask|reply`). Models get tab IDs and these commands in their per-message data,
-/// never whole conversations, and read only what a question needs. Reading is read-only; only
-/// an ask adds a turn, in the tab asked. Private, Private Local and Cantrip Home's own
-/// conversations (its chat, background log and background runs) are never readable or askable.
+/// never whole conversations, and read only what a question needs. Reading is read-only; a
+/// question is answered by a temporary read-only copy of the tab (`TabAskChild`) and leaves
+/// nothing in it; only a parent steering its running child (`--steer`) adds a turn there.
+/// Private, Private Local and Cantrip Home's own conversations (its chat, background log and
+/// background runs) are never readable or askable.
 /// Docs: sessions-and-council.md#look-into-other-tabs.
 @MainActor
 enum TabInsight {
@@ -296,8 +298,9 @@ enum TabInsight {
     }
 }
 
-/// A question one tab (or Home, or the terminal) asked another with `cantrip tab ask`. It runs as
-/// a turn in the tab asked, tracked like a Home handoff; the reply goes back to the asker.
+/// A question one tab (or Home, or the terminal) asked another with `cantrip tab ask`. A temporary
+/// read-only copy of the tab asked answers it (`temporary`); a parent's `--steer` runs as a turn in
+/// its child instead, tracked like a Home handoff. The reply goes back to the asker.
 struct TabAsk: Codable, Equatable, Identifiable {
     let id: UUID
     /// The tab or Home that asked; nil from the terminal.
@@ -315,6 +318,10 @@ struct TabAsk: Codable, Equatable, Identifiable {
     /// The asker's model has the reply: the command printed it, or a later message carried it.
     var delivered: Bool
     var updatedAt: Date
+    /// Answered by a temporary child of the tab asked, not a turn in it.
+    var temporary: Bool?
+    /// That child's backend session, until it's deleted.
+    var child: TabAskChild.Footprint?
 
     var targetID: UUID { tracking.tabID }
     var isActive: Bool { tracking.isActive }
@@ -371,9 +378,11 @@ extension CantripHomeHandoffResult {
     }
 }
 
-/// Runs `cantrip tab ask`: puts the question in the tab asked, follows its run, and brings the
-/// reply back as a card in the asker and, if the command stopped waiting, with the asker's next
-/// message. Records live in `~/.cache/Cantrip/tab-asks.json`. One per `SessionManager`.
+/// Runs `cantrip tab ask`: starts a temporary read-only child of the tab asked (or, for a parent's
+/// `--steer`, puts the message in its running child and follows that run), and brings the reply
+/// back as a card in the asker and, if the command stopped waiting, with the asker's next message.
+/// Records live in `~/.cache/Cantrip/tab-asks.json`; each answer adds a line (no reply text) to
+/// `tab-ask-log.jsonl`. One per `SessionManager`.
 @MainActor
 final class TabAskCoordinator {
     static let questionLimit = 4_000
@@ -386,21 +395,46 @@ final class TabAskCoordinator {
     weak var manager: SessionManager?
     private(set) var asks: [UUID: TabAsk] = [:]
     let url: URL
+    let logURL: URL
     private var observers: [UUID: AnyCancellable] = [:]
     private var sessionsObserver: AnyCancellable?
+    /// Temporary children answering now, by ask.
+    private(set) var children: [UUID: TabAskChild] = [:]
+    private var lastCardPost: [UUID: Date] = [:]
 
     init(manager: SessionManager, url: URL? = nil) {
         self.manager = manager
         self.url = url ?? CantripPaths.cache("tab-asks.json")
+        logURL = self.url.deletingLastPathComponent().appendingPathComponent("tab-ask-log.jsonl")
         if let data = try? Data(contentsOf: self.url),
            let list = try? JSONDecoder().decode([TabAsk].self, from: data) {
             asks = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
         }
     }
 
-    /// Follows questions still open after a relaunch, and tabs closing.
+    /// Follows questions still open after a relaunch, and tabs closing. A temporary child cut off
+    /// by a quit or crash can't finish: its question fails and its session is deleted.
     func attach() {
         guard let manager else { return }
+        let now = Date()
+        var changed = false
+        for var ask in asks.values where ask.temporary == true && children[ask.id] == nil
+            && (ask.isActive || ask.child != nil) {
+            if ask.isActive {
+                ask.tracking.status = .failed
+                ask.tracking.error = "Cantrip restarted before its temporary copy answered. Ask again."
+                ask.tracking.finishedAt = now
+                ask.updatedAt = now
+                postCard(ask, now: now)
+            }
+            if let footprint = ask.child {
+                ask.child = nil
+                Task.detached(priority: .utility) { TabAskChildCleanup.remove(footprint) }
+            }
+            asks[ask.id] = ask
+            changed = true
+        }
+        if changed { save() }
         sessionsObserver = manager.$sessions
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in Task { @MainActor in self?.refresh() } }
@@ -424,6 +458,9 @@ final class TabAskCoordinator {
             if askerID != ChatSession.cantripHomeID, SessionManager.isCantripHomeReserved(askerID) {
                 throw TabInsight.Failure("Cantrip Home background runs don't ask tabs. Read one with `tab read`, or hand a fix off with a cantrip-delegate block.")
             }
+            if TabAskChild.running.contains(askerID) {
+                throw TabInsight.Failure("A question's temporary copy can't ask other tabs. Read them with `tab read`, and answer from what you can see.")
+            }
         }
         let target = try TabInsight.resolve(reference, in: manager)
         guard let session = target.session else {
@@ -431,24 +468,29 @@ final class TabAskCoordinator {
         }
         guard session.id != askerID else { throw TabInsight.Failure("A tab can't ask itself.") }
         let asker = askerID.flatMap { manager.managedSession(id: $0) }
-        if let askerID, asks.values.contains(where: { $0.isActive && $0.askerID == session.id && $0.targetID == askerID }) {
-            throw TabInsight.Failure("“\(session.title)” is already waiting on a question it asked this tab, so asking it back now would leave both waiting. Finish your turn (its question runs next here), or read it with `tab read`.")
-        }
         if let askerID, asks.values.filter({ $0.isActive && $0.askerID == askerID }).count >= Self.activeLimit {
             throw TabInsight.Failure("This tab already has \(Self.activeLimit) questions waiting for answers. Wait for one, or read tabs with `tab read`.")
         }
         let store = ChildTabStore.shared
         let child = store.isActiveChild(session.id) ? store.record(session.id) : nil
-        // Asking a child that stopped, failed or waits to merge would restart it outside the
-        // child-tab caps, and its finished run would merge on its own.
-        if let child, !child.state.isRunning {
-            throw TabInsight.Failure("“\(session.title)” isn't running (\(child.statusLine.lowercased())), and a question would restart it. Read its conversation instead: `\(TabInsight.command) tab read \(session.id.uuidString)`.")
-        }
         let fromParent = askerID != nil && child?.parentID == askerID
         if steer, askerID != nil, !fromParent {
-            throw TabInsight.Failure("--steer is for a tab's own running child tabs; other questions wait in the tab's queue. Ask again without --steer.")
+            throw TabInsight.Failure("--steer is for a tab's own running child tabs; ask again without --steer.")
         }
         let askerTitle = asker?.title ?? (askerID == nil ? "the terminal" : "another tab")
+        guard steer else {
+            return try askTemporaryChild(session, question: text, askerID: asker == nil ? nil : askerID,
+                                         askerTitle: askerID == ChatSession.cantripHomeID ? "Cantrip Home" : askerTitle,
+                                         child: child, now: now)
+        }
+        if let askerID, asks.values.contains(where: { $0.isActive && $0.temporary != true && $0.askerID == session.id && $0.targetID == askerID }) {
+            throw TabInsight.Failure("“\(session.title)” is already waiting on a question it asked this tab, so steering it now would leave both waiting. Finish your turn first, or read it with `tab read`.")
+        }
+        // Steering a child that stopped, failed or waits to merge would restart it outside the
+        // child-tab caps, and its finished run would merge on its own.
+        if let child, !child.state.isRunning {
+            throw TabInsight.Failure("“\(session.title)” isn't running (\(child.statusLine.lowercased())), and steering it would restart it. Ask it without --steer, or read its conversation: `\(TabInsight.command) tab read \(session.id.uuidString)`.")
+        }
         let prompt = Self.framed(text, askerTitle: askerTitle, isHome: askerID == ChatSession.cantripHomeID,
                                  fromParent: fromParent, fromTerminal: askerID == nil)
         var tracking = CantripHomeDelegation(
@@ -468,6 +510,129 @@ final class TabAskCoordinator {
         save()
         if ask.isActive { observe(session) }
         return ask
+    }
+
+    /// A temporary read-only child of `session` answers at once, whether the tab is busy or not;
+    /// the tab's history, queue, running turn and child tabs stay as they are.
+    private func askTemporaryChild(_ session: ChatSession, question: String, askerID: UUID?, askerTitle: String,
+                                   child: ChildTab?, now: Date) throws -> TabAsk {
+        var tracking = CantripHomeDelegation(
+            tabID: session.id, tabTitle: session.title, summary: TabInsight.oneLine(question, 120),
+            prompt: question, createdAt: now, anchorMessageID: nil
+        )
+        tracking.status = .running
+        tracking.latestStatus = "Reading the tab's work"
+        let kind = session.runningBackendKind ?? session.effectiveBackendKind
+        let spec = TabAskChild.Spec(id: UUID(), kind: kind,
+                                    selection: session.runSelection(for: kind == .copilotRemote ? .copilot : kind),
+                                    workdir: session.workdir, label: "Question for “\(TabInsight.oneLine(session.title, 40))”")
+        let runner = TabAskChild(spec: spec)
+        let ask = TabAsk(id: UUID(), askerID: askerID, askerTitle: askerTitle, question: question, steer: false,
+                         tracking: tracking, reply: nil, delivered: false, updatedAt: now, temporary: true,
+                         child: runner.footprint)
+        asks[ask.id] = ask
+        children[ask.id] = runner
+        Log.write("tab-ask: \(askerID.map { String($0.uuidString.prefix(8)) } ?? "terminal") asked \(session.id.uuidString.prefix(8))"
+                  + " in a temporary child (\(kind.rawValue), \(spec.model))")
+        postCard(ask, now: now)
+        save()
+        let context = session.questionContext()
+        let prompt = { (memory: String) in
+            TabAskChild.prompt(question: question, askerTitle: askerTitle, tab: session, context: context,
+                               child: child, memory: memory)
+        }
+        runner.onStatus = { [weak self] status in self?.childStatus(ask.id, status) }
+        runner.onFootprint = { [weak self] footprint in
+            guard let self, var current = self.asks[ask.id] else { return }
+            current.child = footprint
+            self.asks[ask.id] = current
+            self.save()
+        }
+        runner.onFinish = { [weak self] result in self?.childFinished(ask.id, result) }
+        runner.onCleaned = { [weak self] _ in
+            guard let self, var current = self.asks[ask.id] else { return }
+            current.child = nil
+            self.asks[ask.id] = current
+            self.children[ask.id] = nil
+            self.save()
+        }
+        let settings = AppSettings.shared
+        guard settings.memoryEnabled, !session.isPrivate, !session.isLocalPrivate else {
+            runner.start(prompt: prompt(""), question: question, turns: context.turns)
+            return ask
+        }
+        // The vault's notes, read-only (private mode's block: nothing is recorded or written).
+        let path = settings.memoryPath, searchIndex = settings.memorySearchIndex
+        Task { @MainActor in
+            let memory = await MemoryStore.contextBlock(query: question, path: path, isPrivate: true,
+                                                        isLocal: kind == .localModel, searchIndex: searchIndex)
+            guard self.children[ask.id] === runner else { return }
+            runner.start(prompt: prompt(memory), question: question, turns: context.turns)
+        }
+        return ask
+    }
+
+    private func childStatus(_ id: UUID, _ status: String) {
+        guard var ask = asks[id], ask.isActive else { return }
+        ask.tracking.latestStatus = TabInsight.oneLine(status, 120)
+        ask.updatedAt = Date()
+        asks[id] = ask
+        // The card follows at most every few seconds; the command polls the record itself.
+        if Date().timeIntervalSince(lastCardPost[id] ?? .distantPast) >= 3 { postCard(ask, now: ask.updatedAt) }
+    }
+
+    private func childFinished(_ id: UUID, _ result: Result<String, TabInsight.Failure>) {
+        guard var ask = asks[id], let runner = children[id] else { return }
+        let now = Date()
+        switch result {
+        case .success(let answer):
+            ask.tracking.status = .completed
+            ask.reply = TabInsight.clip(answer, head: Self.replyLimit, tail: 0)
+            ask.tracking.result = ask.reply
+        case .failure(let failure):
+            ask.tracking.status = .failed
+            ask.tracking.error = failure.message
+        }
+        ask.tracking.latestStatus = nil
+        ask.tracking.finishedAt = now
+        ask.updatedAt = now
+        ask.child = runner.footprint
+        asks[id] = ask
+        lastCardPost[id] = nil
+        postCard(ask, now: now)
+        save()
+        let seconds = now.timeIntervalSince(runner.startedAt)
+        Log.write("tab-ask: \(ask.targetID.uuidString.prefix(8)) \(ask.status) in \(Int(seconds.rounded())) s by a temporary child"
+                  + " (\(runner.spec.kind.rawValue), \(runner.spec.model), \(ask.reply?.count ?? 0) characters)")
+        var line: [String: Any] = [
+            "at": ISO8601DateFormatter().string(from: now), "askID": id.uuidString,
+            "asker": ask.askerID?.uuidString ?? "terminal", "askerTitle": ask.askerTitle,
+            "target": ask.targetID.uuidString, "targetTitle": ask.tracking.tabTitle,
+            "question": TabInsight.oneLine(ask.question, 200), "answerCharacters": ask.reply?.count ?? 0,
+            "seconds": (seconds * 10).rounded() / 10, "backend": runner.spec.kind.rawValue,
+            "model": runner.spec.model, "outcome": ask.status,
+        ]
+        line["error"] = ask.tracking.error.map { TabInsight.oneLine($0, 200) }
+        if let data = try? JSONSerialization.data(withJSONObject: line, options: [.sortedKeys]) {
+            appendLog(data + Data("\n".utf8))
+        }
+    }
+
+    private func appendLog(_ data: Data) {
+        let files = FileManager.default
+        try? files.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // A small record per answer; the oldest half goes past 1 MB.
+        if let size = (try? files.attributesOfItem(atPath: logURL.path))?[.size] as? Int, size > 1_000_000,
+           let old = try? Data(contentsOf: logURL) {
+            try? old.suffix(old.count / 2).drop(while: { $0 != 0x0A }).dropFirst().write(to: logURL, options: .atomic)
+        }
+        if let handle = try? FileHandle(forWritingTo: logURL) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: logURL, options: .atomic)
+        }
     }
 
     /// The text the tab asked sees: who asks and what kind of request it is, then the question.
@@ -535,7 +700,7 @@ final class TabAskCoordinator {
         guard let manager else { return }
         var changed = false
         var activeTabs = Set<UUID>()
-        for ask in asks.values where ask.isActive {
+        for ask in asks.values where ask.isActive && ask.temporary != true {
             let target = manager.sessions.first { $0.id == ask.targetID }
             var next = ask
             next.tracking = CantripHomeDelegations.evaluate(ask.tracking, target: target, now: now,
@@ -572,6 +737,7 @@ final class TabAskCoordinator {
     /// The asker's card, posted once and updated in place: at the end of a tab (like a child tab's
     /// card), or in Home under the request it's answering, as one of its replies.
     private func postCard(_ ask: TabAsk, now: Date) {
+        lastCardPost[ask.id] = now
         guard let askerID = ask.askerID, let asker = manager?.managedSession(id: askerID),
               !asker.isPrivate, !asker.isLocalPrivate else { return }
         var card = CantripHomeHandoffResult(ask: ask, now: now)

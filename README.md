@@ -83,7 +83,9 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   asks on a conflict. [Child tabs](docs/sessions-and-council.md#child-tabs)
 - **Tabs look into each other:** parents see live child status, and models and
   Home read any non-private tab's conversation on demand or ask it a question,
-  which shows as an **Asked tab** card until the answer arrives. Type `@` to
+  which a temporary read-only copy of the tab answers at once (the tab keeps
+  working, and the copy is deleted after); it shows as an **Asked tab** card
+  until the answer arrives. Type `@` to
   point a message at one tab. [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs)
 - **Remote control:** the Mac's sessions from Cantrip Agent, Cantrip Gateway
   Mac, another Mac or a browser, over LAN or Tailscale, with push alerts,
@@ -156,7 +158,7 @@ On Windows, follow [Windows setup](docs/windows.md) and open Cantrip with
 | `cantrip "question"` | Ask the active backend (pipe input: `cat log \| cantrip "why?"`) | [Ask from Terminal](docs/everyday-tasks.md#ask-cantrip-from-terminal) |
 | `cantrip --backend NAME "question"` | Ask a specific backend (`claude`, `copilot`, `codex`, `agy` or `local`), e.g. `< changes.diff` | [Ask from Terminal](docs/everyday-tasks.md#ask-cantrip-from-terminal) |
 | `cantrip runs [session-or-run-id]` | List recent runs, or show one session's or run's events | [Recover after a crash](docs/sessions-and-council.md#recover-after-a-crash-or-interruption) |
-| `cantrip tab list` / `read ID` / `ask ID "question"` | List tabs with their child tabs, read a tab's recent turns (read-only), or ask a tab and print its reply | [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs) |
+| `cantrip tab list` / `read ID` / `ask ID "question"` | List tabs with their child tabs, read a tab's recent turns (read-only), or ask a tab (a temporary read-only copy of it answers, then is deleted) and print its reply | [Look into other tabs](docs/sessions-and-council.md#look-into-other-tabs) |
 | `cantrip handoffs [--days N] [--json]` | Where work handed off from Cantrip Home went: the tab, child tab and status of each handoff, plus open tabs and recent child tabs (read-only, titles and states only) | [See where handoffs went](docs/sessions-and-council.md#see-where-handoffs-went) |
 | `cantrip privacy report [--days N]` / `test ["<text>"] [--task <id>]` | Summarize where the Privacy Gate routed (or would route) Home chat and Home tasks, test its classifier, or see how a request you write would be routed (nothing is logged) | [Privacy Gate](docs/privacy-and-memory.md#decide-where-home-requests-run-privacy-gate) |
 | `cantrip muse status` / `feeds` / `log [N]` | Muse's login state, its feeds, and what Cantrip sent to and read from it (read-only, never message text) | [Muse](docs/muse.md#commands) |

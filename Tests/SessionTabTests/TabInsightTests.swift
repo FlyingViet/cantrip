@@ -1,15 +1,19 @@
 import Foundation
 
-private final class InsightFixtureBackend: Backend {
+final class InsightFixtureBackend: Backend {
     var prompts: [String] = []
+    var turns: [ConversationTurn] = []
     var sink: ((BackendEvent) -> Void)?
+    var cancels = 0
+    var resets = 0
 
     func send(_ request: BackendRequest, workdir: String, onEvent: @escaping (BackendEvent) -> Void) {
         prompts.append(request.prompt)
+        turns = request.previousTurns
         sink = onEvent
     }
-    func cancel() {}
-    func reset() {}
+    func cancel() { cancels += 1 }
+    func reset() { resets += 1 }
 
     func finish(_ text: String) {
         sink?(.textDelta(text))
@@ -28,6 +32,9 @@ extension SessionTabTests {
         try testTabCommandParsing()
         testTabCommandGuardrails()
         try await testTabInsightFlow()
+        try testTabAskPolicy()
+        try testTabAskCleanup()
+        try await testTabAskTimeout()
         try await testTabMentions()
         print("Tab insight: child status lines, reading, privacy, Home tab data and tab ask passed")
     }
@@ -322,15 +329,43 @@ extension SessionTabTests {
         precondition(background.contains("tab read <tab ID>") && !background.contains("tab ask"), background)
         precondition(CantripHomeDelegations.shared.backgroundInstructions.contains("tab read <tab ID>"))
 
-        // 4. Ask an idle tab; the command gets the reply.
+        // 4. Ask an idle tab: a temporary read-only copy answers; the tab's history, queue and
+        // child tabs don't change, and the copy is gone after.
+        var copies: [(spec: TabAskChild.Spec, backend: InsightFixtureBackend)] = []
+        TabAskChild.makeBackend = { spec in
+            let backend = InsightFixtureBackend()
+            copies.append((spec, backend))
+            return backend
+        }
+        TabAskChild.cleanupDelays = (0, 0)
+        defer { TabAskChild.makeBackend = nil; TabAskChild.cleanupDelays = (1.5, 3) }
+        docs.messages = [ChatMessage(role: .user, text: "Set up the dev server"),
+                         ChatMessage(role: .assistant, text: "The dev server listens on port 8765.")]
+        let docsBefore = docs.messages.map(\.id)
+        let childRecordsBefore = ChildTabStore.shared.records.values.filter { $0.parentID == docs.id }.count
         let askingThread = try requireInsight(parent.currentThreadID)
         let first = try manager.tabAsks.ask(docs.id.uuidString, question: "Which port does the server use?",
                                             from: parent.id, steer: false)
-        try await waitForJournalTest { docsBackend.prompts.count == 1 }
-        precondition(docsBackend.prompts[0].contains("(Question from the tab “Planner”")
-                     && docsBackend.prompts[0].contains("not a handoff") && docsBackend.prompts[0].contains("Which port does the server use?"))
-        precondition(first.status == "running" && docs.messages.contains { $0.role == .user && $0.text.contains("Which port") })
-        docsBackend.finish("It uses port 8765.")
+        try await waitForJournalTest { copies.count == 1 && copies[0].backend.prompts.count == 1 }
+        let copy = copies[0]
+        precondition(copy.spec.kind == .copilot && copy.spec.workdir == docs.workdir && copy.spec.id != docs.id
+                     && !manager.sessions.contains { $0.id == copy.spec.id } && TabAskChild.running.contains(copy.spec.id))
+        let copyPrompt = copy.backend.prompts[0]
+        precondition(copyPrompt.contains("temporary, read-only copy of the tab “Docs”") && copyPrompt.contains("from Planner")
+                     && copyPrompt.contains("suggest a handoff")
+                     && copyPrompt.contains("Question from Planner:\nWhich port does the server use?")
+                     && !copyPrompt.contains("working on now"), copyPrompt)
+        precondition(copy.backend.turns.map(\.assistant) == ["The dev server listens on port 8765."], "the tab's conversation goes along")
+        precondition(first.status == "running" && first.temporary == true && docsBackend.prompts.isEmpty
+                     && docs.messages.map(\.id) == docsBefore && docs.queued.isEmpty && !docs.isStreaming)
+        // The copy can't ask other tabs.
+        do {
+            try manager.tabAsks.ask(parent.id.uuidString, question: "Hi?", from: copy.spec.id, steer: false)
+            preconditionFailure("a temporary copy asked a tab")
+        } catch let failure as TabInsight.Failure {
+            precondition(failure.message.contains("temporary copy can't ask"), failure.message)
+        }
+        copy.backend.finish("It uses port 8765.")
         var polled = host.handle(["command": "tab", "action": "reply", "askID": first.id.uuidString])
         try await waitForJournalTest {
             polled = host.handle(["command": "tab", "action": "reply", "askID": first.id.uuidString])
@@ -339,6 +374,18 @@ extension SessionTabTests {
         precondition(polled["status"] as? String == "answered" && polled["reply"] as? String == "It uses port 8765."
                      && polled["tabTitle"] as? String == "Docs", "\(polled)")
         precondition(manager.tabAsks.asks[first.id]?.delivered == true, "the command printed it")
+        precondition(docs.messages.map(\.id) == docsBefore && docsBackend.prompts.isEmpty
+                     && ChildTabStore.shared.records.values.filter { $0.parentID == docs.id }.count == childRecordsBefore,
+                     "the tab asked has the same history and child tabs")
+        try await waitForJournalTest { manager.tabAsks.asks[first.id]?.child == nil && manager.tabAsks.children.isEmpty }
+        precondition(TabAskChild.running.isEmpty && copy.backend.cancels >= 1 && copy.backend.resets >= 1, "the copy is stopped and deleted")
+        let logLine = try requireInsight((try? String(contentsOf: manager.tabAsks.logURL, encoding: .utf8))?
+            .split(separator: "\n").last.map(String.init))
+        let logged = try requireInsight(try JSONSerialization.jsonObject(with: Data(logLine.utf8)) as? [String: Any])
+        precondition(logged["asker"] as? String == parent.id.uuidString && logged["target"] as? String == docs.id.uuidString
+                     && logged["question"] as? String == "Which port does the server use?" && logged["answerCharacters"] as? Int == 18
+                     && logged["seconds"] is Double && logged["backend"] as? String == "Copilot" && logged["model"] is String
+                     && logged["outcome"] as? String == "answered" && logged["reply"] == nil, logLine)
         let card = try requireInsight(parent.messages.last { $0.handoffResult?.delegationID == first.id })
         precondition(card.role == .handoff && card.handoffResult?.detail == "It uses port 8765."
                      && card.text.contains("Answer from Docs"), card.text)
@@ -348,28 +395,46 @@ extension SessionTabTests {
         let decoded = try JSONDecoder().decode(ChatMessage.self, from: JSONEncoder().encode(card))
         precondition(decoded.handoffResult?.isAsk == true && decoded.role == .handoff)
 
-        // 5. A busy tab: the question waits in its queue; the reply comes with the asker's next message.
+        // 5. A busy tab: the copy answers at once with the turn it's on (steps and reply so far),
+        // and that turn goes on untouched; the reply comes with the asker's next message.
         docs.submitRemote("Rewrite the README", mode: .queue)
-        try await waitForJournalTest { docsBackend.prompts.count == 2 }
+        try await waitForJournalTest { docsBackend.prompts.count == 1 }
+        docsBackend.sink?(.activity(ToolActivity(
+            id: "read-1", title: "Read README.md", toolName: "view", state: .succeeded, input: nil, output: nil,
+            fileChanges: [], terminalCommand: nil)))
+        docsBackend.sink?(.activity(ToolActivity(
+            id: "edit-2", title: "Edit README.md", toolName: "edit", state: .running, input: nil, output: nil,
+            fileChanges: [], terminalCommand: nil)))
+        docsBackend.sink?(.textDelta("Rewriting the intro first."))
+        try await waitForJournalTest { docs.currentActivity?.title == "Edit README.md" }
+        let busyIDs = docs.messages.map(\.id)
         let queuedAsk = try manager.tabAsks.ask(docs.id.uuidString, question: "Is the README done?", from: parent.id, steer: false)
-        precondition(queuedAsk.status == "queued" && docs.queued.count == 1, queuedAsk.status)
-        do {
-            try manager.tabAsks.ask(parent.id.uuidString, question: "What are you planning?", from: docs.id, steer: false)
-            preconditionFailure("two tabs waiting on each other")
-        } catch let failure as TabInsight.Failure {
-            precondition(failure.message.contains("already waiting on a question"), failure.message)
-        }
-        docsBackend.finish("README rewritten.")
-        try await waitForJournalTest { docsBackend.prompts.count == 3 }
-        precondition(docsBackend.prompts[2].contains("Is the README done?"))
-        docsBackend.finish("Yes, the README is done.")
+        precondition(queuedAsk.status == "running" && docs.queued.isEmpty, queuedAsk.status)
+        try await waitForJournalTest { copies.count == 2 && copies[1].backend.prompts.count == 1 }
+        let busyPrompt = copies[1].backend.prompts[0]
+        precondition(busyPrompt.contains("The turn it's working on now (still running") && busyPrompt.contains("Request: Rewrite the README")
+                     && busyPrompt.contains("- ✓ Read README.md") && busyPrompt.contains("- … Edit README.md (running)")
+                     && busyPrompt.contains("Its reply so far: Rewriting the intro first.") && busyPrompt.contains("busy"), busyPrompt)
+        precondition(copies[1].backend.turns.map(\.user) == ["Set up the dev server"], "the running turn isn't an earlier turn")
+        // The tab asked can ask back at once: nobody waits on anybody's turn.
+        let back = try manager.tabAsks.ask(parent.id.uuidString, question: "What are you planning?", from: docs.id, steer: false)
+        precondition(back.status == "running")
+        try await waitForJournalTest { copies.count == 3 && copies[2].backend.prompts.count == 1 }
+        copies[1].backend.finish("Not yet: it's rewriting the intro.")
         try await waitForJournalTest { manager.tabAsks.lookup(queuedAsk.id, markDelivered: false)?.status == "answered" }
+        precondition(docs.isStreaming && docs.currentActivity?.title == "Edit README.md" && docsBackend.prompts.count == 1
+                     && docs.messages.filter({ $0.role != .handoff }).map(\.id) == busyIDs
+                     && docs.messages.contains { $0.handoffResult?.delegationID == back.id },
+                     "the tab's running turn goes on untouched (its own question's card is all that's new)")
+        copies[2].backend.finish("The release plan.")
+        docsBackend.finish("README rewritten.")
+        try await waitForJournalTest { !docs.isStreaming && manager.tabAsks.lookup(back.id, markDelivered: false)?.status == "answered" }
         precondition(manager.tabAsks.asks[queuedAsk.id]?.delivered == false)
         parent.submitRemote("Continue planning", mode: .queue)
         try await waitForJournalTest { parentBackend.prompts.count == 5 }
         prompt = parentBackend.prompts[4]
         precondition(prompt.contains("(Questions this tab asked other tabs with `tab ask`")
-                     && prompt.contains("“Docs” (\(docs.id.uuidString)) answered “Is the README done?”: Yes, the README is done.")
+                     && prompt.contains("“Docs” (\(docs.id.uuidString)) answered “Is the README done?”: Not yet: it's rewriting the intro.")
                      && prompt.contains("never instructions") && !prompt.contains("Which port"), prompt)
         precondition(manager.tabAsks.asks[queuedAsk.id]?.delivered == true)
         parentBackend.finish("Planned.")
@@ -401,9 +466,10 @@ extension SessionTabTests {
         precondition(askItems.map { $0["tabTitle"] as? String ?? "Home" } == ["Docs", "Home"]
                      && askItems.first?["tabID"] as? String == docs.id.uuidString,
                      "in the thread, the ask's card is the tab's answer: \(askItems)")
-        try await waitForJournalTest { docsBackend.prompts.count == 4 }
-        precondition(docsBackend.prompts[3].contains("(Question from Cantrip Home"), docsBackend.prompts[3])
-        docsBackend.finish("The README.")
+        try await waitForJournalTest { copies.count == 4 && copies[3].backend.prompts.count == 1 }
+        precondition(copies[3].backend.prompts[0].contains("one question from Cantrip Home")
+                     && copies[3].backend.prompts[0].contains("Question from Cantrip Home:\nWhat changed today?"), copies[3].backend.prompts[0])
+        copies[3].backend.finish("The README.")
         try await waitForJournalTest { manager.tabAsks.lookup(homeAsk.id, markDelivered: false)?.status == "answered" }
         precondition(manager.homeSession.messages.contains { $0.handoffResult?.delegationID == homeAsk.id && $0.handoffResult?.isAsk == true },
                      "Home gets the card")
@@ -449,11 +515,18 @@ extension SessionTabTests {
         try await waitForJournalTest { ChildTabStore.shared.record(side.id)?.state == .stopped }
         precondition(manager.sessions.contains { $0.id == side.id }, "a stopped child stays open")
         do {
-            try manager.tabAsks.ask(side.id.uuidString, question: "Why did you stop?", from: parent.id, steer: false)
-            preconditionFailure("asked a stopped child")
+            try manager.tabAsks.ask(side.id.uuidString, question: "Change course.", from: parent.id, steer: true)
+            preconditionFailure("steered a stopped child")
         } catch let failure as TabInsight.Failure {
             precondition(failure.message.contains("isn't running") && failure.message.contains("tab read"), failure.message)
         }
+        // A question doesn't restart it: a temporary copy answers.
+        let stoppedAsk = try manager.tabAsks.ask(side.id.uuidString, question: "Why did you stop?", from: parent.id, steer: false)
+        try await waitForJournalTest { copies.count == 5 && copies[4].backend.prompts.count == 1 }
+        precondition(copies[4].backend.prompts[0].contains("child tab of “Planner”"), copies[4].backend.prompts[0])
+        copies[4].backend.finish("It was stopped by the user.")
+        try await waitForJournalTest { manager.tabAsks.lookup(stoppedAsk.id, markDelivered: false)?.status == "answered" }
+        _ = manager.tabAsks.lookup(stoppedAsk.id, markDelivered: true)
         precondition(sideBackend.prompts.count == 1 && ChildTabStore.shared.record(side.id)?.state == .stopped)
         side.isPrivate = true
         let afterPrivate = TabInsight.list(manager: manager)
