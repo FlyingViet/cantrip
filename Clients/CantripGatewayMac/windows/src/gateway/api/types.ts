@@ -316,6 +316,26 @@ export interface RemoteDelegation {
   error?: string;
 }
 
+/** A Muse request Home wrote (`MuseRequestCard.snapshot`), sent only when the user taps Send. */
+export interface RemoteMuseRequest {
+  id: string;
+  title: string;
+  /** Exactly what Send delivers. */
+  text: string;
+  chat?: string;
+  state: "waiting" | "held" | "sending" | "sent" | "replied" | "noReply" | "cancelled" | "failed" | string;
+  statusLine?: string;
+  /** Seconds since 1970. */
+  expiresAt?: number;
+  /** "send", "edit", "cancel" while it's open; empty after. */
+  actions?: string[];
+  /** "Send", or "Send anyway" when the Privacy Gate held it. */
+  sendLabel?: string;
+  findings?: string[];
+  edited?: boolean;
+  demo?: boolean;
+}
+
 /** Home result card carried by a message with role `handoff` (`CantripHomeHandoffResult.snapshot`). */
 export interface RemoteHandoffResult {
   delegationID: UUIDString;
@@ -709,6 +729,8 @@ export interface RemoteMessage {
   delegations?: RemoteDelegation[];
   /** role === 'handoff' only. */
   handoffResult?: RemoteHandoffResult;
+  /** role === 'handoff' only: a Muse request Home wrote, waiting for the user's Send. */
+  museRequest?: RemoteMuseRequest;
   /** A child tab's card in its parent (role `assistant`; `text` is a plain fallback). */
   childResult?: RemoteChildResult;
   reasoning?: RemoteReasoningStep[];

@@ -3898,6 +3898,8 @@ struct TurnView: View, Equatable {
     @ViewBuilder private var row: some View {
         if let child = remoteMessage?.childResult, let parentID = cantripSessionID {
             CantripChildTabCard(child: child, parentID: parentID, remote: remote, onOpenTab: onOpenTab)
+        } else if let request = remoteMessage?.museRequest, remoteMessage?.isHandoffResult == true {
+            CantripMuseRequestCard(card: request, remote: remote)
         } else if let result = remoteMessage?.handoffResult, remoteMessage?.isHandoffResult == true {
             VStack(alignment: .leading, spacing: 8) {
                 if let message = remoteMessage, message.thread != nil {

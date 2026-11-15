@@ -3691,6 +3691,8 @@ struct MessageRow: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
             .accessibilityElement(children: .combine)
+        case .handoff where message.museRequest != nil:
+            if let card = message.museRequest { MuseRequestCardView(card: card) }
         case .handoff where message.muse != nil:
             // An @muse exchange: the request, then Muse's reply (its own words, shown as data).
             VStack(alignment: .leading, spacing: 6) {

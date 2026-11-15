@@ -1536,6 +1536,19 @@ API:
   how the work went. `replyCount` counts Home's own messages, as `threadReplies`
   does. `404` when the prompt is gone.
 
+### Home's Muse requests
+
+A Muse request Cantrip Home wrote is a message with role `handoff`, author
+`Muse` and `museRequest`: `id`, `title`, `text` (exactly what Send delivers),
+`chat`, `state` (`waiting`, `held`, `sending`, `sent`, `replied`, `noReply`,
+`cancelled`, `failed`), `statusLine`, `expiresAt` (seconds), `actions` (`send`,
+`edit`, `cancel` while it's open, else empty), `sendLabel` (`Send`, or
+`Send anyway` when the Privacy Gate held it), and `findings`, `edited`, `demo`
+when set. `text` is a Markdown fallback for clients that don't draw it. The
+buttons call `POST /api/v1/muse/requests/<id>/send|edit|cancel` (see
+[Muse](muse.md#commands)); the iPhone app asks for Face ID before Send. Muse's
+reply is a separate `handoff` message with author `Muse` and `muse`.
+
 ### Questions between tabs
 
 When a tab's model or Cantrip Home asks another tab something with `cantrip tab

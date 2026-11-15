@@ -22,6 +22,7 @@ import { ChildResultCard } from "./ChildTabs";
 import { MCPAppStack } from "./MCPApp";
 import { BrowserCard, usesBrowser } from "./BrowserPreview";
 import { MentionText } from "./TabMentions";
+import { MuseRequestCard } from "./MuseRequest";
 import { Markdown, type InlineImages } from "./Markdown";
 import { CardStack } from "./Cards";
 import { PrivacyBadgeLine } from "./PrivacyBadge";
@@ -524,6 +525,9 @@ export function MessageRow(props: {
   const rest = (children: ComponentChildren) => tag && threadLine === "start" ? <div class="thread-rest">{children}</div> : children;
   if (message.childResult) {
     return <div class={`turn${line}`} data-message-id={message.id}>{head()}{rest(<ChildResultCard parentID={session.id} child={plainMentionsDeep(message.childResult, CHILD_CONTENT)} />)}</div>;
+  }
+  if (message.role === "handoff" && message.museRequest) {
+    return <div class={`turn${line}`} data-message-id={message.id}>{head()}{rest(<MuseRequestCard card={message.museRequest} />)}</div>;
   }
   if (message.role === "handoff" && message.handoffResult) {
     return <div class={`turn${line}`} data-message-id={message.id}>{head()}{rest(<HandoffResultCard result={plainMentionsDeep(message.handoffResult)} />)}</div>;

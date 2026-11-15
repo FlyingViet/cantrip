@@ -7,6 +7,7 @@ struct CantripHomeBlock: Equatable {
         case records = "cantrip-task-records"
         case task = "cantrip-task"
         case artifact = "cantrip-artifact"
+        case muse = "cantrip-muse"
 
         var item: String {
             switch self {
@@ -14,6 +15,7 @@ struct CantripHomeBlock: Equatable {
             case .records: return "record changes"
             case .task: return "task"
             case .artifact: return "artifact"
+            case .muse: return "Muse request"
             }
         }
     }
@@ -201,6 +203,8 @@ enum CantripHomeProtocol {
             return .artifact
         case "cantrip-delegate", "cantrip-delegates", "cantrip-delegation", "cantrip-handoff":
             return .delegate
+        case "cantrip-muse", "cantrip-muse-request":
+            return .muse
         default:
             return nil
         }
@@ -414,6 +418,8 @@ enum CantripHomeProtocol {
             return #"{"taskID":"task UUID","changes":[{"operation":"upsert","id":"record UUID or null","values":{"fieldKey":"string value"}},{"operation":"delete","id":"record UUID","values":null}]}"#
         case .artifact:
             return #"{"title":"display title","path":"absolute or artifact-directory-relative path","kind":"document|image|audio|video"}"#
+        case .muse:
+            return #"{"title":"short title (at most 80 characters)","text":"the exact message for the user's Muse (at most 4,000 characters)","chat":"optional Muse side chat title, or null"}"#
         case .delegate:
             return #"{"tabID":"tab UUID from the list" (or, only when the user asked for a new tab, "newTab":{"title":"tab name","section":"section name or null","folder":"existing absolute folder or null"}),"summary":"short label","goal":"what the tab should achieve","context":["facts, names, paths and IDs it needs"],"constraints":["limits"],"doneWhen":"what finished looks like","dependsOn":"other work in that tab it must wait for, or null","prompt":"optional extra instructions"}"#
         }

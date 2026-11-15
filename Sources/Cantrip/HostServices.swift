@@ -244,6 +244,9 @@ final class HostServices {
         MuseConnector.shared.notify = museNotify
         MuseFeeds.shared.notify = museNotify
         MuseFeeds.shared.start()
+        MuseRequests.shared.home = { [weak manager] in manager?.homeSession }
+        MuseRequests.shared.notify = museNotify
+        MuseRequests.shared.start()
         MuseTab.shared.manager = manager
         MuseConnector.shared.onMainChatActivity = { Task { await MuseTab.shared.sync(force: true) } }
         MuseTab.shared.start()

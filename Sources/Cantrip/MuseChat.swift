@@ -263,6 +263,8 @@ extension ChatSession {
               var held = messages[index].muse else {
             var note = MuseExchange(state: .notSent, request: send ? "send" : "cancel", chat: "main chat")
             note.detail = "Nothing is waiting to be sent to Muse."
+                + (MuseRequests.shared.cards.contains(where: \.isOpen)
+                   ? " Home's Muse requests are sent only with the Send button on their card." : "")
             appendMuse(note)
             return
         }

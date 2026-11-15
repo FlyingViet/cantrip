@@ -44,6 +44,8 @@ enum RemoteHistory {
             exchange["findings"] = muse.findings
             result["muse"] = exchange
         }
+        // Home's Muse request card: the exact text, its state and the actions open now.
+        if let card = message.museRequest { result["museRequest"] = card.snapshot }
         let reasoning = ReasoningStep.steps(from: message.reasoningBlocks)
         if !reasoning.isEmpty {
             result["reasoning"] = reasoning.enumerated().map { $1.snapshot(number: $0 + 1) }

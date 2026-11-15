@@ -3623,6 +3623,9 @@ private extension RemoteControlServer {
     .message-tools{display:flex;justify-content:flex-end;margin-top:4px;opacity:0;transition:opacity .15s}.message:hover>.message-tools,.message:focus-within>.message-tools{opacity:1}@media (hover:none){.message-tools{opacity:1}}.message-tools .control{min-height:0;padding:2px 8px;font-size:12px}
     .error-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.message.error .muted{margin:6px 0 0;color:var(--secondary)}
     .handoffs{display:grid;gap:6px;margin:8px 0}
+    .muse-card{display:grid;gap:6px;padding:10px 12px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;background:var(--surface);font-size:13px}.muse-card.held{border-left-color:var(--orange)}.muse-card:not(.waiting):not(.held){border-left-color:var(--line)}
+    .muse-label{font-size:12px;font-weight:600;color:var(--secondary)}.muse-text{margin:0;padding:8px;border-radius:8px;background:var(--surface-2);white-space:pre-wrap;overflow-wrap:anywhere}.muse-status{margin:0;color:var(--secondary);font-size:12px}.muse-card.held .muse-status{color:var(--orange)}
+    .muse-actions{display:flex;flex-wrap:wrap;gap:6px}.muse-editor textarea{width:min(560px,80vw);font:inherit}.muse-editor h2{font-size:15px;margin:0 0 8px}
     .handoff-card{padding:9px 11px 4px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:13px}
     .handoff-card.result{border-left:3px solid var(--tertiary)}.handoff-card.result.completed{border-left-color:var(--green)}.handoff-card.result.needsInput{border-left-color:var(--orange)}.handoff-card.result.failed{border-left-color:var(--red)}
     .handoff-head{display:flex;align-items:flex-start;gap:7px}
@@ -5561,6 +5564,23 @@ private extension RemoteControlServer {
     function branchGlyph(){const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");svg.setAttribute("viewBox","0 0 16 16");svg.setAttribute("aria-hidden","true");svg.setAttribute("class","branch-glyph");
       svg.innerHTML='<circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="5" r="1.6"/><path d="M4.5 5.1v5.8M11.5 6.6c0 3.2-7 2-7 4.3"/>';return svg}
     const childVerbs={open:"open it",requeue:"move it back to this tab",discard:"discard it",resolve:"start the merge",keepParent:"keep that version",keepChild:"keep that version",leave:"leave it unmerged",retry:"try the merge again",merge:"merge it"};
+    // Home's Muse request: the exact text Send delivers. Nothing reaches Muse until Send.
+    function museRequestCard(card){const box=document.createElement("section");box.className=`muse-card ${card.state}`;box.setAttribute("role","group");box.setAttribute("aria-label",`Request for your Muse: ${card.title}`);
+      const label=document.createElement("span"),title=document.createElement("strong"),text=document.createElement("p"),status=document.createElement("p");label.className="muse-label";label.textContent=card.demo?"Request for your Muse · demo account":"Request for your Muse";
+      title.textContent=card.title;text.className="muse-text";text.textContent=card.text;status.className="muse-status";status.textContent=card.statusLine||"";box.append(label,title,text,status);
+      if((card.actions||[]).includes("send")){const row=document.createElement("div"),send=document.createElement("button"),edit=document.createElement("button"),cancel=document.createElement("button");row.className="muse-actions";
+        send.type=edit.type=cancel.type="button";send.className="control primary";send.textContent=card.sendLabel||"Send";send.onclick=()=>museAction(card,"send",card.text,card.state==="held",send);
+        edit.className="control";edit.textContent="Edit";edit.onclick=()=>museEditor(card);cancel.className="control quiet";cancel.textContent="Cancel";cancel.onclick=()=>museAction(card,"cancel",null,false,cancel);row.append(send,edit,cancel);box.append(row)}
+      return box}
+    async function museAction(card,name,text,override,button){if(name==="send"&&override&&!confirm(`Send this to Muse anyway? The Privacy Gate found ${(card.findings||[]).join(", ")||"private details"}. Muse runs on Meta's servers.`))return false;
+      $("actionError").textContent="";if(button)button.disabled=true;const body={};if(text!=null)body.text=text;if(override)body.override=true;
+      try{await api(`/api/v1/muse/requests/${card.id}/${name}`,{method:"POST",body:JSON.stringify(body)});renderedPayload="";await refresh();return true}
+      catch(error){$("actionError").textContent=`Couldn't ${name} the Muse request: ${error.message}`;if(button)button.disabled=false;return false}}
+    function museEditor(card){const dialog=document.createElement("dialog"),heading=document.createElement("h2"),area=document.createElement("textarea"),note=document.createElement("p"),row=document.createElement("div");dialog.className="muse-editor";dialog.setAttribute("aria-label",`Edit ${card.title}`);
+      heading.textContent=card.title;area.value=card.text;area.rows=10;area.maxLength=4000;area.setAttribute("aria-label","Text to send to Muse");note.className="muted";note.textContent="Send delivers exactly this text. The Privacy Gate checks it again.";row.className="muse-actions";
+      const send=document.createElement("button"),save=document.createElement("button"),discard=document.createElement("button");send.type=save.type=discard.type="button";send.className="control primary";send.textContent="Send";save.className="control";save.textContent="Save";discard.className="control quiet";discard.textContent="Discard";
+      send.onclick=async()=>{if(await museAction(card,"send",area.value,false,send))dialog.close()};save.onclick=async()=>{if(await museAction(card,"edit",area.value,false,save))dialog.close()};discard.onclick=()=>dialog.close();
+      dialog.addEventListener("close",()=>dialog.remove());row.append(send,save,discard);dialog.append(heading,area,note,row);document.body.append(dialog);dialog.showModal();area.focus()}
     async function childAction(sessionID,child,name,button){if(name==="open"&&sessionItems.some(s=>s.id===child.id)){openHandoffTab(child.id);return}
       if(name==="discard"&&!confirm(`Discard child tab “${child.title}”?${child.branch?` Its work on ${child.branch} is deleted.`:""}`))return;
       if(name==="requeue"&&!confirm(`Run “${child.title}” in this tab instead? The child tab stops${child.branch?` and its work on ${child.branch} is deleted`:""}. The request goes back to the front of this tab's queue.`))return;
@@ -5675,7 +5695,7 @@ private extension RemoteControlServer {
           if(!drawsRow(message,answered))continue;if(message.role==="freshStart"){box.append(freshStartDivider(message));continue}const row=document.createElement("article"),line=lines.get(message.id);let link=null;row.className=`message ${message.role}`;row.dataset.messageId=message.id;if(line)row.classList.add(`thread-${line}`);
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
           if(message.thread&&message.role!=="user"){row.classList.add("threaded");link=threadQuote(session.id,message);row.append(link)}
-          appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.privacy)row.append(privacyBadge(message.privacy));else if(message.id===privacyPending)row.append(privacyBadge({label:"Privacy check"},true));const replies=session.threadReplies?.[message.id];if(replies>0)row.append(threadRepliesButton(session.id,message,replies));if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
+          appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.privacy)row.append(privacyBadge(message.privacy));else if(message.id===privacyPending)row.append(privacyBadge({label:"Privacy check"},true));const replies=session.threadReplies?.[message.id];if(replies>0)row.append(threadRepliesButton(session.id,message,replies));if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.museRequest)row.append(museRequestCard(message.museRequest));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
           if(message.role==="error"&&session.supportsStartFresh&&message.id===session.repeatedErrorMessageID)appendErrorRecovery(row,session);
           if(message.role==="error"&&session.continuableMessageIDs?.includes(message.id))appendContinue(row,session,message.id);
           if(canDeleteMessage(session,message))appendDeleteMessage(row,session,message);
@@ -6212,6 +6232,38 @@ extension RemoteControlServer {
             case ("POST", ["check"]):
                 _ = await MuseConnector.shared.check()
                 self.sendJSON(Self.museSnapshot(), on: connection)
+            case ("GET", ["requests"]):
+                self.sendJSON(["requests": MuseRequests.shared.cards.map(\.snapshot)], on: connection)
+            case ("POST", let path) where path.count == 3 && path[0] == "requests":
+                // The card's Send, Edit and Cancel, from a paired app (the way it answers approvals).
+                // Home, tabs, scheduled runs, messages and the CLI have no path here.
+                guard let id = UUID(uuidString: path[1]) else { self.sendError(404, "No such Muse request.", on: connection); return }
+                let json = request.body.isEmpty ? [:] : (request.json ?? ["_invalid": true])
+                guard Set(json.keys).isSubset(of: ["text", "override"]), json["text"] == nil || json["text"] is String,
+                      json["override"] == nil || json["override"] is Bool else {
+                    self.sendError(400, "Send {\"text\": the card's text, \"override\": true for Send anyway}, or nothing.", on: connection)
+                    return
+                }
+                let text = json["text"] as? String
+                let action: MuseRequests.Action
+                switch path[2] {
+                case "send": action = .send(text: text, override: json["override"] as? Bool ?? false)
+                case "edit":
+                    guard let text else { self.sendError(400, "Edit needs the new text.", on: connection); return }
+                    action = .edit(text)
+                case "cancel": action = .cancel
+                default: self.sendError(404, "not found", on: connection); return
+                }
+                do {
+                    let card = try MuseRequests.shared.perform(id, action, via: "a paired device")
+                    self.sendJSON(["card": card.snapshot], on: connection)
+                } catch let failure as MuseRequests.Failure {
+                    var body: [String: Any] = ["error": failure.message]
+                    body["card"] = MuseRequests.shared.record(id)?.card.snapshot
+                    self.sendJSON(body, status: failure.status, on: connection)
+                } catch {
+                    self.sendError(500, error.localizedDescription, on: connection)
+                }
             case ("POST", let path) where path.count == 3 && path[0] == "feeds" && path[2] == "poll":
                 guard MuseFeeds.shared.feed(path[1]) != nil else { self.sendError(404, "No such Muse feed.", on: connection); return }
                 let outcomes = await MuseFeeds.shared.tick(force: true, only: path[1])

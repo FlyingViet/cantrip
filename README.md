@@ -74,7 +74,8 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
 - **Muse:** start a message with @muse in Home or any tab, or chat in the Muse
   tab, which shows your whole Muse chat, to talk to your Meta Muse (opt-in,
   through muse-cli); the Privacy Gate holds mail, texts,
-  finance, contacts and location first. Feeds you approve turn Muse's own
+  finance, contacts and location first. Home can write a request for Muse
+  that you send with one tap, and feeds you approve turn Muse's own
   scheduled results into checked Home task records. [Muse](docs/muse.md)
 - **Child tabs:** an independent queued message runs (on its own for Auto
   delivery, paired devices and Home handoffs, several at once within the caps

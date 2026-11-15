@@ -90,7 +90,9 @@ enum CantripCLI {
                                   for simulatorPoolIdleMinutes, delete members the pool no longer keeps once free,
                                   and old temporary copies; prints the space freed
       cantrip build-queue         Builds running and waiting for a slot (buildQueueEnabled, buildQueueSlots)
-      cantrip muse [status|feeds|log]  Muse: login state, feeds and what was sent or read (read-only)
+      cantrip muse [status|feeds|requests|log]
+                                  Muse: login state, feeds, Home's requests and what was sent or read
+                                  (read-only; Home's requests are sent only from their card)
       cantrip privacy report [--days N]
                                   What the Privacy Gate decided for Home chat and Home tasks (default: 7 days):
                                   routes, what enforce mode would change, rules, detector hits and classifier speed
@@ -721,7 +723,7 @@ enum CantripCLI {
     /// `cantrip weather [PLACE]`: the same forecast, from the same 10-minute cache, as the weather
     /// card of a reply naming that place, so a model's numbers match its card.
     /// `cantrip privacy report|test`: reads this Mac's decision log (never prompt text).
-    /// `cantrip muse status|feeds|log [N]`: read-only; Muse's state files, never a credential.
+    /// `cantrip muse status|feeds|requests|log [N]`: read-only; Muse's state files, never a credential.
     static func muse(_ arguments: [String]) throws -> Int32 {
         let directory = MuseConnector.directory
         switch arguments.first ?? "status" {
@@ -748,6 +750,20 @@ enum CantripCLI {
                       + "\(feed.stats.rejectedItems) items rejected, \(feed.stats.ignoredMessages) messages ignored")
             }
             return 0
+        case "requests":
+            // States and sizes only: the text stays in Home's card.
+            let records = (try? Data(contentsOf: directory.appendingPathComponent("requests.json")))
+                .flatMap { try? JSONDecoder.iso.decode([MuseRequests.Record].self, from: $0) } ?? []
+            if records.isEmpty { print("No Muse requests from Home.") }
+            for record in records {
+                print("\(record.card.id.uuidString) · \(record.card.title): \(record.card.state.rawValue)"
+                      + " (\(record.card.text.count) characters\(record.card.edited == true ? ", edited" : "")"
+                      + "\(record.reply.map { "; reply \($0.count) characters" } ?? ""))")
+            }
+            return 0
+        case "send", "approve", "cancel", "edit":
+            throw Failure(message: "Only you can \(arguments[0]) Home's Muse requests, from the card in Cantrip Home "
+                          + "(the Mac panel or a paired app). The terminal and agents can't.", code: 77)
         case "log":
             let count = arguments.count > 1 ? Int(arguments[1]) ?? 40 : 40
             for name in ["activity.log", "feed-log.jsonl"] {
@@ -757,7 +773,7 @@ enum CantripCLI {
             }
             return 0
         default:
-            throw Failure(message: "Usage: cantrip muse [status | feeds | log [N]]", code: 64)
+            throw Failure(message: "Usage: cantrip muse [status | feeds | requests | log [N]]", code: 64)
         }
     }
 

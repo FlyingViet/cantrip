@@ -656,6 +656,16 @@ export async function forkQueued(sessionID: string, promptID: string): Promise<s
 }
 
 /** One of a child tab card's `actions`, run in its parent. `open` brings back a finished child's tab. */
+/** Home's Muse request card: Send (the text shown, or edited; `override` for Send anyway), Edit or Cancel. */
+export async function museRequestAction(id: string, action: "send" | "edit" | "cancel",
+  body: { text?: string; override?: boolean } = {}): Promise<void> {
+  try {
+    await mutate(() => api(`/api/v1/muse/requests/${pathComponent(id)}/${action}`, { method: "POST", body }));
+  } finally {
+    void refresh();
+  }
+}
+
 export async function childAction(parentID: string, childID: string, action: ChildTabAction): Promise<void> {
   await mutate(() => sessionAction(parentID, `children/${pathComponent(childID)}/${pathComponent(action)}`, {}));
   await refresh();

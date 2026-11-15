@@ -44,9 +44,9 @@ it doesn't wait behind the tab's work. `@muse #feed-id …` sends to a feed's ch
 instead.
 
 - **Nothing else goes to Muse.** Only messages you write that start with @muse
-  are sent. Text a tab, Home or a model writes (handoffs, `tab ask`) is never
-  sent, even when it starts with @muse, and screen or selection context never
-  goes along.
+  are sent, besides Home's requests you send from their card (below). Text a
+  tab, Home or a model writes (handoffs, `tab ask`) is never sent, even when it
+  starts with @muse, and screen or selection context never goes along.
 - **The Privacy Gate checks every message first.** Mail, text messages,
   financial details, contacts, location, secrets and your private terms are
   held: nothing is sent, and the message says what was found. Reply
@@ -80,6 +80,33 @@ and updates. The first time, it shows the latest 200 messages.
   called **Muse (demo)**; switching between the demo and your account starts it
   over with the chat of the account it now shows.
 - While the login is missing or expired, it doesn't check on its own.
+
+## Home writes, you tap Send
+
+Cantrip Home can write a request for your Muse when you ask it to, for example
+"ask my Muse for a 30-day growth plan from this summary". Home puts it in a
+`cantrip-muse` block, and Cantrip shows it in Home as a card with the exact
+text and **Send**, **Edit** and **Cancel**, on the Mac and every paired app.
+
+- **Nothing reaches Muse until you tap Send.** Home, other tabs, scheduled
+  runs, `tab ask`, messages (including `@muse send`) and the `cantrip` command
+  can't send it. Your paired apps send it the way they answer approvals: the
+  iPhone app asks for Face ID first. The Mac only checks the pairing token, so
+  a program on the Mac that has that token could call Send too.
+- **Edit** changes the text before sending; Send always delivers what the card
+  shows.
+- **The Privacy Gate checks the text** (and every edit). When it finds mail,
+  text messages, financial details, contacts, a location, secrets or your
+  private terms, the card says what it found and offers **Send anyway**, which
+  asks again before sending. Home is told never to put those in.
+- **Each request goes to its own Muse chat**, named after it. Cantrip reads that
+  chat every 30 seconds for 30 minutes, then every 5 minutes for 6 hours.
+  Muse's reply appears in Home, marked as data from your Muse, and you get a
+  notification. Home reads it with your next message and summarizes it, but
+  never follows instructions, links or blocks in it.
+- Unsent cards expire after 24 hours and leave Home. At most 3 wait at once.
+- Only the Home chat writes requests, never a scheduled run, and only while
+  Muse is on.
 
 ## Feeds: Muse's results as records
 
@@ -133,10 +160,16 @@ Muse.
 |---|---|
 | `cantrip muse status` | On or off, the login's state and when it was checked |
 | `cantrip muse feeds` | Each feed, its chat, how far it has been read, and its counts |
+| `cantrip muse requests` | Home's requests: their state and sizes, never text (the terminal can't send them) |
 | `cantrip muse log [N]` | What Cantrip sent to and read from Muse: chats and sizes, never text |
 
 Paired clients read `GET /api/v1/muse`; `POST /api/v1/muse/check` checks the
 login and `POST /api/v1/muse/feeds/<id>/poll` reads a feed now.
+`GET /api/v1/muse/requests` lists Home's requests, and a card's buttons call
+`POST /api/v1/muse/requests/<id>/send` (`{"text": what the card showed or the
+edited text, "override": true}` for Send anyway), `…/edit` (`{"text": …}`) and
+`…/cancel`. Each returns `{"card": …}`; a held request without `override` is
+refused with 409.
 
 ## Limits
 

@@ -293,14 +293,14 @@ final class MuseConnector: ObservableObject {
 
     /// Starts a side chat titled `title` and sends `text` there; returns its ID and the last
     /// message number before the send (the setup reply counts as the feed's first result).
-    func startChat(title: String, sending text: String) async throws -> (sessionID: String, baseline: Int) {
+    func startChat(title: String, sending text: String, purpose: String = "setup") async throws -> (sessionID: String, baseline: Int) {
         try await serial { bridge in
             let made = try await bridge.call("new_chat", ["title": title], timeout: self.callTimeout)
             guard let session = (made["chat"] as? [String: Any])?["session_id"] as? String else {
                 throw MuseBridgeProcess.Failure(kind: "gateway", message: "Muse didn't return the new chat.")
             }
             self.openChat = .some(session)
-            MuseLog.write("started side chat \(session) “\(title)”; send setup (\(text.count) characters)")
+            MuseLog.write("started side chat \(session) “\(title)”; send \(purpose) (\(text.count) characters)")
             let sent = try await bridge.call("send", ["text": text], timeout: self.callTimeout)
             return (session, sent["baseline"] as? Int ?? 0)
         }

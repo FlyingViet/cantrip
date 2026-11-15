@@ -28,6 +28,7 @@ extension SessionTabTests {
         testMuseSendCheck()
         testMuseFeedIngest()
         try await testMuseIntegration()
+        try await testMuseRequests()
         print("Muse mention, send check, feed ingest and bridge tests passed")
     }
 

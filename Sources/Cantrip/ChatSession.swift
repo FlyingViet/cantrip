@@ -50,6 +50,8 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     var builds: [BuildRun] = []
     /// An `@muse` exchange (role `handoff`, author "Muse"): Muse's words, never a model turn.
     var muse: MuseExchange?
+    /// A Muse request Home wrote, waiting for the user's Send (`MuseRequests`).
+    var museRequest: MuseRequestCard?
     /// `handoff`: a Home result card posted by Cantrip, never a model turn.
     /// `freshStart`: the Start Fresh divider; turns above it are never sent to the model.
     enum Role: String, Codable { case user, assistant, error, handoff, freshStart }
@@ -60,7 +62,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     // Activities and thinking are runtime-only; transcripts skip them.
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
-        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards, builds, privacy, muse
+        case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards, builds, privacy, muse, museRequest
     }
 }
 
@@ -152,6 +154,7 @@ extension ChatMessage {
         weatherCard = try? container.decodeIfPresent(WeatherCard.self, forKey: .weatherCard)
         cards = (try? container.decodeIfPresent([CardDocument].self, forKey: .cards)) ?? []
         muse = try? container.decodeIfPresent(MuseExchange.self, forKey: .muse)
+        museRequest = try? container.decodeIfPresent(MuseRequestCard.self, forKey: .museRequest)
         // A saved build still running was cut off (Cantrip restarted): nothing will finish it.
         builds = ((try? container.decodeIfPresent([BuildRun].self, forKey: .builds)) ?? []).map { build in
             var build = build
@@ -197,6 +200,7 @@ extension ChatMessage {
         if !cards.isEmpty { try container.encode(cards, forKey: .cards) }
         if !builds.isEmpty { try container.encode(builds, forKey: .builds) }
         try container.encodeIfPresent(muse, forKey: .muse)
+        try container.encodeIfPresent(museRequest, forKey: .museRequest)
     }
 }
 

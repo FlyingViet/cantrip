@@ -657,6 +657,9 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     /// Cantrip Home prompts: the Privacy Gate's decision, which can arrive a moment after the
     /// message. Absent from Macs before the gate.
     var privacy: CantripPrivacyBadge? = nil
+    /// A Muse request Home wrote (role `handoff`), sent only when the user taps Send. Absent from
+    /// older Macs, which show `text` instead.
+    var museRequest: CantripRemoteMuseRequest? = nil
 
     var presentedText: String { displayText ?? text }
     /// Result cards Cantrip posts into Home's chat; never a model reply.
@@ -2906,6 +2909,15 @@ struct CantripRemoteAPI {
             body: try JSONSerialization.data(withJSONObject: ["sectionID": sectionID]), includeRecentExchanges: true
         )
         return response.session
+    }
+
+    /// The Muse request card's Send, Edit or Cancel (`action`).
+    fileprivate func museRequestAction(id: String, action: String, body: Data) async throws -> CantripRemoteMuseRequest {
+        let response: CantripMuseRequestResponse = try await request(
+            path: "/api/v1/muse/requests/\(try Self.pathComponent(id))/\(try Self.pathComponent(action))",
+            method: "POST", body: body
+        )
+        return response.card
     }
 
     fileprivate func moveTab(id: String, body: Data) async throws -> [CantripRemoteSession] {
@@ -5276,6 +5288,43 @@ final class CantripRemoteModel: ObservableObject {
     /// The tab's next prompt starts a new model session. Its title, folder, settings, lock and
     /// visible history stay; the Mac adds a divider so earlier messages read as not sent.
     @discardableResult
+    /// Home's Muse request card: Send (after Face ID or Touch ID, like approvals), Edit or Cancel.
+    /// `text` is what the card showed, or the edited text.
+    func actOnMuseRequest(_ id: String, action: CantripMuseRequestAction) async -> CantripRemoteMuseRequest? {
+        guard !isMutating else {
+            errorMessage = "Wait for the current request to finish, then try again."
+            return nil
+        }
+        var body: [String: Any] = [:]
+        switch action {
+        case .send(let text, let override):
+            do {
+                try await authorizeSensitiveAction(override
+                    ? "Send this request to your Muse even though the Privacy Gate held it."
+                    : "Send this request to your Muse.")
+                try Task.checkCancellation()
+            } catch is CancellationError {
+                errorMessage = "Authentication was cancelled. Nothing was sent to Muse."
+                return nil
+            } catch {
+                errorMessage = error.localizedDescription
+                return nil
+            }
+            body["text"] = text
+            if override { body["override"] = true }
+        case .edit(let text):
+            body["text"] = text
+        case .cancel:
+            break
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        let card = await mutate(prepare: { _ in () }, { api, _ in
+            try await api.museRequestAction(id: id, action: action.name, body: data)
+        })
+        if card != nil { await refreshNow() }
+        return card
+    }
+
     func startFresh(sessionID: String) async -> Bool {
         guard !isMutating else {
             errorMessage = "Wait for the current request to finish, then try starting fresh again."

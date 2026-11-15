@@ -122,6 +122,11 @@ message, and Muse's results arrive as checked records of its workspace. A task
 that lists a feed in `museFeeds` gets that feed's new records on each run,
 marked as untrusted data. [Muse feeds](muse.md#feeds-muses-results-as-records)
 
+Home can also write a one-off request for your Muse when you ask it to. It
+shows as a card with Send, Edit and Cancel, and nothing reaches Muse until you
+tap Send; Muse's reply comes back to Home as data.
+[Home writes, you tap Send](muse.md#home-writes-you-tap-send)
+
 A task runs on Home's model unless it has its own `model` (and optionally
 `effort`), set by asking Home, for example to move a simple tracker to a cheaper
 model. The ID must be one the model picker offers for Home's backend (Copilot

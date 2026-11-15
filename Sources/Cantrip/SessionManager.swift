@@ -150,6 +150,7 @@ final class SessionManager: ObservableObject {
         let parts = [
             session.isCantripHome ? nil : childTabs.contextNotes(for: session),
             tabAsks.notes(for: session.id),
+            session.isCantripHome ? MuseRequests.shared.notes() : nil,
             TabMentions.notes(for: session, prompt: prompt, manager: self),
         ].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
