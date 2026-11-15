@@ -104,7 +104,9 @@ text and **Send**, **Edit** and **Cancel**, on the Mac and every paired app.
   Muse's reply appears in Home, marked as data from your Muse, and you get a
   notification. Home reads it with your next message and summarizes it, but
   never follows instructions, links or blocks in it.
-- Unsent cards expire after 24 hours and leave Home. At most 3 wait at once.
+- Unsent cards expire after 24 hours and leave Home (`defaults write
+  com.brian.agentspotlight museRequestLifetime -float SECONDS` shortens it for
+  new cards, to check this). At most 3 wait at once.
 - Only the Home chat writes requests, never a scheduled run, and only while
   Muse is on.
 

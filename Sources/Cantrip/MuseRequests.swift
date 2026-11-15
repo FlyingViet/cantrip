@@ -130,6 +130,8 @@ final class MuseRequests {
     var home: () -> ChatSession? = { nil }
     var notify: ((_ title: String, _ body: String) -> Void)?
     var now: () -> Date = { Date() }
+    /// How long an unsent card waits. The `museRequestLifetime` default (seconds) shortens it for
+    /// new cards, to check expiry on a running Mac.
     var lifetime: TimeInterval = 24 * 60 * 60
     var fastInterval: TimeInterval = 30
     var fastWindow: TimeInterval = 30 * 60
@@ -194,7 +196,7 @@ final class MuseRequests {
         }
         let now = now()
         var card = MuseRequestCard(id: UUID(), title: title, text: text, chat: chat, state: .waiting, findings: nil,
-                                   detail: nil, expiresAt: now.addingTimeInterval(lifetime), edited: nil,
+                                   detail: nil, expiresAt: now.addingTimeInterval(Self.lifetimeOverride ?? lifetime), edited: nil,
                                    demo: connector.settings().demo ? true : nil, updatedAt: now)
         Self.check(&card)
         var message = ChatMessage(role: .handoff, text: card.fallbackText, author: MuseExchange.author)
@@ -487,6 +489,11 @@ final class MuseRequests {
         guard let data = try? JSONEncoder.iso.encode(records.values.sorted { $0.createdAt < $1.createdAt }) else { return }
         try? data.write(to: storeURL, options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: storeURL.path)
+    }
+
+    private static var lifetimeOverride: Double? {
+        let value = UserDefaults.standard.double(forKey: "museRequestLifetime")
+        return value > 0 ? value : nil
     }
 
     static func oneLine(_ text: String) -> String {
