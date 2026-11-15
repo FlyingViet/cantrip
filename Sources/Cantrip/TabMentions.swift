@@ -291,7 +291,7 @@ enum TabMentions {
     /// Home's background conversations.
     @MainActor
     static func supportsMentions(_ session: ChatSession) -> Bool {
-        !session.isPrivate && !session.isLocalPrivate && !session.isCantripHomeBackground
+        !session.isPrivate && !session.isLocalPrivate && !session.isCantripHomeBackground && !session.isMuseTab
             && session.privateStorageError == nil
     }
 

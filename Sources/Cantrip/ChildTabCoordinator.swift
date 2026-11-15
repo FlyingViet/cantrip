@@ -78,6 +78,7 @@ final class ChildTabCoordinator {
     private func forkNeverAllowedReason(_ parent: ChatSession) -> String? {
         if SessionManager.isCantripHomeReserved(parent) { return "Cantrip Home hands work to tabs instead." }
         if parent.isLocalPrivate || parent.isPrivate { return "Private tabs can't start child tabs." }
+        if parent.isMuseTab { return "The Muse tab sends to Muse; it doesn't start child tabs." }
         if store.isActiveChild(parent.id) { return "A child tab can't start its own child tabs." }
         return nil
     }

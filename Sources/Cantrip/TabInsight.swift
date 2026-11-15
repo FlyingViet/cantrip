@@ -29,7 +29,7 @@ enum TabInsight {
 
     /// Whether other tabs and Home may read or ask this open tab.
     static func isReadable(_ session: ChatSession) -> Bool {
-        !session.isPrivate && !session.isLocalPrivate && session.privateStorageError == nil
+        !session.isPrivate && !session.isLocalPrivate && !session.isMuseTab && session.privateStorageError == nil
             && !SessionManager.isCantripHomeReserved(session)
     }
 

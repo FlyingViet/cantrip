@@ -429,7 +429,7 @@ final class ChatSession: ObservableObject {
     var title: String {
         if isCantripHome { return "Cantrip Home" }
         if isCantripHomeBackground { return "Cantrip Home background" }
-        return tabMetadata.customTitle ?? (isLocalPrivate ? "Private Local" : automaticTitle)
+        return tabMetadata.customTitle ?? (isLocalPrivate ? "Private Local" : isMuseTab ? "Muse" : automaticTitle)
     }
     /// Completion notifications name the background run, not its shared conversation.
     var notificationTitle: String {
@@ -1234,7 +1234,7 @@ final class ChatSession: ObservableObject {
 
     /// Whether queued messages here can move into child tabs.
     var supportsChildTabs: Bool {
-        !SessionManager.isCantripHomeReserved(self) && !isLocalPrivate && !isPrivate
+        !SessionManager.isCantripHomeReserved(self) && !isLocalPrivate && !isPrivate && !isMuseTab
             && !ChildTabStore.shared.isActiveChild(id)
     }
 
@@ -1703,7 +1703,7 @@ final class ChatSession: ObservableObject {
     }
 
     var supportsRemoteImages: Bool {
-        !isLocalPrivate && effectiveBackendKind != .localModel && runningBackendKind != .localModel
+        !isLocalPrivate && !isMuseTab && effectiveBackendKind != .localModel && runningBackendKind != .localModel
     }
 
     /// Remote clients share the live session but must not consume context
@@ -1821,6 +1821,15 @@ final class ChatSession: ObservableObject {
         }
         var prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
+        // The Muse tab has no model: what the user types there goes to Muse, nothing else does.
+        if isMuseTab {
+            if fromUser {
+                receiveMuseMention(prompt, literal: MuseMention.parse(prompt) == nil)
+            } else {
+                Log.write("muse: a message to the Muse tab didn't come from the user; not sent to Muse")
+            }
+            return
+        }
         // The user's `@muse …` goes to Muse, never to this tab's model, queue or router. Text a tab,
         // Home or a model wrote that starts with @muse is an ordinary message: it never reaches Muse.
         if fromUser, receiveMuseMention(prompt) { return }
@@ -4832,7 +4841,7 @@ final class ChatSession: ObservableObject {
     static let freshStartCaption = "Started fresh — earlier messages aren't sent to the model"
 
     /// Cantrip Home keeps its own continuity; every other tab can start fresh.
-    var supportsStartFresh: Bool { !SessionManager.isCantripHomeReserved(self) }
+    var supportsStartFresh: Bool { !SessionManager.isCantripHomeReserved(self) && !isMuseTab }
 
     /// Commands the Copilot Remote server announced for this tab's ACP session.
     var copilotRemoteCommands: (commands: [[String: Any]], endpoint: String)? {

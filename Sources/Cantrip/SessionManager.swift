@@ -258,6 +258,21 @@ final class SessionManager: ObservableObject {
         sessions.append(session)
     }
 
+    /// Shows the Muse tab (`MuseTab`) while Muse is on; hides it, keeping its history, while off.
+    func setMuseTab(shown: Bool) {
+        let index = sessions.firstIndex(where: \.isMuseTab)
+        if shown, index == nil {
+            adopt(ChatSession(id: ChatSession.museID))
+            persistOpenSessions()
+        } else if !shown, let index {
+            let selectedID = active.id
+            sessions.remove(at: index)
+            if sessions.isEmpty { adopt(ChatSession()) }
+            activeIndex = sessions.firstIndex(where: { $0.id == selectedID }) ?? min(index, sessions.count - 1)
+            persistOpenSessions()
+        }
+    }
+
     @discardableResult
     func newSession() -> ChatSession {
         let session = ChatSession()
@@ -284,6 +299,7 @@ final class SessionManager: ObservableObject {
     }
 
     func select(_ index: Int) {
+        if sessions.indices.contains(index), sessions[index].isMuseTab { MuseTab.shared.viewed() }
         guard sessions.indices.contains(index) else { return }
         activeIndex = index
         showingRemote = false
@@ -394,6 +410,9 @@ final class SessionManager: ObservableObject {
         do {
             if session.isLocalPrivate {
                 throw SessionModelSettingsError(409, "Private Local is a permanent tab and cannot be closed.")
+            }
+            if session.isMuseTab {
+                throw SessionModelSettingsError(409, "The Muse tab stays while Muse is on. Turn Muse off in Settings to hide it.")
             }
             try session.tabMetadata.requireUnlocked()
         }

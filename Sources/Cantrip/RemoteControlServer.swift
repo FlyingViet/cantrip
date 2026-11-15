@@ -2743,6 +2743,8 @@ final class RemoteControlServer {
                              recentExchanges: Int?,
                              afterJournal journalSession: ChatSession? = nil,
                              on connection: RemoteRequestConnection) {
+        // A device opened the Muse tab: it checks Muse's chat for news (at most once a minute).
+        if session.isMuseTab { Task { @MainActor in MuseTab.shared.viewed() } }
         connection.trace.enter(.journalWait)
         Task {
             do {
@@ -2862,7 +2864,8 @@ final class RemoteControlServer {
             // queue items carry a suggested plan.
             "supportsChildTabs": session.supportsChildTabs,
             "supportsQueuePlans": true,
-            "supportsModelSettings": !session.isLocalPrivate && !session.isCantripHomeBackground,
+            "supportsModelSettings": !session.isLocalPrivate && !session.isCantripHomeBackground && !session.isMuseTab,
+            "isMuse": session.isMuseTab,
             "modelSettingsRevision": session.modelSettingsRevision,
             // The backend this tab runs on (its own, or the Mac's) and whether it chose its own.
             "backend": session.effectiveBackendKind.rawValue,
@@ -2918,7 +2921,7 @@ final class RemoteControlServer {
         // Failed runs' messages that offer Continue (POST …/resume with {"messageID"}).
         result["supportsContinueFromMessage"] = true
         // The tab's persistent shell (…/terminal); busy while a command (yours or the agent's) runs.
-        result["supportsTerminal"] = !session.isLocalPrivate
+        result["supportsTerminal"] = !session.isLocalPrivate && !session.isMuseTab
         result["terminalBusy"] = session.shell.isRunning || session.shell.hasAgentCommandRunning
         result["continuableMessageIDs"] = session.continuableMessageIDs.map(\.uuidString).sorted()
         // POST …/delete-message {"messageID"} deletes a prompt and its reply; clients drop
@@ -2926,7 +2929,7 @@ final class RemoteControlServer {
         result["supportsDeleteMessage"] = !session.isCantripHomeRun
         // POST …/messages takes {"location": {latitude, longitude, label?, accuracy?, precise?,
         // timeZone?, age?, device?}}; without it, the model is told to use the Mac's location.
-        result["supportsClientLocation"] = !session.isLocalPrivate
+        result["supportsClientLocation"] = !session.isLocalPrivate && !session.isMuseTab
         if !session.deletedMessageIDs.isEmpty {
             result["deletedMessageIDs"] = session.deletedMessageIDs.map(\.uuidString)
         }

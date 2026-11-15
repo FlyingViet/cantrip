@@ -197,8 +197,16 @@ extension ChatSession {
     /// Handles an `@muse` message: true when it was one (sent, held for approval, or refused).
     /// Runs before the tab's own delivery, so it never queues behind or interrupts the tab's work.
     @discardableResult
-    func receiveMuseMention(_ prompt: String) -> Bool {
-        guard let mention = MuseMention.parse(prompt) else { return false }
+    /// `literal`: what the user typed in the Muse tab without @muse; all of it goes to Muse's main
+    /// chat, except a plain “send” or “cancel” while a held message is waiting.
+    func receiveMuseMention(_ prompt: String, literal: Bool = false) -> Bool {
+        let mention: MuseMention.Parsed
+        if literal {
+            mention = .init(text: prompt.trimmingCharacters(in: .whitespacesAndNewlines))
+        } else {
+            guard let parsed = MuseMention.parse(prompt) else { return false }
+            mention = parsed
+        }
         let connector = MuseConnector.shared
         var exchange = MuseExchange(state: .checking, request: mention.text, chat: "main chat")
         let source = isCantripHome ? "Cantrip Home" : "tab “\(title)”"
@@ -212,11 +220,12 @@ extension ChatSession {
         if mention.text.isEmpty { return finish(.notSent, "Write what to send after @muse. Nothing was sent.") }
         let command = mention.text.lowercased()
             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
-        if mention.feedID == nil, command == "send" || command == "cancel" {
+        if mention.feedID == nil, command == "send" || command == "cancel",
+           !literal || messages.contains(where: { $0.muse?.state == .needsApproval }) {
             answerHeldMuse(send: command == "send", source: source)
             return true
         }
-        if mention.feedID == nil, let feedID = MuseMention.setupCommand(command) {
+        if !literal, mention.feedID == nil, let feedID = MuseMention.setupCommand(command) {
             approveMuseFeed(feedID, source: source)
             return true
         }
@@ -321,6 +330,13 @@ extension ChatSession {
                 exchange.state = reply.replied ? .replied : .noReply
                 exchange.choices = reply.choices.isEmpty ? nil : reply.choices
                 exchange.savedFiles = reply.savedFiles.isEmpty ? nil : reply.savedFiles
+                if let self, self.isMuseTab, exchange.sessionID == nil, reply.replied {
+                    // The tab mirrors Muse's chat: the request and reply arrive from there.
+                    self.messages.removeAll { $0.id == messageID }
+                    self.persistTranscript()
+                    await MuseTab.shared.sync(force: true)
+                    return
+                }
                 self?.updateMuse(messageID, exchange, reply: MuseExchange.sanitized(reply.text),
                                  cards: MuseExchange.cards(for: reply))
             } catch let failure as MuseBridgeProcess.Failure {

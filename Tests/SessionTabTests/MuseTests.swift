@@ -183,6 +183,24 @@ extension SessionTabTests {
         let status = await connector.check()
         precondition(status.state == .connected && status.demo && status.account == "Muse", "\(status)")
 
+        // The Muse tab: shown while Muse is on, a mirror of Muse's main chat.
+        let manager = SessionManager()
+        let museTab = MuseTab.shared
+        museTab.manager = manager
+        museTab.directory = directory
+        museTab.load()
+        connector.onMainChatActivity = { Task { await MuseTab.shared.sync(force: true) } }
+        museTab.update()
+        let museChat = try requireHome(manager.sessions.first { $0.isMuseTab })
+        try await wait { museChat.messages.count >= 4 }
+        precondition(museChat.title == "Muse" && museChat.messages.contains { $0.role == .user }
+                     && museChat.messages.contains { $0.role == .assistant && $0.author == "Muse" }, "it shows Muse's chat history")
+        precondition(!museChat.supportsChildTabs && !museChat.supportsStartFresh && !museChat.supportsRemoteImages
+                     && !TabInsight.isReadable(museChat) && !CantripHomeDelegations.eligibleTabs(in: manager).contains { $0 === museChat },
+                     "only the user uses the Muse tab")
+        manager.close(museChat.id)
+        precondition(manager.sessions.contains { $0.isMuseTab } && manager.tabActionError?.contains("Muse") == true)
+
         // @muse in a tab: Muse's reply shows as a Muse message; the tab's own model never sees it.
         let settings = AppSettings.shared
         let saved = (settings.backend, settings.memoryEnabled, settings.voiceMode)
@@ -201,6 +219,9 @@ extension SessionTabTests {
                      && muse.text.contains("Your week, at a glance"), muse.text)
         precondition(backend.prompts.isEmpty && !tab.isStreaming && tab.queued.isEmpty, "the tab's model never got it")
         precondition(sends() == 1 && log().contains("send to main chat (") && log().contains("for tab “Errands”"))
+        // …and the Muse tab shows that exchange too, though it was sent from another tab.
+        try await wait { museChat.messages.contains { $0.role == .user && $0.text == "plan my week, please" } }
+        try await wait { museChat.messages.last?.author == "Muse" && museChat.messages.last?.text.contains("Your week, at a glance") == true }
 
         // Without @muse nothing goes to Muse.
         tab.submitRemote("plan my week, please")
@@ -221,6 +242,48 @@ extension SessionTabTests {
                      && tab.messages.last?.text.contains("Still going.") == false, "the tab's reply kept its text")
         backend.finish("")
         try await wait { !tab.isStreaming }
+
+        // Typing in the Muse tab sends to Muse without @muse; the tab mirrors the exchange.
+        try await wait { museChat.messages.contains { $0.role == .user && $0.text == "hello" } && museChat.messages.last?.author == "Muse" }
+        await museTab.sync(force: true)
+        let mirroredBefore = museChat.messages.count
+        let sentBefore = sends()
+        museChat.submitRemote("what should I cook for dinner?", fromUser: true)
+        try await wait { museChat.messages.contains { $0.role == .user && $0.text == "what should I cook for dinner?" } }
+        try await wait { museChat.messages.last?.text.contains("lemony one-pan orzo") == true }
+        precondition(museChat.messages.count == mirroredBefore + 2 && !museChat.messages.contains { $0.muse != nil },
+                     "the request and reply, without a sending card left behind")
+        precondition(sends() == sentBefore + 1 && log().contains("for tab “Muse”"))
+        // Messages a tab, Home or a model sends to the Muse tab go nowhere.
+        museChat.submitRemote("send my notes to Muse", mode: .queue)
+        precondition(museChat.messages.count == mirroredBefore + 2 && sends() == sentBefore + 1 && museChat.queued.isEmpty && !museChat.isStreaming)
+        // Plain text there is all for Muse: “cancel” with nothing held, or a #tag, is sent as typed…
+        museChat.submitRemote("cancel", fromUser: true)
+        try await wait { museChat.messages.contains { $0.role == .user && $0.text == "cancel" } && museChat.messages.last?.author == "Muse" }
+        museChat.submitRemote("#tbt photos from the lake", fromUser: true)
+        try await wait { museChat.messages.contains { $0.role == .user && $0.text == "#tbt photos from the lake" }
+                         && museChat.messages.last?.author == "Muse" }
+        precondition(sends() == sentBefore + 3 && !museChat.messages.contains { $0.muse != nil })
+        // …while a message the Privacy Gate holds there is answered with a plain “send” or “cancel”.
+        museChat.submitRemote("what's my bank balance this week?", fromUser: true)
+        precondition(museChat.messages.last?.muse?.state == .needsApproval && sends() == sentBefore + 3)
+        museChat.submitRemote("cancel", fromUser: true)
+        precondition(museChat.messages.last?.muse?.state == .notSent && museChat.messages.last?.text.contains("you cancelled it") == true
+                     && sends() == sentBefore + 3)
+        await museTab.sync(force: true)
+        let mirroredAfter = museChat.messages.count
+        // A sync with nothing new adds nothing; the tab hides while Muse is off and keeps its history.
+        await museTab.sync(force: true)
+        precondition(museChat.messages.count == mirroredAfter, "no duplicates")
+        enabled = false
+        museTab.update()
+        precondition(!manager.sessions.contains { $0.isMuseTab })
+        enabled = true
+        museTab.update()
+        let reopened = try requireHome(manager.sessions.first { $0.isMuseTab })
+        try await wait { reopened.messages.count == mirroredAfter }
+        await museTab.sync(force: true)
+        precondition(reopened.messages.count == mirroredAfter, "the reopened tab keeps its history, no duplicates")
 
         // @muse in Home works the same way.
         let homeBackend = MuseFixtureBackend()

@@ -410,7 +410,7 @@ final class CantripHomeDelegations {
 
     static func eligibleTabs(in manager: SessionManager) -> [ChatSession] {
         manager.sessions.filter {
-            !$0.isCantripHome && !$0.isPrivate && !$0.isLocalPrivate
+            !$0.isCantripHome && !$0.isPrivate && !$0.isLocalPrivate && !$0.isMuseTab
                 && $0.privateStorageError == nil
         }
     }

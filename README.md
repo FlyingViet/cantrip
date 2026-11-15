@@ -71,8 +71,9 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   card per reply with the elapsed time, an estimate from earlier runs and the
   result, its earlier steps folded into a one-line summary. The Mac, Cantrip
   Agent, both Gateways and the browser Remote draw them. [Cards](docs/cards.md)
-- **Muse:** start a message with @muse in Home or any tab to send it to your
-  Meta Muse (opt-in, through muse-cli); the Privacy Gate holds mail, texts,
+- **Muse:** start a message with @muse in Home or any tab, or chat in the Muse
+  tab, which shows your whole Muse chat, to talk to your Meta Muse (opt-in,
+  through muse-cli); the Privacy Gate holds mail, texts,
   finance, contacts and location first. Feeds you approve turn Muse's own
   scheduled results into checked Home task records. [Muse](docs/muse.md)
 - **Child tabs:** an independent queued message runs (on its own for Auto

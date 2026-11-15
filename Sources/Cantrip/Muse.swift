@@ -189,6 +189,8 @@ final class MuseConnector: ObservableObject {
     var callTimeout: TimeInterval = 60
     /// Alerts the user (Mac notification and paired devices); set by HostServices.
     var notify: ((_ title: String, _ body: String) -> Void)?
+    /// Something was sent to Muse's main chat (the Muse tab mirrors it).
+    var onMainChatActivity: (() -> Void)?
     var artifactDirectory: () -> URL = { CantripHomeStore.artifactDirectory }
     var registerArtifact: (_ title: String, _ path: String) -> String? = { title, path in
         (try? CantripHomeStore.shared.register(.init(title: title, path: path, kind: nil)))?.title
@@ -221,6 +223,7 @@ final class MuseConnector: ObservableObject {
             if bridge != nil, bridgeDemo != current.demo { stopBridge() }
             Task { await self.check() }
         }
+        MuseTab.shared.update()
     }
 
     // MARK: - Operations
@@ -255,6 +258,7 @@ final class MuseConnector: ObservableObject {
             MuseLog.write("reply from \(chatTitle): \(reply.replied ? "\(reply.text.count) characters" : "none")"
                           + (reply.files.isEmpty ? "" : ", \(reply.files.count) files")
                           + (reply.choices.isEmpty ? "" : ", asks for a choice"))
+            if chat == nil { DispatchQueue.main.async { self.onMainChatActivity?() } }
             return reply
         }
     }
@@ -269,19 +273,20 @@ final class MuseConnector: ObservableObject {
         }
     }
 
-    /// Messages in `chat` after `seq` (oldest first), paging back up to `pages` × 100.
-    func messages(in chat: String, after seq: Int, pages: Int = 5) async throws -> [MuseMessage] {
+    /// Messages in `chat` (nil: the main chat) after `seq` (oldest first), paging back up to
+    /// `pages` × `pageSize`.
+    func messages(in chat: String?, after seq: Int, pages: Int = 5, pageSize: Int = 100) async throws -> [MuseMessage] {
         try await serial { bridge in
-            var batch = (try await self.open(chat, bridge: bridge, limit: 100)).compactMap(MuseMessage.init(json:))
+            var batch = (try await self.open(chat, bridge: bridge, limit: pageSize)).compactMap(MuseMessage.init(json:))
             var collected = batch
             var page = 1
-            while page < pages, let oldest = batch.map(\.seq).min(), oldest > seq + 1, batch.count >= 100 {
-                let older = try await bridge.call("history", ["limit": 100, "before_seq": oldest], timeout: self.callTimeout)
+            while page < pages, let oldest = batch.map(\.seq).min(), oldest > seq + 1, batch.count >= pageSize {
+                let older = try await bridge.call("history", ["limit": pageSize, "before_seq": oldest], timeout: self.callTimeout)
                 batch = (older["messages"] as? [[String: Any]] ?? []).compactMap(MuseMessage.init(json:))
                 collected = batch + collected
                 page += 1
             }
-            MuseLog.write("read chat \(chat) after \(seq): \(collected.filter { $0.seq > seq }.count) new")
+            MuseLog.write("read chat \(chat ?? "main") after \(seq): \(collected.filter { $0.seq > seq }.count) new")
             return collected.filter { $0.seq > seq }.sorted { $0.seq < $1.seq }
         }
     }

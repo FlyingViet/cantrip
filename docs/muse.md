@@ -59,6 +59,25 @@ instead.
 - Muse's text is shown as data: images in it don't load from the web, and
   nothing in it runs or opens on its own.
 
+## The Muse tab
+
+While Muse is on, Cantrip shows a **Muse** tab on the Mac and paired devices. It
+shows your whole conversation in Muse's main chat: what you sent with @muse
+from Home or any tab, what you said to Muse in Meta's apps, and Muse's replies
+and updates. The first time, it shows the latest 200 messages.
+
+- Type there without @muse: everything you write goes to Muse's main chat, with
+  the same Privacy Gate check. A plain `send` or `cancel` answers a held message
+  while one is waiting; otherwise it goes to Muse as written. `#…` isn't a feed
+  there, so use @muse in another tab to send to a feed's chat.
+- It has no model of Cantrip's behind it. Home and other tabs can't hand off
+  to, mention, read or ask it, and it doesn't start child tabs, run a terminal,
+  take attachments or share your location.
+- Cantrip checks Muse's main chat when you send from any chat, when you open
+  the tab (at most once a minute), and every 15 minutes while Muse is on.
+- It stays while Muse is on and can't be closed. Turning Muse off hides it and
+  keeps its history for when you turn Muse on again.
+
 ## Feeds: Muse's results as records
 
 A feed turns one Muse chat into records of a Home task's workspace. Ask Home
