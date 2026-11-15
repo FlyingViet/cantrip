@@ -615,7 +615,7 @@ struct LauncherView: View {
             Spacer()
 
             councilMenu
-                .disabled(session.isLocalPrivate)
+                .disabled(session.isLocalPrivate || session.isMuseTab)
                 .hoverHint("Council mode — several models answer in parallel, then the chair delivers a joint verdict", $toolbarHint)
 
             Button(action: {
@@ -640,7 +640,7 @@ struct LauncherView: View {
                     .font(.system(size: 14))
                     .foregroundStyle(session.isPrivate ? Color.purple : Color.secondary)
             }
-            .disabled(session.isLocalPrivate)
+            .disabled(session.isLocalPrivate || session.isMuseTab)
             .buttonStyle(.plain)
             .help(session.isPrivate
                   ? "Private mode ON — this session isn't saved to transcripts, history, or memory"
@@ -988,7 +988,7 @@ struct LauncherView: View {
                 do { try chat.updateTab(isLocked: !chat.isLocked) }
                 catch { manager.tabActionError = error.localizedDescription }
             }
-            .disabled(chat.isLocalPrivate)
+            .disabled(chat.isLocalPrivate || chat.isMuseTab)
             if let parentID = manager.parentID(ofChild: chat.id) {
                 Button("Open Parent Tab") { manager.select(parentID) }
             }

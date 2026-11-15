@@ -35,8 +35,11 @@ export function tabActions(session: RemoteSessionSummary): MenuEntry[] {
     entries.push({ label: "Open Parent Tab", icon: "arrow.triangle.branch", onSelect: () => nav.openTab(parentID) }, { kind: "separator" });
   }
   entries.push({ label: "Mac Permissions & View Mac", icon: "desktopcomputer", onSelect: () => { nav.sheet.value = { kind: "macAccess" }; } });
-  entries.push({ label: "MCP Servers", icon: "point.3.connected", onSelect: () => { nav.sheet.value = { kind: "mcpServers", tabID: session.id }; } });
-  entries.push({ label: "Skills & Rules", icon: "books.vertical", onSelect: () => { nav.sheet.value = { kind: "skills" }; } });
+  // The Muse tab has no model, conversation or tools of Cantrip's.
+  if (!session.isMuse) {
+    entries.push({ label: "MCP Servers", icon: "point.3.connected", onSelect: () => { nav.sheet.value = { kind: "mcpServers", tabID: session.id }; } });
+    entries.push({ label: "Skills & Rules", icon: "books.vertical", onSelect: () => { nav.sheet.value = { kind: "skills" }; } });
+  }
   if (session.supportsInputRequests) {
     entries.push({
       label: "View Questions in Chat", icon: "questionmark.circle",
@@ -44,19 +47,23 @@ export function tabActions(session: RemoteSessionSummary): MenuEntry[] {
     });
     // GitHub sign-in is the Mac's, not the tab's: Settings > Tools & sign-ins.
   }
+  if (!session.isMuse) {
+    entries.push(
+      {
+        label: session.isLocalPrivate ? "Private Local Settings" : "Model Settings", icon: "slider.horizontal.3", disabled: mutating,
+        onSelect: () => nav.openModelSettings(session),
+      },
+      ...startFreshEntry(session),
+    );
+  }
   entries.push(
-    {
-      label: session.isLocalPrivate ? "Private Local Settings" : "Model Settings", icon: "slider.horizontal.3", disabled: mutating,
-      onSelect: () => nav.openModelSettings(session),
-    },
-    ...startFreshEntry(session),
     {
       label: "Rename Tab", icon: "pencil", disabled: mutating || !session.supportsTabMetadata,
       onSelect: () => { nav.sheet.value = { kind: "rename", sessionID: session.id }; },
     },
     {
       label: session.isLocked ? "Unlock Tab" : "Lock Tab", icon: "lock.fill",
-      disabled: mutating || !session.supportsTabMetadata || session.isLocalPrivate,
+      disabled: mutating || !session.supportsTabMetadata || session.isLocalPrivate || session.isMuse === true,
       onSelect: () => void run(session.isLocked ? "Unlock" : "Lock", () => remote.updateTab(session.id, { isLocked: !session.isLocked })),
     },
   );
@@ -81,6 +88,7 @@ export function tabActions(session: RemoteSessionSummary): MenuEntry[] {
     );
   }
   if (session.isLocalPrivate) entries.push({ kind: "header", label: "Permanent tab. History saved; self-hosted models only." });
+  if (session.isMuse) entries.push({ kind: "header", label: "Your Muse chat. What you send here goes to your Muse; the tab stays while Muse is on." });
   if (!session.supportsTabMetadata) entries.push({ kind: "header", label: "Update Cantrip on the Mac to rename or lock tabs." });
   entries.push({ kind: "separator" });
   if (session.supportsTabReordering) {

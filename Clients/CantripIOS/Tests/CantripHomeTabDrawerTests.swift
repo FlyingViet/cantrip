@@ -351,6 +351,20 @@ final class CantripHomeTabDrawerTests: XCTestCase {
         XCTAssertNotEqual(first, last)
     }
 
+    func testMuseTabCanBeNeitherUnlockedNorClosed() async throws {
+        let model = try await configuredModel()
+        let muse = try JSONDecoder().decode(CantripRemoteSession.self, from: Data("""
+        {"id":"6D7A1E5C-0B3F-4C1E-9A3B-5E0C4D2F1A77","title":"Muse","workdir":"/tmp","isStreaming":false,
+         "canResume":false,"councilMode":false,"queuedCount":0,"isLocked":true,"isMuse":true,
+         "supportsTabMetadata":true,"supportsModelSettings":false}
+        """.utf8))
+        let state = CantripTabActionState(session: muse, model: model)
+        XCTAssertTrue(state.isMuse)
+        XCTAssertTrue(state.isLocked, "Close Tab is off, as for Private Local")
+        let plain = CantripTabActionState(session: try XCTUnwrap(model.sessions.last), model: model)
+        XCTAssertFalse(plain.isMuse, "older Macs and other tabs leave it off")
+    }
+
     /// Renders the drawer, Home's header button and a tab's header for review. Set
     /// TEST_RUNNER_HOME_TABS_ARTIFACT_DIR (pass TEST_RUNNER_TEST_RUNNER_… to xcodebuild).
     func testHomeTabsScreenshots() async throws {

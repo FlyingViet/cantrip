@@ -5,6 +5,7 @@ struct CantripTabActionState: Equatable {
     let id: String
     let isLocked: Bool
     let isLocalPrivate: Bool
+    let isMuse: Bool
     let supportsTabMetadata: Bool
     let supportsTabReordering: Bool
     let supportsInputRequests: Bool
@@ -27,6 +28,7 @@ struct CantripTabActionState: Equatable {
         id = session.id
         isLocked = session.isLocked == true
         isLocalPrivate = session.isLocalPrivate == true
+        isMuse = session.isMuse == true
         supportsTabMetadata = session.supportsTabMetadata == true
         supportsTabReordering = session.supportsTabReordering == true
         supportsInputRequests = session.supportsInputRequests == true
@@ -70,6 +72,12 @@ struct CantripTabActions: View {
     }
 
     var body: some View {
+        // The Muse tab has no model, conversation or tools of Cantrip's.
+        if !state.isMuse { modelSection }
+        tabSection
+    }
+
+    private var modelSection: some View {
         Section("Model & conversation") {
             Button {
                 model.modelSettingsSession = model.sessions.first { $0.id == state.id }
@@ -95,6 +103,9 @@ struct CantripTabActions: View {
             }
             // GitHub sign-in is the Mac's, not the tab's: Settings › Tools & sign-ins.
         }
+    }
+
+    @ViewBuilder private var tabSection: some View {
         Section("Tab") {
             if let parentID = state.parentID, let onOpenTab {
                 Button {
@@ -113,7 +124,7 @@ struct CantripTabActions: View {
                 Label(state.isLocked ? "Unlock Tab" : "Lock Tab",
                       systemImage: state.isLocked ? "lock.open" : "lock")
             }
-            .disabled(state.isMutating || !state.supportsTabMetadata || state.isLocalPrivate)
+            .disabled(state.isMutating || !state.supportsTabMetadata || state.isLocalPrivate || state.isMuse)
             if state.canFileInSection {
                 Menu {
                     Picker("Section", selection: Binding(
@@ -163,6 +174,9 @@ struct CantripTabActions: View {
             }
             if state.isLocalPrivate {
                 Text("Permanent tab. History saved; self-hosted models only.")
+            }
+            if state.isMuse {
+                Text("Your Muse chat. What you send here goes to your Muse; the tab stays while Muse is on.")
             }
             if !state.supportsTabMetadata {
                 Text("Update and reopen Cantrip to rename or lock tabs.")

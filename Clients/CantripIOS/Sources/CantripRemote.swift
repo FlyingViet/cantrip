@@ -727,6 +727,8 @@ struct CantripRemoteSession: Decodable, Equatable, Identifiable {
     var supportsModelSettings: Bool? = nil
     var modelSettingsRevision: String? = nil
     var isLocalPrivate: Bool? = nil
+    /// The Muse tab: the user's Muse chat; everything sent there goes to Muse. Nil from older Macs.
+    var isMuse: Bool? = nil
     var isCantripHome: Bool? = nil
     var supportsPrivateLocalSettings: Bool? = nil
     var supportsInputRequests: Bool? = nil

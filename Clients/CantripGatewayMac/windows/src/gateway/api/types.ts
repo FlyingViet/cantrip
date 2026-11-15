@@ -842,6 +842,8 @@ export interface RemoteSessionSummary {
   isLocked: boolean;
   /** The saved Private Local (self-hosted model) tab. */
   isLocalPrivate: boolean;
+  /** The Muse tab: the user's Muse chat; everything sent there goes to Muse. Absent from older Macs. */
+  isMuse?: boolean;
   isCantripHome: boolean;
   /** Home's background log or one of its hidden runs. */
   isCantripHomeBackground: boolean;

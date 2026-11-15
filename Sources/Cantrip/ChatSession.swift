@@ -436,7 +436,7 @@ final class ChatSession: ObservableObject {
         isCantripHomeBackground ? (cantripHomeRunLabel ?? title) : title
     }
     var isLocked: Bool {
-        isLocalPrivate || isCantripHome || isCantripHomeBackground || tabMetadata.isLocked
+        isLocalPrivate || isMuseTab || isCantripHome || isCantripHomeBackground || tabMetadata.isLocked
     }
     /// The backend this tab runs on: its own (`SessionTabMetadata.backend`), else the Mac's.
     var effectiveBackendKind: BackendKind { isLocalPrivate ? .localModel : tabMetadata.backend ?? settings.backend }
@@ -705,6 +705,9 @@ final class ChatSession: ObservableObject {
     func updateTab(name: String? = nil, isLocked: Bool? = nil) throws {
         if isLocalPrivate, isLocked == false {
             throw SessionModelSettingsError(409, "Private Local is a permanent tab and cannot be unlocked or closed.")
+        }
+        if isMuseTab, isLocked == false {
+            throw SessionModelSettingsError(409, "The Muse tab stays while Muse is on. Turn Muse off in Settings to hide it.")
         }
         var updated = tabMetadata
         if let name { try updated.rename(name) }
