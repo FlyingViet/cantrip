@@ -429,7 +429,7 @@ final class ChatSession: ObservableObject {
     var title: String {
         if isCantripHome { return "Cantrip Home" }
         if isCantripHomeBackground { return "Cantrip Home background" }
-        return tabMetadata.customTitle ?? (isLocalPrivate ? "Private Local" : isMuseTab ? "Muse" : automaticTitle)
+        return tabMetadata.customTitle ?? (isLocalPrivate ? "Private Local" : isMuseTab ? (MuseConnector.shared.settings().demo ? "Muse (demo)" : "Muse") : automaticTitle)
     }
     /// Completion notifications name the background run, not its shared conversation.
     var notificationTitle: String {

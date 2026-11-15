@@ -28,6 +28,8 @@ final class MuseTab {
     var now: () -> Date = { Date() }
 
     private struct State: Codable {
+        /// Which account the tab mirrors ("demo" or "live"); switching starts the mirror over.
+        var account: String?
         var lastSeq = 0
         var lastUpdatedMs: Int?
         var lastSyncAt: Date?
@@ -60,7 +62,7 @@ final class MuseTab {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 guard let self else { return }
-                if self.connector.isEnabled, self.session != nil,
+                if self.connector.isEnabled, self.canCheck, self.session != nil,
                    self.now().timeIntervalSince(self.state.lastSyncAt ?? .distantPast) >= self.syncInterval {
                     await self.sync()
                 }
@@ -70,7 +72,7 @@ final class MuseTab {
 
     /// The user opened the tab (on the Mac or a paired device): check for news, at most once a minute.
     func viewed() {
-        guard connector.isEnabled, now().timeIntervalSince(state.lastSyncAt ?? .distantPast) >= viewedInterval else { return }
+        guard connector.isEnabled, canCheck, now().timeIntervalSince(state.lastSyncAt ?? .distantPast) >= viewedInterval else { return }
         Task { await self.sync() }
     }
 
@@ -86,6 +88,16 @@ final class MuseTab {
                 again = false
                 Task { await self.sync(force: true) }
             }
+        }
+        let account = connector.settings().demo ? "demo" : "live"
+        if state.account != account {
+            // The demo's chat isn't the user's: the tab starts over with the account it now shows.
+            if state.account != nil, !session.messages.isEmpty {
+                session.messages.removeAll()
+                session.persistTranscript()
+                MuseLog.write("Muse tab: now showing the \(account == "demo" ? "demo account" : "user's account"); started over")
+            }
+            state = State(account: account)
         }
         state.lastSyncAt = now()
         save()
@@ -147,6 +159,11 @@ final class MuseTab {
         default:
             return nil
         }
+    }
+
+    /// Background checks wait while there's no working login (sending from a chat still checks).
+    private var canCheck: Bool {
+        ![.loginNeeded, .notInstalled, .off].contains(connector.status.state)
     }
 
     private static func files(_ files: [MuseMessage.File]) -> String {

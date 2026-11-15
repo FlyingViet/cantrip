@@ -193,7 +193,7 @@ extension SessionTabTests {
         museTab.update()
         let museChat = try requireHome(manager.sessions.first { $0.isMuseTab })
         try await wait { museChat.messages.count >= 4 }
-        precondition(museChat.title == "Muse" && museChat.messages.contains { $0.role == .user }
+        precondition(museChat.title == "Muse (demo)" && museChat.messages.contains { $0.role == .user }
                      && museChat.messages.contains { $0.role == .assistant && $0.author == "Muse" }, "it shows Muse's chat history")
         precondition(!museChat.supportsChildTabs && !museChat.supportsStartFresh && !museChat.supportsRemoteImages
                      && !TabInsight.isReadable(museChat) && !CantripHomeDelegations.eligibleTabs(in: manager).contains { $0 === museChat },
@@ -253,7 +253,7 @@ extension SessionTabTests {
         try await wait { museChat.messages.last?.text.contains("lemony one-pan orzo") == true }
         precondition(museChat.messages.count == mirroredBefore + 2 && !museChat.messages.contains { $0.muse != nil },
                      "the request and reply, without a sending card left behind")
-        precondition(sends() == sentBefore + 1 && log().contains("for tab “Muse”"))
+        precondition(sends() == sentBefore + 1 && log().contains("for tab “Muse (demo)”"))
         // Messages a tab, Home or a model sends to the Muse tab go nowhere.
         museChat.submitRemote("send my notes to Muse", mode: .queue)
         precondition(museChat.messages.count == mirroredBefore + 2 && sends() == sentBefore + 1 && museChat.queued.isEmpty && !museChat.isStreaming)
@@ -284,6 +284,16 @@ extension SessionTabTests {
         try await wait { reopened.messages.count == mirroredAfter }
         await museTab.sync(force: true)
         precondition(reopened.messages.count == mirroredAfter, "the reopened tab keeps its history, no duplicates")
+        // Switching between the demo and the user's account starts the mirror over.
+        demo = false
+        connector.settingsChanged()
+        try await wait { reopened.messages.isEmpty && log().contains("now showing the user's account; started over") }
+        precondition(reopened.title == "Muse")
+        demo = true
+        connector.settingsChanged()
+        try await wait { reopened.messages.contains { $0.text == "what should I cook for dinner?" } && reopened.messages.last?.author == "Muse" }
+        precondition(reopened.messages.filter { $0.text == "what should I cook for dinner?" }.count == 1
+                     && !reopened.messages.contains { $0.muse != nil } && reopened.title == "Muse (demo)")
 
         // @muse in Home works the same way.
         let homeBackend = MuseFixtureBackend()

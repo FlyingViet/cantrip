@@ -76,7 +76,10 @@ and updates. The first time, it shows the latest 200 messages.
 - Cantrip checks Muse's main chat when you send from any chat, when you open
   the tab (at most once a minute), and every 15 minutes while Muse is on.
 - It stays while Muse is on and can't be closed. Turning Muse off hides it and
-  keeps its history for when you turn Muse on again.
+  keeps its history for when you turn Muse on again. With the demo account it's
+  called **Muse (demo)**; switching between the demo and your account starts it
+  over with the chat of the account it now shows.
+- While the login is missing or expired, it doesn't check on its own.
 
 ## Feeds: Muse's results as records
 
