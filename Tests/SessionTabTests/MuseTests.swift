@@ -200,6 +200,15 @@ extension SessionTabTests {
                      "only the user uses the Muse tab")
         manager.close(museChat.id)
         precondition(manager.sessions.contains { $0.isMuseTab } && manager.tabActionError?.contains("Muse") == true)
+        // Paired devices get why: it can't be unlocked, so the reason doesn't say to unlock it.
+        precondition(museChat.isLocked && museChat.lockedReason == ChatSession.museTabPermanence
+                     && !museChat.lockedReason.contains("Unlock"))
+        museChat.newConversation()
+        precondition(museChat.tabActionError == ChatSession.museTabPermanence)
+        do {
+            try museChat.updateTab(isLocked: false)
+            preconditionFailure("unlocked the Muse tab")
+        } catch {}
 
         // @muse in a tab: Muse's reply shows as a Muse message; the tab's own model never sees it.
         let settings = AppSettings.shared

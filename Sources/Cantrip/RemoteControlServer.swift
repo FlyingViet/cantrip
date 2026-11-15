@@ -2249,7 +2249,7 @@ final class RemoteControlServer {
             sendSession(session, status: 202, recentExchanges: recentExchanges, on: connection)
         case "new-conversation":
             guard !session.isLocked else {
-                sendError(409, SessionTabError.locked.localizedDescription, on: connection)
+                sendError(409, session.lockedReason, on: connection)
                 return
             }
             guard !session.isStreaming else {
@@ -2273,7 +2273,7 @@ final class RemoteControlServer {
             }
         case "close":
             guard !session.isLocked else {
-                sendError(409, SessionTabError.locked.localizedDescription, on: connection)
+                sendError(409, session.lockedReason, on: connection)
                 return
             }
             guard let sessionIndex = manager.sessions.firstIndex(where: { $0 === session }) else {
@@ -4284,7 +4284,7 @@ private extension RemoteControlServer {
           if(button.lastElementChild!==backgroundBadge)button.append(backgroundBadge)}else if(backgroundBadge)backgroundBadge.remove();
         const childNote=item.parentID?`, child tab of ${item.child?.parentTitle||"another tab"}`:"";let note=button.querySelector(".child-note");if(childNote){if(!note){note=document.createElement("span");note.className="sr-only child-note";button.append(note)}setText(note,childNote)}else if(note)note.remove();
         button.setAttribute("aria-current",item.id===selected?"true":"false");button.onclick=()=>{selectTab(item.id);renderedPayload="";renderProgress(item);refresh()};
-        const close=tab.children[1];close.textContent=item.isLocked?"🔒":"×";close.disabled=Boolean(item.isLocked);close.title=item.isLocked?"Locked - unlock in tab settings":`Close ${item.title}`;close.setAttribute("aria-label",close.title);close.hidden=Boolean(item.isCantripHome);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};
+        const close=tab.children[1];close.textContent=item.isLocked?"🔒":"×";close.disabled=Boolean(item.isLocked);close.title=item.isMuse?"The Muse tab stays while Muse is on":item.isLocked?"Locked - unlock in tab settings":`Close ${item.title}`;close.setAttribute("aria-label",close.title);close.hidden=Boolean(item.isCantripHome);close.onclick=event=>{event.stopPropagation();closeSession(item.id)};
         let menu=tab.children[2];if(item.supportsTabMetadata){if(!menu){menu=document.createElement("button");menu.className="session-menu";menu.textContent="…";tab.append(menu)}
           menu.title=`Settings for ${item.title}${item.supportsTabReordering?" - drag tabs to reorder":""}`;menu.setAttribute("aria-label",menu.title);menu.onclick=()=>editTab(item)}else if(menu)menu.remove();
         if(nav.children[index]!==tab)nav.insertBefore(tab,nav.children[index]||null)}

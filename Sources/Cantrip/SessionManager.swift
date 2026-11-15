@@ -412,7 +412,7 @@ final class SessionManager: ObservableObject {
                 throw SessionModelSettingsError(409, "Private Local is a permanent tab and cannot be closed.")
             }
             if session.isMuseTab {
-                throw SessionModelSettingsError(409, "The Muse tab stays while Muse is on. Turn Muse off in Settings to hide it.")
+                throw SessionModelSettingsError(409, ChatSession.museTabPermanence)
             }
             try session.tabMetadata.requireUnlocked()
         }

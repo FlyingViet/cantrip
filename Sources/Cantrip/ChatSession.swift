@@ -707,7 +707,7 @@ final class ChatSession: ObservableObject {
             throw SessionModelSettingsError(409, "Private Local is a permanent tab and cannot be unlocked or closed.")
         }
         if isMuseTab, isLocked == false {
-            throw SessionModelSettingsError(409, "The Muse tab stays while Muse is on. Turn Muse off in Settings to hide it.")
+            throw SessionModelSettingsError(409, ChatSession.museTabPermanence)
         }
         var updated = tabMetadata
         if let name { try updated.rename(name) }
@@ -4821,9 +4821,16 @@ final class ChatSession: ObservableObject {
         privateLocalModel.reset()
     }
 
+    /// Why a locked tab can't be closed or cleared. The Muse tab can't be unlocked, so it doesn't
+    /// say to unlock it.
+    var lockedReason: String {
+        isMuseTab ? Self.museTabPermanence : SessionTabError.locked.localizedDescription
+    }
+    static let museTabPermanence = "The Muse tab stays while Muse is on, and its history comes from Muse. Turn Muse off in Settings to hide it."
+
     func newConversation() {
         guard !isLocked else {
-            tabActionError = SessionTabError.locked.localizedDescription
+            tabActionError = lockedReason
             return
         }
         if isCantripHome { PrivacyGate.shared.resetConversation(Self.privacyHomeConversationKey) }
