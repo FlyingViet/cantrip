@@ -25,12 +25,13 @@ extension SessionTabTests {
         backend.sink?(.textDelta("Checking the build."))
         try await waitForJournalTest { (try? reply().text) == "Checking the build." }
         let first = try reply()
-        precondition(first.workSplit == nil, "text with no tool call after it is the answer")
+        precondition(first.workSplit(live: true) == nil, "text with no tool call after it is the answer")
         backend.sink?(.activity(ToolActivityFactory.start(id: "t1", toolName: "bash", arguments: [:])))
         try await waitForJournalTest { (try? reply().activities.count) == 1 }
         var running = try reply()
-        precondition(running.workSplit == WorkSplit(noteBlocks: 1, notes: 1, steps: 1, hasAnswer: false),
-                     "\(String(describing: running.workSplit))")
+        precondition(running.workSplit(live: true) == WorkSplit(noteBlocks: 1, notes: 1, steps: 1, hasAnswer: false),
+                     "\(String(describing: running.workSplit(live: true)))")
+        precondition(running.workSplit(live: false) == nil, "a single note with nothing after it is the whole reply")
         var finished = ToolActivityFactory.start(id: "t1", toolName: "bash", arguments: [:])
         finished.state = .succeeded
         backend.sink?(.activity(finished))
@@ -48,14 +49,15 @@ extension SessionTabTests {
         let done = try reply()
         precondition(done.text == "Checking the build.\n\nFound the log.\n\nThe build passed.\n\n- 12 tests\n- 0 failures",
                      "\(done.text.debugDescription)")
-        precondition(done.workSplit == WorkSplit(noteBlocks: 2, notes: 2, steps: 3, hasAnswer: true),
-                     "\(String(describing: done.workSplit))")
+        precondition(done.workSplit(live: false) == WorkSplit(noteBlocks: 2, notes: 2, steps: 3, hasAnswer: true),
+                     "\(String(describing: done.workSplit(live: false)))")
+        precondition(done.workSplit(live: true) == done.workSplit(live: false))
         precondition(ReplyBlocks.split(done.text, before: [2])
                      == ["Checking the build.\n\nFound the log.", "The build passed.\n\n- 12 tests\n- 0 failures"])
 
         // Saved with the transcript, and sent to clients by block.
         let decoded = try JSONDecoder().decode(ChatMessage.self, from: JSONEncoder().encode(done))
-        precondition(decoded.toolMarks == done.toolMarks && decoded.workSplit == done.workSplit)
+        precondition(decoded.toolMarks == done.toolMarks && decoded.workSplit(live: false) == done.workSplit(live: false))
         let work = try requireHome(RemoteHistory.message(done)["work"] as? [String: Any])
         precondition(work["noteBlocks"] as? Int == 2 && work["notes"] as? Int == 2
                      && work["steps"] as? Int == 3 && work["hasAnswer"] as? Bool == true, "\(work)")
@@ -64,12 +66,25 @@ extension SessionTabTests {
         var direct = ChatMessage(role: .assistant, text: "")
         direct.toolMarks = [0]
         direct.text = "Here it is."
-        precondition(direct.workSplit == nil && RemoteHistory.message(direct)["work"] == nil)
+        precondition(direct.workSplit(live: false) == nil && RemoteHistory.message(direct)["work"] == nil)
         let legacy = try JSONDecoder().decode(ChatMessage.self, from: JSONEncoder().encode(
             ChatMessage(role: .assistant, text: "Old reply.\n\nStill old.")))
-        precondition(legacy.toolMarks.isEmpty && legacy.workSplit == nil)
+        precondition(legacy.toolMarks.isEmpty && legacy.workSplit(live: false) == nil)
         let user = ChatMessage(role: .user, text: "Hi")
-        precondition(user.workSplit == nil)
+        precondition(user.workSplit(live: false) == nil)
+
+        // A reply that ends on a tool call (a question for the user): once finished, its last
+        // note is the answer and the earlier ones fold; while it runs, every note folds.
+        var asking = ChatMessage(role: .assistant, text: "Reading the log.")
+        asking.toolMarks = [asking.text.utf8.count]
+        asking.text += "\n\nFound two causes.\n\n- cache\n- flag"
+        asking.toolMarks += [asking.text.utf8.count, asking.text.utf8.count]
+        precondition(asking.workSplit(live: false) == WorkSplit(noteBlocks: 1, notes: 1, steps: 3, hasAnswer: true),
+                     "\(String(describing: asking.workSplit(live: false)))")
+        precondition(asking.workSplit(live: true) == WorkSplit(noteBlocks: 3, notes: 2, steps: 3, hasAnswer: false))
+        let asked = RemoteHistory.message(asking)["work"] as? [String: Any]
+        precondition(asked?["noteBlocks"] as? Int == 1 && asked?["hasAnswer"] as? Bool == true, "\(String(describing: asked))")
+        precondition((RemoteHistory.message(asking, live: true)["work"] as? [String: Any])?["hasAnswer"] as? Bool == false)
         try testReplyWorkSplitWeb()
         print("Reply work split: notes before the last tool call fold, the answer stays, and marks persist")
     }

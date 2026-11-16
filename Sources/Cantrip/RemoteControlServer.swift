@@ -1644,7 +1644,8 @@ final class RemoteControlServer {
             }
             let index = session.messages.firstIndex { $0.id == messageID } ?? 0
             let tags = ThreadTags.tags(in: session.messages, range: index..<index + 1, sessionID: id)
-            let object = messageSnapshot(message, sessionID: id, home: HomeReplyView(session), thread: tags[messageID])
+            let object = messageSnapshot(message, sessionID: id, liveReplyID: session.liveReplyID,
+                                         home: HomeReplyView(session), thread: tags[messageID])
             sendEncoded(on: connection, queue: detailEncodingQueue) {
                 try JSONSerialization.data(withJSONObject: ["message": object], options: [.sortedKeys])
             }
@@ -2987,9 +2988,10 @@ final class RemoteControlServer {
                 return object
             }
             let home = HomeReplyView(session)
+            let live = session.liveReplyID
             let tags = ThreadTags.tags(in: session.messages, range: session.messages.indices, sessionID: session.id)
             result["messages"] = session.messages.map {
-                messageSnapshot($0, sessionID: session.id, home: home, thread: tags[$0.id])
+                messageSnapshot($0, sessionID: session.id, liveReplyID: live, home: home, thread: tags[$0.id])
             }
             result["threadReplies"] = ThreadTags.replyCountsObject(in: session.messages, sessionID: session.id)
         }
@@ -3026,11 +3028,14 @@ final class RemoteControlServer {
         }
     }
 
-    private func messageSnapshot(_ message: ChatMessage, sessionID: UUID,
+    private func messageSnapshot(_ message: ChatMessage, sessionID: UUID, liveReplyID: UUID?,
                                  home: HomeReplyView? = nil, thread: [String: Any]? = nil) -> [String: Any] {
+        // Tool marks count the saved text, so the split comes before Home trims its blocks.
+        let work = message.workSplit(live: message.id == liveReplyID)
         var message = message
         if let home, message.role == .assistant { message.text = home.text(of: message) }
         var object = RemoteHistory.message(message)
+        object["work"] = work?.snapshot
         object["thread"] = thread
         object["isLocalPrivate"] = sessionID == ChatSession.privateLocalID
         if message.role == .user {
@@ -3112,6 +3117,7 @@ final class RemoteControlServer {
         let queued = session.queued
         let plans = session.queuePlans.mapValues(\.snapshot)
         let home = HomeReplyView(session)
+        let live = session.liveReplyID
         let tags = ThreadTags.tags(in: session.messages, range: candidateStart..<end, sessionID: sessionID)
         // For every loaded page: a client updates prompts it cached from older pages too.
         let replyCounts = ThreadTags.replyCountsObject(in: session.messages, sessionID: sessionID)
@@ -3121,12 +3127,14 @@ final class RemoteControlServer {
             result["threadReplies"] = replyCounts
             var messages: [[String: Any]] = []
             if includesCompleteExchanges {
-                messages = candidates.map { self.messageSnapshot($0, sessionID: sessionID, home: home, thread: tags[$0.id]) }
+                messages = candidates.map {
+                    self.messageSnapshot($0, sessionID: sessionID, liveReplyID: live, home: home, thread: tags[$0.id])
+                }
             } else {
                 var bytes = 0
                 for candidate in candidates.suffix(RemoteHistory.pageSize).reversed() {
-                    let message = self.messageSnapshot(candidate, sessionID: sessionID, home: home,
-                                                       thread: tags[candidate.id])
+                    let message = self.messageSnapshot(candidate, sessionID: sessionID, liveReplyID: live,
+                                                       home: home, thread: tags[candidate.id])
                     let size = try JSONSerialization.data(withJSONObject: message).count
                     if !messages.isEmpty, bytes + size > RemoteHistory.pageBytes { break }
                     messages.insert(message, at: 0)
@@ -3138,7 +3146,8 @@ final class RemoteControlServer {
                 if start < candidates.count, candidates[start].role != .user,
                    let prompt = candidates[..<start].lastIndex(where: { $0.role == .user }) {
                     messages = candidates[prompt..<start].map {
-                        self.messageSnapshot($0, sessionID: sessionID, home: home, thread: tags[$0.id])
+                        self.messageSnapshot($0, sessionID: sessionID, liveReplyID: live, home: home,
+                                             thread: tags[$0.id])
                     } + messages
                 }
             }

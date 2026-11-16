@@ -1992,8 +1992,9 @@ subagent `textBlock` counts them), `notes` (runs of notes between tool calls),
 call yet). Every client folds the notes into one row above the answer: while
 the reply runs it reads **Working** with the latest note; when it finishes it
 reads **3 notes · 12 steps**, and tapping or clicking it shows the notes in
-smaller, dimmer text. A finished reply with no text after its notes shows them
-in full. Replies saved before this, and Private Local replies, show as before.
+smaller, dimmer text. A finished reply that ended on a tool call (a question
+for you, or a run that stopped) uses its last note as the answer and folds the
+earlier ones. Replies saved before this, and Private Local replies, show as before.
 
 Reply text selects like a document on every client: a selection can run across
 paragraphs, list items, headings and tables, and copies as plain lines (tables

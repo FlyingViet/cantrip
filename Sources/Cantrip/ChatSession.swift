@@ -124,7 +124,8 @@ extension ChatMessage {
 
     /// Where the reply's progress notes end and its answer begins, by markdown block
     /// (`ReplyBlocks`): text written before its last tool call is notes, text after it the
-    /// answer. Nil when it has no notes (no tool call, or no text before one).
+    /// answer. A finished reply that ended on a tool call (a question for the user, a run that
+    /// stopped) has its last note as the answer. Nil when it has no notes to fold.
     struct WorkSplit: Equatable {
         /// Leading blocks that are notes; the answer is every block after them.
         let noteBlocks: Int
@@ -140,19 +141,26 @@ extension ChatMessage {
         }
     }
 
-    var workSplit: WorkSplit? {
+    /// `live`: the tab is still writing this reply, so text after the last tool call may be
+    /// on its way and the newest note stays with the others.
+    func workSplit(live: Bool) -> WorkSplit? {
         guard role == .assistant, let last = toolMarks.last else { return nil }
         let starts = ReplyBlocks.starts(in: text)
         let noteBlocks = starts.filter { $0 < last }.count
         guard noteBlocks > 0 else { return nil }
-        var notes = 0
+        // First block of each run of notes between tool calls.
+        var runs: [Int] = []
         var from = 0
         for mark in toolMarks where mark > from {
-            if starts.contains(where: { $0 >= from && $0 < mark }) { notes += 1 }
+            if let first = starts.firstIndex(where: { $0 >= from && $0 < mark }) { runs.append(first) }
             from = mark
         }
-        return WorkSplit(noteBlocks: noteBlocks, notes: notes, steps: toolMarks.count,
-                         hasAnswer: starts.count > noteBlocks)
+        if starts.count > noteBlocks || live {
+            return WorkSplit(noteBlocks: noteBlocks, notes: runs.count, steps: toolMarks.count,
+                             hasAnswer: starts.count > noteBlocks)
+        }
+        guard runs.count > 1, let answerStart = runs.last else { return nil }
+        return WorkSplit(noteBlocks: answerStart, notes: runs.count - 1, steps: toolMarks.count, hasAnswer: true)
     }
 
     /// `thinking` split into its blocks (usually one per model call).

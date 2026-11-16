@@ -4,7 +4,8 @@ enum RemoteHistory {
     static let pageSize = 30
     static let pageBytes = 192 * 1024
 
-    static func message(_ message: ChatMessage) -> [String: Any] {
+    /// `live`: the tab is still writing this reply (see `ChatMessage.workSplit`).
+    static func message(_ message: ChatMessage, live: Bool = false) -> [String: Any] {
         var result: [String: Any] = [
             "id": message.id.uuidString,
             // A child tab's card reads as a reply to clients that don't draw it.
@@ -38,7 +39,7 @@ enum RemoteHistory {
         }
         if let handoff = message.handoffResult { result["handoffResult"] = handoff.snapshot }
         // Progress notes vs. the answer: clients fold the first `noteBlocks` markdown blocks.
-        if let work = message.workSplit { result["work"] = work.snapshot }
+        if let work = message.workSplit(live: live) { result["work"] = work.snapshot }
         if let child = message.childResult { result["childResult"] = child.snapshot }
         if let muse = message.muse {
             // `@muse` exchange: role handoff, author Muse; `text` is what to show.
@@ -134,6 +135,11 @@ extension ChatSession {
     /// How many recent messages are searched for running background agents: an agent a turn
     /// started keeps running through the next few turns, never across dozens.
     static let backgroundAgentWindow = 40
+
+    /// The reply the tab is still writing, if it's running.
+    var liveReplyID: UUID? {
+        isStreaming ? messages.last(where: { $0.role == .assistant })?.id : nil
+    }
 
     /// Background agents still running in this tab (watchers, `side-` requests…), oldest first.
     var liveBackgroundAgents: [ToolActivity] {

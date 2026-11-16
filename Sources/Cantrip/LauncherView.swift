@@ -3757,8 +3757,7 @@ struct MessageRow: View {
 /// Streamed extended-thinking text, collapsed by default so long silent
 /// stretches are legible without crowding the answer.
 /// A reply cut into the notes it wrote between tool calls and the answer after its last one
-/// (`ChatMessage.workSplit`). Nil when there's nothing to fold, or when a finished run wrote
-/// nothing after its notes (then the notes are all there is).
+/// (`ChatMessage.workSplit`). Nil when there's nothing to fold.
 struct WorkFold {
     let notes: String
     let answer: String
@@ -3767,7 +3766,7 @@ struct WorkFold {
     let working: Bool
 
     init?(message: ChatMessage, streaming: Bool) {
-        guard let split = message.workSplit, streaming || split.hasAnswer else { return nil }
+        guard let split = message.workSplit(live: streaming), streaming || split.hasAnswer else { return nil }
         let parts = ReplyBlocks.split(message.text, before: [split.noteBlocks])
         guard parts.count == 2, !parts[0].isEmpty else { return nil }
         notes = parts[0]
