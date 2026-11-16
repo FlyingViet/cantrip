@@ -1,138 +1,46 @@
 import SwiftUI
 import AppKit
 
-/// Lightweight block-level markdown renderer for assistant responses:
-/// headings, bullet/numbered lists (with nesting), fenced code, block
-/// quotes, tables (monospaced), rules, and inline md within paragraphs.
+/// An assistant reply's markdown. Prose between code fences and images is one selectable text
+/// view (`CantripRichText`), so a selection runs across paragraphs, lists, headings and tables;
+/// code fences keep their Copy box, and images (and image files the text mentions) preview below.
 struct MarkdownContent: View {
     let text: String
+    var size: CantripRichText.Size = .body
+    /// Progress notes: secondary color.
+    var secondary = false
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
-        let blocks = Self.parse(text)
+        let segments = CantripRichText.segments(Self.separatingImages(text))
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                render(block)
-            }
-        }
-    }
-
-    // MARK: - Blocks
-
-    enum Block {
-        case paragraph(String)
-        case heading(Int, String)
-        case list([ListItem])
-        case code(String)
-        case quote(String)
-        case table([[String]])   // rows of cells; first row = header
-        case image(String)       // file path (may contain ~) or URL
-        case rule
-    }
-
-    struct ListItem {
-        let marker: String   // "•" or "3."
-        let text: String
-        let indent: Int      // nesting level
-    }
-
-    @ViewBuilder
-    private func render(_ block: Block) -> some View {
-        switch block {
-        case .paragraph(let text):
-            Text(Self.inline(text))
-                .font(.body)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .heading(let level, let text):
-            Text(Self.inline(text))
-                .font(level == 1 ? .system(size: 17, weight: .bold)
-                     : level == 2 ? .system(size: 15, weight: .semibold)
-                     : .system(size: 13.5, weight: .semibold))
-                .padding(.top, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .list(let items):
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(item.marker)
-                            .font(.body.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        Text(Self.inline(item.text))
-                            .font(.body)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.leading, CGFloat(item.indent) * 16)
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .prose(let prose):
+                    CantripMarkdownText(markdown: TabMentions.markdown(prose), size: size,
+                                        secondary: secondary) { openURL($0) }
+                case .code(let code, _):
+                    CodeBlockView(code: code)
+                case .image(let line):
+                    ImageBlock(target: Self.imageTarget(line))
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-        case .code(let code):
-            CodeBlockView(code: code)
-        case .quote(let text):
-            HStack(alignment: .top, spacing: 8) {
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.accentColor.opacity(0.6))
-                    .frame(width: 3)
-                Text(Self.inline(text))
-                    .font(.body)
-                    .foregroundStyle(.secondary)
+            ForEach(Self.mentionedImages(in: text, shown: segments), id: \.self) { path in
+                ImageBlock(target: path)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-        case .table(let rows):
-            renderTable(rows)
-        case .image(let target):
-            ImageBlock(target: target)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .rule:
-            Divider()
         }
     }
 
-    @ViewBuilder
-    private func renderTable(_ rows: [[String]]) -> some View {
-        if let header = rows.first {
-            let columns = header.count
-            Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 6) {
-                GridRow {
-                    ForEach(0..<columns, id: \.self) { c in
-                        Text(Self.inline(header[c]))
-                            .font(.callout.weight(.semibold))
-                    }
-                }
-                Divider().gridCellUnsizedAxes(.horizontal)
-                ForEach(Array(rows.dropFirst().enumerated()), id: \.offset) { _, row in
-                    GridRow {
-                        ForEach(0..<columns, id: \.self) { c in
-                            Text(Self.inline(c < row.count ? row[c] : ""))
-                                .font(.callout)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-            }
-            .padding(10)
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
-        }
-    }
-
-    // MARK: - Inline
-
-    private static let htmlBreakRegex = try? NSRegularExpression(
-        pattern: "<br\\s*/?>",
-        options: .caseInsensitive)
-
-    static func inline(_ source: String) -> AttributedString {
-        let source = TabMentions.markdown(source)
-        let range = NSRange(source.startIndex..<source.endIndex, in: source)
-        let text = htmlBreakRegex?.stringByReplacingMatches(
-            in: source,
-            range: range,
-            withTemplate: "\n"
-        ) ?? source
-        return (try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+    /// A note as one line of inline markdown (code spans, bold); plain while a token is incomplete.
+    static func inlineNote(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: TabMentions.markdown(text),
+                               options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(text)
     }
 
-    // MARK: - Parser
+    // MARK: - Images
 
     private static let mdImageRegex = try? NSRegularExpression(
         pattern: "!\\[[^\\]]*\\]\\(([^)]+)\\)")
@@ -140,177 +48,59 @@ struct MarkdownContent: View {
         pattern: "[~/][^\\s\"'`)\\]]+\\.(?:png|jpe?g|gif|webp|heic|tiff?|bmp|svg)",
         options: [.caseInsensitive])
 
-    static func parse(_ text: String) -> [Block] {
-        var blocks: [Block] = []
-        var paragraph: [String] = []
-        var listItems: [ListItem] = []
-        let lines = text.components(separatedBy: "\n")
-        var i = 0
+    /// Every markdown image on its own line (outside code fences), so it previews as a block
+    /// even when the line also has text.
+    static func separatingImages(_ text: String) -> String {
+        guard text.contains("!["), let regex = mdImageRegex else { return text }
+        var output: [String] = []
+        var fence: Character?
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let first = trimmed.first, first == "`" || first == "~", trimmed.hasPrefix(String(repeating: first, count: 3)) {
+                fence = fence == nil ? first : (fence == first ? nil : fence)
+                output.append(line)
+                continue
+            }
+            let ns = line as NSString
+            let matches = fence == nil && line.contains("![")
+                ? regex.matches(in: line, range: NSRange(location: 0, length: ns.length)) : []
+            guard !matches.isEmpty else { output.append(line); continue }
+            let residual = regex.stringByReplacingMatches(
+                in: line, range: NSRange(location: 0, length: ns.length), withTemplate: ""
+            ).trimmingCharacters(in: .whitespaces)
+            if !residual.isEmpty { output.append(contentsOf: [residual, ""]) }
+            for match in matches { output.append(contentsOf: [ns.substring(with: match.range), ""]) }
+        }
+        return output.joined(separator: "\n")
+    }
 
-        func flushParagraph() {
-            if !paragraph.isEmpty {
-                blocks.append(.paragraph(paragraph.joined(separator: " ")))
-                paragraph = []
+    static func imageTarget(_ line: String) -> String {
+        guard let regex = mdImageRegex,
+              let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length))
+        else { return line }
+        var target = (line as NSString).substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
+        if target.hasPrefix("<"), target.hasSuffix(">") { target = String(target.dropFirst().dropLast()) }
+        return target
+    }
+
+    /// Bare image paths mentioned anywhere in the text (e.g. "PNG: ~/cat.png") whose files exist,
+    /// up to four, skipping ones already shown.
+    static func mentionedImages(in text: String, shown segments: [CantripRichText.Segment]) -> [String] {
+        guard let regex = imagePathRegex else { return [] }
+        let already = Set(segments.compactMap { segment -> String? in
+            if case .image(let line) = segment { return imageTarget(line) }
+            return nil
+        })
+        let ns = text as NSString
+        var found: [String] = []
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let path = ns.substring(with: match.range)
+            if !already.contains(path), !found.contains(path),
+               FileManager.default.fileExists(atPath: (path as NSString).expandingTildeInPath) {
+                found.append(path)
             }
         }
-        func flushList() {
-            if !listItems.isEmpty {
-                blocks.append(.list(listItems))
-                listItems = []
-            }
-        }
-        func flushAll() { flushParagraph(); flushList() }
-
-        while i < lines.count {
-            let raw = lines[i]
-            let trimmed = raw.trimmingCharacters(in: .whitespaces)
-            let leadingSpaces = raw.prefix(while: { $0 == " " }).count
-
-            // Fenced code
-            if trimmed.hasPrefix("```") {
-                flushAll()
-                var code: [String] = []
-                i += 1
-                while i < lines.count,
-                      !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                    code.append(lines[i])
-                    i += 1
-                }
-                i += 1 // skip closing fence
-                blocks.append(.code(code.joined(separator: "\n")))
-                continue
-            }
-            // Blank line
-            if trimmed.isEmpty { flushAll(); i += 1; continue }
-            // Markdown image(s): ![alt](target)
-            if trimmed.contains("!["), let regex = Self.mdImageRegex {
-                let ns = trimmed as NSString
-                let range = NSRange(location: 0, length: ns.length)
-                let matches = regex.matches(in: trimmed, range: range)
-                if !matches.isEmpty {
-                    flushAll()
-                    for match in matches {
-                        blocks.append(.image(ns.substring(with: match.range(at: 1))
-                            .trimmingCharacters(in: .whitespaces)))
-                    }
-                    let residual = regex.stringByReplacingMatches(
-                        in: trimmed, range: range, withTemplate: "")
-                        .trimmingCharacters(in: .whitespaces)
-                    if !residual.isEmpty { blocks.append(.paragraph(residual)) }
-                    i += 1
-                    continue
-                }
-            }
-            // Heading
-            if trimmed.hasPrefix("#") {
-                let level = trimmed.prefix(while: { $0 == "#" }).count
-                if level <= 6, trimmed.dropFirst(level).hasPrefix(" ") {
-                    flushAll()
-                    blocks.append(.heading(min(level, 3),
-                                           String(trimmed.dropFirst(level + 1))))
-                    i += 1
-                    continue
-                }
-            }
-            // Rule
-            if trimmed == "---" || trimmed == "***" || trimmed == "___" {
-                flushAll(); blocks.append(.rule); i += 1; continue
-            }
-            // Quote
-            if trimmed.hasPrefix(">") {
-                flushAll()
-                var quote: [String] = []
-                while i < lines.count {
-                    let q = lines[i].trimmingCharacters(in: .whitespaces)
-                    guard q.hasPrefix(">") else { break }
-                    quote.append(q.dropFirst().trimmingCharacters(in: .whitespaces))
-                    i += 1
-                }
-                blocks.append(.quote(quote.joined(separator: "\n")))
-                continue
-            }
-            // Table
-            if trimmed.hasPrefix("|") {
-                flushAll()
-                var rows: [[String]] = []
-                while i < lines.count {
-                    let rowLine = lines[i].trimmingCharacters(in: .whitespaces)
-                    guard rowLine.hasPrefix("|") else { break }
-                    var cells = rowLine.components(separatedBy: "|")
-                        .map { $0.trimmingCharacters(in: .whitespaces) }
-                    if cells.first?.isEmpty == true { cells.removeFirst() }
-                    if cells.last?.isEmpty == true { cells.removeLast() }
-                    // Skip the |---|---| separator row.
-                    let isSeparator = !cells.isEmpty && cells.allSatisfy { cell in
-                        cell.contains("-") &&
-                        cell.allSatisfy { "-: ".contains($0) }
-                    }
-                    if !isSeparator { rows.append(cells) }
-                    i += 1
-                }
-                if !rows.isEmpty { blocks.append(.table(rows)) }
-                continue
-            }
-            // Bullet item
-            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
-                flushParagraph()
-                listItems.append(ListItem(marker: "•",
-                                          text: String(trimmed.dropFirst(2)),
-                                          indent: leadingSpaces / 2))
-                i += 1
-                continue
-            }
-            // Numbered item ("3. text" or "3) text")
-            if let dot = trimmed.firstIndex(where: { $0 == "." || $0 == ")" }),
-               !trimmed[..<dot].isEmpty,
-               trimmed[..<dot].allSatisfy(\.isNumber),
-               trimmed[trimmed.index(after: dot)...].hasPrefix(" ") {
-                flushParagraph()
-                listItems.append(ListItem(
-                    marker: String(trimmed[...dot]),
-                    text: trimmed[trimmed.index(after: dot)...]
-                        .trimmingCharacters(in: .whitespaces),
-                    indent: leadingSpaces / 2))
-                i += 1
-                continue
-            }
-            // Continuation of a list item (indented text under it)
-            if !listItems.isEmpty && leadingSpaces >= 2 {
-                let last = listItems.removeLast()
-                listItems.append(ListItem(marker: last.marker,
-                                          text: last.text + " " + trimmed,
-                                          indent: last.indent))
-                i += 1
-                continue
-            }
-            // Plain paragraph line
-            flushList()
-            paragraph.append(trimmed)
-            i += 1
-        }
-        flushAll()
-
-        // Preview bare image paths mentioned anywhere in the text
-        // (e.g. "PNG: ~/cat-meowing.png") if the file actually exists.
-        if let regex = imagePathRegex {
-            let already = Set(blocks.compactMap { block -> String? in
-                if case .image(let target) = block { return target }
-                return nil
-            })
-            let ns = text as NSString
-            var found: [String] = []
-            for match in regex.matches(in: text,
-                                       range: NSRange(location: 0, length: ns.length)) {
-                let path = ns.substring(with: match.range)
-                if !already.contains(path), !found.contains(path),
-                   FileManager.default.fileExists(
-                       atPath: (path as NSString).expandingTildeInPath) {
-                    found.append(path)
-                }
-            }
-            for path in found.prefix(4) { blocks.append(.image(path)) }
-        }
-        return blocks
+        return Array(found.prefix(4))
     }
 }
 

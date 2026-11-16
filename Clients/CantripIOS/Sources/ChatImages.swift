@@ -163,35 +163,56 @@ enum ChatMarkdownImages {
     private static func isBlank(_ line: String) -> Bool { line.allSatisfy(\.isWhitespace) }
 }
 
+/// A reply's markdown. Prose between code fences and images is one selectable text view, so a
+/// selection runs across paragraphs, lists and headings (`CantripRichText`).
 struct ChatAssistantText: View {
     let text: String
     let images: [ChatMessageImage]
     /// Not observed: a reply's text redraws when it changes, not on every poll of the Mac.
     let remote: CantripRemoteModel
+    var size: CantripRichText.Size = .body
+    /// Progress notes: secondary color.
+    var secondary = false
     @Environment(\.openURL) private var openURL
     @Environment(\.cantripMentionLinks) private var mentionLinks
 
     var body: some View {
         // Tab mentions read as a bold "@Label", linked when the tab can open from here.
-        Markdown(ChatMarkdownImages.separatingBlocks(
+        let markdown = ChatMarkdownImages.separatingBlocks(
             CantripTabMentions.markdown(text) { mentionLinks?.canOpen($0) == true }
-        ))
-            .markdownImageProvider(ChatPreviewImageProvider(images: images, remote: remote))
-            .textSelection(.enabled)
-            .environment(\.openURL, OpenURLAction { url in
-                // Image previews open here, without reaching the root's swipe check.
-                guard CantripSwipeTaps.allowsTap() else { return .discarded }
-                switch ChatPreviewLink.action(for: url, images: images) {
-                case .preview(let source):
-                    ChatImageViewer.present(source, remote: remote, index: 0)
-                    return .handled
-                case .discard:
-                    return .discarded
-                case .inherited:
-                    openURL(url)
-                    return .handled
+        )
+        VStack(alignment: .leading, spacing: size == .body ? 12 : 8) {
+            ForEach(Array(CantripRichText.segments(markdown).enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .prose(let prose):
+                    CantripMarkdownText(markdown: prose, size: size, secondary: secondary) { url in
+                        _ = open(url)
+                    }
+                case .code(let code, _):
+                    CantripCodeBlockText(code: code, size: size, secondary: secondary)
+                case .image(let line):
+                    Markdown(line)
+                        .markdownImageProvider(ChatPreviewImageProvider(images: images, remote: remote))
+                        .environment(\.openURL, OpenURLAction { open($0) })
                 }
-            })
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func open(_ url: URL) -> OpenURLAction.Result {
+        // Image previews open here, without reaching the root's swipe check.
+        guard CantripSwipeTaps.allowsTap() else { return .discarded }
+        switch ChatPreviewLink.action(for: url, images: images) {
+        case .preview(let source):
+            ChatImageViewer.present(source, remote: remote, index: 0)
+            return .handled
+        case .discard:
+            return .discarded
+        case .inherited:
+            openURL(url)
+            return .handled
+        }
     }
 }
 
