@@ -24,6 +24,7 @@ import { BrowserCard, usesBrowser } from "./BrowserPreview";
 import { MentionText } from "./TabMentions";
 import { MuseRequestCard } from "./MuseRequest";
 import { Markdown, type InlineImages } from "./Markdown";
+import { latestNote, replyBlockStarts, workFold, workSummary, type WorkFold } from "./workNotes";
 import { CardStack } from "./Cards";
 import { PrivacyBadgeLine } from "./PrivacyBadge";
 import { LinkPreviewStack, PlaceCardView, WeatherCardView } from "./RichCards";
@@ -261,31 +262,9 @@ function ReasoningStepRow(props: { step: RemoteReasoningStep; number: number; cu
   ) : <div class="reasoning-step">{body}</div>;
 }
 
-/** Where each finished subagent card goes: after N reply blocks (blank-line separated, fences kept whole). */
-function replyBlockStarts(text: string): number[] {
-  const starts: number[] = [];
-  let offset = 0;
-  let fence = "";
-  let afterBlank = true;
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (fence) {
-      if (trimmed.startsWith(fence)) fence = "";
-      afterBlank = false;
-    } else if (!trimmed) afterBlank = true;
-    else {
-      if (afterBlank) starts.push(offset);
-      afterBlank = false;
-      if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) fence = trimmed.slice(0, 3);
-    }
-    offset += line.length + 1;
-  }
-  return starts;
-}
-
-function ReplyText(props: { message: RemoteMessage; session: RemoteSessionSummary; settled: RemoteSubagent[] }): JSX.Element {
-  const { message, session } = props;
-  const text = (message.images?.length ? message.displayText : undefined) ?? message.displayText ?? message.text ?? "";
+/** Reply text with each finished subagent card after the block it ended on; `base` blocks came before `text`. */
+function ReplyParts(props: { text: string; message: RemoteMessage; session: RemoteSessionSummary; settled: RemoteSubagent[]; base: number }): JSX.Element {
+  const { message, session, text } = props;
   const images = session.isLocalPrivate ? null : inlineImages(session.id, message.images);
   const part = (value: string, key: string) => {
     if (!value.trim()) return null;
@@ -296,7 +275,7 @@ function ReplyText(props: { message: RemoteMessage; session: RemoteSessionSummar
   if (!props.settled.length) return <>{part(text, "t")}</>;
   const groups = new Map<number, RemoteSubagent[]>();
   for (const agent of props.settled) {
-    const block = Math.max(0, agent.textBlock ?? 0);
+    const block = Math.max(0, (agent.textBlock ?? 0) - props.base);
     groups.set(block, [...(groups.get(block) ?? []), agent]);
   }
   const starts = replyBlockStarts(text);
@@ -310,6 +289,44 @@ function ReplyText(props: { message: RemoteMessage; session: RemoteSessionSummar
   }
   out.push(part(text.slice(from), "tail"));
   return <>{out}</>;
+}
+
+/** The folded notes above a reply's answer: Working and the latest note while it runs, "3 notes · 12 steps" when done. */
+function WorkNotes(props: { fold: WorkFold; children: ComponentChildren }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const { fold } = props;
+  const latest = fold.working ? latestNote(fold.notes) : "";
+  return (
+    <div class="reasoning work-notes">
+      <button type="button" class="reasoning-toggle" aria-expanded={expanded ? "true" : "false"}
+        title={expanded ? "Hides the progress notes" : "Shows the progress notes written while working"} onClick={() => setExpanded(!expanded)}>
+        <Icon name={expanded ? "chevron.down" : "chevron.right"} size={12} class="disclosure-chevron" />
+        {fold.working ? <Spinner size="small" /> : <Icon name="checkmark.circle" size={14} class="muted" />}
+        <strong>{fold.working ? "Working" : workSummary(fold.work)}</strong>
+        <span class="grow" />
+        {fold.working ? <span class="muted">{stepLabel(fold.work.steps)}</span> : null}
+      </button>
+      {fold.working && !expanded && latest ? <div class="reasoning-now" aria-label={`Now: ${latest}`}><Markdown text={latest} /></div> : null}
+      {expanded ? <div class="work-notes-body">{props.children}</div> : null}
+    </div>
+  );
+}
+
+function ReplyText(props: { message: RemoteMessage; session: RemoteSessionSummary; settled: RemoteSubagent[]; streaming: boolean }): JSX.Element {
+  const { message, session, settled } = props;
+  const text = (message.images?.length ? message.displayText : undefined) ?? message.displayText ?? message.text ?? "";
+  const fold = session.isLocalPrivate || message.isLocalPrivate ? null : workFold(text, message.work, props.streaming);
+  if (!fold) return <ReplyParts text={text} message={message} session={session} settled={settled} base={0} />;
+  return (
+    <>
+      <WorkNotes fold={fold}>
+        <ReplyParts text={fold.notes} message={message} session={session} base={0}
+          settled={settled.filter((agent) => (agent.textBlock ?? 0) <= fold.noteBlocks)} />
+      </WorkNotes>
+      <ReplyParts text={fold.answer} message={message} session={session} base={fold.noteBlocks}
+        settled={settled.filter((agent) => (agent.textBlock ?? 0) > fold.noteBlocks)} />
+    </>
+  );
 }
 
 // MARK: Handoffs
@@ -574,7 +591,7 @@ export function MessageRow(props: {
           {steps.length ? <ReasoningSteps steps={steps} streaming={props.streaming} /> : null}
           {apps.length ? <MCPAppStack sessionID={session.id} apps={apps} /> : null}
           {usesBrowser(message.activities) ? <BrowserCard live={props.streaming} /> : null}
-          {!isError ? <ReplyText message={message} session={session} settled={settled} /> : null}
+          {!isError ? <ReplyText message={message} session={session} settled={settled} streaming={props.streaming} /> : null}
           {isError ? null : Array.isArray(message.cards) && message.cards.length ? (
             <CardStack cards={message.cards} />
           ) : (

@@ -710,6 +710,18 @@ export interface RemoteCardDocument {
 }
 
 /** One transcript message (`RemoteHistory.message` + `messageSnapshot`). */
+/** Where a reply's progress notes end and its answer begins. Absent from older Macs and replies without notes. */
+export interface RemoteWork {
+  /** Leading reply blocks (blank-line separated, fences whole) that are notes. */
+  noteBlocks: number;
+  /** Runs of notes between tool calls. */
+  notes: number;
+  /** Tool calls the reply made. */
+  steps: number;
+  /** Whether any answer text follows the last tool call yet. */
+  hasAnswer: boolean;
+}
+
 export interface RemoteMessage {
   id: UUIDString;
   role: MessageRole;
@@ -734,6 +746,8 @@ export interface RemoteMessage {
   /** A child tab's card in its parent (role `assistant`; `text` is a plain fallback). */
   childResult?: RemoteChildResult;
   reasoning?: RemoteReasoningStep[];
+  /** Assistant replies: text before the last tool call is notes, folded above the answer. */
+  work?: RemoteWork;
   subagents?: RemoteSubagent[];
   apps?: MCPAppSummary[];
   /**

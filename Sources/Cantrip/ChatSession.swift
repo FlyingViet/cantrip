@@ -11,6 +11,11 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     }
     /// UTF-8 length of `text` when each subagent (by activity ID) finished; its card sits there.
     var subagentEnds: [String: Int] = [:]
+    /// UTF-8 length of `text` when each tool call started: text before the last one is progress
+    /// notes, text after it the answer (`workSplit`). Saved with the transcript.
+    var toolMarks: [Int] = []
+    /// A tool call started since the last text: the next text starts a new paragraph.
+    var breaksBeforeText = false
     /// Streamed reasoning (thinking deltas) — shown collapsed in the UI.
     var thinking: String = ""
     /// UTF-8 offsets in `thinking` where each reasoning block starts.
@@ -63,6 +68,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
         case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards, builds, privacy, muse, museRequest
+        case toolMarks
     }
 }
 
@@ -116,6 +122,39 @@ extension ChatMessage {
         return ReplyBlocks.block(atOffset: end, in: text)
     }
 
+    /// Where the reply's progress notes end and its answer begins, by markdown block
+    /// (`ReplyBlocks`): text written before its last tool call is notes, text after it the
+    /// answer. Nil when it has no notes (no tool call, or no text before one).
+    struct WorkSplit: Equatable {
+        /// Leading blocks that are notes; the answer is every block after them.
+        let noteBlocks: Int
+        /// Runs of notes between tool calls that have text.
+        let notes: Int
+        /// Tool calls the reply made.
+        let steps: Int
+        /// Whether any answer text follows the last tool call yet.
+        let hasAnswer: Bool
+
+        var snapshot: [String: Any] {
+            ["noteBlocks": noteBlocks, "notes": notes, "steps": steps, "hasAnswer": hasAnswer]
+        }
+    }
+
+    var workSplit: WorkSplit? {
+        guard role == .assistant, let last = toolMarks.last else { return nil }
+        let starts = ReplyBlocks.starts(in: text)
+        let noteBlocks = starts.filter { $0 < last }.count
+        guard noteBlocks > 0 else { return nil }
+        var notes = 0
+        var from = 0
+        for mark in toolMarks where mark > from {
+            if starts.contains(where: { $0 >= from && $0 < mark }) { notes += 1 }
+            from = mark
+        }
+        return WorkSplit(noteBlocks: noteBlocks, notes: notes, steps: toolMarks.count,
+                         hasAnswer: starts.count > noteBlocks)
+    }
+
     /// `thinking` split into its blocks (usually one per model call).
     var reasoningBlocks: [String] {
         let bytes = Array(thinking.utf8)
@@ -155,6 +194,7 @@ extension ChatMessage {
         cards = (try? container.decodeIfPresent([CardDocument].self, forKey: .cards)) ?? []
         muse = try? container.decodeIfPresent(MuseExchange.self, forKey: .muse)
         museRequest = try? container.decodeIfPresent(MuseRequestCard.self, forKey: .museRequest)
+        toolMarks = (try? container.decodeIfPresent([Int].self, forKey: .toolMarks)) ?? []
         // A saved build still running was cut off (Cantrip restarted): nothing will finish it.
         builds = ((try? container.decodeIfPresent([BuildRun].self, forKey: .builds)) ?? []).map { build in
             var build = build
@@ -201,6 +241,7 @@ extension ChatMessage {
         if !builds.isEmpty { try container.encode(builds, forKey: .builds) }
         try container.encodeIfPresent(muse, forKey: .muse)
         try container.encodeIfPresent(museRequest, forKey: .museRequest)
+        if !toolMarks.isEmpty { try container.encode(toolMarks, forKey: .toolMarks) }
     }
 }
 
@@ -3758,9 +3799,17 @@ final class ChatSession: ObservableObject {
         switch event {
         case .inputRequired(let request):
             receiveInput(request)
-        case .textDelta(let delta):
+        case .textDelta(var delta):
             Log.write("ui: textDelta(\(delta.count) chars)")
             if let idx = messages.lastIndex(where: { $0.role == .assistant }) {
+                // Text after a tool call starts its own paragraph, so notes and the answer
+                // never share one (`workSplit` splits at paragraphs).
+                if messages[idx].breaksBeforeText, !delta.isEmpty {
+                    messages[idx].breaksBeforeText = false
+                    let text = messages[idx].text
+                    let newlines = text.reversed().prefix { $0 == "\n" }.count + delta.prefix { $0 == "\n" }.count
+                    if !text.isEmpty, newlines < 2 { delta = String(repeating: "\n", count: 2 - newlines) + delta }
+                }
                 messages[idx].text += delta
                 recordOutput(
                     delta,
@@ -5266,6 +5315,11 @@ final class ChatSession: ObservableObject {
             messages[messageIndex].activities[activityIndex] = activity
         } else {
             messages[messageIndex].activities.append(activity)
+            // Text so far is progress notes once a tool call follows it.
+            if messages[messageIndex].role == .assistant {
+                messages[messageIndex].toolMarks.append(messages[messageIndex].text.utf8.count)
+                messages[messageIndex].breaksBeforeText = true
+            }
         }
         attachApp(from: activity, toMessageAt: messageIndex)
     }

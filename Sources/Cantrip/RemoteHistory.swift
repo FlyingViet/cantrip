@@ -37,6 +37,8 @@ enum RemoteHistory {
             result["delegations"] = message.delegations.map(\.snapshot)
         }
         if let handoff = message.handoffResult { result["handoffResult"] = handoff.snapshot }
+        // Progress notes vs. the answer: clients fold the first `noteBlocks` markdown blocks.
+        if let work = message.workSplit { result["work"] = work.snapshot }
         if let child = message.childResult { result["childResult"] = child.snapshot }
         if let muse = message.muse {
             // `@muse` exchange: role handoff, author Muse; `text` is what to show.

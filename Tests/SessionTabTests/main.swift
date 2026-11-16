@@ -130,6 +130,11 @@ struct SessionTabTests {
             try await testTabInsight()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "work" {
+            try testSubagentPlacement()
+            try await testReplyWorkSplit()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "muse" {
             try await testMuse()
             return
@@ -355,6 +360,7 @@ struct SessionTabTests {
         try await testThreadTags()
         try testCantripHomeRunSummaries()
         try testSubagentPlacement()
+        try await testReplyWorkSplit()
         try await testSubagentMonitor()
         try await testBackgroundWatcherContinuation()
         try await testBackgroundRuntimeWake()

@@ -3125,6 +3125,7 @@ struct LauncherView: View {
                     if let parentID = manager.parentID(ofChild: session.id), let record = childTabStore.record(session.id) {
                         ChildTabBanner(record: record) { manager.select(parentID) }
                     }
+                    let liveReplyID = session.isStreaming ? transcriptMessages.last { $0.role == .assistant }?.id : nil
                     ForEach(transcriptMessages) { message in
                         MessageRow(message: message, localOnly: session.isLocalPrivate,
                                    appActions: settings.copilotMCPApps ? mcpAppActions : nil,
@@ -3139,7 +3140,8 @@ struct LauncherView: View {
                                    childAction: { action, child in runChildAction(action, child) },
                                    childTabOpen: message.childResult.map { child in
                                        manager.sessions.contains { $0.id == child.id }
-                                   } ?? false)
+                                   } ?? false,
+                                   streaming: message.id == liveReplyID)
                             .modifier(DeleteMessageAction(isAvailable: MessageDeletionRequest.offers(message, in: session)) {
                                 deletingMessage = MessageDeletionRequest(session: session, messageID: message.id)
                             })
@@ -3576,6 +3578,8 @@ struct MessageRow: View {
     /// A child tab card's buttons (`ChildTab.actions`).
     var childAction: ((String, ChildTab) -> Void)?
     var childTabOpen = false
+    /// This is the reply the tab is still writing.
+    var streaming = false
 
     private var visibleApps: [MCPAppPayload] { appActions == nil ? [] : message.apps }
     /// Finished subagents grouped by the reply block they follow; running ones are pinned below the transcript.
@@ -3585,6 +3589,29 @@ struct MessageRow: View {
         return Dictionary(grouping: finished) { message.subagentTextBlock($0.id) }
             .sorted { $0.key < $1.key }
             .map { (block: $0.key, agents: $0.value) }
+    }
+
+    /// Reply text with each finished subagent's strip where the reply had got to when it ended.
+    private func replyParts(_ text: String, placed: [(block: Int, agents: [ToolActivity])],
+                            size: CantripRichText.Size = .body) -> some View {
+        let parts = ReplyBlocks.split(text, before: placed.map(\.block))
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
+                if index > 0, let openSubagents {
+                    let agents = placed[index - 1].agents
+                    SubagentStrip(activities: agents, open: {
+                        openSubagents(agents.contains { $0.subagent?.background == true })
+                    })
+                }
+                if !part.isEmpty {
+                    if localOnly {
+                        Text(verbatim: part).textSelection(.enabled)
+                    } else {
+                        MarkdownContent(text: part, size: size, secondary: size == .small)
+                    }
+                }
+            }
+        }
     }
 
     var body: some View {
@@ -3612,7 +3639,7 @@ struct MessageRow: View {
                 && visibleApps.isEmpty && placed.isEmpty && cards.isEmpty {
                 EmptyView()
             } else {
-                let parts = ReplyBlocks.split(message.text, before: placed.map(\.block))
+                let fold = localOnly ? nil : WorkFold(message: message, streaming: streaming)
                 VStack(alignment: .leading, spacing: 6) {
                     if let author = message.author {
                         Label(author, systemImage: author.hasPrefix("Verdict")
@@ -3628,22 +3655,16 @@ struct MessageRow: View {
                     ForEach(visibleApps) { app in
                         MCPAppInlineView(app: app, actions: appActions)
                     }
-                    // Each finished subagent's strip sits where the reply had got to when it ended.
-                    ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
-                        if index > 0, let openSubagents {
-                            let agents = placed[index - 1].agents
-                            SubagentStrip(activities: agents, open: {
-                                openSubagents(agents.contains { $0.subagent?.background == true })
-                            })
+                    if let fold {
+                        // Notes written between tool calls fold above the answer.
+                        WorkNotesDisclosure(fold: fold) {
+                            replyParts(fold.notes, placed: placed.filter { $0.block <= fold.noteBlocks },
+                                       size: .small)
                         }
-                        if !part.isEmpty {
-                            if localOnly {
-                                Text(verbatim: part).textSelection(.enabled)
-                            } else {
-                                MarkdownContent(text: part)
-                                    .textSelection(.enabled)
-                            }
-                        }
+                        replyParts(fold.answer, placed: placed.filter { $0.block > fold.noteBlocks }
+                            .map { (block: $0.block - fold.noteBlocks, agents: $0.agents) })
+                    } else {
+                        replyParts(message.text, placed: placed)
                     }
                     if !cards.isEmpty {
                         CardDocumentStack(cards: cards, links: showsLinks ? message.visibleLinkPreviews : [])
@@ -3735,6 +3756,89 @@ struct MessageRow: View {
 
 /// Streamed extended-thinking text, collapsed by default so long silent
 /// stretches are legible without crowding the answer.
+/// A reply cut into the notes it wrote between tool calls and the answer after its last one
+/// (`ChatMessage.workSplit`). Nil when there's nothing to fold, or when a finished run wrote
+/// nothing after its notes (then the notes are all there is).
+struct WorkFold {
+    let notes: String
+    let answer: String
+    let noteBlocks: Int
+    let split: ChatMessage.WorkSplit
+    let working: Bool
+
+    init?(message: ChatMessage, streaming: Bool) {
+        guard let split = message.workSplit, streaming || split.hasAnswer else { return nil }
+        let parts = ReplyBlocks.split(message.text, before: [split.noteBlocks])
+        guard parts.count == 2, !parts[0].isEmpty else { return nil }
+        notes = parts[0]
+        answer = parts[1]
+        noteBlocks = split.noteBlocks
+        self.split = split
+        working = streaming
+    }
+
+    /// "3 notes · 12 steps".
+    var summary: String {
+        let notes = max(1, split.notes)
+        return "\(notes) \(notes == 1 ? "note" : "notes") · \(split.steps) \(split.steps == 1 ? "step" : "steps")"
+    }
+
+    /// The newest note, for the row while the reply runs.
+    var latestNote: String {
+        let blocks = ReplyBlocks.starts(in: notes).count
+        return (ReplyBlocks.split(notes, before: [max(0, blocks - 1)]).last ?? notes)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// The folded notes above a reply's answer: "Working" and the latest note while it runs,
+/// "3 notes · 12 steps" when done.
+private struct WorkNotesDisclosure<Content: View>: View {
+    let fold: WorkFold
+    @ViewBuilder let content: () -> Content
+    @State private var isExpanded = false
+    @Environment(\.workNotesExpanded) private var startsExpanded
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            content()
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    Capsule().fill(.quaternary).frame(width: 2)
+                }
+                .padding(.top, 4)
+                .padding(.bottom, 2)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    if fold.working {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "checklist")
+                    }
+                    Text(fold.working ? "Working · \(fold.split.steps) \(fold.split.steps == 1 ? "step" : "steps")"
+                         : fold.summary)
+                }
+                .foregroundStyle(.secondary)
+                if fold.working, !isExpanded, !fold.latestNote.isEmpty {
+                    Text(MarkdownContent.inlineNote(fold.latestNote))
+                        .lineLimit(2)
+                        .foregroundStyle(.primary)
+                }
+            }
+            .font(.caption)
+            .accessibilityElement(children: .combine)
+        }
+        .accessibilityHint(isExpanded ? "Hides the progress notes" : "Shows the progress notes written while working")
+        .onAppear { if startsExpanded { isExpanded = true } }
+    }
+}
+
+extension EnvironmentValues {
+    /// Opens every progress-notes row as it appears (screenshot renders).
+    @Entry var workNotesExpanded = false
+}
+
 private struct ThinkingDisclosure: View {
     let text: String
     @State private var isExpanded = false

@@ -1980,6 +1980,25 @@ only a bold heading, as in GPT reasoning summaries, also starts a step. Other
 steps are titled by their first sentence. Each subagent's `reasoning` holds its
 last 8 steps. Cantrip Agent shows these steps instead of tool calls.
 
+## Progress notes and the answer
+
+Text a reply writes before its last tool call is progress notes ("Checking the
+log first."); the text after it is the answer. Cantrip records where each tool
+call started and starts the text after a tool call on a new paragraph, so the
+split always falls between markdown blocks. Assistant messages with notes
+include `work`: `noteBlocks` (how many leading blocks are notes, counted the way
+subagent `textBlock` counts them), `notes` (runs of notes between tool calls),
+`steps` (tool calls) and `hasAnswer` (whether any text follows the last tool
+call yet). Every client folds the notes into one row above the answer: while
+the reply runs it reads **Working** with the latest note; when it finishes it
+reads **3 notes · 12 steps**, and tapping or clicking it shows the notes in
+smaller, dimmer text. A finished reply with no text after its notes shows them
+in full. Replies saved before this, and Private Local replies, show as before.
+
+Reply text selects like a document on every client: a selection can run across
+paragraphs, list items, headings and tables, and copies as plain lines (tables
+as tab-separated columns). Code blocks and images keep their own boxes.
+
 ## Web link previews and inline place cards
 
 When an assistant reply contains public HTTP/HTTPS links outside code blocks,

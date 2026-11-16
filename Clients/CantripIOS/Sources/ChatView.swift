@@ -3953,6 +3953,9 @@ struct TurnView: View, Equatable {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
+                let fold = turn.isLocalPrivate == true ? nil
+                    : CantripWorkFold.make(text: turn.text, work: remoteMessage?.work, streaming: turn.streaming)
+                let placed = CantripReplyBlocks.placed(cantripSubagents)
                 if !cantripReasoning.isEmpty {
                     CantripReasoningSteps(steps: cantripReasoning, streaming: turn.streaming)
                 } else if turn.executionLane?.usesCantripRemote != true, hasIntermediateSteps {
@@ -3969,21 +3972,15 @@ struct TurnView: View, Equatable {
                 if remoteMessage?.activities.contains(where: { $0.browser == true }) == true {
                     CantripBrowserPreviewCard(remote: remote, live: turn.streaming)
                 }
-                // Each finished subagent's card sits where the reply had got to when it ended.
-                let placed = CantripReplyBlocks.placed(cantripSubagents)
-                let parts = CantripReplyBlocks.split(turn.text, before: placed.map(\.block))
-                ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
-                    if index > 0 {
-                        CantripSubagentStack(remote: remote, sessionID: cantripSessionID,
-                                             subagents: placed[index - 1].subagents)
+                if let fold {
+                    // Notes written between tool calls fold above the answer.
+                    let split = fold.place(placed)
+                    CantripWorkNotes(fold: fold) {
+                        replyParts(fold.notes, placed: split.notes, size: .small)
                     }
-                    if !part.isEmpty {
-                        if turn.isLocalPrivate == true {
-                            Text(verbatim: part).textSelection(.enabled)
-                        } else {
-                            ChatAssistantText(text: part, images: turn.images ?? [], remote: remote)
-                        }
-                    }
+                    replyParts(fold.answer, placed: split.answer)
+                } else {
+                    replyParts(turn.text, placed: placed)
                 }
                 let cards = CantripCard.forReply(cards: remoteMessage?.cards ?? turn.cards,
                                                  weather: remoteMessage?.weatherCard ?? turn.weatherCard,
@@ -4053,6 +4050,29 @@ struct TurnView: View, Equatable {
             .frame(maxWidth: .infinity, alignment: .leading)
             // Errors only: replies keep native text selection (Look Up, Translate, partial copy).
             .modifier(messageMenu())
+        }
+    }
+
+    /// Reply text with each finished subagent's card where the reply had got to when it ended.
+    @ViewBuilder
+    private func replyParts(_ text: String, placed: [(block: Int, subagents: [CantripRemoteSubagent])],
+                            size: CantripRichText.Size = .body) -> some View {
+        let parts = CantripReplyBlocks.split(text, before: placed.map(\.block))
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
+                if index > 0 {
+                    CantripSubagentStack(remote: remote, sessionID: cantripSessionID,
+                                         subagents: placed[index - 1].subagents)
+                }
+                if !part.isEmpty {
+                    if turn.isLocalPrivate == true {
+                        Text(verbatim: part).textSelection(.enabled)
+                    } else {
+                        ChatAssistantText(text: part, images: turn.images ?? [], remote: remote,
+                                          size: size, secondary: size == .small)
+                    }
+                }
+            }
         }
     }
 

@@ -6,10 +6,11 @@ enum ReplyVisibility {
     static let guidance = """
     Cantrip's apps show your reasoning only as a collapsed "Reasoning" row that the user \
     doesn't read. Anything meant for the user (explanations, findings, comparisons) must be \
-    visible reply text. Text you write just before a tool call reaches the user only as a short \
-    summary once it runs past a sentence or two, so keep notes before a tool call to one or two \
-    short sentences, and give full explanations in the reply that ends your turn (the one with no \
-    tool call). When you ask the user to choose (ask_user), put everything they need to decide \
+    visible reply text. Text you write before a tool call is a progress note: it reaches the user \
+    only as a short summary once it runs past a sentence or two, and when your turn ends the apps \
+    fold every note into one collapsed row above the answer. So keep each note to one or two short \
+    sentences, and give the full answer after your last tool call, in the reply that ends your \
+    turn; anything written before a later tool call is folded away with the notes. When you ask the user to choose (ask_user), put everything they need to decide \
     inside the question itself: the key findings, what each choice means and which you \
     recommend, in plain text before the actual question (short paragraphs or "- " lists; the \
     question isn't rendered as Markdown, so no bold or headings). The question is the only part \

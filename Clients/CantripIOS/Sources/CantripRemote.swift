@@ -660,6 +660,8 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     /// A Muse request Home wrote (role `handoff`), sent only when the user taps Send. Absent from
     /// older Macs, which show `text` instead.
     var museRequest: CantripRemoteMuseRequest? = nil
+    /// Where the reply's progress notes end and its answer begins. Absent from older Macs.
+    var work: CantripRemoteWork? = nil
 
     var presentedText: String { displayText ?? text }
     /// Result cards Cantrip posts into Home's chat; never a model reply.
