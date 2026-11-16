@@ -88,6 +88,55 @@ final class WorkNotesMacRenderTests: XCTestCase {
         XCTAssertGreaterThan(reply.frame.height, 80)
     }
 
+    /// Sizing like `Text`: no room at the minimum, the unwrapped text as the ideal, wrapped to a
+    /// width otherwise; measured without touching the view.
+    func testSelectableTextSizesLikeText() {
+        let text = CantripRichText.attributed("A long paragraph that wraps when it's narrow.\n\n- one\n- two",
+                                              style: CantripRichText.Style(size: 13))
+        var cache: [CGFloat: CGSize] = [:]
+        let measure = { (width: CGFloat?) in CantripRichText.measure(text, width: width) }
+        XCTAssertEqual(CantripRichText.fit(ProposedViewSize(width: 0, height: nil), cache: &cache, measure: measure), .zero)
+        let ideal = CantripRichText.fit(.unspecified, cache: &cache, measure: measure)
+        XCTAssertEqual(CantripRichText.fit(.infinity, cache: &cache, measure: measure), ideal)
+        XCTAssertGreaterThan(ideal.width, 150)
+        XCTAssertLessThan(ideal.width, 600)
+        let narrow = CantripRichText.fit(ProposedViewSize(width: 120, height: nil), cache: &cache, measure: measure)
+        XCTAssertEqual(narrow.width, 120)
+        XCTAssertGreaterThan(narrow.height, ideal.height, "Narrow text wraps onto more lines")
+    }
+
+    /// A reply in a split view's detail column, as Gateway Mac and the Home window lay it out: the
+    /// split view asks each column for its minimum width, and a reply that answered that with its
+    /// full text width sent AppKit into an update-constraints loop that aborted the app at launch.
+    func testReplyInSplitViewDetailLaysOutWithoutConstraintLoop() async throws {
+        let (model, vm) = try await transcript()
+        let view = NavigationSplitView {
+            List { Text("Tabs") }
+                .navigationSplitViewColumnWidth(min: 220, ideal: 248, max: 320)
+        } detail: {
+            ScrollView { rows(model, vm) }
+        }
+        .frame(minWidth: 700, minHeight: 500)
+        let host = NSHostingView(rootView: view)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 900, height: 600),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        window.orderFront(nil)
+        for width in [900.0, 760, 1200, 900] {
+            window.setContentSize(CGSize(width: width, height: 600))
+            try await Task.sleep(for: .milliseconds(150))
+            window.layoutIfNeeded()
+            window.displayIfNeeded()
+        }
+        let reply = try XCTUnwrap(textViews(in: host).first { $0.string.hasPrefix("The build passed") })
+        XCTAssertLessThan(reply.frame.width, 1200, "The reply takes its column's width, not its text's")
+        XCTAssertGreaterThan(reply.frame.width, 200)
+        let minimum = host.fittingSize
+        XCTAssertLessThan(minimum.width, 1000, "A reply doesn't raise the window's minimum width: \(minimum)")
+    }
+
     /// Renders for review. Set TEST_RUNNER_WORK_NOTES_ARTIFACT_DIR (pass TEST_RUNNER_TEST_RUNNER_… to xcodebuild).
     func testWorkNotesMacScreenshots() async throws {
         let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_WORK_NOTES_ARTIFACT_DIR"]

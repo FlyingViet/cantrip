@@ -405,6 +405,43 @@ enum CantripRichText {
     #endif
 }
 
+// MARK: - Sizing
+
+extension CantripRichText {
+    /// A text view's size for a SwiftUI proposal, like `Text`: a zero width (the minimum) takes
+    /// no room, no width or an unlimited one (the ideal) is the unwrapped text, and a width wraps
+    /// the text to it. `measure` lays the text out at a width (nil = unwrapped); sizes are cached
+    /// by width until the text changes.
+    static func fit(_ proposal: ProposedViewSize, cache: inout [CGFloat: CGSize],
+                    measure: (CGFloat?) -> CGSize) -> CGSize {
+        guard let proposed = proposal.width else { return cached(-1, &cache) { measure(nil) } }
+        if proposed <= 0 { return .zero }
+        if !proposed.isFinite { return cached(-1, &cache) { measure(nil) } }
+        return cached(proposed, &cache) { CGSize(width: proposed, height: measure(proposed).height) }
+    }
+
+    private static func cached(_ key: CGFloat, _ cache: inout [CGFloat: CGSize], _ make: () -> CGSize) -> CGSize {
+        if let size = cache[key] { return size }
+        let size = make()
+        cache[key] = size
+        return size
+    }
+
+    /// `text` laid out at `width` (nil = unwrapped) by a private TextKit stack, with the same
+    /// zero line padding as the views.
+    static func measure(_ text: NSAttributedString, width: CGFloat?) -> CGSize {
+        let storage = NSTextStorage(attributedString: text)
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: width ?? 100_000, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        let used = layout.usedRect(for: container)
+        return CGSize(width: ceil(used.width), height: ceil(used.height))
+    }
+}
+
 // MARK: - Views
 
 /// Prose markdown (no code fences or image lines; see `CantripRichText.segments`) as one
@@ -490,7 +527,8 @@ struct CantripSelectableText: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.onOpenURL = onOpenURL
-        if context.coordinator.text !== text {
+        // Same text (often a new copy of it): leave the view alone, so layout doesn't restart.
+        if context.coordinator.text?.isEqual(to: text) != true {
             context.coordinator.text = text
             context.coordinator.sizes = [:]
             view.attributedText = text
@@ -498,12 +536,10 @@ struct CantripSelectableText: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
-        let width = proposal.width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 10_000
-        if let size = context.coordinator.sizes[width] { return size }
-        let fitted = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
-        let size = CGSize(width: proposal.width == nil ? ceil(fitted.width) : width, height: ceil(fitted.height))
-        context.coordinator.sizes[width] = size
-        return size
+        CantripRichText.fit(proposal, cache: &context.coordinator.sizes) { width in
+            let fitted = uiView.sizeThatFits(CGSize(width: width ?? 100_000, height: .greatestFiniteMagnitude))
+            return CGSize(width: ceil(fitted.width), height: ceil(fitted.height))
+        }
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
@@ -554,7 +590,8 @@ struct CantripSelectableText: NSViewRepresentable {
 
     func updateNSView(_ view: NSTextView, context: Context) {
         context.coordinator.onOpenURL = onOpenURL
-        if context.coordinator.text !== text {
+        // Same text (often a new copy of it): leave the view alone, so layout doesn't restart.
+        if context.coordinator.text?.isEqual(to: text) != true {
             context.coordinator.text = text
             context.coordinator.sizes = [:]
             view.textStorage?.setAttributedString(text)
@@ -562,17 +599,11 @@ struct CantripSelectableText: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextView, context: Context) -> CGSize? {
-        let width = proposal.width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 10_000
-        if let size = context.coordinator.sizes[width] { return size }
-        guard let container = nsView.textContainer, let layout = nsView.layoutManager else { return nil }
-        let previous = container.size
-        container.size = NSSize(width: width, height: .greatestFiniteMagnitude)
-        layout.ensureLayout(for: container)
-        let used = layout.usedRect(for: container)
-        container.size = previous
-        let size = CGSize(width: proposal.width == nil ? ceil(used.width) : width, height: ceil(used.height))
-        context.coordinator.sizes[width] = size
-        return size
+        // Measured off-screen: resizing the view's own container here, inside AppKit's
+        // constraints pass, can send a split view into a layout loop.
+        CantripRichText.fit(proposal, cache: &context.coordinator.sizes) { width in
+            CantripRichText.measure(text, width: width)
+        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
