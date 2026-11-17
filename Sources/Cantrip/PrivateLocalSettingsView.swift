@@ -112,7 +112,8 @@ struct PrivateLocalSettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(toolServers, id: \.name) { server in
                             VStack(alignment: .leading, spacing: 2) {
-                                Toggle(server.name, isOn: serverBinding(server.name))
+                                Toggle(server.name, isOn: server.blocked || server.tools.isEmpty
+                                       ? .constant(false) : serverBinding(server.name))
                                     .disabled(server.blocked || server.tools.isEmpty)
                                 Text(server.detail).font(.caption).foregroundStyle(server.problem == nil ? Color.secondary : Color.orange)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -156,7 +157,7 @@ extension PrivateLocalToolServer {
     var detail: String {
         if let problem { return problem }
         if tools.isEmpty { return "No read-only tools." }
-        return "\(tools.count) read-only tools, \(onDemand ? "loaded when needed" : "always offered") (about \(tokens) tokens)"
+        return "\(tools.count) read-only tool\(tools.count == 1 ? "" : "s"), \(onDemand ? "loaded when needed" : "always offered") (about \(tokens) tokens)"
             + (excluded.isEmpty ? "" : ", \(excluded.count) left out")
             + (service.map { ". Sends queries to \($0)." } ?? ". Runs on this Mac and may reach its own service.")
     }

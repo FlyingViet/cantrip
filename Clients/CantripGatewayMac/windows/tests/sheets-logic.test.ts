@@ -139,7 +139,7 @@ describe("model settings", () => {
       { name: "passwords", tools: [], excluded: [], onDemand: false, tokens: 0, problem: "Never available in Private Local.", blocked: true },
     ];
     expect(privateToolDetail(servers[0])).toBe("2 read-only tools, always offered (about 900 tokens), 1 left out. Runs on the Mac and may reach its own service.");
-    expect(privateToolDetail(servers[1])).toContain("loaded when needed");
+    expect(privateToolDetail(servers[1])).toContain("1 read-only tool, loaded when needed");
     expect(privateToolDetail(servers[1])).toContain("Sends queries to tracker.example.com.");
     expect(privateToolDetail(servers[2])).toBe("Never available in Private Local.");
     expect(privateToolsUse({ enabled: true }, "tracker")).toBe(true);

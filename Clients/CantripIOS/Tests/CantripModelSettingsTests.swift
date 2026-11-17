@@ -1067,7 +1067,8 @@ final class CantripModelSettingsTests: XCTestCase {
         let servers = try JSONDecoder().decode(Response.self, from: listed).servers
         XCTAssertEqual(servers.map(\.usable), [true, true, false])
         XCTAssertTrue(servers[0].detail.hasPrefix("2 read-only tools, always offered") && servers[0].detail.contains("1 left out"))
-        XCTAssertTrue(servers[1].detail.contains("loaded when needed") && servers[1].detail.contains("Sends queries to tracker.example.com"))
+        XCTAssertTrue(servers[1].detail.hasPrefix("1 read-only tool, loaded when needed")
+                      && servers[1].detail.contains("Sends queries to tracker.example.com"))
         XCTAssertEqual(servers[2].detail, "Never available in Private Local.")
         XCTAssertTrue(CantripPrivateLocalToolServer.footer.contains("never to a cloud model"))
     }

@@ -267,7 +267,7 @@ export const PRIVATE_TOOLS_FOOTER = "Private Local can look things up with the r
 export function privateToolDetail(server: PrivateLocalToolServer): string {
   if (server.problem) return server.problem;
   if (!server.tools.length) return "No read-only tools.";
-  return `${server.tools.length} read-only tools, ${server.onDemand ? "loaded when needed" : "always offered"} (about ${server.tokens} tokens)`
+  return `${server.tools.length} read-only tool${server.tools.length === 1 ? "" : "s"}, ${server.onDemand ? "loaded when needed" : "always offered"} (about ${server.tokens} tokens)`
     + (server.excluded.length ? `, ${server.excluded.length} left out` : "")
     + (server.service ? `. Sends queries to ${server.service}.` : ". Runs on the Mac and may reach its own service.");
 }

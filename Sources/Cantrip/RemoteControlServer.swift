@@ -4639,7 +4639,7 @@ private extension RemoteControlServer {
       finally{if(privateEditorState===state)privateBusy(false)}}
     $("privateReload").onclick=loadPrivateSettings;
     function privateToolDetail(s){if(s.problem)return s.problem;if(!s.tools.length)return "No read-only tools.";
-      return `${s.tools.length} read-only tools, ${s.onDemand?"loaded when needed":"always offered"} (about ${s.tokens} tokens)${s.excluded.length?`, ${s.excluded.length} left out`:""}${s.service?`. Sends queries to ${s.service}.`:". Runs on the Mac and may reach its own service."}`}
+      return `${s.tools.length} read-only tool${s.tools.length===1?"":"s"}, ${s.onDemand?"loaded when needed":"always offered"} (about ${s.tokens} tokens)${s.excluded.length?`, ${s.excluded.length} left out`:""}${s.service?`. Sends queries to ${s.service}.`:". Runs on the Mac and may reach its own service."}`}
     async function loadPrivateTools(refresh){const state=privateEditorState;if(!state)return;const box=$("privateToolServers");box.textContent="Listing tools…";
       try{const data=await api(`/api/v1/sessions/${state.id}/private-tools${refresh?"?refresh=1":""}`);if(privateEditorState!==state)return;state.toolServers=data.servers;box.replaceChildren();
         for(const s of data.servers){const row=document.createElement("div");const label=document.createElement("label");label.className="private-check";const box2=document.createElement("input");box2.type="checkbox";box2.dataset.server=s.name;
