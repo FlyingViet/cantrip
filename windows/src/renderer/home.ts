@@ -21,6 +21,9 @@ import {
   recordTitle,
   statusLabel,
   statusTone,
+  latestNote,
+  workFold,
+  workLabel,
 } from "../shared/home";
 import type {
   HomeBackgroundRun,
@@ -33,6 +36,7 @@ import type {
   HomeTask,
   HomeTaskRecord,
   HomeTasksSnapshot,
+  WorkFold,
 } from "../shared/home";
 import type { CardDocument } from "../shared/cards";
 
@@ -160,8 +164,8 @@ function note(text: string, className = "view-note"): HTMLElement {
   return el("p", className, text);
 }
 
-function markdown(text: string): HTMLElement {
-  const body = el("div", "message-body markdown");
+function markdown(text: string, className = "message-body markdown"): HTMLElement {
+  const body = el("div", className);
   const html = marked.parse(text, { async: false, breaks: true, gfm: true }) as string;
   body.innerHTML = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
   return body;
@@ -169,7 +173,20 @@ function markdown(text: string): HTMLElement {
 
 // MARK: - Conversation (Home and the Full Log)
 
-function messageItem(message: HomeMessage): HTMLElement | null {
+/** Notes the reply wrote between tool calls, folded into one row above its answer. */
+function workNotes(fold: WorkFold): HTMLElement {
+  const details = el("details", "work-notes");
+  const summary = el("summary", "work-notes-label", workLabel(fold));
+  details.append(summary);
+  if (fold.working) {
+    const latest = latestNote(fold.notes);
+    if (latest) summary.append(el("span", "work-notes-latest", latest.replace(/\*\*|__|`/g, "")));
+  }
+  details.append(markdown(fold.notes, "message-body markdown work-notes-body"));
+  return details;
+}
+
+function messageItem(message: HomeMessage, live: boolean): HTMLElement | null {
   const item = el("li", `message role-${message.role}`);
   if (message.role === "freshStart") {
     item.append(el("p", "message-divider", "Started fresh"));
@@ -189,7 +206,13 @@ function messageItem(message: HomeMessage): HTMLElement | null {
     if (result.detail) body.append(el("p", undefined, result.detail));
     item.append(body);
   } else if (message.role === "assistant" && text) {
-    item.append(markdown(text));
+    const fold = workFold(text, message.work, live);
+    if (fold) {
+      item.append(workNotes(fold));
+      if (fold.answer) item.append(markdown(fold.answer));
+    } else {
+      item.append(markdown(text));
+    }
   } else if (text) {
     item.append(el("div", "message-body plain", text));
   }
@@ -206,8 +229,10 @@ function conversation(session: HomeSession | null, empty: string): HTMLElement {
   }
   if (session.hasOlderMessages) wrap.append(note("Older messages stay on the Mac.", "view-note small"));
   const list = el("ol", "messages");
-  for (const message of Array.isArray(session.messages) ? session.messages : []) {
-    const item = messageItem(message);
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const liveID = session.isStreaming ? [...messages].reverse().find((m) => m.role === "assistant")?.id : undefined;
+  for (const message of messages) {
+    const item = messageItem(message, message.id === liveID);
     if (item) list.append(item);
   }
   if (!list.childElementCount) wrap.append(note(empty));

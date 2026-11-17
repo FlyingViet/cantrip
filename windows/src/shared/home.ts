@@ -48,11 +48,26 @@ export interface HomeMessage {
   handoffResult?: { tabTitle: string; summary: string; state: string; detail: string; kind?: string };
   /** Every card under the reply, resolved on the Mac. */
   cards?: CardDocument[];
+  /** Assistant replies with progress notes: the first `noteBlocks` markdown blocks are notes. */
+  work?: HomeWork;
+}
+
+/** Where a reply's progress notes end and its answer begins (Mac v1.1.18-125 and newer). */
+export interface HomeWork {
+  noteBlocks: number;
+  /** Runs of notes between tool calls. */
+  notes: number;
+  /** Tool calls the reply made. */
+  steps: number;
+  /** Whether any answer text follows the notes yet. */
+  hasAnswer: boolean;
 }
 
 export interface HomeSession {
   id: string;
   title?: string;
+  /** The reply at the end is still being written. */
+  isStreaming?: boolean;
   messages: HomeMessage[];
   hasOlderMessages?: boolean;
 }
@@ -210,6 +225,66 @@ export const UUID_PATTERN = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A
 
 /** Seconds between 1970-01-01 and 2001-01-01, the epoch of the Mac's encoded dates. */
 const APPLE_EPOCH = 978_307_200;
+
+// MARK: - Progress notes
+
+/** Where each reply block starts: blank-line separated, code fences kept whole (the Mac splits the same way). */
+export function replyBlockStarts(text: string): number[] {
+  const starts: number[] = [];
+  let offset = 0;
+  let fence = "";
+  let afterBlank = true;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (fence) {
+      if (trimmed.startsWith(fence)) fence = "";
+      afterBlank = false;
+    } else if (!trimmed) afterBlank = true;
+    else {
+      if (afterBlank) starts.push(offset);
+      afterBlank = false;
+      if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) fence = trimmed.slice(0, 3);
+    }
+    offset += line.length + 1;
+  }
+  return starts;
+}
+
+export interface WorkFold {
+  notes: string;
+  answer: string;
+  work: HomeWork;
+  /** Still being written: the row reads Working with the latest note. */
+  working: boolean;
+}
+
+/**
+ * A reply cut into the notes folded above it and its answer, or null when there's nothing to fold
+ * (no split from the Mac, or a finished reply with no answer after its notes, which then show in full).
+ */
+export function workFold(text: string, work: HomeWork | undefined, streaming: boolean): WorkFold | null {
+  if (!work || !(work.noteBlocks > 0) || !(streaming || work.hasAnswer)) return null;
+  const starts = replyBlockStarts(text);
+  const cut = work.noteBlocks < starts.length ? starts[work.noteBlocks] : text.length;
+  const notes = text.slice(0, cut).replace(/\s+$/, "");
+  const answer = text.slice(cut).trim();
+  if (!notes || (!streaming && !answer)) return null;
+  return { notes, answer, work, working: streaming };
+}
+
+/** "3 notes · 12 steps", or "Working · 3 steps" while the reply runs. */
+export function workLabel(fold: WorkFold): string {
+  const steps = `${fold.work.steps} ${fold.work.steps === 1 ? "step" : "steps"}`;
+  if (fold.working) return `Working · ${steps}`;
+  const notes = Math.max(1, fold.work.notes);
+  return `${notes} ${notes === 1 ? "note" : "notes"} · ${steps}`;
+}
+
+/** The newest note, shown under Working while the reply runs. */
+export function latestNote(notes: string): string {
+  const starts = replyBlockStarts(notes);
+  return notes.slice(starts[starts.length - 1] ?? 0).trim();
+}
 
 export function appleDate(seconds: unknown): Date | null {
   return typeof seconds === "number" && Number.isFinite(seconds) ? new Date((seconds + APPLE_EPOCH) * 1000) : null;

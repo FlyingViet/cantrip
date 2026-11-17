@@ -493,6 +493,39 @@ code {
   font-weight: 600;
 }
 
+.work-notes {
+  margin: 0 0 8px;
+}
+
+.work-notes-label {
+  color: #a1a1a6;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.work-notes-latest {
+  margin: 3px 0 0 14px;
+  color: #e6e6e9;
+  font-weight: 400;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.work-notes[open] .work-notes-latest {
+  display: none;
+}
+
+.work-notes-body {
+  margin: 6px 0 2px 4px;
+  padding-left: 12px;
+  border-left: 2px solid #3a3a3e;
+  color: #a1a1a6;
+  font-size: 13px;
+}
+
 .markdown > :first-child {
   margin-top: 0;
 }
