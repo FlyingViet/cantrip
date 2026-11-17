@@ -39,7 +39,7 @@ private final class PrivateHTTPSFixture: URLProtocol {
     }
 }
 
-private final class PrivateOllamaFixture: @unchecked Sendable {
+final class PrivateOllamaFixture: @unchecked Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "cantrip-private-ollama-test")
     private let lock = NSLock()
@@ -51,6 +51,12 @@ private final class PrivateOllamaFixture: @unchecked Sendable {
         set { lock.withLock { scenario = newValue; recorded = [] } }
     }
     var requests: [HTTPRequest] { lock.withLock { recorded } }
+    /// "openai-shadow": the final reply once tool results come back (CantripHomeShadowTests).
+    var shadowReply: String {
+        get { lock.withLock { reply } }
+        set { lock.withLock { reply = newValue } }
+    }
+    private var reply = ""
 
     init() throws {
         let parameters = NWParameters.tcp
@@ -128,6 +134,17 @@ private final class PrivateOllamaFixture: @unchecked Sendable {
                 switch mode {
                 case "openai-tools":
                     body += event(#"{"tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"run_shell","arguments":"{}"}}]}"#)
+                case "openai-shadow":
+                    // First a shell call and a read-only tool call; after their results, a reply with a block.
+                    let usage = #"data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30}}"# + "\n\n"
+                    if String(decoding: request.body, as: UTF8.self).contains(#""role":"tool""#) {
+                        let delta = (try? JSONSerialization.data(withJSONObject: ["content": self.shadowReply])) ?? Data()
+                        body += event(String(decoding: delta, as: UTF8.self)) + event("{}", finish: #""stop""#)
+                            + usage + "data: [DONE]\n\n"
+                    } else {
+                        body += event(#"{"tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"run_shell","arguments":"{\"command\":\"ls\"}"}},{"index":1,"id":"t2","type":"function","function":{"name":"mcp__personal__mail_read","arguments":"{}"}}]}"#)
+                            + event("{}", finish: #""tool_calls""#) + usage + "data: [DONE]\n\n"
+                    }
                 case "openai-error":
                     body += #"data: {"error":{"message":"out of memory"}}"# + "\n\n"
                 case "openai-incomplete":

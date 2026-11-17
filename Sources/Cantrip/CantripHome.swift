@@ -2585,6 +2585,16 @@ extension ChatSession {
               let index = messages.lastIndex(where: { $0.role == .assistant }) else { return [] }
         var text = messages[index].text
         let blocks = CantripHomeProtocol.extractBlocks(from: &text)
+        if let shadow = cantripHomeShadow {
+            // A shadow run's blocks are kept as written, never applied.
+            for block in blocks { shadow.capture(kind: block.kind.rawValue, payload: block.payload) }
+            if !blocks.isEmpty {
+                cantripHomeNotices.append("Captured \(blocks.count) Home item(s) from this shadow run; nothing was applied.")
+                text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if text != messages[index].text { messages[index].text = text }
+            return []
+        }
         let delegations = saveCantripHomeDelegations(
             blocks.filter { $0.kind == .delegate }, messageIndex: index, lintBlocking: lintBlocking
         )

@@ -135,6 +135,10 @@ struct SessionTabTests {
             try await testReplyWorkSplit()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "shadow" {
+            try await testCantripHomeShadow()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "muse" {
             try await testMuse()
             return
@@ -357,6 +361,7 @@ struct SessionTabTests {
         try testHomeRepeatedData()
         try await testPrivacyGate()
         try await testPrivacyContentRouting()
+        try await testCantripHomeShadow()
         try await testMuse()
         try testBuildQueue()
         try await testThreadTags()

@@ -462,6 +462,11 @@ final class ChatSession: ObservableObject {
     }
     /// The saved task a hidden run executes and its run notes; nil for incidents.
     private(set) var cantripHomeTask: (id: UUID, note: String?)?
+    /// A local-tools shadow run (CantripHomeShadow): the task as it was before its real run, on the
+    /// local model with read-only tools; its Home blocks are captured, never applied.
+    var cantripHomeShadow: CantripHomeShadowRun?
+    /// The shadow runs' tools, shared across runs (set by the background runner).
+    var cantripHomeShadowTools: CantripHomeShadowTools?
     /// Home confirmations and refusals waiting to be appended to this run's reply.
     var cantripHomeNotices: [String] = []
     /// Refusals held while Home corrects its blocks; replaced if the correction saves blocks.
@@ -2555,8 +2560,9 @@ final class ChatSession: ObservableObject {
             codex.homeProtocol = nil
         }
         homeCarrier?.homeProtocol = cantripHomeChatProtocol
+        let homeTasks = cantripHomeShadow?.tasks ?? CantripHomeStore.shared.tasks
         if !isSlashCommand, automatedRun?.isIncident == false, let run = cantripHomeTask,
-           let task = CantripHomeStore.shared.tasks.first(where: { $0.id == run.id }) {
+           let task = homeTasks.first(where: { $0.id == run.id }) {
             // Static protocol, then memory, then this task, then everything that changes per run.
             writeCantripHomeTaskTabs()
             taskHead = cantripHomeTaskStaticInstructions
@@ -2567,7 +2573,7 @@ final class ChatSession: ObservableObject {
                                          consumesStagedContext: consumesStagedContext,
                                          includesHomeInstructions: false)
             backendPrompt = "\n\n" + (preamble.map { $0 + "\n\n" } ?? "") + prompt
-                + CantripHomeTaskContext.workspaceData(for: task, in: CantripHomeStore.shared.tasks)
+                + CantripHomeTaskContext.workspaceData(for: task, in: homeTasks)
                 + (run.note.map { "\n\n" + $0 } ?? "") + ambient
         } else if !isSlashCommand {
             if let preamble {
@@ -2594,7 +2600,9 @@ final class ChatSession: ObservableObject {
         localModel.baseURLOverride = nil
         localModel.modelOverride = nil
         localModel.contextBudgetTokens = nil
-        let privacyKind: PrivacyGateRequest.Kind? = isSlashCommand || councilMode || isLocalPrivate ? nil
+        localModel.shadow = nil
+        let privacyKind: PrivacyGateRequest.Kind? = isSlashCommand || councilMode || isLocalPrivate
+            || cantripHomeShadow != nil ? nil
             : isCantripHome ? .homeChat
             : isCantripHomeBackground && cantripHomeTask != nil && automatedRun?.isIncident != true ? .homeTask : nil
         let privacySettings = privacyKind.map { _ in PrivacyGate.shared.settings }
@@ -2632,6 +2640,10 @@ final class ChatSession: ObservableObject {
                 ))
                 return
             }
+            if let shadow = self.cantripHomeShadow {
+                self.dispatchShadow(request, run: shadow, generation: generation)
+                return
+            }
             guard let kind = privacyGated, let settings = privacySettings else {
                 // A Home run with the gate off gets back what an earlier enforced cloud run took away.
                 if privacyKind != nil { self.applyPrivacyCloudRestriction(nil) }
@@ -2649,6 +2661,30 @@ final class ChatSession: ObservableObject {
                 self.dispatchRun(request, backend: self.backend(for: backendKind), generation: generation)
                 self.observePrivacy(gate, settings: settings, messageID: privacyMessageID)
             }
+        }
+    }
+
+    /// A shadow run goes only to the local model (Private Local's OpenAI-compatible server, which
+    /// must be on this Mac, the LAN or the tailnet), with the shadow run's read-only tools.
+    private func dispatchShadow(_ request: BackendRequest, run: CantripHomeShadowRun, generation: Int) {
+        do {
+            let configuration = try privateLocalConfiguration()
+            try configuration.validate()
+            guard configuration.api == .openAI else {
+                throw SessionModelSettingsError(400, "shadow runs need Private Local on an OpenAI-compatible server.")
+            }
+            if let problem = PrivacyHostCheck.problem(with: configuration.baseURL) {
+                throw SessionModelSettingsError(400, problem)
+            }
+            localModel.baseURLOverride = configuration.baseURL
+            localModel.modelOverride = configuration.model
+            localModel.contextBudgetTokens = run.config.contextBudgetTokens
+            localModel.shadow = (cantripHomeShadowTools ?? CantripHomeShadowTools(config: run.config), run)
+            run.startedAt = Date()
+            Log.write("home shadow: \(run.title.prefix(40)) on the local model (\(configuration.model))")
+            dispatchRun(request, backend: localModel, generation: generation)
+        } catch {
+            handle(.failure("Shadow run not started: \(error.localizedDescription)"))
         }
     }
 
@@ -4578,9 +4614,11 @@ final class ChatSession: ObservableObject {
         councilFinished = []
         councilSynthesizing = false
         if !isLocalPrivate { processOverlayBlock() }
-        let runCards = isCantripHomeBackground ? beginRunCards() : nil
+        // A shadow run's reply stays here: no card lookups (places, weather, links) leave the Mac.
+        let isShadow = cantripHomeShadow != nil
+        let runCards = isCantripHomeBackground && !isShadow ? beginRunCards() : nil
         let reply = processCantripHomeBlocks()
-        let hasPendingRichCard = !isLocalPrivate ? processRichCards() : false
+        let hasPendingRichCard = !isLocalPrivate && !isShadow ? processRichCards() : false
         if let completion = pendingTurnCompletion {
             var visibleSummary = messages.last(where: { $0.role == .assistant })?.text
                 ?? completion.summary
@@ -4606,7 +4644,7 @@ final class ChatSession: ObservableObject {
         isWaitingOnBackgroundWatchers = false
         statusText = nil
         // Session layer: log the completed exchange for future grep.
-        if settings.memoryEnabled, !isPrivate, !isLocalPrivate,
+        if settings.memoryEnabled, !isPrivate, !isLocalPrivate, !isShadow,
            let userIdx = messages.lastIndex(where: { $0.role == .user }),
            let assistantIdx = messages.lastIndex(where: { $0.role == .assistant }),
            assistantIdx > userIdx, !messages[assistantIdx].text.isEmpty {
@@ -4646,7 +4684,7 @@ final class ChatSession: ObservableObject {
                 guard let self, self.streamGeneration == generation else { return }
                 self.drainQueue()
             }
-        } else if notify, !isLocalPrivate {
+        } else if notify, !isLocalPrivate, !isShadow {
             // Whole run complete: speak the reply / notify if hidden.
             if settings.voiceMode,
                let reply = messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }) {

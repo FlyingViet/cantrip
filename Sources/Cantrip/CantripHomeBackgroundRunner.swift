@@ -163,6 +163,8 @@ final class CantripHomeBackgroundRunner {
         guard let manager, AppSettings.shared.cantripHomeEnabled else { return }
         enqueueDueTasks(now: now)
         startReadyJobs(now: now, manager: manager)
+        stopOverdueShadow(at: now)
+        startNextShadow(manager: manager)
     }
 
     private func enqueueDueTasks(now: Date) {
@@ -343,7 +345,9 @@ final class CantripHomeBackgroundRunner {
                 return
             }
             note = startNote(for: current, job: job, now: now)
+            snapshotForShadow(current, jobID: job.id, note: note, now: now)
             guard store.beginTaskRun(taskID: taskID, runID: job.id, at: now) else {
+                shadowSnapshots[job.id] = nil
                 jobs.removeAll { $0.id == job.id }
                 return
             }
@@ -476,8 +480,117 @@ final class CantripHomeBackgroundRunner {
         Log.write("home: background run \(jobID.uuidString) finished: \(status)")
         let cards = session.messages.last { $0.role == .assistant }?.cardDocuments(linkPreviews: false) ?? []
         store.complete(runID: jobID, status: status, summary: text, cards: cards)
+        queueShadow(jobID: jobID, status: status, summary: text)
         // Let the finishing turn settle (notifications read its last reply) before teardown.
         DispatchQueue.main.async { [weak self] in self?.retire(session) }
+    }
+
+    // MARK: - Shadow runs (CantripHomeShadow)
+
+    /// The store as it was when each covered real run started, by job ID.
+    private var shadowSnapshots: [UUID: (taskID: UUID, tasks: [CantripHomeTask], note: String?)] = [:]
+    private(set) var shadowQueue: [CantripHomeShadowRun] = []
+    private var shadowLive: (session: ChatSession, run: CantripHomeShadowRun)?
+    /// Shared by shadow runs with the same configuration; tests set it.
+    var shadowTools: CantripHomeShadowTools?
+    /// Tests replace the configuration.
+    var shadowConfig: () -> CantripHomeShadowConfig? = { CantripHomeShadowConfig.load() }
+    var shadowRoot = CantripHomeShadowConfig.folder
+
+    private func snapshotForShadow(_ task: CantripHomeTask, jobID: UUID, note: String?, now: Date) {
+        guard let config = shadowConfig(), config.covers(task.id, at: now) else { return }
+        shadowSnapshots[jobID] = (task.id, store.tasks, note)
+    }
+
+    /// After a covered real run: the task's records before and after it, then a shadow run.
+    private func queueShadow(jobID: UUID, status: String, summary: String) {
+        guard let snapshot = shadowSnapshots.removeValue(forKey: jobID), let config = shadowConfig(),
+              let before = snapshot.tasks.first(where: { $0.id == snapshot.taskID }) else { return }
+        let run = CantripHomeShadowRun(realRunID: jobID, task: before, tasks: snapshot.tasks, note: snapshot.note,
+                                       config: config, root: shadowRoot)
+        let beforeRecords = CantripHomeShadowRun.records(of: before)
+        let afterRecords = CantripHomeShadowRun.records(of: store.tasks.first { $0.id == snapshot.taskID })
+        run.write("before.json", data: beforeRecords.data)
+        run.write("after.json", data: afterRecords.data)
+        run.write("real-reply.txt", data: Data(summary.utf8))
+        run.writeJSON("checksums.json", ["before": beforeRecords.sha256, "afterRealRun": afterRecords.sha256,
+                                         "realRunStatus": status])
+        guard status == "succeeded" else {
+            run.writeJSON("run.json", run.summary(status: "skipped: the real run \(status)", endedAt: Date(), error: nil,
+                                                  model: "", server: ""))
+            runShadowHook(run)
+            return
+        }
+        shadowQueue.append(run)
+        Log.write("home shadow: queued \(before.title.prefix(40)) after real run \(jobID.uuidString.prefix(8))")
+        if let manager { startNextShadow(manager: manager) }
+    }
+
+    /// One shadow run at a time, never while a task named in `waitForTasks` runs.
+    private func startNextShadow(manager: SessionManager) {
+        guard shadowLive == nil, !shadowQueue.isEmpty else { return }
+        let busy = jobs.contains { job in
+            job.state == .running && job.taskID.map { id in shadowQueue[0].config.waits(for: id) } == true
+        }
+        guard !busy else { return }
+        let run = shadowQueue.removeFirst()
+        guard let task = run.task else { return }
+        // The MCP servers start once and are kept while the server list stays the same.
+        if shadowTools?.config.servers != run.config.servers || shadowTools?.config.mcpConfigPath != run.config.mcpConfigPath {
+            shadowTools = CantripHomeShadowTools(config: run.config)
+        }
+        let session = makeSession(UUID())
+        session.cantripHomeShadow = run
+        session.cantripHomeShadowTools = shadowTools
+        manager.adoptCantripHomeRun(session)
+        shadowLive = (session, run)
+        session.onTurnCompleted = { [weak self] _, status, _ in
+            DispatchQueue.main.async { self?.finishShadow(status: status) }
+        }
+        session.submitCantripHomeTask(id: task.id, title: task.title, scheduleSummary: task.schedule.summary,
+                                      prompt: task.prompt, note: run.note)
+        if session.currentRunIdentifier == nil { finishShadow(status: "failed") }
+    }
+
+    /// A shadow run gets at most this long; then it's stopped and logged as timed out.
+    var shadowTimeLimit: TimeInterval = 40 * 60
+
+    func stopOverdueShadow(at date: Date = Date()) {
+        guard let (session, run) = shadowLive,
+              date.timeIntervalSince(run.startedAt ?? run.queuedAt) >= shadowTimeLimit else { return }
+        session.onTurnCompleted = nil
+        session.cancel()
+        finishShadow(status: "timed out")
+    }
+
+    private func finishShadow(status: String) {
+        guard let (session, run) = shadowLive else { return }
+        shadowLive = nil
+        session.onTurnCompleted = nil
+        let error = status == "succeeded" ? nil : session.messages.last { $0.role == .error }?.text
+        run.write("reply.txt", data: Data((session.messages.last { $0.role == .assistant }?.text ?? "").utf8))
+        let local = try? session.privateLocalConfiguration()
+        run.writeJSON("run.json", run.summary(status: status, endedAt: Date(), error: error, model: local?.model ?? "",
+                                              server: URL(string: local?.baseURL ?? "")?.host ?? ""))
+        // The real run's records must be exactly as it left them.
+        let now = CantripHomeShadowRun.records(of: store.tasks.first { $0.id == run.taskID })
+        run.writeJSON("checksums-after-shadow.json", ["afterShadowRun": now.sha256])
+        Log.write("home shadow: \(run.title.prefix(40)) finished: \(status)")
+        session.discardCantripHomeRun()
+        manager?.releaseCantripHomeRun(session)
+        runShadowHook(run)
+        if let manager { startNextShadow(manager: manager) }
+    }
+
+    /// Scores the run with the configured local command (its folder as the argument).
+    private func runShadowHook(_ run: CantripHomeShadowRun) {
+        guard let command = run.config.afterRun.first else { return }
+        let arguments = Array(run.config.afterRun.dropFirst()) + [run.folder.path]
+        DispatchQueue.global(qos: .utility).async {
+            let path = (command as NSString).expandingTildeInPath
+            _ = try? ProcessRunner.run(path, arguments.map { ($0 as NSString).expandingTildeInPath },
+                                       errorOutput: .merge, timeout: 600, outputLimit: 200_000)
+        }
     }
 
     private func retire(_ session: ChatSession) {

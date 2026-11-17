@@ -2,8 +2,9 @@ import Foundation
 
 extension SessionTabTests {
     @MainActor
-    static func waitForJournalTest(line: UInt = #line, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(5)
+    static func waitForJournalTest(line: UInt = #line, timeout: TimeInterval = 5,
+                                   _ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
         while !condition(), Date() < deadline {
             try await Task.sleep(nanoseconds: 10_000_000)
         }

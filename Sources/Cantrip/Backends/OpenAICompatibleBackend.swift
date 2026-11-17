@@ -18,6 +18,9 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
     /// Read-only instance (council advisors): no tool loop, regardless
     /// of global autonomy.
     var readOnly = false
+    /// A Home shadow run (CantripHomeShadow): only its read-only tools, never the shell, its own
+    /// step cap and result size; every call is counted.
+    var shadow: (tools: CantripHomeShadowTools, run: CantripHomeShadowRun)?
     private let settings = AppSettings.shared
     private var history: [[String: Any]] = []
     private var task: URLSessionDataTask?
@@ -134,7 +137,7 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         if !system.isEmpty {
             messages.append(["role": "system", "content": system])
         }
-        let tools = settings.allowActions && !readOnly ? Self.tools() : []
+        let tools = shadow.map { $0.tools.openAITools() } ?? (settings.allowActions && !readOnly ? Self.tools() : [])
         if let budget = contextBudgetTokens {
             let fixed = HomeLocalProfile.estimate(system)
                 + HomeLocalProfile.estimate(String(decoding: (try? JSONSerialization.data(withJSONObject: tools)) ?? Data(), as: UTF8.self))
@@ -157,6 +160,10 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
             "stream": true,
         ]
         if !tools.isEmpty { body["tools"] = tools }
+        if let shadow {
+            body["stream_options"] = ["include_usage": true]
+            if !shadow.run.config.priority.isEmpty { body["priority"] = shadow.run.config.priority }
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -198,9 +205,11 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
         if payload == "[DONE]" { return }
         guard let data = payload.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = obj["choices"] as? [[String: Any]],
-              let first = choices.first else { return }
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        if let usage = obj["usage"] as? [String: Any], let shadow {
+            shadow.run.noteUsage(prompt: usage["prompt_tokens"] as? Int ?? 0, completion: usage["completion_tokens"] as? Int ?? 0)
+        }
+        guard let choices = obj["choices"] as? [[String: Any]], let first = choices.first else { return }
         if let reason = first["finish_reason"] as? String { finishReason = reason }
         guard let delta = first["delta"] as? [String: Any] else { return }
         if let content = delta["content"] as? String, !content.isEmpty {
@@ -258,15 +267,17 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
     // MARK: - Tool execution loop
 
     private func executeToolCallsAndContinue() {
-        guard settings.allowActions else {
+        guard settings.allowActions || shadow != nil else {
             onEvent?(.failure("Model requested tool use, but \"Act on my behalf\" is off."))
             return
         }
         iterations += 1
-        guard iterations <= maxIterations else {
-            onEvent?(.failure("Tool loop exceeded \(maxIterations) iterations — stopping."))
+        let cap = shadow?.run.config.maxSteps ?? maxIterations
+        guard iterations <= cap else {
+            onEvent?(.failure("Tool loop exceeded \(cap) iterations — stopping."))
             return
         }
+        shadow?.run.noteStep()
 
         let calls = pendingToolCalls.sorted { $0.key < $1.key }.map(\.value)
         // Record the assistant turn that requested the tools.
@@ -291,7 +302,14 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
 
                 let output: String
                 let success: Bool
-                if let refusal = self.guardrailRefusal(for: call.name, command: command,
+                if let shadow = self.shadow {
+                    // Only the shadow run's read-only tools; nothing else, not even the shell.
+                    let args = (try? JSONSerialization.jsonObject(
+                        with: Data(call.arguments.utf8)) as? [String: Any]) ?? [:]
+                    let result = shadow.tools.call(call.name, arguments: args)
+                    shadow.run.noteToolCall(call.name, allowed: result.allowed)
+                    (output, success) = (result.output, result.success)
+                } else if let refusal = self.guardrailRefusal(for: call.name, command: command,
                                                        arguments: call.arguments) {
                     (output, success) = (refusal, false)
                 } else if call.name == "run_shell", let command, !command.isEmpty {
@@ -306,7 +324,7 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
                 }
                 self.history.append(["role": "tool",
                                      "tool_call_id": call.id,
-                                     "content": String(output.prefix(4000))])
+                                     "content": String(output.prefix(self.shadow?.run.config.resultCharacters ?? 4000))])
                 self.onEvent?(.activity(ToolActivityFactory.complete(
                     activity, id: activity.id, success: success, output: output)))
             }

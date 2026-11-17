@@ -228,6 +228,45 @@ if its content decided, without changing how it runs:
 (`{"my-mail-export.py": "mail"}`). It needs a server with `/v1/judgments`
 (Splash); results it can't judge are counted as unchecked.
 
+### Shadow-test scheduled tasks on the local model
+
+To see whether a scheduled task could run fully locally, list it in
+`~/.cache/Cantrip/local-tools-shadow/config.json`:
+
+```json
+{"tasks": ["<task id>"], "until": "2026-12-01T06:00:00Z",
+ "servers": ["personal", "homelab"], "waitForTasks": [], "afterRun": []}
+```
+
+After each successful real run of a listed task (until `until`), Cantrip runs the
+same task again on your Private Local model (an OpenAI-compatible server on
+this Mac, your LAN or tailnet), one shadow run at a time:
+
+- It gets the same task message, Home instructions and run note, built from
+  the task as it was **before** the real run.
+- It may use only the read-only tools of the listed MCP servers (taken from
+  `mcpConfigPath`, `~/.copilot/mcp-config.json` by default). It never gets
+  Bitwarden, the shell or any tool whose name can change something. A refused
+  call is counted.
+- Every Home block it writes is saved and **never applied**. It shows no cards,
+  sends no notifications, writes nothing to memory and adds nothing to Home.
+- Each run gets a private folder under `private/` (mode 0700) holding:
+  - `before.json` and `after.json`: the task's records before and after the real run;
+  - `blocks.jsonl`: the shadow run's blocks;
+  - `reply.txt` and `real-reply.txt`: the shadow run's reply and the real run's summary;
+  - `checksums.json`: the real records' checksums, plus their checksum again after
+    the shadow run, which must match;
+  - `run.json`: model, server, steps, tool calls by name, refusals, blocks,
+    tokens and time.
+- `afterRun` runs a local command with the folder as its last argument (for
+  scoring).
+- Requests carry `priority` (`background`, so Splash serves Home chat and the
+  Privacy Gate first; set `""` for servers that reject unknown fields).
+- Shadow runs wait while the tasks in `waitForTasks` run, stop after
+  `maxSteps` tool rounds (40) or 40 minutes, and keep each tool result to
+  `resultCharacters` (12,000) within `contextBudgetTokens` (56,000).
+- A real run that spans a Cantrip restart is not shadowed.
+
 ### Review a week of observe data
 
 1. Run `cantrip privacy report` (or `--days 14`). It summarizes the routes, what
