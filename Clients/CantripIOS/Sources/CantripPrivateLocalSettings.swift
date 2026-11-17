@@ -18,6 +18,41 @@ struct CantripPrivateLocalConfiguration: Codable, Equatable {
     var systemPrompt = ""
     /// Nil from a Mac that predates the API choice: saves then omit it and that Mac stays on Ollama.
     var api: CantripPrivateLocalAPI?
+    /// Read-only tools; nil from a Mac that predates them (saves then omit it).
+    var tools: CantripPrivateLocalTools?
+}
+
+/// `PrivateLocalToolSettings`: `servers` nil means every available server.
+struct CantripPrivateLocalTools: Codable, Equatable {
+    var enabled = false
+    var servers: [String]?
+
+    func uses(_ server: String) -> Bool { servers?.contains(server) ?? true }
+}
+
+/// `PrivateLocalToolServer` (GET …/private-tools): one server's read-only tools.
+struct CantripPrivateLocalToolServer: Decodable, Equatable, Identifiable {
+    let name: String
+    let tools: [String]
+    let excluded: [String]
+    let onDemand: Bool
+    let tokens: Int
+    let service: String?
+    let problem: String?
+    let blocked: Bool
+
+    var id: String { name }
+    var usable: Bool { !blocked && !tools.isEmpty }
+
+    var detail: String {
+        if let problem { return problem }
+        if tools.isEmpty { return "No read-only tools." }
+        return "\(tools.count) read-only tools, \(onDemand ? "loaded when needed" : "always offered") (about \(tokens) tokens)"
+            + (excluded.isEmpty ? "" : ", \(excluded.count) left out")
+            + (service.map { ". Sends queries to \($0)." } ?? ". Runs on the Mac and may reach its own service.")
+    }
+
+    static let footer = "Private Local can look things up with the read-only tools of Cantrip's MCP servers: search, read, list and status, never send, create, change, delete or run. Tools run on the Mac; results go only to your self-hosted model, never to a cloud model. A service server (shown with its address) sends your query to that service, as it does from other tabs. Passwords, browser, file, form and build servers are never offered."
 }
 
 struct CantripPrivateLocalSettings: Decodable, Equatable {
@@ -57,6 +92,8 @@ struct CantripPrivateLocalSettingsView: View {
     @State private var saving = false
     @State private var needsReload = false
     @State private var error: String?
+    @State private var toolServers: [CantripPrivateLocalToolServer] = []
+    @State private var loadingTools = false
 
     init(model: CantripRemoteModel, session: CantripRemoteSession, identity: UUID) {
         self.model = model
@@ -120,8 +157,11 @@ struct CantripPrivateLocalSettingsView: View {
                     Text(Self.footer(for: selectedAPI))
                 }
                 .disabled(snapshot == nil || snapshot?.unavailableReason != nil)
+                if configuration.tools != nil {
+                    toolsSection.disabled(snapshot == nil || snapshot?.unavailableReason != nil)
+                }
                 Section {
-                    Text("Tools, shell commands, shared-memory logging, push summaries and automatic external content are disabled. Auto queues follow-ups locally. Changes apply to this tab only, while idle.")
+                    Text("Shell commands, shared-memory logging, push summaries and automatic external content are disabled. Auto queues follow-ups locally. Changes apply to this tab only, while idle.")
                     Button("Reload settings") { Task { await load() } }
                     if loading || saving { ProgressView() }
                     if let message = error ?? snapshot?.unavailableReason {
@@ -165,6 +205,67 @@ struct CantripPrivateLocalSettingsView: View {
 
     private var selectedAPI: CantripPrivateLocalAPI { configuration.api ?? .ollama }
 
+    @ViewBuilder private var toolsSection: some View {
+        Section {
+            Toggle("Let Private Local use read-only tools", isOn: Binding(
+                get: { configuration.tools?.enabled ?? false },
+                set: { configuration.tools = CantripPrivateLocalTools(enabled: $0, servers: configuration.tools?.servers) }))
+                .accessibilityIdentifier("privateLocal.tools")
+            if configuration.tools?.enabled == true {
+                if selectedAPI != .openAI {
+                    Text("Tools need an OpenAI-compatible server API.").foregroundStyle(.orange)
+                }
+                ForEach(toolServers) { server in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle(server.name, isOn: serverBinding(server.name))
+                            .disabled(!server.usable)
+                            .accessibilityIdentifier("privateLocal.toolServer.\(server.name)")
+                        Text(server.detail).font(.caption)
+                            .foregroundStyle(server.problem == nil ? Color.secondary : Color.orange)
+                        if !server.tools.isEmpty {
+                            DisclosureGroup("Allowed tools (\(server.tools.count))") {
+                                Text(server.tools.joined(separator: ", ")).font(.caption.monospaced()).textSelection(.enabled)
+                                if !server.excluded.isEmpty {
+                                    Text("Left out: " + server.excluded.joined(separator: ", "))
+                                        .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                                }
+                            }
+                            .font(.caption)
+                        }
+                    }
+                }
+                if loadingTools { ProgressView() }
+                Button("Refresh tools") { Task { await loadTools(refresh: true) } }.disabled(loadingTools)
+            }
+        } header: {
+            Text("Read-only tools")
+        } footer: {
+            Text(CantripPrivateLocalToolServer.footer)
+        }
+    }
+
+    private func serverBinding(_ name: String) -> Binding<Bool> {
+        Binding(get: { configuration.tools?.uses(name) ?? false }, set: { on in
+            var tools = configuration.tools ?? CantripPrivateLocalTools()
+            var servers = tools.servers ?? toolServers.filter(\.usable).map(\.name)
+            servers.removeAll { $0 == name }
+            if on { servers.append(name) }
+            tools.servers = servers.sorted()
+            configuration.tools = tools
+        })
+    }
+
+    @MainActor
+    private func loadTools(refresh: Bool) async {
+        loadingTools = true
+        defer { loadingTools = false }
+        do {
+            toolServers = try await model.privateLocalTools(id: session.id, refresh: refresh)
+        } catch is CancellationError {
+            return
+        } catch { self.error = error.localizedDescription }
+    }
+
     private var serverAPI: Binding<CantripPrivateLocalAPI> {
         Binding(get: { selectedAPI }, set: {
             guard $0 != configuration.api else { return }
@@ -192,6 +293,7 @@ struct CantripPrivateLocalSettingsView: View {
             models = []
             error = nil
             needsReload = false
+            if value.configuration.tools != nil { await loadTools(refresh: false) }
         } catch is CancellationError {
             return
         } catch {

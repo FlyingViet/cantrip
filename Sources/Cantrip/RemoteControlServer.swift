@@ -1675,9 +1675,25 @@ final class RemoteControlServer {
             }
             return
         }
-        if parts.count == 2, ["private-settings", "private-models"].contains(String(parts[1])) {
+        if parts.count == 2, ["private-settings", "private-models", "private-tools"].contains(String(parts[1])) {
             do {
                 guard session.isLocalPrivate else { throw SessionModelSettingsError(404, "Private Local tab not found.") }
+                if parts[1] == "private-tools" {
+                    // The servers Private Local may use and each one's read-only tools.
+                    guard request.method == "GET" else { throw SessionModelSettingsError(405, "method not allowed") }
+                    let refresh = request.query("refresh") == "1"
+                    Task {
+                        let tools = PrivateLocalTools.shared
+                        let servers = tools.summary(await tools.catalog(refresh: refresh))
+                        let encoder = JSONEncoder()
+                        if let data = try? encoder.encode(["servers": servers]) {
+                            send(status: 200, contentType: "application/json; charset=utf-8", body: data, on: connection)
+                        } else {
+                            sendError(500, "Couldn't list Private Local tools.", on: connection)
+                        }
+                    }
+                    return
+                }
                 if parts[1] == "private-models" {
                     guard request.method == "GET" else { throw SessionModelSettingsError(405, "method not allowed") }
                     var configuration = try session.privateLocalConfiguration()
@@ -1708,8 +1724,8 @@ final class RemoteControlServer {
                           let fields = json["configuration"] as? [String: Any] else {
                         throw SessionModelSettingsError(400, "Provide revision and the complete Private Local configuration.")
                     }
-                    let configuration = try PrivateLocalConfiguration.remote(
-                        fields, savedAPI: session.privateLocalConfiguration().api)
+                    let saved = try session.privateLocalConfiguration()
+                    let configuration = try PrivateLocalConfiguration.remote(fields, savedAPI: saved.api, savedTools: saved.tools)
                     try session.updatePrivateLocalSettings(configuration, revision: revision)
                 } else if request.method != "GET" {
                     throw SessionModelSettingsError(405, "method not allowed")
@@ -3720,7 +3736,7 @@ private extension RemoteControlServer {
     #modelEditor button{min-height:44px}#modelForm select:focus-visible,#modelEditor button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     #modelError{color:var(--text);font-size:13px}#modelForm .tab-actions{flex-wrap:wrap}#modelForm input{width:24px;height:24px}
     #privateEditor{width:min(calc(100% - 24px),480px);max-height:90vh;overflow:auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
-    #privateEditor::backdrop{background:rgba(0,0,0,.35)}#privateForm{display:grid;gap:14px}#privateForm label{display:grid;gap:6px}
+    #privateEditor::backdrop{background:rgba(0,0,0,.35)}#privateForm{display:grid;gap:14px}#privateForm label{display:grid;gap:6px}#privateForm label.private-check{display:flex;gap:8px;align-items:center}#privateTools{display:grid;gap:8px;border:1px solid var(--line);border-radius:10px;padding:10px}#privateToolServers{display:grid;gap:8px;max-height:260px;overflow:auto}#privateToolServers code{font-size:12px;white-space:normal;word-break:break-word}
     #privateForm input,#privateForm select,#privateForm textarea{box-sizing:border-box;width:100%;max-width:none;min-height:44px;background:Canvas;color:var(--text);border:1px solid var(--line);padding:8px;font:inherit}
     #privateForm .tab-actions{flex-wrap:wrap}#privateForm button{min-height:44px}#privateForm :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     #inputEditor{width:min(calc(100% - 24px),580px);max-height:90vh;overflow:auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}
@@ -3992,13 +4008,17 @@ private extension RemoteControlServer {
     <div id="desktopPermissions"></div></dialog>
     <dialog id="privateEditor" aria-labelledby="privateTitle"><form id="privateForm">
     <strong id="privateTitle">Private Local Settings</strong>
-    <p class="muted">Local means self-hosted, not limited to the Cantrip Mac. Your self-hosted server may run on another machine. This permanent tab stays saved on the Mac and accessible through paired Remote clients. No cloud fallback, tools, shared memory, push summaries or automatic external content.</p>
+    <p class="muted">Local means self-hosted, not limited to the Cantrip Mac. Your self-hosted server may run on another machine. This permanent tab stays saved on the Mac and accessible through paired Remote clients. No cloud fallback, shell, shared memory, push summaries or automatic external content.</p>
     <label>Server API<select id="privateAPI" aria-label="Server API"><option value="ollama">Ollama</option><option value="openai">OpenAI-compatible (oMLX, LM Studio, mlx-serve)</option></select></label>
     <label><span id="privateURLLabel">Self-hosted Ollama server URL</span><input id="privateURL" type="url" required autocomplete="off" aria-labelledby="privateURLLabel"></label>
     <label>Installed model<input id="privateModel" required autocomplete="off" list="privateModels"></label><datalist id="privateModels"></datalist>
     <label>Context tokens<input id="privateContext" type="number" min="512" max="131072" step="1" required></label>
     <label>System prompt<textarea id="privatePrompt" maxlength="8000" rows="4"></textarea></label>
     <p class="muted">Use your own server's HTTPS URL, including LAN or Tailscale hostnames and reverse-proxy base paths. HTTP is allowed only on loopback. Install models on that server. Context depends on its model and RAM; for OpenAI-compatible servers, context size is set on the server. Saved history is not unlimited model context. Save while idle.</p>
+    <fieldset id="privateTools" hidden><legend>Read-only tools</legend>
+    <label class="private-check"><input id="privateToolsOn" type="checkbox"> Let Private Local use read-only tools</label>
+    <p class="muted">Private Local can look things up with the read-only tools of Cantrip&#39;s MCP servers: search, read, list and status, never send, create, change, delete or run. Tools run on the Mac; results go only to your self-hosted model, never to a cloud model. A service server (shown with its address) sends your query to that service, as it does from other tabs. Passwords, browser, file, form and build servers are never offered.</p>
+    <div id="privateToolServers" aria-live="polite"></div><button id="privateToolsRefresh" type="button" class="control">Refresh tools</button></fieldset>
     <div id="privateError" role="alert"></div><div class="tab-actions">
     <button id="privateReload" type="button" class="control">Reload settings</button><button id="privateRefresh" type="button" class="control">Load server models</button>
     <button id="privateCancel" type="button" class="control">Cancel</button><button id="privateSave" type="submit" class="control primary">Save</button>
@@ -4613,10 +4633,22 @@ private extension RemoteControlServer {
       $("privateEditor").showModal();loadPrivateSettings()}
     async function loadPrivateSettings(){const state=privateEditorState;if(!state||state.saving)return;privateBusy(true);
       try{const data=await api(`/api/v1/sessions/${state.id}/private-settings`);if(privateEditorState!==state||token!==state.token)return;
-        state.data=data;state.needsReload=false;const c=data.configuration;$("privateAPI").value=c.api||"ollama";privateAPIChanged();$("privateURL").value=c.baseURL;$("privateModel").value=c.model;$("privateContext").value=c.contextWindow;$("privatePrompt").value=c.systemPrompt;$("privateModels").replaceChildren();$("privateError").textContent=data.unavailableReason||""}
+        state.data=data;state.needsReload=false;const c=data.configuration;$("privateAPI").value=c.api||"ollama";privateAPIChanged();$("privateURL").value=c.baseURL;$("privateModel").value=c.model;$("privateContext").value=c.contextWindow;$("privatePrompt").value=c.systemPrompt;$("privateModels").replaceChildren();$("privateError").textContent=data.unavailableReason||"";
+        state.servers=c.tools?c.tools.servers??null:null;state.serversTouched=false;$("privateTools").hidden=!c.tools;$("privateToolsOn").checked=Boolean(c.tools?.enabled);if(c.tools)loadPrivateTools(false)}
       catch(error){if(privateEditorState===state){state.needsReload=true;$("privateError").textContent=error.message}}
       finally{if(privateEditorState===state)privateBusy(false)}}
     $("privateReload").onclick=loadPrivateSettings;
+    function privateToolDetail(s){if(s.problem)return s.problem;if(!s.tools.length)return "No read-only tools.";
+      return `${s.tools.length} read-only tools, ${s.onDemand?"loaded when needed":"always offered"} (about ${s.tokens} tokens)${s.excluded.length?`, ${s.excluded.length} left out`:""}${s.service?`. Sends queries to ${s.service}.`:". Runs on the Mac and may reach its own service."}`}
+    async function loadPrivateTools(refresh){const state=privateEditorState;if(!state)return;const box=$("privateToolServers");box.textContent="Listing tools…";
+      try{const data=await api(`/api/v1/sessions/${state.id}/private-tools${refresh?"?refresh=1":""}`);if(privateEditorState!==state)return;state.toolServers=data.servers;box.replaceChildren();
+        for(const s of data.servers){const row=document.createElement("div");const label=document.createElement("label");label.className="private-check";const box2=document.createElement("input");box2.type="checkbox";box2.dataset.server=s.name;
+          const usable=!s.blocked&&s.tools.length>0;box2.disabled=!usable;box2.checked=usable&&(state.servers===null||state.servers.includes(s.name));box2.onchange=()=>{state.serversTouched=true};
+          label.append(box2,document.createTextNode(" "+s.name));const detail=document.createElement("div");detail.className="muted";detail.textContent=privateToolDetail(s);row.append(label,detail);
+          if(s.tools.length){const more=document.createElement("details");const summary=document.createElement("summary");summary.textContent=`Allowed tools (${s.tools.length})`;const list=document.createElement("code");list.textContent=s.tools.join(", ")+(s.excluded.length?` — left out: ${s.excluded.join(", ")}`:"");more.append(summary,list);row.append(more)}
+          box.append(row)}}
+      catch(error){if(privateEditorState===state)box.textContent=error.message}}
+    $("privateToolsRefresh").onclick=()=>loadPrivateTools(true);
     $("privateRefresh").onclick=async()=>{const state=privateEditorState;if(!state?.data||state.saving)return;privateBusy(true);
       try{const data=await api(`/api/v1/sessions/${state.id}/private-models?baseURL=${encodeURIComponent($("privateURL").value)}&api=${encodeURIComponent($("privateAPI").value)}`);if(privateEditorState!==state||token!==state.token)return;
         $("privateModels").replaceChildren();for(const model of data.models){const option=document.createElement("option");option.value=model;$("privateModels").append(option)}
@@ -4626,6 +4658,7 @@ private extension RemoteControlServer {
     $("privateEditor").addEventListener("cancel",event=>{if(privateEditorState?.saving)event.preventDefault();else privateEditorState=null});
     $("privateForm").onsubmit=async event=>{event.preventDefault();const state=privateEditorState;if(!state?.data||state.saving||state.needsReload||token!==state.token)return;
       const configuration={api:$("privateAPI").value,baseURL:$("privateURL").value,model:$("privateModel").value,contextWindow:Number($("privateContext").value),systemPrompt:$("privatePrompt").value};
+      if(state.data.configuration.tools){const tools={enabled:$("privateToolsOn").checked};const servers=state.serversTouched?[...$("privateToolServers").querySelectorAll("input[data-server]")].filter(box=>box.checked).map(box=>box.dataset.server):state.servers;if(servers!==null)tools.servers=servers;configuration.tools=tools}
       state.saving=true;privateBusy(true);
       try{await api(`/api/v1/sessions/${state.id}/private-settings`,{method:"POST",body:JSON.stringify({revision:state.data.revision,configuration})});
         if(privateEditorState===state&&token===state.token){$("privateEditor").close();privateEditorState=null;await refresh()}}

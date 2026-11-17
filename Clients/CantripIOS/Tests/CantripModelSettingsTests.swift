@@ -935,10 +935,12 @@ final class CantripModelSettingsTests: XCTestCase {
         try await capture("older-mac-dark", try snapshot())
     }
 
-    private func privateSnapshot(revision: String = "private-v1", reason: String? = nil, api: String? = nil) throws -> Data {
+    private func privateSnapshot(revision: String = "private-v1", reason: String? = nil, api: String? = nil,
+                                 tools: [String: Any]? = nil) throws -> Data {
         var configuration: [String: Any] = ["baseURL": "https://llm.example.ts.net/ollama", "model": "local:latest",
                                             "contextWindow": 8192, "systemPrompt": "Keep this conversation local."]
         if let api { configuration["api"] = api }
+        if let tools { configuration["tools"] = tools }
         var value: [String: Any] = ["revision": revision, "configuration": configuration]
         if let reason { value["unavailableReason"] = reason }
         return try JSONSerialization.data(withJSONObject: value)
@@ -1017,6 +1019,57 @@ final class CantripModelSettingsTests: XCTestCase {
         XCTAssertFalse(CantripPrivateLocalAPI.ollama.urlPlaceholder.hasSuffix("/v1"))
         XCTAssertTrue(CantripPrivateLocalSettingsView.footer(for: .openAI).contains("set on the server"))
         XCTAssertFalse(CantripPrivateLocalSettingsView.footer(for: .ollama).contains("set on the server"))
+    }
+
+    func testPrivateLocalToolsRoundTripAndOldMacsGetNone() async throws {
+        let legacy = try JSONDecoder().decode(CantripPrivateLocalSettings.self, from: privateSnapshot(api: "openai"))
+        XCTAssertNil(legacy.configuration.tools, "A Mac without Private Local tools sends none")
+        let legacyBody = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy.configuration)) as? [String: Any])
+        XCTAssertNil(legacyBody["tools"], "Saves to such a Mac leave tools out")
+
+        let all = try JSONDecoder().decode(CantripPrivateLocalSettings.self,
+                                           from: privateSnapshot(api: "openai", tools: ["enabled": true]))
+        XCTAssertEqual(all.configuration.tools, CantripPrivateLocalTools(enabled: true, servers: nil))
+        XCTAssertTrue(all.configuration.tools?.uses("any-server") == true, "No server list means every server")
+        let some = CantripPrivateLocalTools(enabled: true, servers: ["mail"])
+        XCTAssertTrue(some.uses("mail"))
+        XCTAssertFalse(some.uses("tracker"))
+
+        let model = try await model()
+        var configuration = all.configuration
+        configuration.tools = some
+        var posted: [String: Any]?
+        ModelSettingsRequestProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                let stream = try XCTUnwrap(request.httpBodyStream)
+                stream.open()
+                defer { stream.close() }
+                var bytes = [UInt8](repeating: 0, count: 4096)
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bytes.prefix(count))) as? [String: Any])
+                posted = body["configuration"] as? [String: Any]
+            }
+            return (200, try self.privateSnapshot(api: "openai", tools: ["enabled": true]))
+        }
+        let saved = await model.updatePrivateLocalSettings(id: id,
+            change: .init(revision: all.revision, configuration: configuration), identity: model.usageIdentity)
+        XCTAssertTrue(saved, model.errorMessage ?? "")
+        let tools = try XCTUnwrap(posted?["tools"] as? [String: Any])
+        XCTAssertEqual(tools["enabled"] as? Bool, true)
+        XCTAssertEqual(tools["servers"] as? [String], ["mail"])
+
+        let listed = Data(#"""
+        {"servers":[{"name":"mail","tools":["mail_search","mail_read"],"excluded":["mail_send"],"onDemand":false,"tokens":900,"blocked":false},
+                    {"name":"tracker","tools":["get_issue"],"excluded":[],"onDemand":true,"tokens":4000,"service":"tracker.example.com","blocked":false},
+                    {"name":"passwords","tools":[],"excluded":[],"onDemand":false,"tokens":0,"problem":"Never available in Private Local.","blocked":true}]}
+        """#.utf8)
+        struct Response: Decodable { let servers: [CantripPrivateLocalToolServer] }
+        let servers = try JSONDecoder().decode(Response.self, from: listed).servers
+        XCTAssertEqual(servers.map(\.usable), [true, true, false])
+        XCTAssertTrue(servers[0].detail.hasPrefix("2 read-only tools, always offered") && servers[0].detail.contains("1 left out"))
+        XCTAssertTrue(servers[1].detail.contains("loaded when needed") && servers[1].detail.contains("Sends queries to tracker.example.com"))
+        XCTAssertEqual(servers[2].detail, "Never available in Private Local.")
+        XCTAssertTrue(CantripPrivateLocalToolServer.footer.contains("never to a cloud model"))
     }
 
     func testPrivateLocalBusyStaleAndChangedMacNeverWrite() async throws {

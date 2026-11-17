@@ -19,8 +19,10 @@ struct PrivateLocalConfiguration: Codable, Equatable {
     var contextWindow = 8192
     var systemPrompt = "You are a helpful private assistant. Answer using only this conversation. You have no tools or internet access."
     var api = PrivateLocalAPI.ollama
+    /// Read-only tools (`PrivateLocalTools`); OpenAI-compatible servers only.
+    var tools = PrivateLocalToolSettings()
 
-    private enum CodingKeys: String, CodingKey { case baseURL, model, contextWindow, systemPrompt, api }
+    private enum CodingKeys: String, CodingKey { case baseURL, model, contextWindow, systemPrompt, api, tools }
 
     func endpoint(_ path: String) throws -> URL {
         guard var components = URLComponents(string: baseURL),
@@ -58,6 +60,7 @@ struct PrivateLocalConfiguration: Codable, Equatable {
               !model.contains("://"), !Self.isCloudModel(model) else {
             throw SessionModelSettingsError(400, "Choose a model installed on your \(api.serverName), not a cloud model.")
         }
+        try tools.validate()
     }
 
     static func isCloudModel(_ name: String) -> Bool {
@@ -74,15 +77,17 @@ extension PrivateLocalConfiguration {
         contextWindow = try container.decode(Int.self, forKey: .contextWindow)
         systemPrompt = try container.decode(String.self, forKey: .systemPrompt)
         api = try container.decodeIfPresent(PrivateLocalAPI.self, forKey: .api) ?? .ollama
+        tools = try container.decodeIfPresent(PrivateLocalToolSettings.self, forKey: .tools) ?? PrivateLocalToolSettings()
     }
 
     static let remoteFields: Set<String> = ["baseURL", "model", "contextWindow", "systemPrompt"]
 
-    /// A remote client's complete configuration. Clients that predate the API choice omit `api`;
-    /// they keep the saved one rather than silently switching the server back to Ollama.
-    static func remote(_ fields: [String: Any], savedAPI: PrivateLocalAPI) throws -> PrivateLocalConfiguration {
+    /// A remote client's complete configuration. Clients that predate the API choice omit `api`,
+    /// and those that predate tools omit `tools`: they keep the saved ones.
+    static func remote(_ fields: [String: Any], savedAPI: PrivateLocalAPI,
+                       savedTools: PrivateLocalToolSettings = PrivateLocalToolSettings()) throws -> PrivateLocalConfiguration {
         let keys = Set(fields.keys)
-        guard keys == remoteFields || keys == remoteFields.union(["api"]),
+        guard keys.isSuperset(of: remoteFields), keys.subtracting(remoteFields).isSubset(of: ["api", "tools"]),
               fields["baseURL"] is String, fields["model"] is String, fields["systemPrompt"] is String,
               let tokens = fields["contextWindow"] as? NSNumber,
               CFGetTypeID(tokens) != CFBooleanGetTypeID(),
@@ -92,9 +97,16 @@ extension PrivateLocalConfiguration {
         if let api = fields["api"], (api as? String).flatMap(PrivateLocalAPI.init(rawValue:)) == nil {
             throw SessionModelSettingsError(400, "Choose Ollama or an OpenAI-compatible server API.")
         }
+        if let tools = fields["tools"] {
+            let invalid = SessionModelSettingsError(400, "Private Local tools need `enabled` (true or false) and optionally `servers` (names).")
+            guard let object = tools as? [String: Any], Set(object.keys).isSubset(of: ["enabled", "servers"]),
+                  let enabled = object["enabled"] as? NSNumber, CFGetTypeID(enabled) == CFBooleanGetTypeID() else { throw invalid }
+            if let servers = object["servers"], !(servers is NSNull), !(servers is [String]) { throw invalid }
+        }
         var configuration = try JSONDecoder().decode(PrivateLocalConfiguration.self,
                                                      from: JSONSerialization.data(withJSONObject: fields))
         if fields["api"] == nil { configuration.api = savedAPI }
+        if fields["tools"] == nil { configuration.tools = savedTools }
         return configuration
     }
 }

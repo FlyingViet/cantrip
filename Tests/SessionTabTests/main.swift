@@ -135,6 +135,10 @@ struct SessionTabTests {
             try await testReplyWorkSplit()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "private-local-tools" {
+            try await testPrivateLocalTools()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "shadow" {
             try await testCantripHomeShadow()
             return
@@ -362,6 +366,7 @@ struct SessionTabTests {
         try await testPrivacyGate()
         try await testPrivacyContentRouting()
         try await testCantripHomeShadow()
+        try await testPrivateLocalTools()
         try await testMuse()
         try testBuildQueue()
         try await testThreadTags()

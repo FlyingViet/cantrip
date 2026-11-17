@@ -8,6 +8,7 @@ import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { api, pathComponent } from "../../api/client";
 import type {
   ModelSelection, ModelSettingsSnapshot, PrivateLocalConfiguration, PrivateLocalModelsResponse, PrivateLocalSettingsSnapshot,
+  PrivateLocalToolServer, PrivateLocalToolsResponse,
   RemoteSessionSummary, UsageFallbackRequest, UsageFallbackSnapshot,
 } from "../../api/types";
 import * as remote from "../../state/remote";
@@ -16,7 +17,8 @@ import { Loading, StatusLabel, Warning, findSession, sleep, useAlive } from "./c
 import {
   DEFAULT_PRIVATE_CONFIGURATION, MAC_BACKEND, MODEL_REFRESH_POLLS, PRIVATE_LOCAL_APIS, capitalized, contextLabel, errorText, isUnsupported,
   modelInfo, modelSettingsQuery, modelSettingsSave, modelValidationError, parseContextTokens, pickerChoices, privateModelChoices,
-  privateModelsQuery, privateServerFooter, privateURLField, selectModel, tabBackendChoices, tabBackendName, tabBackendNote,
+  privateModelsQuery, privateServerFooter, privateToolDetail, privateToolServerUsable, privateToolsUse, privateToolsWithServer,
+  privateURLField, PRIVATE_TOOLS_FOOTER, selectModel, tabBackendChoices, tabBackendName, tabBackendNote,
   tabBackendValue, tokenLabel,
   usageFallbackAdd, usageFallbackAddable, usageFallbackEfforts, usageFallbackEntries, usageFallbackLabel, usageFallbackLimitNote,
   usageFallbackLimits, usageFallbackModelChange, usageFallbackModelOptions, usageFallbackMove, usageFallbackPerModel,
@@ -489,6 +491,8 @@ function PrivateLocalSettings(props: { session: RemoteSessionSummary; onClose: (
   const configuration = useSignal<PrivateLocalConfiguration>({ ...DEFAULT_PRIVATE_CONFIGURATION });
   const contextText = useSignal(String(DEFAULT_PRIVATE_CONFIGURATION.contextWindow));
   const models = useSignal<string[]>([]);
+  const toolServers = useSignal<PrivateLocalToolServer[]>([]);
+  const loadingTools = useSignal(false);
   const loading = useSignal(false);
   const saving = useSignal(false);
   const needsReload = useSignal(false);
@@ -520,6 +524,7 @@ function PrivateLocalSettings(props: { session: RemoteSessionSummary; onClose: (
         error.value = null;
         needsReload.value = false;
       });
+      if (value.configuration.tools) void loadTools(false);
     } catch (failure) {
       if (!alive.current) return;
       error.value = errorText(failure);
@@ -541,6 +546,19 @@ function PrivateLocalSettings(props: { session: RemoteSessionSummary; onClose: (
       if (alive.current) error.value = errorText(failure);
     } finally {
       loading.value = false;
+    }
+  };
+
+  const loadTools = async (refresh: boolean) => {
+    if (loadingTools.value) return;
+    loadingTools.value = true;
+    try {
+      const data = await api<PrivateLocalToolsResponse>(`${base}/private-tools${refresh ? "?refresh=1" : ""}`);
+      if (alive.current) toolServers.value = data.servers;
+    } catch (failure) {
+      if (alive.current) error.value = errorText(failure);
+    } finally {
+      loadingTools.value = false;
     }
   };
 
@@ -651,9 +669,52 @@ function PrivateLocalSettings(props: { session: RemoteSessionSummary; onClose: (
             </FormRow>
           </FormSection>
         </fieldset>
+        {config.tools ? (
+          <fieldset class="sh-fieldset" disabled={!current || Boolean(unavailable)}>
+            <FormSection header="Read-only tools" footer={PRIVATE_TOOLS_FOOTER}>
+              <FormRow>
+                <label class="sk-toggle">
+                  <input type="checkbox" role="switch" class="switch" checked={config.tools.enabled}
+                    aria-label="Let Private Local use read-only tools"
+                    onChange={(event) => update({ tools: { ...config.tools!, enabled: (event.target as HTMLInputElement).checked } })} />
+                  <span>Let Private Local use read-only tools</span>
+                </label>
+              </FormRow>
+              {config.tools.enabled && config.api !== "openai"
+                ? <FormRow><span class="sh-warning">Tools need an OpenAI-compatible server API.</span></FormRow> : null}
+              {config.tools.enabled ? toolServers.value.map((server) => (
+                <FormRow key={server.name} stack>
+                  <label class="sk-toggle">
+                    <input type="checkbox" role="switch" class="switch" disabled={!privateToolServerUsable(server)}
+                      checked={privateToolServerUsable(server) && privateToolsUse(config.tools, server.name)}
+                      aria-label={`Use ${server.name}`}
+                      onChange={(event) => update({ tools: privateToolsWithServer(config.tools!, toolServers.value, server.name,
+                        (event.target as HTMLInputElement).checked) })} />
+                    <span class="sh-mono">{server.name}</span>
+                  </label>
+                  <span class={server.problem ? "sh-warning" : "sh-caption"}>{privateToolDetail(server)}</span>
+                  {server.tools.length ? (
+                    <details>
+                      <summary class="sh-caption">Allowed tools ({server.tools.length})</summary>
+                      <span class="sh-caption sh-mono selectable">{server.tools.join(", ")}</span>
+                      {server.excluded.length
+                        ? <span class="sh-caption sh-mono selectable"> Left out: {server.excluded.join(", ")}</span> : null}
+                    </details>
+                  ) : null}
+                </FormRow>
+              )) : null}
+              {config.tools.enabled ? (
+                <FormRow>
+                  <button type="button" class="btn" disabled={loadingTools.value} onClick={() => void loadTools(true)}>Refresh tools</button>
+                  {loadingTools.value ? <Spinner size="small" label="Listing tools" /> : null}
+                </FormRow>
+              ) : null}
+            </FormSection>
+          </fieldset>
+        ) : null}
         <FormSection>
           <FormRow>
-            <span>Tools, shell commands, shared-memory logging, push summaries and automatic external content are disabled. Auto queues follow-ups locally. Changes apply to this tab only, while idle.</span>
+            <span>Shell commands, shared-memory logging, push summaries and automatic external content are disabled. Auto queues follow-ups locally. Changes apply to this tab only, while idle.</span>
           </FormRow>
           <FormRow><button type="button" class="btn" onClick={() => void load()}>Reload settings</button></FormRow>
           {busy ? <FormRow><Spinner size="small" label={saving.value ? "Saving" : "Loading"} /></FormRow> : null}

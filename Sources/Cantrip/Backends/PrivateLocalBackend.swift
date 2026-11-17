@@ -1,6 +1,7 @@
 import Foundation
 
-/// A separate transport with no tools, redirects, proxy, credentials, or cloud fallback.
+/// A separate transport with no redirects, proxy, credentials, or cloud fallback. Tools only when
+/// switched on (read-only, `PrivateLocalTools`), and only with OpenAI-compatible servers.
 final class PrivateLocalClient: NSObject, URLSessionTaskDelegate {
     private var session: URLSession!
 
@@ -84,6 +85,7 @@ final class PrivateLocalClient: NSObject, URLSessionTaskDelegate {
     }
 
     func chat(_ configuration: PrivateLocalConfiguration, request input: BackendRequest,
+              tools: PrivateLocalToolSession? = nil,
               onEvent: @escaping (BackendEvent) -> Void) async throws {
         try configuration.validate()
         let api = configuration.api
@@ -110,6 +112,9 @@ final class PrivateLocalClient: NSObject, URLSessionTaskDelegate {
             }
         }
         try Task.checkCancellation()
+        if let tools, api == .openAI, !tools.isEmpty {
+            return try await chatWithTools(configuration, request: input, tools: tools, onEvent: onEvent)
+        }
         var messages: [[String: String]] = []
         if !configuration.systemPrompt.isEmpty {
             messages.append(["role": "system", "content": configuration.systemPrompt])
@@ -135,6 +140,137 @@ final class PrivateLocalClient: NSObject, URLSessionTaskDelegate {
             throw SessionModelSettingsError(502, "Your \(api.serverName) disconnected before finishing. No cloud fallback was used.")
         }
         onEvent(.done)
+    }
+
+    /// Replies that may use read-only tools: each step streams; requested tools run (refused when
+    /// not offered) and show as tool steps; older tool output is left out first to fit the window.
+    private func chatWithTools(_ configuration: PrivateLocalConfiguration, request input: BackendRequest,
+                               tools: PrivateLocalToolSession, onEvent: @escaping (BackendEvent) -> Void) async throws {
+        let base = configuration.systemPrompt == PrivateLocalConfiguration().systemPrompt
+            ? "You are a helpful private assistant." : configuration.systemPrompt
+        let system = (base.isEmpty ? "" : base + "\n\n") + tools.instructions
+        var history: [[String: Any]] = (input.replay ?? ConversationContextBuilder.chatMessages(for: input.userMessage, turns: input.previousTurns))
+            .map { ["role": $0.role, "content": $0.content] }
+        var replayed = history.count
+        history.append(["role": "user", "content": input.prompt])
+        var steps = 0
+        while true {
+            try Task.checkCancellation()
+            let offered = steps < PrivateLocalTools.maxSteps ? tools.openAITools() : []
+            if steps == PrivateLocalTools.maxSteps {
+                history.append(["role": "user", "content": "(Tool step limit reached. Answer now with what you found, and say what you couldn't check.)"])
+            }
+            let fixed = HomeLocalProfile.estimate(system)
+                + HomeLocalProfile.estimate(String(decoding: (try? JSONSerialization.data(withJSONObject: offered)) ?? Data(), as: UTF8.self))
+            let budget = configuration.contextWindow - HomeLocalProfile.outputReserveTokens - fixed
+            let before = history.filter { $0["content"] as? String == OpenAICompatibleBackend.leftOut }.count
+            guard OpenAICompatibleBackend.fit(&history, budget: budget, replayed: &replayed) else {
+                throw SessionModelSettingsError(413, "This reply needs more than the \(configuration.contextWindow)-token context window, even after leaving out earlier tool output. Nothing was sent to a cloud model.")
+            }
+            let leftOut = history.filter { $0["content"] as? String == OpenAICompatibleBackend.leftOut }.count - before
+            if leftOut > 0 { Log.write("private local: left out \(leftOut) earlier tool outputs to fit \(configuration.contextWindow) tokens") }
+            var body: [String: Any] = ["model": configuration.model, "stream": true,
+                                       "messages": [["role": "system", "content": system]] + history]
+            if !offered.isEmpty { body["tools"] = offered }
+            let (bytes, response) = try await session.bytes(for: request(configuration, path: PrivateLocalAPI.openAI.chatPath, body: body))
+            try check(response, .openAI)
+            var text = "", finish: String?, calls: [Int: (id: String, name: String, arguments: String)] = [:]
+            var completed = false
+            for try await line in bytes.lines {
+                try Task.checkCancellation()
+                guard let chunk = try Self.openAIToolChunk(line) else { continue }
+                if !chunk.thinking.isEmpty { onEvent(.thinkingDelta(chunk.thinking)) }
+                if !chunk.text.isEmpty { text += chunk.text; onEvent(.textDelta(chunk.text)) }
+                for delta in chunk.calls {
+                    var call = calls[delta.index] ?? ("", "", "")
+                    if let id = delta.id { call.id = id }
+                    call.name += delta.name ?? ""
+                    call.arguments += delta.arguments ?? ""
+                    calls[delta.index] = call
+                }
+                if let reason = chunk.finishReason { finish = reason }
+                if chunk.done || chunk.finishReason != nil { completed = true }
+                if chunk.done { break }
+            }
+            guard completed else {
+                throw SessionModelSettingsError(502, "Your self-hosted server disconnected before finishing. No cloud fallback was used.")
+            }
+            let requested = calls.sorted { $0.key < $1.key }.map(\.value).filter { !$0.name.isEmpty }
+            guard !requested.isEmpty, finish != "stop" || text.isEmpty, steps < PrivateLocalTools.maxSteps else {
+                onEvent(.done)
+                return
+            }
+            steps += 1
+            let named = requested.enumerated().map { index, call in
+                (id: call.id.isEmpty ? "call_\(steps)_\(index)" : call.id, name: call.name, arguments: call.arguments)
+            }
+            history.append(["role": "assistant", "content": text.isEmpty ? NSNull() : text,
+                            "tool_calls": named.map { ["id": $0.id, "type": "function",
+                                                       "function": ["name": $0.name, "arguments": $0.arguments]] }])
+            for call in named {
+                try Task.checkCancellation()
+                let arguments = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any]) ?? [:]
+                let activity = ToolActivityFactory.start(id: call.id, toolName: call.name, arguments: arguments)
+                onEvent(.activity(activity))
+                let result = await tools.call(call.name, arguments: arguments)
+                onEvent(.activity(ToolActivityFactory.complete(activity, id: call.id, success: result.success, output: result.output)))
+                var content = result.output
+                if content.count > PrivateLocalTools.resultCharacters {
+                    content = String(content.prefix(PrivateLocalTools.resultCharacters))
+                        + "\n[\(content.count - PrivateLocalTools.resultCharacters) more characters left out]"
+                }
+                history.append(["role": "tool", "tool_call_id": call.id, "content": content])
+            }
+            onEvent(.status("Reading tool results…"))
+        }
+    }
+
+    struct ToolCallDelta: Equatable {
+        var index = 0
+        var id: String?
+        var name: String?
+        var arguments: String?
+    }
+
+    struct ToolStreamChunk: Equatable {
+        var text = ""
+        var thinking = ""
+        var calls: [ToolCallDelta] = []
+        var finishReason: String?
+        /// `data: [DONE]`.
+        var done = false
+    }
+
+    /// One server-sent-events line of a stream that may call tools, or nil for a blank line,
+    /// comment or non-data field.
+    static func openAIToolChunk(_ line: String) throws -> ToolStreamChunk? {
+        let invalid = SessionModelSettingsError(502, "Your self-hosted server returned an invalid stream.")
+        guard !line.isEmpty, !line.hasPrefix(":") else { return nil }
+        guard line.hasPrefix("data:") else {
+            guard ["event:", "id:", "retry:"].contains(where: line.hasPrefix) else { throw invalid }
+            return nil
+        }
+        var payload = line.dropFirst(5)
+        if payload.first == " " { payload = payload.dropFirst() }
+        if payload.trimmingCharacters(in: .whitespaces) == "[DONE]" { return ToolStreamChunk(done: true) }
+        guard let value = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any] else { throw invalid }
+        if let error = value["error"], !(error is NSNull) {
+            throw SessionModelSettingsError(502, "Your self-hosted server could not complete the request. Check the model and available memory on that server.")
+        }
+        var chunk = ToolStreamChunk()
+        guard let choice = (value["choices"] as? [[String: Any]])?.first else { return chunk }
+        if let delta = choice["delta"] as? [String: Any] {
+            chunk.text = delta["content"] as? String ?? ""
+            chunk.thinking = [delta["reasoning_content"], delta["reasoning"]]
+                .lazy.compactMap { $0 as? String }.first { !$0.isEmpty } ?? ""
+            chunk.calls = (delta["tool_calls"] as? [[String: Any]] ?? []).map { call in
+                let function = call["function"] as? [String: Any]
+                return ToolCallDelta(index: (call["index"] as? NSNumber)?.intValue ?? 0, id: call["id"] as? String,
+                                     name: function?["name"] as? String, arguments: function?["arguments"] as? String)
+            }
+        }
+        if let reason = choice["finish_reason"] as? String, !reason.isEmpty { chunk.finishReason = reason }
+        return chunk
     }
 
     struct StreamChunk: Equatable {
@@ -204,17 +340,25 @@ final class PrivateLocalClient: NSObject, URLSessionTaskDelegate {
 
 final class PrivateLocalBackend: Backend {
     var configuration = PrivateLocalConfiguration()
+    /// Tests replace the tools.
+    var tools: PrivateLocalTools = .shared
     private var task: Task<Void, Never>?
 
     func send(_ request: BackendRequest, workdir: String, onEvent: @escaping (BackendEvent) -> Void) {
         cancel()
         let configuration = configuration
+        let provider = tools
         task = Task {
             let client = PrivateLocalClient()
-            defer { client.close() }
+            var session: PrivateLocalToolSession?
+            defer { client.close(); session?.close() }
             do {
                 onEvent(.status("Checking self-hosted model..."))
-                try await client.chat(configuration, request: request, onEvent: onEvent)
+                if configuration.tools.enabled, configuration.api == .openAI {
+                    onEvent(.status("Listing read-only tools..."))
+                    session = await provider.session(configuration.tools)
+                }
+                try await client.chat(configuration, request: request, tools: session, onEvent: onEvent)
             } catch is CancellationError {
                 return
             } catch {

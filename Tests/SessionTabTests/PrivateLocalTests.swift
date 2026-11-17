@@ -57,6 +57,12 @@ final class PrivateOllamaFixture: @unchecked Sendable {
         set { lock.withLock { reply = newValue } }
     }
     private var reply = ""
+    /// Scripted `/v1/chat/completions` bodies (server-sent events), by request (PrivateLocalToolsTests).
+    var chatResponder: ((HTTPRequest) -> String)? {
+        get { lock.withLock { responder } }
+        set { lock.withLock { responder = newValue } }
+    }
+    private var responder: ((HTTPRequest) -> String)?
 
     init() throws {
         let parameters = NWParameters.tcp
@@ -124,6 +130,12 @@ final class PrivateOllamaFixture: @unchecked Sendable {
                 if mode == "openai-redirect" {
                     let header = "HTTP/1.1 307 Temporary Redirect\r\nLocation: /must-not-follow\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                     connection.send(content: Data(header.utf8), completion: .contentProcessed { _ in connection.cancel() })
+                    return
+                }
+                if let responder = self.chatResponder {
+                    let data = Data(responder(request).utf8)
+                    let header = Data("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: \(data.count)\r\nConnection: close\r\n\r\n".utf8)
+                    connection.send(content: header + data, completion: .contentProcessed { _ in connection.cancel() })
                     return
                 }
                 func event(_ delta: String, finish: String = "null") -> String {

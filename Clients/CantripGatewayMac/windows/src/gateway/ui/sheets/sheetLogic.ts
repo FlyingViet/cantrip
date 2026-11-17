@@ -7,7 +7,7 @@ import type {
   BackendHealth, BackendState, BackendsSnapshot, GitHubAuth, CopilotQuotaBucket, CopilotUsageSnapshot, MCPServer, SkillEntry, SkillsDrift, SkillsRule, SkillsSnapshot, DesktopCommand, DesktopFrame, GitHubBuildJob, GitHubBuildRepository,
   GitHubBuildSnapshot, MacPermissionState, MaintenanceAction, MaintenanceJob, MaintenanceRequest, MaintenanceSnapshot,
   MemoryCatalog, MemoryCategory, MemoryEntry, MemoryPage, ModelOption, ModelSelection, ModelSettingsSnapshot,
-  ModelSettingsUpdateRequest, PrivateLocalAPI, PrivateLocalConfiguration, RemoteSessionSummary, UsageFallbackChoice, UsageFallbackEntryChange, UsageFallbackRequest,
+  ModelSettingsUpdateRequest, PrivateLocalAPI, PrivateLocalConfiguration, PrivateLocalToolServer, PrivateLocalTools, RemoteSessionSummary, UsageFallbackChoice, UsageFallbackEntryChange, UsageFallbackRequest,
   UsageFallbackSnapshot,
   AntigravityLimitBucket, AntigravityUsageState, ClaudeLimitWindow, ClaudeUsageState, CodexLimitWindow, CodexUsageState,
 } from "../../api/types";
@@ -259,6 +259,34 @@ export function privateServerFooter(api: PrivateLocalAPI | undefined): string {
     + (api === "openai"
       ? "Context size is set on the server for OpenAI-compatible servers; saved history is not unlimited model context."
       : "Context size depends on its model and RAM; saved history is not unlimited model context.");
+}
+
+export const PRIVATE_TOOLS_FOOTER = "Private Local can look things up with the read-only tools of Cantrip's MCP servers: search, read, list and status, never send, create, change, delete or run. Tools run on the Mac; results go only to your self-hosted model, never to a cloud model. A service server (shown with its address) sends your query to that service, as it does from other tabs. Passwords, browser, file, form and build servers are never offered.";
+
+/** The line under a tool server's switch (`PrivateLocalToolServer.detail`). */
+export function privateToolDetail(server: PrivateLocalToolServer): string {
+  if (server.problem) return server.problem;
+  if (!server.tools.length) return "No read-only tools.";
+  return `${server.tools.length} read-only tools, ${server.onDemand ? "loaded when needed" : "always offered"} (about ${server.tokens} tokens)`
+    + (server.excluded.length ? `, ${server.excluded.length} left out` : "")
+    + (server.service ? `. Sends queries to ${server.service}.` : ". Runs on the Mac and may reach its own service.");
+}
+
+export function privateToolServerUsable(server: PrivateLocalToolServer): boolean {
+  return !server.blocked && server.tools.length > 0;
+}
+
+/** Whether tools use a server: no list means every server. */
+export function privateToolsUse(tools: PrivateLocalTools | undefined, name: string): boolean {
+  return tools?.servers ? tools.servers.includes(name) : Boolean(tools);
+}
+
+/** Switches one server; the first change turns "every server" into the usable servers' names. */
+export function privateToolsWithServer(tools: PrivateLocalTools, servers: readonly PrivateLocalToolServer[], name: string, on: boolean): PrivateLocalTools {
+  const current = tools.servers ?? servers.filter(privateToolServerUsable).map((server) => server.name);
+  const next = current.filter((value) => value !== name);
+  if (on) next.push(name);
+  return { ...tools, servers: next.sort() };
 }
 
 /** The model-list query: `api` only for a Mac that reported one, so older Macs keep their saved choice. */

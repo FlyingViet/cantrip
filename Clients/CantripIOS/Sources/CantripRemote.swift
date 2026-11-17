@@ -2793,6 +2793,13 @@ struct CantripRemoteAPI {
         return response.models
     }
 
+    /// The servers Private Local may use and each one's read-only tools (Macs with Private Local tools).
+    func privateLocalTools(id: String, refresh: Bool = false) async throws -> [CantripPrivateLocalToolServer] {
+        struct Response: Decodable { let servers: [CantripPrivateLocalToolServer] }
+        let response: Response = try await request(path: "/api/v1/sessions/\(id)/private-tools" + (refresh ? "?refresh=1" : ""))
+        return response.servers
+    }
+
     fileprivate func preparePrivateLocalSettings(id: String, change: CantripPrivateLocalChange) async throws -> Data {
         let current = try await privateLocalSettings(id: id)
         guard current.revision == change.revision else {
@@ -4906,6 +4913,10 @@ final class CantripRemoteModel: ObservableObject {
 
     func privateLocalModels(id: String, baseURL: String, api: CantripPrivateLocalAPI? = nil) async throws -> [String] {
         try await performHistoryRead { try await $0.privateLocalModels(id: id, baseURL: baseURL, api: api) }
+    }
+
+    func privateLocalTools(id: String, refresh: Bool = false) async throws -> [CantripPrivateLocalToolServer] {
+        try await performHistoryRead { try await $0.privateLocalTools(id: id, refresh: refresh) }
     }
 
     func inputRequests(sessionID: String) async throws -> [CantripInputRequest] {

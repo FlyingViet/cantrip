@@ -1455,6 +1455,31 @@ export interface PrivateLocalConfiguration {
   systemPrompt: string;
   /** Absent from Macs that predate the choice (they speak Ollama); omit it when saving to them. */
   api?: PrivateLocalAPI;
+  /** Read-only tools; absent from Macs that predate them (omit it when saving to them). */
+  tools?: PrivateLocalTools;
+}
+
+/** `PrivateLocalToolSettings`: `servers` absent means every available server. */
+export interface PrivateLocalTools {
+  enabled: boolean;
+  servers?: string[];
+}
+
+/** `PrivateLocalToolServer`: one server's read-only tools (GET …/private-tools). */
+export interface PrivateLocalToolServer {
+  name: string;
+  tools: string[];
+  excluded: string[];
+  onDemand: boolean;
+  tokens: Int;
+  service?: string;
+  problem?: string;
+  blocked: boolean;
+}
+
+/** GET /api/v1/sessions/<privateLocalID>/private-tools[?refresh=1] */
+export interface PrivateLocalToolsResponse {
+  servers: PrivateLocalToolServer[];
 }
 
 /** GET/POST /api/v1/sessions/<privateLocalID>/private-settings. */
@@ -1464,7 +1489,7 @@ export interface PrivateLocalSettingsSnapshot {
   unavailableReason?: string;
 }
 
-/** POST private-settings: exactly {revision, configuration} with all four configuration keys, plus `api` when the Mac sent one. */
+/** POST private-settings: exactly {revision, configuration} with all four configuration keys, plus `api` and `tools` when the Mac sent them. */
 export interface PrivateLocalUpdateRequest {
   revision: string;
   configuration: PrivateLocalConfiguration;

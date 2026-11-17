@@ -2857,6 +2857,9 @@ final class ChatSession: ObservableObject {
             throw SessionModelSettingsError(400, "Private Local isn't set up: \(error.localizedDescription)")
         }
         if kind == .homeChat {
+            // Home chat's local route stays tool-free; read-only tools are the Private Local tab's.
+            var configuration = configuration
+            configuration.tools.enabled = false
             privateLocalModel.configuration = configuration
             return privateLocalModel
         }

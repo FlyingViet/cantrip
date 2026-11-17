@@ -13,7 +13,7 @@ import {
   memoryEntriesByCategory, memoryName, memoryTitle, mergeCatalog, modelInfo, modelSettingsChange, modelValidationError,
   normalizeTabName, normalizedPoint, openCombined, overageAllowedText, overageText, parseContextTokens, percentageSummary,
   permissionStateLabel, pickerChoices, primaryBucket, PRIVATE_LOCAL_APIS, privateModelChoices, privateModelsQuery,
-  privateServerFooter, privateURLField, queueReadiness, queueReason, readerApply,
+  privateServerFooter, privateToolDetail, privateToolsUse, privateToolsWithServer, privateURLField, PRIVATE_TOOLS_FOOTER, queueReadiness, queueReason, readerApply,
   readerRequest, relativeDuration, repositoryIsStale, sealCombined, selectModel, snapshotIsComplete, tabNameError,
   tokenLabel, usageFallbackAdd, usageFallbackAddable, usageFallbackChain, usageFallbackEfforts, usageFallbackEntries, usageFallbackEntry,
   usageFallbackFreeModel, usageFallbackLabel, usageFallbackLimitNote, usageFallbackLimits, usageFallbackModelChange, usageFallbackModelOptions,
@@ -130,6 +130,24 @@ describe("model settings", () => {
     expect(privateURLField("ollama").label).toBe("Self-hosted Ollama URL");
     expect(privateServerFooter("openai")).toContain("set on the server");
     expect(privateServerFooter("ollama")).not.toContain("set on the server");
+  });
+
+  it("shows and switches Private Local's read-only tool servers", () => {
+    const servers = [
+      { name: "mail", tools: ["mail_search", "mail_read"], excluded: ["mail_send"], onDemand: false, tokens: 900, blocked: false },
+      { name: "tracker", tools: ["get_issue"], excluded: [], onDemand: true, tokens: 4000, service: "tracker.example.com", blocked: false },
+      { name: "passwords", tools: [], excluded: [], onDemand: false, tokens: 0, problem: "Never available in Private Local.", blocked: true },
+    ];
+    expect(privateToolDetail(servers[0])).toBe("2 read-only tools, always offered (about 900 tokens), 1 left out. Runs on the Mac and may reach its own service.");
+    expect(privateToolDetail(servers[1])).toContain("loaded when needed");
+    expect(privateToolDetail(servers[1])).toContain("Sends queries to tracker.example.com.");
+    expect(privateToolDetail(servers[2])).toBe("Never available in Private Local.");
+    expect(privateToolsUse({ enabled: true }, "tracker")).toBe(true);
+    expect(privateToolsUse(undefined, "tracker")).toBe(false);
+    const off = privateToolsWithServer({ enabled: true }, servers, "tracker", false);
+    expect(off).toEqual({ enabled: true, servers: ["mail"] });
+    expect(privateToolsWithServer(off, servers, "tracker", true)).toEqual({ enabled: true, servers: ["mail", "tracker"] });
+    expect(PRIVATE_TOOLS_FOOTER).toContain("never to a cloud model");
     expect(privateModelsQuery({ baseURL: "https://llm.example.ts.net/v1", api: "openai" }))
       .toBe("baseURL=https%3A%2F%2Fllm.example.ts.net%2Fv1&api=openai");
     expect(privateModelsQuery({ baseURL: "https://llm.example.ts.net/ollama" }))

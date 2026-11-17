@@ -87,13 +87,14 @@ cloud aliases are rejected. An OpenAI-compatible server has no architecture
 metadata, so Cantrip requires the model in its `/models` list and relies on the
 address rules above and on the server being yours. Missing models or a stopped
 server fail visibly without using Copilot, Claude, Codex, or any cloud fallback.
-Tool calls in a reply stop the run without executing anything.
-Settings use revision checks so another device cannot overwrite a stale form.
+With **Read-only tools** off (the default), tool calls in a reply stop the run
+without executing anything. Settings use revision checks so another device cannot overwrite a stale form.
 Loading models never submits a conversation or downloads a model.
 
-The tab currently supports **text chat**, not attachments or agent tools.
-Shell/slash commands are treated as text; tools, MCP, Council, ambient context,
-shared memory injection/logging and cross-tab continuity digests are disabled.
+The tab supports **text chat**, not attachments, plus optional **read-only
+tools** (below). Shell/slash commands are treated as text; the shell, Council,
+ambient context, shared memory injection/logging and cross-tab continuity
+digests are disabled.
 Auto delivery queues locally; Redirect and Stop remain available. The transcript
 uses plain text rather than fetching Markdown images or opening model-generated
 links. Drafts are isolated by tab, and no private completion summaries go to APNs.
@@ -111,12 +112,47 @@ ownership. This tab has its own transport (native Ollama or OpenAI-compatible
 chat completions); the global Local Model backend's settings, API key and tools
 are not reused.
 
+### Read-only tools
+
+Turn on **Read-only tools** in Private Local Settings (OpenAI-compatible servers
+only) to let the model look things up with the read-only tools of Cantrip's MCP
+servers (Settings > MCP Servers), for example "summarize my messages from a
+contact" with a mail or messages server. Each server has its own switch; with
+none chosen, every available server is used. The settings list every server's
+allowed tools and the tools left out.
+
+- A tool is offered only if its name has no word that can change something
+  (create, update, delete, send, run, execute, fill, install, click…), the server
+  doesn't mark it as writing or destructive, and either its name reads (search,
+  get, list, read, find, status, query…) or the server declares every one of its
+  tools read-only. Anything unclear is left out. Password, browser, file, form and
+  build servers (Bitwarden, agent Chrome, forms, Xcode, reverse engineering) are
+  never offered. A call to anything else is refused and shown as a failed step;
+  nothing runs.
+- Tools run on the Mac through Cantrip's MCP relay, with each server's own
+  sign-in, tool limit and per-tab switch. Results go only to your self-hosted
+  model, never to a cloud model. A service server (shown with its address)
+  sends your query to that service, as it does from other tabs.
+- Small servers' tools go with every request; larger ones are listed by name
+  and loaded when the model asks (`search_tools`), to keep requests small.
+- A reply may take up to 25 tool steps, then must answer. Each result is cut to
+  16,000 characters, and older results are left out first to stay within the
+  context window. Tool steps show in the transcript like other tabs.
+- While tools are on, the original default system prompt ("You have no tools")
+  is replaced by one that describes them; a custom prompt is kept and the tool
+  rules are added after it.
+
 Both native apps need updated builds and the host must reopen to activate it.
 The paired API advertises `isLocalPrivate`/`supportsPrivateLocalSettings`, with
 `GET/POST /api/v1/sessions/{id}/private-settings` and read-only
 `GET /api/v1/sessions/{id}/private-models?baseURL=...&api=...`. The configuration's
 `api` is `"ollama"` or `"openai"`; a save that omits it (clients from before the
 choice) keeps the saved API, and so does a model list without `api`.
+`tools` is `{"enabled": bool, "servers": [names]}` (`servers` absent = every
+server); a save that omits it keeps the saved one. Read-only
+`GET /api/v1/sessions/{id}/private-tools[?refresh=1]` returns `servers`, each with
+`name`, `tools` (allowed), `excluded`, `onDemand`, `tokens`, `service` (the host a
+service server sends queries to), `problem` and `blocked`.
 
 ## Per-tab backend, model, effort and context window
 
@@ -470,7 +506,7 @@ request on refresh. Requests and secrets are not restored/replayed after a crash
 
 **Act on my behalf** and provider-specific automatic permissions are preserved.
 Turn automatic actions off to require tool approvals. Read-only Council seats
-remain read-only; the Private Local tab remains tool-free. Codex's approvals for
+remain read-only; the Private Local tab gets read-only tools only, and only when switched on. Codex's approvals for
 commands, edits and MCP tools arrive as ordinary approval requests. Arbitrary
 programs, manual persistent-terminal input, and arbitrary OAuth callback flows
 are not covered by this bridge.
