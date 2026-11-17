@@ -13,6 +13,8 @@ Usage:
   cantrip daemon start|stop|restart|run|logs   (headless background service)
   cantrip pair | status | config | doctor | cleanup  (see `cantrip help`)
   cantrip secret list | sync | run NAME... -- cmd     (secrets broker)
+  cantrip privacy report|test · muse feeds|log|requests · handoffs · sim acquire|release
+          · api · weather [PLACE] · build-queue · seed-worktree PATH   (see `cantrip help`)
 
 If the app isn't running, the exact bundle next to this script's repo is
 launched (never LaunchServices' pick among stale copies), with a warning
@@ -249,21 +251,33 @@ def inspect_runs(identifier=None):
     return 0
 
 
-HOST_COMMANDS = {"daemon", "pair", "config", "status", "doctor", "cleanup", "secret", "secrets", "env", "help"}
+HOST_COMMANDS = {"daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "secret", "secrets", "env",
+                 "weather", "help"}
 TAB_ACTIONS = {"list", "read", "ask", "reply"}
 SKILLS_ACTIONS = {"list", "add", "edit", "enable", "disable", "sync", "check", "help"}
 INSTRUCTIONS_ACTIONS = {"list", "edit", "check", "help"}
 MCP_ACTIONS = {"list", "migrate", "restore", "connect", "approve", "decline", "signout", "enable", "disable", "serve", "help"}
+# The rest of the app's commands (CantripCLI.commands); each needs one of its actions or a flag.
+COMMAND_ACTIONS = {
+    "tab": TAB_ACTIONS, "tabs": TAB_ACTIONS, "skills": SKILLS_ACTIONS, "instructions": INSTRUCTIONS_ACTIONS,
+    "mcp": MCP_ACTIONS,
+    "privacy": {"report", "test", "help"},
+    "muse": {"feeds", "log", "requests", "send", "status", "help"},
+    "sim": {"acquire", "release", "list", "adopt", "tidy", "help"},
+    "api": {"key", "help"},
+    "handoffs": {"help"},
+    "build-queue": {"run", "status", "list", "help"},
+}
 
 
 def is_host_command(args):
-    """`tab`/`skills`/`instructions`/`mcp` only with an action, so `cantrip tab completion in zsh?` is still a question."""
+    """Commands with actions run in the app only with an action (or alone, or with a flag), so
+    `cantrip tab completion in zsh?` or `cantrip privacy settings for my tabs?` is still a question."""
     if not args:
         return False
     if args[0] in HOST_COMMANDS:
         return True
-    actions = {"tab": TAB_ACTIONS, "tabs": TAB_ACTIONS, "skills": SKILLS_ACTIONS,
-               "instructions": INSTRUCTIONS_ACTIONS, "mcp": MCP_ACTIONS}.get(args[0])
+    actions = COMMAND_ACTIONS.get(args[0])
     return actions is not None and (
         len(args) == 1 or args[1] in actions or args[1].startswith("--"))
 

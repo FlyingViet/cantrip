@@ -9,7 +9,7 @@ APP_PENDING = .$(APP_NAME).app.pending
 # Historical cert name is preferred so existing permission grants survive.
 CERT_NAME = AgentSpotlight Dev
 
-.PHONY: all build home-window test test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-mac-context test-github-auth test-remote-routing test-message-routing test-session-tabs test-settings-manifest test-maintenance test-release-updater test-github-builds test-mcp-on-demand test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-browser-preview-live test-rich-cards test-agent-policy test-skills test-secrets test-environments cert artwork icon app run clean test-memory-index
+.PHONY: all build home-window test test-cli-routing test-prune prune-builds test-architectures test-tool-path test-process-runner test-iso-date test-cantrip-paths test-context test-features test-copilot-parser test-package-tracking test-recovery test-run-journal test-message-deletion test-remote-images test-mac-context test-github-auth test-remote-routing test-message-routing test-session-tabs test-settings-manifest test-maintenance test-release-updater test-github-builds test-mcp-on-demand test-cli-routing test-consolidation test-voice-vocabulary test-backend-commands test-web-slash test-storage-upkeep test-build-caches test-simulator-pool test-browser-preview test-browser-preview-live test-rich-cards test-agent-policy test-skills test-secrets test-environments cert artwork icon app run clean test-memory-index
 
 all: app
 
@@ -301,6 +301,10 @@ test-environments:
 
 test-mcp-on-demand:
 	@python3 Tests/MCPOnDemandTests/test_mcp_on_demand.py
+
+# The cantrip script sends the app's commands to the app and anything else to an agent.
+test-cli-routing:
+	@python3 Tests/CLIRoutingTests/test_cli_routing.py
 
 # Runs the browser Remote's slash-command matching and caching code straight from webAppTemplate.
 test-web-slash:
