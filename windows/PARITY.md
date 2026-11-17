@@ -15,6 +15,11 @@ macOS 26 is supported; Xcode 27 builds retain that minimum, with macOS 27 runtim
 confirmation pending. This does not change the Windows x64
 target or certify separately installed backend runtimes on either platform.
 
+macOS's persistent Copilot adapter supports both the legacy SDK and CLI
+1.0.113's grouped SDK options, including native steering, permission callbacks,
+streaming, model lookup and command discovery. Windows still uses the CLI
+process interface rather than this SDK adapter.
+
 | Subsystem | Status | Windows implementation / remaining gap |
 |---|---|---|
 | Global summon shortcut | Partial | Alt+Space with conflict reporting, Ctrl+Space fallback, and retry. Selected-text shortcut remains. |

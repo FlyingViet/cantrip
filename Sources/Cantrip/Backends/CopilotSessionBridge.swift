@@ -1,7 +1,7 @@
 import Foundation
 
 enum CopilotSessionBridge {
-    static let script = CopilotRuntime.discoveryScript + "\n" + #"""
+    static let script = CopilotRuntime.discoveryScript + "\n" + CopilotRuntime.sdkScript + "\n" + #"""
     import { createInterface } from 'node:readline';
     import { randomUUID } from 'node:crypto';
 
@@ -271,16 +271,10 @@ enum CopilotSessionBridge {
       emit({ kind: 'runtimeResolved', runID, cached: paths.cached === true,
         seconds: Math.round((Date.now() - resolving) / 100) / 10, version: paths.version ?? null });
       const sdk = await import(paths.sdk);
-      if (!sdk.RuntimeConnection?.forStdio || !sdk.CopilotClient) {
-        throw new Error('Update Copilot CLI to a version with native session steering.');
-      }
-      client = new sdk.CopilotClient({
-        connection: sdk.RuntimeConnection.forStdio({ path: paths.runtime }),
-        workingDirectory: config.workdir, logLevel: 'none', useLoggedInUser: true
-      });
+      client = createCopilotClient(sdk, paths, config.workdir);
       await client.start();
       watchRuntime();
-      const options = {
+      const options = copilotSessionOptions(sdk, {
         clientName: 'Cantrip', workingDirectory: config.workdir,
         model: config.model || undefined, reasoningEffort: config.effort || undefined,
         contextTier: config.contextTier || undefined, streaming: true,
@@ -336,7 +330,7 @@ enum CopilotSessionBridge {
           return {answer:answer.text,wasFreeform:!(request.choices || []).includes(answer.text)};
         }),
         onEvent
-      };
+      });
       let resumed = false;
       if (resumeSessionID && typeof client.resumeSession === 'function') {
         try {

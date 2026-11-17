@@ -112,7 +112,7 @@ enum CopilotModelFetcher {
         let error: CopilotModelError?
     }
 
-    static let script = CopilotRuntime.discoveryScript + "\n" + #"""
+    static let script = CopilotRuntime.discoveryScript + "\n" + CopilotRuntime.sdkScript + "\n" + #"""
     const positive = value => Number.isSafeInteger(value) && value > 0 ? value : undefined;
     const credits = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
     const price = prices => {
@@ -158,11 +158,8 @@ enum CopilotModelFetcher {
       let paths;
       try { paths = resolveCopilotRuntime(process.env.CANTRIP_COPILOT_COMMAND || 'copilot'); }
       catch { throw new Error('unavailable'); }
-      const { CopilotClient, RuntimeConnection } = await import(paths.sdk);
-      client = new CopilotClient({
-        connection: RuntimeConnection.forStdio({ path: paths.runtime }),
-        logLevel: 'none', useLoggedInUser: true, workingDirectory: homedir()
-      });
+      const sdk = await import(paths.sdk);
+      client = createCopilotClient(sdk, paths, homedir());
       await client.start();
       return project((await client.rpc.models.list({})).models);
     }

@@ -4,6 +4,52 @@ enum CopilotRuntime {
     /// `code` on the error (and on the bridge's `failure`) when `copilot --version` never answered.
     static let probeTimeoutCode = "COPILOT_PROBE_TIMEOUT"
 
+    // CLI 1.0.113 groups SDK options and renames the spawned-stdio factory.
+    static let sdkScript = #"""
+    function copilotGroupedSDK(sdk) {
+      return typeof sdk.RuntimeConnection?.forSpawnedStdio === 'function';
+    }
+
+    function createCopilotClient(sdk, paths, workingDirectory) {
+      if (typeof sdk.CopilotClient !== 'function') {
+        throw new Error("Cantrip can't use this Copilot CLI SDK. Update Cantrip or choose a supported CLI version.");
+      }
+      if (copilotGroupedSDK(sdk)) {
+        return new sdk.CopilotClient({
+          mode: 'coding-agent',
+          runtime: sdk.RuntimeConnection.forSpawnedStdio({ path: paths.runtime, workingDirectory }),
+          observability: { logLevel: 'none' }, github: { useLoggedInUser: true }
+        });
+      }
+      if (typeof sdk.RuntimeConnection?.forStdio !== 'function') {
+        throw new Error("Cantrip can't use this Copilot CLI SDK. Update Cantrip or choose a supported CLI version.");
+      }
+      return new sdk.CopilotClient({
+        connection: sdk.RuntimeConnection.forStdio({ path: paths.runtime }),
+        workingDirectory, logLevel: 'none', useLoggedInUser: true
+      });
+    }
+
+    function copilotSessionOptions(sdk, options) {
+      if (!copilotGroupedSDK(sdk)) return options;
+      const { reasoningEffort, contextTier, streaming, remoteSession, memory, enableMcpApps, mcpOAuthTokenStorage,
+        availableTools, excludedTools, disabledMcpServers, toolSearch, includeSubAgentStreamingEvents,
+        enableFileHooks, onPermissionRequest, onUserInputRequest, onEvent, ...base } = options;
+      return {
+        ...base,
+        inference: { reasoningEffort, contextTier },
+        tools: { availableTools, excludedTools, search: toolSearch },
+        state: { memory },
+        mcp: { enableApps: enableMcpApps, oauthTokenStorage: mcpOAuthTokenStorage,
+          disabledServers: disabledMcpServers },
+        hooks: { enableRepositoryHooks: enableFileHooks },
+        permissions: { onRequest: onPermissionRequest },
+        interaction: { onUserInputRequest },
+        events: { streaming, includeSubAgentStreamingEvents, onEvent }
+      };
+    }
+    """#
+
     // Resolve the SDK and native runtime from the same installed CLI version.
     // In particular, a custom CLI path must never silently use another install.
     static let discoveryScript = #"""

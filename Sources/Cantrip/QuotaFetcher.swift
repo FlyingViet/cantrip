@@ -122,7 +122,7 @@ enum QuotaFetcher {
 
     // Only this allowlisted projection crosses the process boundary. No chat
     // session is created, and the SDK owns a separate, short-lived runtime.
-    static let script = CopilotRuntime.discoveryScript + "\n" + #"""
+    static let script = CopilotRuntime.discoveryScript + "\n" + CopilotRuntime.sdkScript + "\n" + #"""
     const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
     const bool = value => typeof value === 'boolean' ? value : undefined;
     const text = value => typeof value === 'string' ? value.slice(0, 100) : undefined;
@@ -168,11 +168,8 @@ enum QuotaFetcher {
     }
     async function main() {
       const paths = resolveCopilotRuntime();
-      const { CopilotClient, RuntimeConnection } = await import(paths.sdk);
-      client = new CopilotClient({
-        connection: RuntimeConnection.forStdio({ path: paths.runtime }),
-        logLevel: 'none', useLoggedInUser: true, workingDirectory: homedir()
-      });
+      const sdk = await import(paths.sdk);
+      client = createCopilotClient(sdk, paths, homedir());
       await client.start();
       if (!client.rpc.account?.getQuota || !client.rpc.account?.getCurrentAuth) throw new Error('runtime');
       if (!(await client.rpc.account.getCurrentAuth())?.authInfo?.copilotUser) throw new Error('authentication');

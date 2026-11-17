@@ -81,9 +81,13 @@ sign-in (`codex login`).
 
 On macOS, local Copilot runs through a persistent native SDK session, not a
 one-shot prompt process. Use a recent CLI with its bundled SDK and runtime
-(exercised with 1.0.83), and ensure `node` is available in your login shell.
+(exercised with 1.0.113), and ensure `node` is available in your login shell.
 Cantrip resolves both from the configured CLI installation/version; it does
 not substitute another cached version when a custom path is invalid.
+Cantrip supports both the older SDK and 1.0.113's grouped settings. If an older
+Cantrip build says “Update Copilot CLI to a version with native session steering”
+after a CLI upgrade, update Cantrip: that message can mean the SDK API changed,
+not that the CLI is too old.
 A custom path that can't run at all (a file that's gone, a folder, a file
 without execute permission, or a test stand-in such as `/usr/bin/false`) is
 cleared when Cantrip starts, with a line in `~/Library/Logs/Cantrip.log`

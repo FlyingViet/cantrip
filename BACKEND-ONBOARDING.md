@@ -183,6 +183,11 @@ live run.
   existed (5044094). MCP OAuth sign-ins only work from the binary that saved them (c9a0739).
 - Build the child's PATH with `ToolPath`, which keeps the caller's order and adds only the
   missing tool folders (91af48f).
+- Copilot SDK compatibility lives in `CopilotRuntime.sdkScript`, shared by chat, commands,
+  model discovery and quota lookup. CLI 1.0.113 renamed `forStdio` to `forSpawnedStdio`,
+  requires `mode: "coding-agent"` and `runtime`, and groups session options (including
+  permissions, tools, memory and events). Adapt all of them together: fixing the factory alone
+  can leave approvals or streaming disconnected. Keep tests for both SDK shapes.
 - Read a helper command's output while it runs (`ProcessRunner`). A pipe holds 64 KB, and a
   command that prints more never exits (6b34f7c).
 - Don't look up a missing CLI through a login shell on the main thread. Nothing is cached when
@@ -455,8 +460,8 @@ below. When a fix teaches something new, add it to section 4 with its commit.
 
 ## 9. Known gaps in current backends
 
-Checked against `main` on 2026-10-31. Fix these when working on the backend, and update the
-table when you do.
+Checked against `main` on 2026-10-31; Copilot SDK compatibility updated for 1.0.113 on
+2026-11-17. Fix these when working on the backend, and update the table when you do.
 
 | Backend | Missing |
 |---|---|
@@ -466,6 +471,14 @@ table when you do.
 | Copilot Remote | Delete Message can't reach the remote server's session; Cantrip only starts a new one |
 | Agent policy | Reads that Codex runs on its own under `untrusted` (`cat`, `ls`) never reach Cantrip, so read and `any` path rules can't stop them on Codex; deletes done inside an interpreter (`python3 -c 'os.remove(…)'`) aren't matched by `deletesOutside`; a delete whose target is a variable (`rm -rf "$OUT"`) can't be checked; Claude Code and Codex in Terminal get only the deny rules they can express (plain command prefixes, whole MCP servers, `~` paths) |
 | Windows (all) | Structured events, conversation resume, usage fallback, model tiers, the agent policy and build cards in its own tabs (see PARITY.md) |
+
+Last live check of Copilot SDK compatibility: 2026-11-17, CLI 1.0.113 with `gpt-6.1-sol`,
+using `CopilotSessionBridge`'s script. Passed: startup, streamed reply, immediate steering,
+both markers recalled in the next turn, denied file creation, and approved file creation after
+stopping the runtime and resuming its session. Model catalog, quota and session command discovery
+also passed through their actual helper scripts without model calls. Test sessions were deleted.
+A request through the updated installed engine (`cantrip --backend copilot`) also passed.
+The GUI and paired-client UI were not checked.
 
 Last live check of the agent policy: 2026-10-31, `claude` 2.1.312, Copilot CLI 1.0.105,
 `codex-cli` 0.166.0 and `agy` 1.4.12 (Gemini 3.8 Flash, as the automatic pick was at its weekly

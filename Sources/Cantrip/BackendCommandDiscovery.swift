@@ -15,7 +15,7 @@ enum BackendCommandDiscovery {
 
     // MARK: Copilot
 
-    static let copilotScript = CopilotRuntime.discoveryScript + "\n" + #"""
+    static let copilotScript = CopilotRuntime.discoveryScript + "\n" + CopilotRuntime.sdkScript + "\n" + #"""
     const config = JSON.parse(process.argv[1] ?? '{}');
     const out = value => new Promise(resolve => process.stdout.write(JSON.stringify(value) + '\n', resolve));
     const text = error => String(error?.message ?? error).slice(0, 400);
@@ -24,10 +24,7 @@ enum BackendCommandDiscovery {
     try {
       const paths = resolveCopilotRuntime(config.command);
       const sdk = await import(paths.sdk);
-      client = new sdk.CopilotClient({
-        connection: sdk.RuntimeConnection.forStdio({ path: paths.runtime }),
-        workingDirectory: config.workdir, logLevel: 'none', useLoggedInUser: true
-      });
+      client = createCopilotClient(sdk, paths, config.workdir);
       await client.start();
       let disabled = [];
       try {
@@ -38,10 +35,10 @@ enum BackendCommandDiscovery {
       try {
         // A session in the tab's folder lists exactly what a turn there can run. MCP servers stay
         // off: they never add commands, and starting them would be slow.
-        const session = await client.createSession({
+        const session = await client.createSession(copilotSessionOptions(sdk, {
           clientName: 'Cantrip', workingDirectory: config.workdir, enableConfigDiscovery: true,
           remoteSession: 'off', disabledMcpServers: disabled, onPermissionRequest: () => ({ kind: 'reject' })
-        });
+        }));
         sessionId = session.sessionId;
         commands = (await session.rpc.commands.list({ includeBuiltins: true, includeSkills: true, includeClientCommands: false }))?.commands ?? [];
         try { skills = (await session.rpc.skills.list())?.skills ?? []; } catch {}

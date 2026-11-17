@@ -125,6 +125,8 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
 
 Capabilities depend on the backend. The Local Model backend does not receive
 attachments or screen captures.
+The macOS Copilot adapter supports CLI 1.0.113's SDK and the older SDK interface;
+see [backend setup](docs/backends.md) if a CLI upgrade triggers a compatibility error.
 
 ## Quick start
 

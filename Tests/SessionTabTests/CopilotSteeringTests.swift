@@ -155,7 +155,7 @@ extension SessionTabTests {
         try await testSteeringDurabilityBarrier()
         try await testSteeringRecovery()
         try await testRemoteSteering()
-        try await testCopilotBridge()
+        for grouped in [false, true] { try await testCopilotBridge(grouped: grouped) }
         print("Copilot steering: ordered delivery, durability, idle/cancel races, fallback and bridge passed")
     }
 
@@ -276,17 +276,46 @@ extension SessionTabTests {
     }
 
     @MainActor
-    private static func testCopilotBridge() async throws {
+    private static func testCopilotBridge(grouped: Bool) async throws {
         let fakeSDK = #"""
-        export const RuntimeConnection = { forStdio: options => options };
+        const grouped = GROUPED_SDK;
+        export const RuntimeConnection = grouped
+          ? { forSpawnedStdio: options => options }
+          : { forStdio: options => options };
         export class CopilotClient {
           constructor(options) {
-            if (options.connection.path !== 'fixture')
+            const runtime = grouped ? options.runtime : options.connection;
+            if (runtime.path !== 'fixture')
               throw Error('Sessions must run the runtime discovery chose');
+            if (grouped && (options.mode !== 'coding-agent' || !runtime.workingDirectory
+                || options.observability?.logLevel !== 'none' || options.github?.useLoggedInUser !== true
+                || 'connection' in options || 'workingDirectory' in options))
+              throw Error('Missing grouped client settings');
           }
           async start() {}
           async forceStop() {}
           async createSession(config) {
+            if (grouped) {
+              const moved = ['streaming', 'remoteSession', 'memory', 'enableMcpApps', 'mcpOAuthTokenStorage',
+                'availableTools', 'excludedTools', 'disabledMcpServers', 'toolSearch', 'enableFileHooks',
+                'reasoningEffort', 'contextTier', 'includeSubAgentStreamingEvents',
+                'onPermissionRequest', 'onUserInputRequest', 'onEvent'];
+              if (moved.some(key => key in config)) throw Error('Legacy session settings reached the grouped SDK');
+              if (config.state?.memory?.enabled !== false || config.events?.includeSubAgentStreamingEvents !== false
+                  || typeof config.permissions?.onRequest !== 'function'
+                  || typeof config.interaction?.onUserInputRequest !== 'function'
+                  || config.tools?.search?.deferThreshold !== 7
+                  || !config.tools?.excludedTools?.includes('fixture-excluded')
+                  || !config.mcp?.disabledServers?.includes('fixture-disabled')
+                  || config.inference?.reasoningEffort !== 'high' || config.inference?.contextTier !== 'long_context')
+                throw Error('Missing grouped session settings');
+              if (config.tools?.availableTools?.length === 0 && config.hooks?.enableRepositoryHooks !== false)
+                throw Error('Read-only sessions must not run repository hooks');
+              config = { ...config, streaming: config.events.streaming, onEvent: config.events.onEvent,
+                remoteSession: 'off', mcpOAuthTokenStorage: config.mcp.oauthTokenStorage,
+                enableMcpApps: config.mcp.enableApps, availableTools: config.tools.availableTools,
+                onPermissionRequest: config.permissions.onRequest };
+            }
             if (!config.streaming || !config.enableConfigDiscovery || config.remoteSession !== 'off'
                 || config.mcpOAuthTokenStorage !== 'persistent')
               throw Error('Missing session settings');
@@ -319,7 +348,7 @@ extension SessionTabTests {
             };
           }
         }
-        """#
+        """#.replacingOccurrences(of: "GROUPED_SDK", with: grouped ? "true" : "false")
         let sdkURL = "data:text/javascript;base64," + Data(fakeSDK.utf8).base64EncodedString()
         let discovery = "function resolveCopilotRuntime() { return {sdk: '\(sdkURL)', runtime: 'fixture'}; }"
         let script = CopilotSessionBridge.script.replacingOccurrences(
@@ -327,6 +356,13 @@ extension SessionTabTests {
         )
         let backend = CopilotBackend(bridgeScript: script)
         let other = CopilotBackend(bridgeScript: script)
+        for fixture in [backend, other] {
+            fixture.effortOverride = "high"
+            fixture.contextTierOverride = "long_context"
+            fixture.toolDeferThreshold = 7
+            fixture.excludedTools = ["fixture-excluded"]
+            fixture.disabledMcpServers = ["fixture-disabled"]
+        }
         other.readOnly = true
         defer { backend.cancel(); other.cancel() }
         let first = SteeringEvents()
