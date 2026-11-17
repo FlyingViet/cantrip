@@ -57,6 +57,12 @@ final class PrivateOllamaFixture: @unchecked Sendable {
         set { lock.withLock { reply = newValue } }
     }
     private var reply = ""
+    /// "openai-shadow": the reply after a correction request, when one comes.
+    var shadowCorrectedReply: String {
+        get { lock.withLock { corrected } }
+        set { lock.withLock { corrected = newValue } }
+    }
+    private var corrected = ""
     /// Scripted `/v1/chat/completions` bodies (server-sent events), by request (PrivateLocalToolsTests).
     var chatResponder: ((HTTPRequest) -> String)? {
         get { lock.withLock { responder } }
@@ -149,8 +155,11 @@ final class PrivateOllamaFixture: @unchecked Sendable {
                 case "openai-shadow":
                     // First a shell call and a read-only tool call; after their results, a reply with a block.
                     let usage = #"data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":30}}"# + "\n\n"
-                    if String(decoding: request.body, as: UTF8.self).contains(#""role":"tool""#) {
-                        let delta = (try? JSONSerialization.data(withJSONObject: ["content": self.shadowReply])) ?? Data()
+                    let sent = String(decoding: request.body, as: UTF8.self)
+                    if sent.contains(#""role":"tool""#) {
+                        let text = sent.contains("can't be saved as written") && !self.shadowCorrectedReply.isEmpty
+                            ? self.shadowCorrectedReply : self.shadowReply
+                        let delta = (try? JSONSerialization.data(withJSONObject: ["content": text])) ?? Data()
                         body += event(String(decoding: delta, as: UTF8.self)) + event("{}", finish: #""stop""#)
                             + usage + "data: [DONE]\n\n"
                     } else {

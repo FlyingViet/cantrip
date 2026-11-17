@@ -25,6 +25,19 @@ struct CantripHomeShadowConfig: Codable, Equatable {
     /// Sent as the request's `priority` (Splash: foreground, normal or background) so shadow runs
     /// yield to Home chat and the Privacy Gate; empty for servers that reject unknown fields.
     var priority = "background"
+    /// Tuning (shadow runs only): extra system instructions, sampling and thinking level.
+    var instructions = ""
+    var temperature: Double?
+    /// Sent as `reasoning_effort` (Splash: low, medium, high turn thinking on); empty to leave it.
+    var reasoningEffort = ""
+    /// Offer `home_records`: the task's saved records from the run's snapshot, every field and full ID
+    /// (real runs print them with a shell command shadow runs don't have).
+    var recordsTool = false
+    /// Check record changes the way saving them would, and send the problems back once to correct.
+    var validateRecords = false
+    /// Keep the first request and every tool call with its full result in the run's private folder,
+    /// so the run can be replayed offline with other settings. Deleted a day after `until`.
+    var keepTranscript = true
 
     init() {}
 
@@ -41,6 +54,12 @@ struct CantripHomeShadowConfig: Codable, Equatable {
         mcpConfigPath = try c.decodeIfPresent(String.self, forKey: .mcpConfigPath) ?? d.mcpConfigPath
         afterRun = try c.decodeIfPresent([String].self, forKey: .afterRun) ?? d.afterRun
         priority = try c.decodeIfPresent(String.self, forKey: .priority) ?? d.priority
+        instructions = try c.decodeIfPresent(String.self, forKey: .instructions) ?? d.instructions
+        temperature = try c.decodeIfPresent(Double.self, forKey: .temperature)
+        reasoningEffort = try c.decodeIfPresent(String.self, forKey: .reasoningEffort) ?? d.reasoningEffort
+        recordsTool = try c.decodeIfPresent(Bool.self, forKey: .recordsTool) ?? d.recordsTool
+        validateRecords = try c.decodeIfPresent(Bool.self, forKey: .validateRecords) ?? d.validateRecords
+        keepTranscript = try c.decodeIfPresent(Bool.self, forKey: .keepTranscript) ?? d.keepTranscript
     }
 
     static var folder: URL { CantripPaths.cache("local-tools-shadow") }
@@ -167,6 +186,10 @@ final class CantripHomeShadowRun: @unchecked Sendable {
     let config: CantripHomeShadowConfig
     var startedAt: Date?
     let queuedAt = Date()
+    /// The one correction round (`validateRecords`) was used.
+    var corrected = false
+    private(set) var validationProblems = 0
+    private var savedRequest = false
     private let lock = NSLock()
     private(set) var toolCalls: [String: Int] = [:]
     private(set) var refusedCalls: [String: Int] = [:]
@@ -242,6 +265,146 @@ final class CantripHomeShadowRun: @unchecked Sendable {
         try? handle.write(contentsOf: data)
     }
 
+    // MARK: Transcript (private, for offline replay)
+
+    /// The first request as sent: messages and tools (the model and sampling are in run.json).
+    func saveRequest(_ body: [String: Any]) {
+        guard config.keepTranscript, lock.withLock({ () -> Bool in defer { savedRequest = true }; return !savedRequest }) else { return }
+        var kept = body
+        kept["stream"] = nil
+        kept["stream_options"] = nil
+        writeJSON("request.json", kept)
+    }
+
+    func recordToolCall(_ name: String, arguments: [String: Any], output: String, success: Bool, allowed: Bool) {
+        guard config.keepTranscript else { return }
+        let entry: [String: Any] = ["name": name, "arguments": arguments, "output": output,
+                                    "success": success, "allowed": allowed]
+        let line = (try? JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys])) ?? Data()
+        append(line + Data([0x0A]), to: "tools.jsonl")
+    }
+
+    /// Removes saved requests and tool results from every run folder (after the test ends).
+    static func purgeTranscripts(root: URL = CantripHomeShadowConfig.folder) -> Int {
+        let folder = root.appendingPathComponent("private", isDirectory: true)
+        let runs = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        var removed = 0
+        for run in runs {
+            for name in ["tools.jsonl", "request.json"] {
+                if (try? FileManager.default.removeItem(at: run.appendingPathComponent(name))) != nil { removed += 1 }
+            }
+        }
+        return removed
+    }
+
+    // MARK: Records tool
+
+    static let recordsToolName = "home_records"
+
+    static var recordsToolSchema: [String: Any] {
+        ["type": "function", "function": [
+            "name": recordsToolName,
+            "description": "Read the saved records of a Cantrip Home task (read-only): every field and the full record ID. "
+                + "Use it instead of the command the instructions mention for printing records. Defaults to this task. "
+                + "Filter with `ids` (full IDs, or their first 8 or more characters) or `query` (words found in any field); "
+                + "page with `offset` and `limit` (default 20, at most 50).",
+            "parameters": ["type": "object", "properties": [
+                "task": ["type": "string", "description": "Task ID (default: this task)"],
+                "ids": ["type": "array", "items": ["type": "string"], "description": "Record IDs or ID prefixes"],
+                "query": ["type": "string", "description": "Words that must all appear in a record"],
+                "offset": ["type": "integer"], "limit": ["type": "integer"],
+            ] as [String: Any]],
+        ] as [String: Any]]
+    }
+
+    func recordsTool(_ arguments: [String: Any]) -> String {
+        let wanted = (arguments["task"] as? String).flatMap(UUID.init(uuidString:)) ?? taskID
+        guard let task = tasks.first(where: { $0.id == wanted }), let workspace = task.workspace else {
+            return "No task with records has that ID. Omit `task` for this task's records."
+        }
+        var records = workspace.records
+        if let ids = arguments["ids"] as? [String], !ids.isEmpty {
+            let prefixes = ids.map { $0.trimmingCharacters(in: .whitespaces).uppercased() }.filter { $0.count >= 8 }
+            records = records.filter { record in prefixes.contains { record.id.uuidString.hasPrefix($0) } }
+        }
+        if let query = (arguments["query"] as? String)?.lowercased(), !query.isEmpty {
+            let words = query.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+            records = records.filter { record in
+                let text = record.values.values.joined(separator: " ").lowercased()
+                return words.allSatisfy { text.contains($0) }
+            }
+        }
+        let offset = max(0, (arguments["offset"] as? NSNumber)?.intValue ?? 0)
+        let limit = min(50, max(1, (arguments["limit"] as? NSNumber)?.intValue ?? 20))
+        let page = records.dropFirst(offset).prefix(limit)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let lines = page.map { record -> String in
+            let object = ["id": record.id.uuidString, "values": record.values] as [String: Any]
+            return String(decoding: (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data(), as: UTF8.self)
+        }
+        let range = page.isEmpty ? "none" : "\(offset + 1)-\(offset + page.count)"
+        return "Task \(task.id.uuidString) · \(task.title): \(records.count) matching records (showing \(range)); "
+            + "fields: \(workspace.fields.map(\.key).joined(separator: ", ")).\n" + lines.joined(separator: "\n")
+    }
+
+    // MARK: Checking record changes
+
+    /// Separates a reply's first record changes from the corrected ones; only blocks after it count.
+    static let correctionMarker = "(Corrected record changes follow; they replace the record changes above.)"
+
+    /// What saving these record blocks would refuse or what does nothing, checked against the
+    /// snapshot. Empty when they're fine.
+    func validate(_ text: String) -> [String] {
+        var copy = text
+        var problems: [String] = []
+        for block in CantripHomeProtocol.extractBlocks(from: &copy) where block.kind == .records {
+            guard let batch = try? CantripHomeProtocol.decode(CantripHomeTaskRecordBatch.self, from: block.payload) else {
+                problems.append("A cantrip-task-records block isn't valid JSON for {\"taskID\", \"changes\": [...]}.")
+                continue
+            }
+            guard let task = tasks.first(where: { $0.id == batch.taskID }), let workspace = task.workspace else {
+                problems.append("taskID \(batch.taskID.uuidString) isn't a task with records.")
+                continue
+            }
+            if batch.changes.isEmpty {
+                problems.append("A block for \(task.title) has no changes; leave the block out when nothing changed.")
+            }
+            if batch.changes.count > 50 { problems.append("A block has \(batch.changes.count) changes; at most 50 per block.") }
+            let fields = Set(workspace.fields.map(\.key))
+            for change in batch.changes {
+                let values = change.values ?? [:]
+                for key in values.keys where !fields.contains(key) {
+                    problems.append("Field \"\(key)\" isn't in \(task.title) (fields: \(fields.sorted().joined(separator: ", "))).")
+                }
+                guard let id = change.id else {
+                    if change.operation == .delete { problems.append("A delete has no record ID.") }
+                    continue
+                }
+                guard let record = workspace.records.first(where: { $0.id == id }) else {
+                    problems.append("Record \(id.uuidString) doesn't exist in \(task.title); use a full ID from the records.")
+                    continue
+                }
+                if change.operation == .upsert, !values.isEmpty,
+                   values.allSatisfy({ record.values[$0.key] == $0.value }) {
+                    problems.append("Record \(id.uuidString) is resent with unchanged values; send only fields that changed.")
+                }
+            }
+        }
+        // IDs that aren't UUIDs fail to decode: point at them.
+        for match in text.matches(of: #/"id"\s*:\s*"([0-9A-Fa-f-]{4,35})"/#) {
+            problems.append("\"\(match.1)\" isn't a full record ID; use the full 36-character ID (home_records shows them).")
+        }
+        lock.withLock { validationProblems += problems.count }
+        return Array(problems.prefix(20))
+    }
+
+    static func correctionMessage(_ problems: [String]) -> String {
+        "Your record changes can't be saved as written:\n" + problems.map { "- " + $0 }.joined(separator: "\n")
+            + "\n\nSend the corrected cantrip-task-records blocks again, with full record IDs and only fields that "
+            + "actually changed (no block if nothing changed), then one short summary line."
+    }
+
     /// The run's summary: counts, labels and times only.
     func summary(status: String, endedAt: Date, error: String?, model: String, server: String) -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
@@ -250,6 +413,10 @@ final class CantripHomeShadowRun: @unchecked Sendable {
             "model": model, "server": server, "steps": steps, "toolCalls": toolCalls, "refusedCalls": refusedCalls,
             "blocks": blockCounts, "promptTokens": promptTokens, "completionTokens": completionTokens,
             "seconds": Int(endedAt.timeIntervalSince(startedAt ?? endedAt)),
+            "corrected": corrected, "validationProblems": validationProblems,
+            "tuning": ["instructions": !config.instructions.isEmpty, "temperature": config.temperature as Any,
+                       "reasoningEffort": config.reasoningEffort, "recordsTool": config.recordsTool,
+                       "validateRecords": config.validateRecords] as [String: Any],
         ]
         result["startedAt"] = startedAt.map { ISO8601DateFormatter().string(from: $0) }
         result["error"] = error.map { String($0.prefix(300)) }

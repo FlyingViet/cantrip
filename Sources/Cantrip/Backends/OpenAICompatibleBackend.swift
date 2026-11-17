@@ -21,6 +21,8 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
     /// A Home shadow run (CantripHomeShadow): only its read-only tools, never the shell, its own
     /// step cap and result size; every call is counted.
     var shadow: (tools: CantripHomeShadowTools, run: CantripHomeShadowRun)?
+    /// A shadow run's reply text so far (all steps), checked for record changes at the end.
+    private var shadowReplyText = ""
     private let settings = AppSettings.shared
     private var history: [[String: Any]] = []
     private var task: URLSessionDataTask?
@@ -66,6 +68,7 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         self.onEvent = onEvent
         self.currentWorkdir = workdir
         iterations = 0
+        shadowReplyText = ""
         guardrailLock.withLock { approvedScopes = [] }
         history = ConversationContextBuilder.chatMessages(
             for: request.userMessage,
@@ -133,11 +136,15 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         }
 
         var messages: [[String: Any]] = []
-        let system = settings.localSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        var system = settings.localSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let extra = shadow?.run.config.instructions.trimmingCharacters(in: .whitespacesAndNewlines), !extra.isEmpty {
+            system = system.isEmpty ? extra : system + "\n\n" + extra
+        }
         if !system.isEmpty {
             messages.append(["role": "system", "content": system])
         }
-        let tools = shadow.map { $0.tools.openAITools() } ?? (settings.allowActions && !readOnly ? Self.tools() : [])
+        var tools = shadow.map { $0.tools.openAITools() } ?? (settings.allowActions && !readOnly ? Self.tools() : [])
+        if shadow?.run.config.recordsTool == true { tools.append(CantripHomeShadowRun.recordsToolSchema) }
         if let budget = contextBudgetTokens {
             let fixed = HomeLocalProfile.estimate(system)
                 + HomeLocalProfile.estimate(String(decoding: (try? JSONSerialization.data(withJSONObject: tools)) ?? Data(), as: UTF8.self))
@@ -161,8 +168,12 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         ]
         if !tools.isEmpty { body["tools"] = tools }
         if let shadow {
+            let config = shadow.run.config
             body["stream_options"] = ["include_usage": true]
-            if !shadow.run.config.priority.isEmpty { body["priority"] = shadow.run.config.priority }
+            if !config.priority.isEmpty { body["priority"] = config.priority }
+            if let temperature = config.temperature { body["temperature"] = temperature }
+            if !config.reasoningEffort.isEmpty { body["reasoning_effort"] = config.reasoningEffort }
+            shadow.run.saveRequest(body)
         }
 
         var request = URLRequest(url: url)
@@ -258,6 +269,21 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
             return
         }
 
+        shadowReplyText += assistantAccumulator
+        if let shadow, shadow.run.config.validateRecords, !shadow.run.corrected {
+            let problems = shadow.run.validate(shadowReplyText)
+            if !problems.isEmpty {
+                // One correction round, as saving would refuse them in a real run.
+                shadow.run.corrected = true
+                shadowReplyText = ""
+                history.append(["role": "assistant", "content": assistantAccumulator])
+                history.append(["role": "user", "content": CantripHomeShadowRun.correctionMessage(problems)])
+                onEvent?(.textDelta("\n\n" + CantripHomeShadowRun.correctionMarker + "\n\n"))
+                onEvent?(.status("Correcting record changes…"))
+                startRequest()
+                return
+            }
+        }
         if !assistantAccumulator.isEmpty {
             history.append(["role": "assistant", "content": assistantAccumulator])
         }
@@ -278,6 +304,7 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
             return
         }
         shadow?.run.noteStep()
+        shadowReplyText += assistantAccumulator
 
         let calls = pendingToolCalls.sorted { $0.key < $1.key }.map(\.value)
         // Record the assistant turn that requested the tools.
@@ -306,8 +333,12 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
                     // Only the shadow run's read-only tools; nothing else, not even the shell.
                     let args = (try? JSONSerialization.jsonObject(
                         with: Data(call.arguments.utf8)) as? [String: Any]) ?? [:]
-                    let result = shadow.tools.call(call.name, arguments: args)
+                    let result = call.name == CantripHomeShadowRun.recordsToolName && shadow.run.config.recordsTool
+                        ? (output: shadow.run.recordsTool(args), success: true, allowed: true)
+                        : shadow.tools.call(call.name, arguments: args)
                     shadow.run.noteToolCall(call.name, allowed: result.allowed)
+                    shadow.run.recordToolCall(call.name, arguments: args, output: result.output,
+                                              success: result.success, allowed: result.allowed)
                     (output, success) = (result.output, result.success)
                 } else if let refusal = self.guardrailRefusal(for: call.name, command: command,
                                                        arguments: call.arguments) {

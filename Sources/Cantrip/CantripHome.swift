@@ -2586,8 +2586,14 @@ extension ChatSession {
         var text = messages[index].text
         let blocks = CantripHomeProtocol.extractBlocks(from: &text)
         if let shadow = cantripHomeShadow {
-            // A shadow run's blocks are kept as written, never applied.
-            for block in blocks { shadow.capture(kind: block.kind.rawValue, payload: block.payload) }
+            // A shadow run's blocks are kept as written, never applied; after a correction round,
+            // only the corrected ones count.
+            var kept = blocks
+            if let marker = messages[index].text.range(of: CantripHomeShadowRun.correctionMarker, options: .backwards) {
+                var corrected = String(messages[index].text[marker.upperBound...])
+                kept = CantripHomeProtocol.extractBlocks(from: &corrected)
+            }
+            for block in kept { shadow.capture(kind: block.kind.rawValue, payload: block.payload) }
             if !blocks.isEmpty {
                 cantripHomeNotices.append("Captured \(blocks.count) Home item(s) from this shadow run; nothing was applied.")
                 text = text.trimmingCharacters(in: .whitespacesAndNewlines)

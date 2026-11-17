@@ -25,13 +25,17 @@ extension SessionTabTests {
         decoder.dateDecodingStrategy = .iso8601
         let parsed = try decoder.decode(CantripHomeShadowConfig.self, from: Data("""
             {"tasks":["\(covered.uuidString.lowercased())"],"until":"2030-01-01T00:00:00Z",
-             "waitForTasks":["\(waiter.uuidString)"]}
+             "waitForTasks":["\(waiter.uuidString)"],"temperature":0.2,"reasoningEffort":"low",
+             "recordsTool":true,"validateRecords":true,"instructions":"Change a field only with new evidence."}
             """.utf8))
         let end = ISO8601DateFormatter().date(from: "2030-01-01T00:00:00Z")!
         precondition(parsed.covers(covered, at: end) && !parsed.covers(covered, at: end.addingTimeInterval(1))
                      && !parsed.covers(other, at: Date()) && parsed.waits(for: waiter) && !parsed.waits(for: covered)
                      && parsed.servers == ["personal", "homelab"] && parsed.maxSteps == 40 && parsed.afterRun.isEmpty
-                     && parsed.priority == "background",
+                     && parsed.priority == "background" && parsed.temperature == 0.2 && parsed.reasoningEffort == "low"
+                     && parsed.recordsTool && parsed.validateRecords && parsed.keepTranscript
+                     && parsed.instructions == "Change a field only with new evidence."
+                     && CantripHomeShadowConfig().temperature == nil && !CantripHomeShadowConfig().recordsTool,
                      "Shadow runs cover only the listed tasks until the end date")
         precondition(CantripHomeShadowConfig.load(from: URL(fileURLWithPath: "/nonexistent/config.json")) == nil,
                      "No configuration file means no shadow runs")
@@ -126,11 +130,49 @@ extension SessionTabTests {
         }
         let shadowed = try tracker("Shadow tracker")
         let record = try requireHome(shadowed.workspace?.records.first)
+
+        // The records tool reads the snapshot; the checks catch what saving would refuse or what does nothing.
+        let unitRoot = FileManager.default.temporaryDirectory.appendingPathComponent("cantrip-shadow-unit-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: unitRoot) }
+        let unit = CantripHomeShadowRun(realRunID: UUID(), task: shadowed, tasks: store.tasks, note: nil,
+                                        config: config, root: unitRoot)
+        let id = record.id.uuidString
+        precondition(unit.recordsTool([:]).contains("1 matching records") && unit.recordsTool([:]).contains(id)
+                     && unit.recordsTool(["ids": [String(id.prefix(8)).lowercased()]]).contains(id)
+                     && unit.recordsTool(["ids": ["1234"]]).contains("0 matching records")
+                     && unit.recordsTool(["query": "example waiting"]).contains(id)
+                     && unit.recordsTool(["query": "nomatch"]).contains("0 matching records")
+                     && unit.recordsTool(["task": UUID().uuidString]).hasPrefix("No task with records"),
+                     "home_records filters by ID prefix and words, with full IDs")
+        func block(_ changes: String) -> String {
+            "```cantrip-task-records\n{\"taskID\":\"\(shadowed.id.uuidString)\",\"changes\":\(changes)}\n```"
+        }
+        func problems(_ changes: String) -> String { unit.validate(block(changes)).joined(separator: " | ") }
+        precondition(problems(#"[{"operation":"upsert","id":"\#(id)","values":{"status":"Waiting"}}]"#).contains("unchanged values")
+                     && problems(#"[{"operation":"upsert","id":"\#(id.prefix(14))","values":{"status":"Closed"}}]"#).contains("isn't a full record ID")
+                     && problems("[]").contains("has no changes")
+                     && problems(#"[{"operation":"upsert","id":"\#(id)","values":{"color":"Red"}}]"#).contains("isn't in Shadow tracker")
+                     && problems(#"[{"operation":"upsert","id":"\#(UUID().uuidString)","values":{"status":"Closed"}}]"#).contains("doesn't exist")
+                     && problems(#"[{"operation":"upsert","id":"\#(id)","values":{"status":"Closed"}}]"#).isEmpty
+                     && unit.validate("No records changed.").isEmpty,
+                     "Record changes are checked against the snapshot")
+
         config.tasks = [shadowed.id.uuidString]
+        config.temperature = 0.2
+        config.reasoningEffort = "low"
+        config.recordsTool = true
+        config.validateRecords = true
+        config.instructions = "Change a field only with new evidence."
         store.runner.shadowConfig = { config }
         store.runner.shadowRoot = root
         store.runner.shadowTools = probe
         fixture.shadowReply = """
+            Example Co is still waiting.
+            ```cantrip-task-records
+            {"taskID":"\(shadowed.id.uuidString)","changes":[{"operation":"upsert","id":"\(record.id.uuidString)","values":{"status":"Waiting"}}]}
+            ```
+            """
+        fixture.shadowCorrectedReply = """
             Example Co closed the thread.
             ```cantrip-task-records
             {"taskID":"\(shadowed.id.uuidString)","changes":[{"operation":"upsert","id":"\(record.id.uuidString)","values":{"status":"Closed"}}]}
@@ -170,7 +212,9 @@ extension SessionTabTests {
                      && summary["toolCalls"] as? [String: Int] == ["mcp__personal__mail_read": 1]
                      && summary["refusedCalls"] as? [String: Int] == ["run_shell": 1]
                      && summary["blocks"] as? [String: Int] == ["cantrip-task-records": 1]
-                     && summary["steps"] as? Int == 1 && summary["promptTokens"] as? Int == 240
+                     && summary["steps"] as? Int == 1 && summary["promptTokens"] as? Int == 360
+                     && summary["corrected"] as? Bool == true && (summary["validationProblems"] as? Int ?? 0) >= 1
+                     && (summary["tuning"] as? [String: Any])?["recordsTool"] as? Bool == true
                      && summary["model"] as? String == "Fixture-8B-4bit" && summary["server"] as? String == "127.0.0.1",
                      "The run summary counts tools, refusals, blocks and tokens: \(summary)")
         precondition(checksums["realRunStatus"] as? String == "succeeded"
@@ -182,22 +226,38 @@ extension SessionTabTests {
         let blocks = try String(contentsOf: run.appendingPathComponent("blocks.jsonl"), encoding: .utf8)
         let reply = try String(contentsOf: run.appendingPathComponent("reply.txt"), encoding: .utf8)
         let realReply = try String(contentsOf: run.appendingPathComponent("real-reply.txt"), encoding: .utf8)
-        precondition(reply.contains("closed the thread") && realReply.contains("Example Co replied"),
-                     "Both replies are kept for comparison")
+        precondition(reply.contains("closed the thread") && reply.contains(CantripHomeShadowRun.correctionMarker)
+                     && realReply.contains("Example Co replied"), "Both replies are kept for comparison")
         precondition(before.contains("Waiting") && after.contains("Replied") && blocks.contains("Closed")
-                     && blocks.split(separator: "\n").count == 1, "Before, after and the captured block are kept")
+                     && !blocks.contains("Waiting") && blocks.split(separator: "\n").count == 1,
+                     "Before, after and only the corrected block are kept")
+        // The transcript (first request and every tool call with its result) is kept for replay.
+        let request = try json("request.json")
+        let transcript = try String(contentsOf: run.appendingPathComponent("tools.jsonl"), encoding: .utf8)
+            .split(separator: "\n").map { try JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String: Any] }
+        precondition((request["messages"] as? [[String: Any]])?.isEmpty == false && request["temperature"] as? Double == 0.2
+                     && transcript.map { $0["name"] as? String ?? "" } == ["run_shell", "mcp__personal__mail_read"]
+                     && transcript[0]["allowed"] as? Bool == false
+                     && (transcript[1]["output"] as? String)?.contains("Example Co replied") == true,
+                     "The request and tool calls are saved: \(transcript.map { $0["name"] ?? "" })")
         let permissions = try FileManager.default.attributesOfItem(atPath: folder.path)[.posixPermissions] as? Int
         precondition(permissions == 0o700, "The shadow folder is private")
 
         // The local model saw the pre-run snapshot, the same task message, and only the read-only tool.
         let chats = fixture.requests.filter { $0.path == "/v1/chat/completions" }
-        precondition(chats.count == 2, "One tool round, then the reply: \(chats.count)")
+        precondition(chats.count == 3, "One tool round, the reply, then one correction: \(chats.count)")
         let first = try JSONSerialization.jsonObject(with: chats[0].body) as! [String: Any]
         let firstText = String(decoding: chats[0].body, as: UTF8.self)
         let toolNames = (first["tools"] as? [[String: Any]] ?? []).compactMap {
             ($0["function"] as? [String: Any])?["name"] as? String
         }
-        precondition(toolNames == ["mcp__personal__mail_read"] && firstText.contains("Scheduled task · Shadow tracker")
+        let system = ((first["messages"] as? [[String: Any]])?.first { $0["role"] as? String == "system" }?["content"] as? String) ?? ""
+        precondition(first["temperature"] as? Double == 0.2 && first["reasoning_effort"] as? String == "low"
+                     && system.contains("Change a field only with new evidence.")
+                     && String(decoding: chats[2].body, as: UTF8.self).contains("unchanged values"),
+                     "Tuning settings and the correction reach the local model")
+        precondition(toolNames == ["mcp__personal__mail_read", CantripHomeShadowRun.recordsToolName]
+                     && firstText.contains("Scheduled task · Shadow tracker")
                      && firstText.contains("status=Waiting") && !firstText.contains("status=Replied")
                      && first["priority"] as? String == "background"
                      && realPrompt.contains("status=Waiting"),
@@ -214,6 +274,12 @@ extension SessionTabTests {
                      && !homeChat.messages.contains { $0.text.contains("closed the thread") },
                      "A shadow run adds no background run or Home message")
         try await waitForJournalTest { !SessionManager.isCantripHomeReserved(shadowSession) }
+
+        // A day after the test ends, saved requests and tool results are removed.
+        precondition(CantripHomeShadowRun.purgeTranscripts(root: root) == 2
+                     && !FileManager.default.fileExists(atPath: run.appendingPathComponent("tools.jsonl").path)
+                     && FileManager.default.fileExists(atPath: run.appendingPathComponent("run.json").path),
+                     "Purging removes only the saved requests and tool results")
 
         // A failed real run gets no shadow run; its folder says why.
         settings.cantripHomeEnabled = false
@@ -233,7 +299,7 @@ extension SessionTabTests {
         let skippedSummary = try JSONSerialization.jsonObject(
             with: Data(contentsOf: skipped.appendingPathComponent("run.json"))) as! [String: Any]
         precondition((skippedSummary["status"] as? String)?.hasPrefix("skipped") == true
-                     && fixture.requests.filter { $0.path == "/v1/chat/completions" }.count == 2
+                     && fixture.requests.filter { $0.path == "/v1/chat/completions" }.count == 3
                      && pool.fixtures.count == 3, "A failed real run is not shadowed")
 
         for task in [shadowed, failing] { try? store.delete(id: task.id) }

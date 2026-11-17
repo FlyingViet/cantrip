@@ -267,6 +267,22 @@ this Mac, your LAN or tailnet), one shadow run at a time:
   `resultCharacters` (12,000) within `contextBudgetTokens` (56,000).
 - A real run that spans a Cantrip restart is not shadowed.
 
+Tuning settings (all optional, shadow runs only):
+
+- `instructions`: extra system instructions; `temperature`; `reasoningEffort`
+  (sent as `reasoning_effort`, which turns thinking on for Splash).
+- `recordsTool`: offers `home_records`, which reads the task's saved records from
+  the run's snapshot (every field and the full ID; filter by ID prefix or words,
+  paged). Real runs print records with a command the shadow run can't use.
+- `validateRecords`: checks the run's record changes as saving them would (unknown
+  or shortened IDs, fields not in the workspace, empty blocks, resends of
+  unchanged values) and sends the problems back once. Only the corrected blocks
+  are kept.
+- `keepTranscript` (on): saves the first request (`request.json`) and every tool
+  call with its full result (`tools.jsonl`) in the run's private folder, so the
+  run can be replayed offline with other settings. These hold raw personal data;
+  Cantrip deletes them a day after `until`.
+
 ### Review a week of observe data
 
 1. Run `cantrip privacy report` (or `--days 14`). It summarizes the routes, what

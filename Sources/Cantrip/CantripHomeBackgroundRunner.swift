@@ -164,7 +164,19 @@ final class CantripHomeBackgroundRunner {
         enqueueDueTasks(now: now)
         startReadyJobs(now: now, manager: manager)
         stopOverdueShadow(at: now)
+        purgeShadowTranscriptsIfDone(at: now)
         startNextShadow(manager: manager)
+    }
+
+    private var purgedShadowTranscripts = false
+
+    /// Saved requests and tool results (raw personal data) go a day after the test ends.
+    func purgeShadowTranscriptsIfDone(at date: Date) {
+        guard !purgedShadowTranscripts, let config = shadowConfig(), config.until > .distantPast,
+              date > config.until.addingTimeInterval(24 * 3600) else { return }
+        purgedShadowTranscripts = true
+        let removed = CantripHomeShadowRun.purgeTranscripts(root: shadowRoot)
+        if removed > 0 { Log.write("home shadow: test ended; removed \(removed) saved requests and tool results") }
     }
 
     private func enqueueDueTasks(now: Date) {
