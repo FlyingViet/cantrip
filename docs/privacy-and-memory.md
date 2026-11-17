@@ -199,6 +199,35 @@ counts, never values), timings, how many characters the classifier read, and
 what enforce mode would do. Prompt text is
 never logged; in observe mode it goes only to your classifier.
 
+**Content-aware routing for scheduled tasks (observe only).** Today a task
+routes by the tools it *can* use: any task with the `personal` or `homelab`
+server goes local. Beside that route, Cantrip also logs where the task could go
+if its content decided, without changing how it runs:
+
+1. Before the run, the private sources the task needs (mail, messages,
+   calendar, contacts, finance, documents, home, passwords) come from its prompt
+   and the tools its last five runs actually used (kept as tool names in
+   `privacy/task-tools.json`). None: cloud. Passwords: local. Mail or messages:
+   hybrid. Others: cloud with personal details masked. The decision's log line
+   gets `contentRoute`, `contentSources` and `contentBasis`.
+2. During the run, each private tool result (by tool, or a shell command or file
+   that reads Mail, Messages, Calendar, Contacts or `bw`; in a task that needs
+   anything private, other shell and file output too) is judged on your local
+   model through `POST /v1/judgments` at background priority: **pass** (not
+   personal), **redact** (mask names, emails, phone numbers, account numbers),
+   **extract** (turn it into a few short facts locally) or **keep local**.
+   Bitwarden results are always keep local and never sent to the judge.
+3. When the run ends, one `homeTaskContent` line records the gate's route, the
+   content-aware route, results per label with their characters, and how many
+   characters a cloud model would see (public and passed results whole, masked
+   ones about the same, extracted ones as facts, `factRatio` of their size).
+
+`cantrip privacy report` adds a per-task section comparing the two routes.
+`privacyGate.contentRouting` holds `observe` (on), `maxResultsPerRun` (150),
+`judgeCharacters` (3,000), `factRatio` and extra `privatePaths`
+(`{"my-mail-export.py": "mail"}`). It needs a server with `/v1/judgments`
+(Splash); results it can't judge are counted as unchecked.
+
 ### Review a week of observe data
 
 1. Run `cantrip privacy report` (or `--days 14`). It summarizes the routes, what

@@ -464,6 +464,9 @@ final class CantripHomeBackgroundRunner {
         idleSince[jobID] = nil
         guard let session = live.removeValue(forKey: jobID) else { return }
         session.onTurnCompleted = nil
+        // Content-aware routing (observe only): the run's judged tool results become one log line.
+        let sessionID = session.id
+        Task.detached(priority: .background) { await PrivacyContentRouting.shared.finish(run: sessionID) }
         jobs.removeAll { $0.id == jobID }
         persist()
         var text = status == "cancelled" && summary == "cancelled by user" ? "Stopped." : summary

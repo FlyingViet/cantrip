@@ -142,6 +142,7 @@ struct SessionTabTests {
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "privacy" {
             try testHomeLocalProfile()
             try await testPrivacyGate()
+            try await testPrivacyContentRouting()
             return
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "home-handoffs" {
@@ -355,6 +356,7 @@ struct SessionTabTests {
         try testHomeLocalProfile()
         try testHomeRepeatedData()
         try await testPrivacyGate()
+        try await testPrivacyContentRouting()
         try await testMuse()
         try testBuildQueue()
         try await testThreadTags()

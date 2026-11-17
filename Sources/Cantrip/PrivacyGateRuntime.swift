@@ -88,6 +88,11 @@ struct PrivacyDecisionRecord: Codable, Equatable {
     var underlying: String?
     /// Characters the classifier read (optional: older lines lack it).
     var classifierChars: Int? = nil
+    /// Scheduled tasks: the content-aware route before the run (observe only), the private
+    /// sources it needs, and whether they came from the prompt or recent runs' tools.
+    var contentRoute: String? = nil
+    var contentSources: [String]? = nil
+    var contentBasis: [String]? = nil
 }
 
 /// What a cloud run in enforce mode may not touch. Backends read it before each tool call.
@@ -392,7 +397,7 @@ final class PrivacyGate: @unchecked Sendable {
     // MARK: Recording
 
     func record(_ decision: PrivacyDecision, request: PrivacyGateRequest, settings: PrivacyGateSettings,
-                applied: Bool, totalMs: Int, at: Date = Date()) {
+                applied: Bool, totalMs: Int, content: PrivacyContentRouting.Plan? = nil, at: Date = Date()) {
         let enforcement = PrivacyEnforcement.of(decision, kind: request.kind, settings: settings)
         if request.kind == .homeChat { noteHomeTurn(request.conversationKey, decision: decision, turns: settings.stickyTurns) }
         let privateTools = request.mcpServers.filter { server in
@@ -407,14 +412,20 @@ final class PrivacyGate: @unchecked Sendable {
             classifierError: decision.classifierError, totalMs: totalMs, backend: request.backend,
             privateTools: privateTools, enforce: enforcement.rawValue, applied: applied,
             promptChars: request.message.count, underlying: decision.underlying?.rawValue,
-            classifierChars: decision.classifierChars)
+            classifierChars: decision.classifierChars, contentRoute: content?.preRoute.rawValue,
+            contentSources: content.map { $0.need.sources.sorted().map(\.rawValue) }, contentBasis: content?.need.basis)
         append(record)
         Log.write("privacy: \(request.kind.rawValue)\(request.taskTitle.map { " “\($0.prefix(40))”" } ?? "") "
                   + "\(settings.mode.rawValue) -> \(record.route) (\(record.source)\(record.rule.map { " \($0)" } ?? "")), "
                   + "enforce \(record.enforce), \(totalMs) ms")
     }
 
-    private func append(_ record: PrivacyDecisionRecord) {
+    private func append(_ record: PrivacyDecisionRecord) { appendLine(record) }
+
+    /// A finished task run's content-aware record, in the same log.
+    func appendContent(_ record: PrivacyContentRecord) { appendLine(record) }
+
+    private func appendLine<Record: Encodable>(_ record: Record) {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
@@ -443,6 +454,16 @@ final class PrivacyGate: @unchecked Sendable {
         }
     }
 
+    func contentRecords(since: Date) -> [PrivacyContentRecord] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return [directory.appendingPathComponent("decisions.1.jsonl"), logURL].flatMap { url -> [PrivacyContentRecord] in
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+            return text.split(separator: "\n").filter { $0.contains("\"homeTaskContent\"") }
+                .compactMap { try? decoder.decode(PrivacyContentRecord.self, from: Data($0.utf8)) }
+        }.filter { $0.at >= since }
+    }
+
     func records(since: Date) -> [PrivacyDecisionRecord] {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -450,6 +471,31 @@ final class PrivacyGate: @unchecked Sendable {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
             return text.split(separator: "\n").compactMap { try? decoder.decode(PrivacyDecisionRecord.self, from: Data($0.utf8)) }
         }.filter { $0.at >= since }
+    }
+
+    /// Content-aware routing beside the gate's route, per task (observe only).
+    func contentReport(since: Date) -> [String] {
+        let runs = contentRecords(since: since)
+        guard !runs.isEmpty else { return [] }
+        func k(_ n: Int) -> String { n >= 10_000 ? "\(n / 1000)k" : n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)" }
+        var lines = ["", "Content-aware routing (observed beside the route, \(runs.count) task runs):"]
+        for (title, items) in Dictionary(grouping: runs, by: { $0.taskTitle ?? $0.task }).sorted(by: { $0.key < $1.key }) {
+            let gate = Dictionary(grouping: items.map { $0.gateRoute ?? "?" }, by: { $0 }).map { "\($0.key) \($0.value.count)" }.sorted()
+            let content = Dictionary(grouping: items.map(\.route), by: { $0 }).map { "\($0.key) \($0.value.count)" }.sorted()
+            var labels: [String: Int] = [:]
+            for item in items { for (label, n) in item.labels { labels[label, default: 0] += n } }
+            let judged = labels.values.reduce(0, +)
+            let shares = PrivacyResultLabel.allCases.map { label -> String in
+                let n = labels[label.rawValue] ?? 0
+                return "\(label.rawValue) \(judged == 0 ? 0 : Int((Double(n) / Double(judged) * 100).rounded()))%"
+            }.joined(separator: ", ")
+            let raw = items.map(\.rawChars).reduce(0, +), cloud = items.map(\.cloudChars).reduce(0, +)
+            let studio = items.map(\.studioMs).sorted()
+            lines.append("  \(title.prefix(48)): gate \(gate.joined(separator: ", ")) -> content \(content.joined(separator: ", "))")
+            lines.append("    private results \(judged) (\(shares)), unchecked \(items.map(\.unchecked).reduce(0, +)); "
+                         + "cloud would see ~\(k(cloud)) of \(k(raw)) characters; judging median \(studio[studio.count / 2]) ms a run")
+        }
+        return lines
     }
 
     // MARK: Badges
@@ -553,6 +599,7 @@ final class PrivacyGate: @unchecked Sendable {
                 lines.append("  \(near) answers were \(percent - 20)-\(percent - 1)% cloud: just under the cloud threshold (\(percent)%).")
             }
         }
+        lines.append(contentsOf: contentReport(since: since))
         let rulesSorted = all.map(\.rulesMs).sorted()
         lines.append("")
         lines.append("Rules: median \(rulesSorted[rulesSorted.count / 2]) ms. Log: \(logURL.path) (no prompt text).")

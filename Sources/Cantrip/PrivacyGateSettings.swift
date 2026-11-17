@@ -228,6 +228,40 @@ struct PrivacyCloudRuns: Codable, Equatable {
 
 /// The `privacyGate` section of the agent policy file. A file without it gets these defaults:
 /// on, observing (recording only).
+/// A kind of private data a tool call can read (content-aware routing, PrivacyContentRouting).
+enum PrivateSource: String, Codable, CaseIterable, Comparable {
+    case mail, messages, calendar, contacts, finance, documents, home, passwords
+
+    static func < (lhs: Self, rhs: Self) -> Bool { allCases.firstIndex(of: lhs)! < allCases.firstIndex(of: rhs)! }
+}
+
+struct PrivacyContentRoutingSettings: Codable, Equatable {
+    /// Judge and log each private tool result of scheduled Home task runs (observe only).
+    var observe = true
+    /// Results judged per run; later ones are counted as unchecked.
+    var maxResultsPerRun = 150
+    /// Characters of each result the judge reads.
+    var judgeCharacters = 3000
+    /// Extracted facts as a share of the raw characters they replace (measured on replayed runs),
+    /// for the cloud-characters estimate.
+    var factRatio = 0.04
+    /// Extra substrings of a command or path that read a private source ("my-mail-script.py":
+    /// "mail"), on top of the system ones (`PrivacyContentSources.builtInPaths`).
+    var privatePaths: [String: PrivateSource] = [:]
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Self()
+        observe = try c.decodeIfPresent(Bool.self, forKey: .observe) ?? d.observe
+        maxResultsPerRun = try c.decodeIfPresent(Int.self, forKey: .maxResultsPerRun) ?? d.maxResultsPerRun
+        judgeCharacters = try c.decodeIfPresent(Int.self, forKey: .judgeCharacters) ?? d.judgeCharacters
+        factRatio = try c.decodeIfPresent(Double.self, forKey: .factRatio) ?? d.factRatio
+        privatePaths = (try? c.decodeIfPresent([String: PrivateSource].self, forKey: .privatePaths)) ?? d.privatePaths
+    }
+}
+
 struct PrivacyGateSettings: Codable, Equatable {
     enum Scope: String, Codable, CaseIterable { case homeChat, homeTasks }
     enum OfflineChat: String, Codable, CaseIterable { case ask, cancel }
@@ -262,6 +296,8 @@ struct PrivacyGateSettings: Codable, Equatable {
     var stickyTurns = 3
     /// The user's own names ("Pat" or "Pat Example"): never counted as a person's name.
     var ownerNames: [String] = []
+    /// Content-aware routing for scheduled tasks, observed beside the route (PrivacyContentRouting).
+    var contentRouting = PrivacyContentRoutingSettings()
 
     init() {}
 
@@ -282,6 +318,7 @@ struct PrivacyGateSettings: Codable, Equatable {
         approvalTimeoutMinutes = try c.decodeIfPresent(Timeouts.self, forKey: .approvalTimeoutMinutes) ?? d.approvalTimeoutMinutes
         stickyTurns = try c.decodeIfPresent(Int.self, forKey: .stickyTurns) ?? d.stickyTurns
         ownerNames = try c.decodeIfPresent([String].self, forKey: .ownerNames) ?? d.ownerNames
+        contentRouting = try c.decodeIfPresent(PrivacyContentRoutingSettings.self, forKey: .contentRouting) ?? d.contentRouting
     }
 
     func applies(to scope: Scope) -> Bool { enabled && appliesTo.contains(scope) }

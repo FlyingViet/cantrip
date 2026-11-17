@@ -2703,13 +2703,37 @@ final class ChatSession: ObservableObject {
     private func observePrivacy(_ gate: PrivacyGateRequest, settings: PrivacyGateSettings, messageID: UUID?) {
         let started = Date()
         let session = WeakSessionBox(self)
+        let content = beginContentRouting(gate, settings: settings)
         Task.detached(priority: .utility) {
             let decision = await PrivacyGate.shared.decide(gate, settings: settings)
             let total = Int(Date().timeIntervalSince(started) * 1000)
-            PrivacyGate.shared.record(decision, request: gate, settings: settings, applied: false, totalMs: total)
+            content.map { PrivacyContentRouting.shared.noteGateRoute(run: $0.run, route: decision.route?.rawValue ?? "offline") }
+            PrivacyGate.shared.record(decision, request: gate, settings: settings, applied: false, totalMs: total,
+                                      content: content?.plan)
             let badge = PrivacyGate.badge(decision, kind: gate.kind, settings: settings, applied: false, totalMs: total)
             await MainActor.run { session.value?.setPrivacyBadge(badge, on: messageID) }
         }
+    }
+
+    /// A scheduled task run's content-aware plan (observe only): logged beside the gate's decision,
+    /// and its tool results are judged as they finish (`observeContent`).
+    private func beginContentRouting(_ gate: PrivacyGateRequest, settings: PrivacyGateSettings)
+        -> (run: UUID, plan: PrivacyContentRouting.Plan)? {
+        guard gate.kind == .homeTask, let taskID = gate.taskID else { return nil }
+        let endpoint = try? PrivacyClassifierEndpoint.resolve(settings.classifier,
+                                                              privateLocal: PrivacyGate.shared.privateLocal()).get()
+        let plan = PrivacyContentRouting.shared.begin(run: id, taskID: taskID, taskTitle: gate.taskTitle,
+                                                      prompt: gate.request, gateRoute: nil, gate: settings,
+                                                      endpoint: endpoint)
+        return (id, plan)
+    }
+
+    /// A finished tool call of an observed task run.
+    private func observeContent(_ activity: ToolActivity) {
+        guard isCantripHomeBackground, cantripHomeTask != nil,
+              activity.state == .succeeded || activity.state == .failed else { return }
+        PrivacyContentRouting.shared.observe(run: id, activityID: activity.id, tool: activity.toolName,
+                                             input: activity.input ?? activity.terminalCommand, output: activity.output)
     }
 
     /// Lets a detached task reach the session without holding it.
@@ -2724,11 +2748,14 @@ final class ChatSession: ObservableObject {
                                 backendKind: BackendKind, generation: Int, messageID: UUID?) {
         let started = Date()
         statusText = "Checking privacy…"
+        let content = beginContentRouting(gate, settings: settings)
         Task { [weak self] in
             let decision = await PrivacyGate.shared.decide(gate, settings: settings, skipsClassifierWhenFixed: true)
+            content.map { PrivacyContentRouting.shared.noteGateRoute(run: $0.run, route: decision.route?.rawValue ?? "offline") }
             guard let self, self.streamGeneration == generation, self.isStreaming else { return }
             let total = Int(Date().timeIntervalSince(started) * 1000)
-            PrivacyGate.shared.record(decision, request: gate, settings: settings, applied: true, totalMs: total)
+            PrivacyGate.shared.record(decision, request: gate, settings: settings, applied: true, totalMs: total,
+                                      content: content?.plan)
             self.setPrivacyBadge(PrivacyGate.badge(decision, kind: gate.kind, settings: settings, applied: true, totalMs: total),
                                  on: messageID)
             self.statusText = "Thinking…"
@@ -5321,8 +5348,10 @@ final class ChatSession: ObservableObject {
             where: { $0.id == activity.id }
         ) {
             messages[messageIndex].activities[activityIndex] = activity
+            observeContent(activity)
         } else {
             messages[messageIndex].activities.append(activity)
+            observeContent(activity)
             // Text so far is progress notes once a tool call follows it.
             if messages[messageIndex].role == .assistant {
                 messages[messageIndex].toolMarks.append(messages[messageIndex].text.utf8.count)
