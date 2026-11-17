@@ -150,7 +150,7 @@ struct PrivateLocalSettingsView: View {
 }
 
 extension PrivateLocalToolServer {
-    static let footer = "Private Local can look things up with the read-only tools of Cantrip's MCP servers: search, read, list and status, never send, create, change, delete or run. Tools run on this Mac; results go only to your self-hosted model, never to a cloud model. A service server (shown with its address) sends your query to that service, as it does from other tabs. Passwords, browser, file, form and build servers are never offered."
+    static let footer = "Private Local can look things up with the read-only tools of Cantrip's MCP servers: search, read, list and status, never send, create, change, delete or run. Tools run on this Mac; results go only to your self-hosted model, never to a cloud model. A service server (shown with its address) sends your query to that service, as it does from other tabs. Passwords, browser, file, form and build servers are never offered. Turning tools on starts this tab fresh: earlier messages stay visible but aren't sent to the model."
 
     /// One line under the server's switch.
     var detail: String {

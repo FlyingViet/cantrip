@@ -149,8 +149,12 @@ extension ChatSession {
         }
         if let reason = snapshot.unavailableReason { throw SessionModelSettingsError(409, reason) }
         try configuration.validate()
+        let wasUsingTools = snapshot.configuration.tools.enabled
         let data = try JSONEncoder().encode(configuration)
         UserDefaults.standard.set(data, forKey: "privateLocalConfiguration")
+        // Earlier no-tools replies ("I don't have access") make the model skip its new tools, so
+        // switching tools on starts fresh: earlier messages stay visible but aren't sent.
+        if !wasUsingTools, configuration.tools.enabled, !messages.isEmpty { try? startFresh() }
         objectWillChange.send()
     }
 }

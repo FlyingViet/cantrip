@@ -138,6 +138,9 @@ allowed tools and the tools left out.
 - A reply may take up to 25 tool steps, then must answer. Each result is cut to
   16,000 characters, and older results are left out first to stay within the
   context window. Tool steps show in the transcript like other tabs.
+- Turning tools on starts the tab fresh (a divider): earlier messages stay visible
+  but aren't sent to the model, since earlier "I don't have access" replies made
+  it skip its new tools.
 - While tools are on, the original default system prompt ("You have no tools")
   is replaced by one that describes them; a custom prompt is kept and the tool
   rules are added after it.

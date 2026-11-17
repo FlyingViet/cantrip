@@ -401,12 +401,18 @@ final class PrivateLocalToolSession: @unchecked Sendable {
 
     /// What the model is told about its tools (added to the system prompt).
     var instructions: String {
+        // Short on purpose: tool names that differ from the attached functions, or notes about earlier
+        // no-tools replies, made the model skip tools more often (Studio Qwen, 2026-11-17).
         var text = """
-        Tools: you can look things up with read-only tools (listed with this request). They only read: you \
-        can't send, create, change, delete, buy or run anything. If asked to, say that Private Local can only \
-        read and suggest asking in another Cantrip tab. Use a tool when the answer depends on the user's data \
-        or a service; quote what you found briefly, without inventing details.
+        Tools: you can look things up with read-only tools (attached to this request as functions). They only \
+        read: you can't send, create, change, delete, buy or run anything. If asked to, say that Private Local \
+        can only read and suggest asking in another Cantrip tab. Use a tool when the answer depends on the \
+        user's data or a service; quote what you found briefly, without inventing details.
         """
+        let always = servers.filter { direct.contains($0.name) && !$0.tools.isEmpty }
+        if !always.isEmpty {
+            text += "\n\nServers attached now: " + always.map { "\($0.name) (\($0.tools.count) tools)" }.joined(separator: ", ") + "."
+        }
         let groups = servers.filter { !direct.contains($0.name) && !$0.tools.isEmpty }
         if !groups.isEmpty {
             text += "\n\nMore read-only tools load on demand with \(Self.searchName) (by name or topic):\n"

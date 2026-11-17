@@ -127,8 +127,10 @@ extension SessionTabTests {
         func offered() -> [String] { session.openAITools().compactMap { ($0["function"] as? [String: Any])?["name"] as? String } }
         precondition(offered() == ["mcp__notes__notes_search", "mcp__notes__notes_read", "mcp__notes__notes_count",
                                    PrivateLocalToolSession.searchName], "Offered: \(offered())")
-        precondition(session.instructions.contains("- tracker: get_issue, get_issue_1")
-                     && session.instructions.contains("can't send, create, change, delete"))
+        precondition(session.instructions.contains("Servers attached now: notes (3 tools).")
+                     && session.instructions.contains("load on demand with search_tools (by name or topic):\n- tracker: get_issue, get_issue_1")
+                     && session.instructions.contains("can't send, create, change, delete"),
+                     "The model is told which servers are attached and which tools load on demand")
         let before = await session.call("mcp__tracker__get_issue", arguments: ["id": "DEMO-1"])
         precondition(before.allowed && before.success && before.output.contains("DEMO-1"),
                      "An on-demand tool can be called by its name")
@@ -204,7 +206,7 @@ extension SessionTabTests {
         precondition(text.hasSuffix("I can't create issues here."), "The answer streams after the tool steps")
         precondition(bodies.count == steps.count + 1, "One request per step: \(bodies.count)")
         let system = ((bodies[0]["messages"] as? [[String: Any]])?.first?["content"] as? String) ?? ""
-        precondition(system.hasPrefix("You are a helpful private assistant.\n\nTools:") && !system.contains("no tools"),
+        precondition(system.hasPrefix("You are a helpful private assistant.\n\nTools:") && !system.contains("You have no tools or internet access"),
                      "The old no-tools default prompt is replaced while tools are on")
         let toolMessages = (bodies.last?["messages"] as? [[String: Any]] ?? []).filter { $0["role"] as? String == "tool" }
         let contents = toolMessages.compactMap { $0["content"] as? String }
@@ -268,7 +270,9 @@ extension SessionTabTests {
         shared.registry = { servers }
         shared.socketPath = { socketPath }
         _ = await shared.catalog(refresh: true)
-        UserDefaults.standard.set(try JSONEncoder().encode(local), forKey: "privateLocalConfiguration")
+        var toolsOff = local
+        toolsOff.tools.enabled = false
+        UserDefaults.standard.set(try JSONEncoder().encode(toolsOff), forKey: "privateLocalConfiguration")
         fixture.chatResponder = { request in
             let body = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
             let answered = ((body["messages"] as? [[String: Any]]) ?? []).contains { $0["role"] as? String == "tool" }
@@ -286,7 +290,20 @@ extension SessionTabTests {
         }
         let trap = CloudTrap()
         let chat = ChatSession(id: ChatSession.privateLocalID, copilotBackend: trap)
-        chat.messages = []
+        chat.messages = [ChatMessage(role: .user, text: "Check my notes"),
+                         ChatMessage(role: .assistant, text: "I do not have access to your notes.")]
+        // Switching tools on starts fresh, so the earlier no-access reply never reaches the model.
+        try chat.updatePrivateLocalSettings(local, revision: chat.privateLocalRevision)
+        precondition(chat.messages.last?.role == .freshStart, "Turning tools on starts the tab fresh")
+        let divider = chat.messages.count
+        try chat.updatePrivateLocalSettings(local, revision: chat.privateLocalRevision)
+        precondition(chat.messages.count == divider, "Saving again with tools on adds no second divider")
+        var sentHistory = ""
+        let previous = fixture.chatResponder
+        fixture.chatResponder = { request in
+            sentHistory += String(decoding: request.body, as: UTF8.self)
+            return previous?(request) ?? ""
+        }
         chat.submitRemote("What do my notes say about Example Co?")
         try await waitForJournalTest(timeout: 30) { !chat.isStreaming && chat.messages.last?.text.isEmpty == false }
         let answer = try requireHome(chat.messages.last)
@@ -294,6 +311,7 @@ extension SessionTabTests {
                      "The tab answers from the tool result, locally: \(answer.text)")
         precondition(answer.activities.map(\.toolName).count == 1 && answer.activities.first?.state == .succeeded,
                      "The tool step shows in the transcript: \(answer.activities)")
+        precondition(!sentHistory.contains("I do not have access to your notes"), "Turns above the divider aren't sent")
         let savedTranscript = try JSONDecoder().decode([ChatMessage].self, from: Data(contentsOf: SessionManager.chatsDir.appendingPathComponent("\(chat.id.uuidString).json")))
         precondition(savedTranscript.last?.toolMarks.count == 1 && savedTranscript.last?.text == answer.text,
                      "The saved reply keeps where its tool step was (activities are live-only in every tab)")
