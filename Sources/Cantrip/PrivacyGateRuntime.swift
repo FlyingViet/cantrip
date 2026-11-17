@@ -589,8 +589,7 @@ extension PrivacyGate {
         let log = logURL.path.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
         switch PrivacyClassifierEndpoint.resolve(settings.classifier, privateLocal: privateLocal()) {
         case .success(let endpoint):
-            let address = endpoint.decisionsURL.deletingLastPathComponent().absoluteString
-                .replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+            let address = endpoint.address
             return PrivacyClassifierStatus(address: address, model: endpoint.model,
                                            from: settings.classifier.baseURL.isEmpty ? "privateLocal" : "own", log: log)
         case .failure(let error):
@@ -607,7 +606,7 @@ extension PrivacyGate {
         case .success(let endpoint):
             let result = await classifier.classify(text: "Write a Swift function that reverses the words in a sentence.",
                                                    endpoint: endpoint, settings: settings.classifier)
-            let address = endpoint.decisionsURL.deletingLastPathComponent().absoluteString
+            let address = endpoint.address
             switch result {
             case .success(let c):
                 let route = c.route(cloudMinimum: settings.classifier.cloudMinProbability, uncertain: settings.uncertainRoute)

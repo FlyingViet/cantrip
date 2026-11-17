@@ -169,7 +169,8 @@ struct PrivacyGateRule: Codable, Equatable, Identifiable {
 
 struct PrivacyClassifierSettings: Codable, Equatable {
     var enabled = true
-    /// An OpenAI-compatible server's base URL ending in /v1, with `POST /decisions` (oMLX). Empty:
+    /// An OpenAI-compatible server's base URL ending in /v1, with `POST /judgments` (Splash) or
+    /// `POST /decisions` (oMLX). Empty:
     /// the Private Local server, when it uses the OpenAI-compatible API.
     var baseURL = ""
     /// Empty: Private Local's model.

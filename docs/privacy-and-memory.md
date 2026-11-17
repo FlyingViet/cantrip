@@ -158,9 +158,12 @@ How it decides, first match wins:
    earlier single `personal-details` rule (which also covered names, contact
    details and private terms anywhere) is read as these two rules.
 3. The classifier, for requests no rule decides: a model on your own server
-   (oMLX's `POST /v1/decisions`, by default Private Local's server and model)
-   reads the request three times with the options in a different order, and
-   Cantrip averages the answers. In Home chat it also reads your earlier
+   (by default Private Local's server and model) reads the request three times
+   with the options in a different order, and Cantrip averages the answers. On
+   Splash it asks the three orders side by side, one `POST /v1/judgments` each;
+   on oMLX all three go in one `POST /v1/decisions`. Cantrip tries the API the
+   server answered with last and switches to the other when the server says it
+   doesn't have it, so swapping servers needs no setting. In Home chat it also reads your earlier
    messages and the first 300 characters of the latest reply, up to 900
    characters in all (`chatInputCharacters`), because the server reads every new
    character before it answers and whole replies took it past 2.5 s. A

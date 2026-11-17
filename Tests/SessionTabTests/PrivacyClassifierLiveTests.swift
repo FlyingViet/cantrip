@@ -11,7 +11,7 @@ extension SessionTabTests {
             print("Set CANTRIP_LIVE_LOCAL_URL and CANTRIP_LIVE_LOCAL_MODEL"); return
         }
         let endpoint = PrivacyClassifierEndpoint(
-            decisionsURL: URL(string: url.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/decisions")!, model: model)
+            baseURL: URL(string: url.trimmingCharacters(in: CharacterSet(charactersIn: "/")))!, model: model)
         var settings = PrivacyClassifierSettings()
         settings.timeoutMs = 10_000
         let card = "4111 1111 1111 " + "1111"
@@ -75,10 +75,12 @@ extension SessionTabTests {
         ]
         let classifier = PrivacyClassifier()
         var slowest = 0
+        var times: [Int] = []
         func route(_ text: String) async throws -> (PrivacyRoute, Double) {
             let result = await classifier.classify(text: text, endpoint: endpoint, settings: settings)
             guard case .success(let c) = result else { throw URLError(.badServerResponse) }
             slowest = max(slowest, c.elapsedMs)
+            times.append(c.elapsedMs)
             return (c.route(cloudMinimum: settings.cloudMinProbability, uncertain: .redactApprove), c.probability(.cloud))
         }
         func percent(_ value: Double) -> String { String(format: "%.1f%%", value * 100) }
@@ -103,7 +105,8 @@ extension SessionTabTests {
                   + "\(definitionScores.filter { $0 >= check }.count) of \(definitionScores.count) definition questions to the cloud")
         }
         print("Privacy classifier live: \(cloudHits) of \(plain.count) plain requests to the cloud at \(percent(threshold)); personal requests at most "
-              + "\(percent(worstPrivate)) cloud (\(model)); slowest answer \(slowest) ms")
+              + "\(percent(worstPrivate)) cloud (\(model), /\(classifier.preferredAPI(for: endpoint).rawValue)); "
+              + "median answer \(times.sorted()[times.count / 2]) ms, slowest \(slowest) ms")
         precondition(cloudHits * 4 >= plain.count * 3, "fewer than 3 in 4 plain requests reach the cloud")
         precondition(worstPrivate < threshold, "a personal request reached the cloud threshold")
     }

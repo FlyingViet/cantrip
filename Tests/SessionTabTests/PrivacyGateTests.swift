@@ -164,6 +164,8 @@ extension SessionTabTests {
         var answer = (local: 0.03, cloud: 0.95)
         var delay: UInt64 = 0
         gate.classifier = PrivacyClassifier(transport: { request in
+            // This server is oMLX: it has /decisions only.
+            if request.url?.lastPathComponent == "judgments" { return (Data(), notFound(request)) }
             calls += 1
             if delay > 0 { try await Task.sleep(nanoseconds: delay) }
             let redact = max(0, 1 - answer.local - answer.cloud)
@@ -267,6 +269,113 @@ extension SessionTabTests {
         precondition(!tight.validationErrors().isEmpty, "a bounded chat input")
     }
 
+    static func notFound(_ request: URLRequest) -> HTTPURLResponse {
+        HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+    }
+
+    /// Splash's `POST /judgments`: one row per rotation, sent together, averaged like `/decisions`;
+    /// the classifier remembers which API a server has and tries the other when it's missing.
+    static func testPrivacyClassifierJudgments(endpoint: PrivacyClassifierEndpoint,
+                                               settings: PrivacyClassifierSettings) async throws {
+        let bodies = try PrivacyClassifier.judgmentBodies(text: "Explain TCP", model: "m", rotations: 3)
+            .map { try JSONSerialization.jsonObject(with: $0) as! [String: Any] }
+        let leads = bodies.map { (($0["options"] as! [[String: Any]]).first!["id"] as! String) }
+        precondition(bodies.count == 3 && leads == ["local", "cloud", "redact"]
+                     && bodies.allSatisfy { $0["state"] as? String == "Explain TCP" && $0["model"] as? String == "m"
+                                            && $0["question"] as? String == PrivacyClassifier.instructions }, "\(leads)")
+
+        // A Splash-like server: /judgments answers in the order of the options it was sent; no /decisions.
+        actor Log { var paths: [String] = []; var inFlight = 0; var peak = 0
+            func start(_ path: String) { paths.append(path); inFlight += 1; peak = max(peak, inFlight) }
+            func end() { inFlight -= 1 } }
+        let log = Log()
+        let cloudByLead: [String: Double] = ["local": 0.96, "cloud": 0.98, "redact": 0.94]
+        let splash: PrivacyClassifier.Transport = { request in
+            let path = request.url!.lastPathComponent
+            await log.start(path)
+            defer { Task { await log.end() } }
+            guard path == "judgments" else { return (Data(), notFound(request)) }
+            try await Task.sleep(nanoseconds: 50_000_000)
+            let row = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+            let ids = (row["options"] as! [[String: Any]]).map { $0["id"] as! String }
+            let cloud = cloudByLead[ids[0]]!
+            let rest = (1 - cloud) / 2
+            let probabilities = ids.map { $0 == "cloud" ? cloud : rest }
+            let data = try JSONSerialization.data(withJSONObject: ["id": row["id"]!, "option_ids": ids, "probabilities": probabilities,
+                                                                   "option_logits": probabilities.map { log2($0) }])
+            return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let classifier = PrivacyClassifier(transport: splash)
+        guard case .success(let first) = await classifier.classify(text: "Explain TCP", endpoint: endpoint, settings: settings) else {
+            preconditionFailure("Splash answers through /judgments")
+        }
+        let firstPaths = await log.paths
+        let peak = await log.peak
+        precondition(abs(first.probability(.cloud) - 0.96) < 0.0001 && first.answered == 3
+                     && abs(first.probability(.local) - 0.02) < 0.0001 && firstPaths == ["judgments", "judgments", "judgments"]
+                     && peak == 3, "\(first) \(firstPaths) peak \(peak)")
+        precondition(first.route(cloudMinimum: settings.cloudMinProbability, uncertain: .redactApprove) == .cloud
+                     && classifier.preferredAPI(for: endpoint) == .judgments)
+
+        // oMLX: a 404 on /judgments, then /decisions, remembered. Swapped to Splash later, the
+        // remembered /decisions gets a 404 and /judgments answers, remembered in turn.
+        final class Server: @unchecked Sendable { var isSplash = false }
+        let server = Server()
+        let swapping = PrivacyClassifier(transport: { request in
+            if server.isSplash { return try await splash(request) }
+            if request.url!.lastPathComponent == "judgments" { return (Data(), notFound(request)) }
+            let data = decisionsReply((0..<3).map { _ in [("local", 0.1), ("cloud", 0.85), ("redact", 0.05)] })
+            return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        guard case .success(let viaDecisions) = await swapping.classify(text: "x", endpoint: endpoint, settings: settings),
+              abs(viaDecisions.probability(.cloud) - 0.85) < 0.0001, swapping.preferredAPI(for: endpoint) == .decisions else {
+            preconditionFailure("oMLX answers through /decisions after a 404 on /judgments")
+        }
+        server.isSplash = true
+        guard case .success(let afterSwap) = await swapping.classify(text: "x", endpoint: endpoint, settings: settings),
+              abs(afterSwap.probability(.cloud) - 0.96) < 0.0001, swapping.preferredAPI(for: endpoint) == .judgments else {
+            preconditionFailure("after the swap /judgments answers")
+        }
+        // Neither API: a clear error, not a timeout.
+        let neither = PrivacyClassifier(transport: { request in (Data(), notFound(request)) })
+        guard case .failure(.unreachable(let detail)) = await neither.classify(text: "x", endpoint: endpoint, settings: settings),
+              detail.contains("/judgments") && detail.contains("/decisions") else {
+            preconditionFailure("a server with neither API")
+        }
+        // One rotation failing still answers with the others; a judgment missing an option isn't counted.
+        var calls = 0
+        let lock = NSLock()
+        let flaky = PrivacyClassifier(transport: { request in
+            lock.lock(); calls += 1; let n = calls; lock.unlock()
+            if n == 1 { return (Data(), HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!) }
+            if n == 2 {
+                let data = try JSONSerialization.data(withJSONObject: ["option_ids": ["local", "cloud"], "probabilities": [0.5, 0.5]])
+                return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+            return try await splash(request)
+        })
+        guard case .success(let partial) = await flaky.classify(text: "x", endpoint: endpoint, settings: settings),
+              partial.answered == 1 else { preconditionFailure("one judgment answered") }
+        // Every judgment failing is the server's error.
+        let down = PrivacyClassifier(transport: { request in
+            (Data(), HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil)!)
+        })
+        guard case .failure(.unreachable("HTTP 503")) = await down.classify(text: "x", endpoint: endpoint, settings: settings) else {
+            preconditionFailure("every judgment failed")
+        }
+        // The budget covers both tries: a slow /judgments times out without then trying /decisions.
+        var timed = settings
+        timed.timeoutMs = 200
+        let slowSplash = PrivacyClassifier(transport: { request in
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+            return try await splash(request)
+        })
+        let started = Date()
+        guard case .failure(.timedOut(200)) = await slowSplash.classify(text: "x", endpoint: endpoint, settings: timed),
+              Date().timeIntervalSince(started) < 1.5 else { preconditionFailure("a slow /judgments times out") }
+        print("Privacy classifier: /judgments rotations in parallel, /decisions fallback both ways, partial answers and timeouts passed")
+    }
+
     static func decisionsReply(_ orders: [[(String, Double)]]) -> Data {
         let answers = orders.enumerated().map { index, pairs -> [String: Any] in
             ["type": "choice", "name": "route_\(index)", "choice": pairs.max { $0.1 < $1.1 }!.0,
@@ -283,10 +392,13 @@ extension SessionTabTests {
         let firstValues = questions.map { (($0["choices"] as! [[String: Any]]).first!["value"] as! String) }
         precondition(body["model"] as? String == "m" && questions.count == 3 && firstValues == ["local", "cloud", "redact"], "\(firstValues)")
 
-        let endpoint = PrivacyClassifierEndpoint(decisionsURL: URL(string: "https://model-server.local/v1/decisions")!, model: "m")
+        let endpoint = PrivacyClassifierEndpoint(baseURL: URL(string: "https://model-server.local/v1")!, model: "m")
         var settings = PrivacyClassifierSettings()
         func reply(_ data: Data, status: Int = 200) -> PrivacyClassifier.Transport {
-            { request in (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!) }
+            { request in
+                if request.url?.lastPathComponent == "judgments" { return (Data(), notFound(request)) }
+                return (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
+            }
         }
         // Averaged across orderings: 0.97, 0.93, 0.95 cloud -> 0.95 -> cloud.
         let cloudy = decisionsReply([[("local", 0.02), ("cloud", 0.97), ("redact", 0.01)],
@@ -337,6 +449,8 @@ extension SessionTabTests {
             preconditionFailure("a slow classifier times out")
         }
         precondition(Date().timeIntervalSince(started) < 1.5, "the timeout doesn't wait for the server")
+        settings.timeoutMs = PrivacyClassifierSettings().timeoutMs
+        try await testPrivacyClassifierJudgments(endpoint: endpoint, settings: settings)
 
         // Hosts: this Mac, the LAN and the tailnet; HTTPS off this Mac; never Cantrip's own API.
         precondition(PrivacyHostCheck.problem(with: "https://model-server.local/v1") == nil
@@ -445,6 +559,7 @@ extension SessionTabTests {
         var calls = 0
         var inputs: [String] = []
         gate.classifier = PrivacyClassifier(transport: { request in
+            if request.url?.lastPathComponent == "judgments" { return (Data(), notFound(request)) }
             calls += 1
             if let body = request.httpBody, let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
                let input = object["input"] as? String {
