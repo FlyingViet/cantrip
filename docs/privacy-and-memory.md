@@ -272,12 +272,18 @@ Tuning settings (all optional, shadow runs only):
 - `instructions`: extra system instructions; `temperature`; `reasoningEffort`
   (sent as `reasoning_effort`, which turns thinking on for Splash).
 - `recordsTool`: offers `home_records`, which reads the task's saved records from
-  the run's snapshot (every field and the full ID; filter by ID prefix or words,
-  paged). Real runs print records with a command the shadow run can't use.
+  the run's snapshot (every field and the full ID; filter by ID prefix, or by
+  words with the best matches first; paged). Real runs print records with a command the shadow run can't use.
 - `validateRecords`: checks the run's record changes as saving them would (unknown
   or shortened IDs, fields not in the workspace, empty blocks, resends of
   unchanged values) and sends the problems back once. Only the corrected blocks
   are kept.
+- `guards`: refuses repeated identical tool calls (pointing back to the earlier
+  result), tells the model when 10 tool steps are left, and treats a new record
+  that repeats an existing one (same title field) as a problem to correct.
+- `memoryTools`: offers `memory_read` and `memory_search` over the memory vault's
+  notes (read-only, not the session logs), since real runs read a task's
+  procedure note with the shell.
 - `keepTranscript` (on): saves the first request (`request.json`) and every tool
   call with its full result (`tools.jsonl`) in the run's private folder, so the
   run can be replayed offline with other settings. These hold raw personal data;

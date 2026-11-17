@@ -145,6 +145,7 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         }
         var tools = shadow.map { $0.tools.openAITools() } ?? (settings.allowActions && !readOnly ? Self.tools() : [])
         if shadow?.run.config.recordsTool == true { tools.append(CantripHomeShadowRun.recordsToolSchema) }
+        if shadow?.run.config.memoryTools == true { tools += CantripHomeShadowRun.memoryToolSchemas }
         if let budget = contextBudgetTokens {
             let fixed = HomeLocalProfile.estimate(system)
                 + HomeLocalProfile.estimate(String(decoding: (try? JSONSerialization.data(withJSONObject: tools)) ?? Data(), as: UTF8.self))
@@ -333,9 +334,19 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
                     // Only the shadow run's read-only tools; nothing else, not even the shell.
                     let args = (try? JSONSerialization.jsonObject(
                         with: Data(call.arguments.utf8)) as? [String: Any]) ?? [:]
-                    let result = call.name == CantripHomeShadowRun.recordsToolName && shadow.run.config.recordsTool
-                        ? (output: shadow.run.recordsTool(args), success: true, allowed: true)
-                        : shadow.tools.call(call.name, arguments: args)
+                    let config = shadow.run.config
+                    let result: (output: String, success: Bool, allowed: Bool)
+                    if config.guards, let earlier = shadow.run.repeatedCall(call.name, arguments: args, step: self.iterations) {
+                        result = ("You already made this exact call (step \(earlier)); its result is above. Don't repeat "
+                                  + "calls: use what you have, try a different search, or write your answer.", false, true)
+                    } else if call.name == CantripHomeShadowRun.recordsToolName && config.recordsTool {
+                        result = (shadow.run.recordsTool(args), true, true)
+                    } else if CantripHomeShadowRun.memoryToolNames.contains(call.name) && config.memoryTools {
+                        let vault = URL(fileURLWithPath: (self.settings.memoryPath as NSString).expandingTildeInPath)
+                        result = (CantripHomeShadowRun.memoryTool(call.name, arguments: args, vault: vault), true, true)
+                    } else {
+                        result = shadow.tools.call(call.name, arguments: args)
+                    }
                     shadow.run.noteToolCall(call.name, allowed: result.allowed)
                     shadow.run.recordToolCall(call.name, arguments: args, output: result.output,
                                               success: result.success, allowed: result.allowed)
@@ -358,6 +369,9 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
                                      "content": String(output.prefix(self.shadow?.run.config.resultCharacters ?? 4000))])
                 self.onEvent?(.activity(ToolActivityFactory.complete(
                     activity, id: activity.id, success: success, output: output)))
+            }
+            if let shadow = self.shadow, shadow.run.config.guards, self.iterations == shadow.run.config.maxSteps - 10 {
+                self.history.append(["role": "user", "content": CantripHomeShadowRun.stepsLeftNote])
             }
             self.onEvent?(.status("Thinking…"))
             self.startRequest()

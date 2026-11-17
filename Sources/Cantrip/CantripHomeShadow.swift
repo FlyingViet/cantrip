@@ -38,6 +38,12 @@ struct CantripHomeShadowConfig: Codable, Equatable {
     /// Keep the first request and every tool call with its full result in the run's private folder,
     /// so the run can be replayed offline with other settings. Deleted a day after `until`.
     var keepTranscript = true
+    /// Refuse repeated identical tool calls, warn 10 steps before the cap, and treat a new record that
+    /// repeats an existing one (same title field) as a problem to correct.
+    var guards = false
+    /// Offer `memory_read` and `memory_search`: the memory vault's notes, read-only (real runs read a
+    /// task's procedure note with the shell).
+    var memoryTools = false
 
     init() {}
 
@@ -60,6 +66,8 @@ struct CantripHomeShadowConfig: Codable, Equatable {
         recordsTool = try c.decodeIfPresent(Bool.self, forKey: .recordsTool) ?? d.recordsTool
         validateRecords = try c.decodeIfPresent(Bool.self, forKey: .validateRecords) ?? d.validateRecords
         keepTranscript = try c.decodeIfPresent(Bool.self, forKey: .keepTranscript) ?? d.keepTranscript
+        guards = try c.decodeIfPresent(Bool.self, forKey: .guards) ?? d.guards
+        memoryTools = try c.decodeIfPresent(Bool.self, forKey: .memoryTools) ?? d.memoryTools
     }
 
     static var folder: URL { CantripPaths.cache("local-tools-shadow") }
@@ -311,7 +319,7 @@ final class CantripHomeShadowRun: @unchecked Sendable {
             "parameters": ["type": "object", "properties": [
                 "task": ["type": "string", "description": "Task ID (default: this task)"],
                 "ids": ["type": "array", "items": ["type": "string"], "description": "Record IDs or ID prefixes"],
-                "query": ["type": "string", "description": "Words that must all appear in a record"],
+                "query": ["type": "string", "description": "Words to look for; records with the most of them come first"],
                 "offset": ["type": "integer"], "limit": ["type": "integer"],
             ] as [String: Any]],
         ] as [String: Any]]
@@ -328,11 +336,12 @@ final class CantripHomeShadowRun: @unchecked Sendable {
             records = records.filter { record in prefixes.contains { record.id.uuidString.hasPrefix($0) } }
         }
         if let query = (arguments["query"] as? String)?.lowercased(), !query.isEmpty {
-            let words = query.split { !$0.isLetter && !$0.isNumber }.map(String.init)
-            records = records.filter { record in
+            // Ranked by how many of the words a record has: a partial name still finds it.
+            let words = query.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count > 1 }
+            records = records.enumerated().map { index, record -> (Int, Int, CantripHomeTaskRecord) in
                 let text = record.values.values.joined(separator: " ").lowercased()
-                return words.allSatisfy { text.contains($0) }
-            }
+                return (words.filter { text.contains($0) }.count, index, record)
+            }.filter { $0.0 > 0 }.sorted { ($0.0, -$0.1) > ($1.0, -$1.1) }.map(\.2)
         }
         let offset = max(0, (arguments["offset"] as? NSNumber)?.intValue ?? 0)
         let limit = min(50, max(1, (arguments["limit"] as? NSNumber)?.intValue ?? 20))
@@ -379,6 +388,12 @@ final class CantripHomeShadowRun: @unchecked Sendable {
                 }
                 guard let id = change.id else {
                     if change.operation == .delete { problems.append("A delete has no record ID.") }
+                    let titleKey = workspace.list.titleField
+                    if config.guards, let title = values[titleKey].map(Self.normalized), !title.isEmpty,
+                       let existing = workspace.records.first(where: { Self.normalized($0.values[titleKey] ?? "") == title }) {
+                        problems.append("A new record repeats existing record \(existing.id.uuidString) (\(titleKey) "
+                            + "\"\(values[titleKey] ?? "")\"); update that record instead of adding one.")
+                    }
                     continue
                 }
                 guard let record = workspace.records.first(where: { $0.id == id }) else {
@@ -399,6 +414,81 @@ final class CantripHomeShadowRun: @unchecked Sendable {
         return Array(problems.prefix(20))
     }
 
+    static func normalized(_ text: String) -> String {
+        text.lowercased().split { !$0.isLetter && !$0.isNumber }.joined(separator: " ")
+    }
+
+    // MARK: Guards and memory
+
+    private var seenCalls: [String: Int] = [:]
+
+    /// The step an identical call (same tool and arguments) was already made at, or nil (and records it).
+    func repeatedCall(_ name: String, arguments: [String: Any], step: Int) -> Int? {
+        let data = (try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys])) ?? Data()
+        let key = name + "\u{1F}" + String(decoding: data, as: UTF8.self)
+        return lock.withLock {
+            if let earlier = seenCalls[key] { repeats += 1; return earlier }
+            seenCalls[key] = step
+            return nil
+        }
+    }
+
+    private(set) var repeats = 0
+
+    static let stepsLeftNote = "(10 tool steps left. Finish looking things up and write your record changes and report.)"
+
+    static let memoryToolNames: Set<String> = ["memory_read", "memory_search"]
+
+    static var memoryToolSchemas: [[String: Any]] {
+        [["type": "function", "function": [
+            "name": "memory_read",
+            "description": "Read a note from the user's memory vault (read-only), e.g. the task's procedure note named in "
+                + "the instructions (\"interview-tracker.md\"). Without `note`, lists the notes. Page with `offset`/`limit` (lines).",
+            "parameters": ["type": "object", "properties": [
+                "note": ["type": "string"], "offset": ["type": "integer"], "limit": ["type": "integer"],
+            ] as [String: Any]],
+        ] as [String: Any]],
+         ["type": "function", "function": [
+            "name": "memory_search",
+            "description": "Search the memory vault's notes for lines containing all the words (read-only). "
+                + "Returns up to 40 matching lines as note:line.",
+            "parameters": ["type": "object", "properties": ["query": ["type": "string"]], "required": ["query"]] as [String: Any],
+         ] as [String: Any]]]
+    }
+
+    /// The vault's notes (Markdown, not the session logs), read-only.
+    static func memoryTool(_ name: String, arguments: [String: Any], vault: URL) -> String {
+        let root = vault.standardizedFileURL
+        let notes = (FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
+            .filter { $0.pathExtension == "md" && !$0.path.contains("/sessions/") }
+            .map { $0.standardizedFileURL }.sorted { $0.path < $1.path }
+        func relative(_ url: URL) -> String { String(url.path.dropFirst(root.path.count + 1)) }
+        if name == "memory_read" {
+            let note = (arguments["note"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+            guard !note.isEmpty else { return "Notes:\n" + notes.map(relative).joined(separator: "\n") }
+            guard let url = notes.first(where: { relative($0) == note || $0.lastPathComponent == (note as NSString).lastPathComponent }),
+                  let text = try? String(contentsOf: url, encoding: .utf8) else {
+                return "No note named \(note). Call memory_read without `note` to list them."
+            }
+            let lines = text.components(separatedBy: "\n")
+            let offset = max(0, (arguments["offset"] as? NSNumber)?.intValue ?? 0)
+            let limit = min(400, max(1, (arguments["limit"] as? NSNumber)?.intValue ?? 200))
+            let page = lines.dropFirst(offset).prefix(limit)
+            return "\(relative(url)) lines \(offset + 1)-\(offset + page.count) of \(lines.count):\n" + page.joined(separator: "\n")
+        }
+        let words = ((arguments["query"] as? String) ?? "").lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        guard !words.isEmpty else { return "No matching lines." }
+        var hits: [String] = []
+        for url in notes {
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            for (index, line) in text.components(separatedBy: "\n").enumerated() where words.allSatisfy(line.lowercased().contains) {
+                hits.append("\(relative(url)):\(index + 1): \(line.trimmingCharacters(in: .whitespaces).prefix(300))")
+                if hits.count >= 40 { return hits.joined(separator: "\n") }
+            }
+        }
+        return hits.isEmpty ? "No matching lines." : hits.joined(separator: "\n")
+    }
+
     static func correctionMessage(_ problems: [String]) -> String {
         "Your record changes can't be saved as written:\n" + problems.map { "- " + $0 }.joined(separator: "\n")
             + "\n\nSend the corrected cantrip-task-records blocks again, with full record IDs and only fields that "
@@ -413,10 +503,11 @@ final class CantripHomeShadowRun: @unchecked Sendable {
             "model": model, "server": server, "steps": steps, "toolCalls": toolCalls, "refusedCalls": refusedCalls,
             "blocks": blockCounts, "promptTokens": promptTokens, "completionTokens": completionTokens,
             "seconds": Int(endedAt.timeIntervalSince(startedAt ?? endedAt)),
-            "corrected": corrected, "validationProblems": validationProblems,
+            "corrected": corrected, "validationProblems": validationProblems, "repeatedCalls": repeats,
             "tuning": ["instructions": !config.instructions.isEmpty, "temperature": config.temperature as Any,
                        "reasoningEffort": config.reasoningEffort, "recordsTool": config.recordsTool,
-                       "validateRecords": config.validateRecords] as [String: Any],
+                       "validateRecords": config.validateRecords, "guards": config.guards,
+                       "memoryTools": config.memoryTools] as [String: Any],
         ]
         result["startedAt"] = startedAt.map { ISO8601DateFormatter().string(from: $0) }
         result["error"] = error.map { String($0.prefix(300)) }

@@ -156,6 +156,34 @@ extension SessionTabTests {
                      && problems(#"[{"operation":"upsert","id":"\#(id)","values":{"status":"Closed"}}]"#).isEmpty
                      && unit.validate("No records changed.").isEmpty,
                      "Record changes are checked against the snapshot")
+        precondition(unit.recordsTool(["query": "nomatch example"]).contains("1 matching records"),
+                     "A partial match still finds the record")
+        var guarded = config
+        guarded.guards = true
+        let guardedRun = CantripHomeShadowRun(realRunID: UUID(), task: shadowed, tasks: store.tasks, note: nil,
+                                              config: guarded, root: unitRoot)
+        let duplicate = guardedRun.validate(block(#"[{"operation":"upsert","values":{"name":"example co","status":"Waiting"}}]"#))
+        precondition(duplicate.first?.contains("repeats existing record \(id)") == true
+                     && unit.validate(block(#"[{"operation":"upsert","values":{"name":"example co","status":"Waiting"}}]"#)).isEmpty,
+                     "With guards, a new record that repeats an existing one is a problem: \(duplicate)")
+        precondition(guardedRun.repeatedCall("mcp__personal__mail_search", arguments: ["since": "2026-01-01"], step: 1) == nil
+                     && guardedRun.repeatedCall("mcp__personal__mail_search", arguments: ["since": "2026-01-02"], step: 2) == nil
+                     && guardedRun.repeatedCall("mcp__personal__mail_search", arguments: ["since": "2026-01-01"], step: 3) == 1
+                     && guardedRun.repeats == 1, "Identical calls are caught; different arguments aren't")
+        let vault = unitRoot.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(at: vault.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+        try "# Tracker\nCheck replies since the last run.\nExample Co counts as a reply.\n".write(
+            to: vault.appendingPathComponent("tracker.md"), atomically: true, encoding: .utf8)
+        try "Example Co private chat log".write(to: vault.appendingPathComponent("sessions/day.md"), atomically: true, encoding: .utf8)
+        let listed = CantripHomeShadowRun.memoryTool("memory_read", arguments: [:], vault: vault)
+        let noteLines = CantripHomeShadowRun.memoryTool("memory_read", arguments: ["note": "tracker.md", "offset": 1, "limit": 1], vault: vault)
+        let found = CantripHomeShadowRun.memoryTool("memory_search", arguments: ["query": "example co"], vault: vault)
+        precondition(listed.contains("tracker.md") && !listed.contains("sessions")
+                     && noteLines.contains("lines 2-2 of 4") && noteLines.contains("Check replies") && !noteLines.contains("counts as")
+                     && found == "tracker.md:3: Example Co counts as a reply."
+                     && CantripHomeShadowRun.memoryTool("memory_read", arguments: ["note": "../../etc/passwd"], vault: vault)
+                        .hasPrefix("No note named"),
+                     "Memory tools read the vault's notes only, not session logs or other files: \(found)")
 
         config.tasks = [shadowed.id.uuidString]
         config.temperature = 0.2
@@ -163,6 +191,9 @@ extension SessionTabTests {
         config.recordsTool = true
         config.validateRecords = true
         config.instructions = "Change a field only with new evidence."
+        config.guards = true
+        config.memoryTools = true
+        config.maxSteps = 11
         store.runner.shadowConfig = { config }
         store.runner.shadowRoot = root
         store.runner.shadowTools = probe
@@ -256,7 +287,9 @@ extension SessionTabTests {
                      && system.contains("Change a field only with new evidence.")
                      && String(decoding: chats[2].body, as: UTF8.self).contains("unchanged values"),
                      "Tuning settings and the correction reach the local model")
-        precondition(toolNames == ["mcp__personal__mail_read", CantripHomeShadowRun.recordsToolName]
+        precondition(String(decoding: chats[1].body, as: UTF8.self).contains("10 tool steps left"),
+                     "With guards, the model is told when 10 tool steps are left")
+        precondition(toolNames == ["mcp__personal__mail_read", CantripHomeShadowRun.recordsToolName, "memory_read", "memory_search"]
                      && firstText.contains("Scheduled task · Shadow tracker")
                      && firstText.contains("status=Waiting") && !firstText.contains("status=Replied")
                      && first["priority"] as? String == "background"
