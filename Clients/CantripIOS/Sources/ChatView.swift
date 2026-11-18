@@ -4065,12 +4065,10 @@ struct TurnView: View, Equatable {
                                          subagents: placed[index - 1].subagents)
                 }
                 if !part.isEmpty {
-                    if turn.isLocalPrivate == true {
-                        Text(verbatim: part).textSelection(.enabled)
-                    } else {
-                        ChatAssistantText(text: part, images: turn.images ?? [], remote: remote,
-                                          size: size, secondary: size == .small)
-                    }
+                    // Private Local renders Markdown like other tabs but never loads an image.
+                    let local = turn.isLocalPrivate == true
+                    ChatAssistantText(text: part, images: local ? [] : turn.images ?? [], remote: remote,
+                                      size: size, secondary: size == .small, loadsImages: !local)
                 }
             }
         }

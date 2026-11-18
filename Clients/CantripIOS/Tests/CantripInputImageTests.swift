@@ -102,6 +102,14 @@ final class CantripInputImageTests: XCTestCase {
         XCTAssertEqual(ChatMarkdownImages.separatingBlocks("No images here"), "No images here")
     }
 
+    /// Private Local shows an image's description instead of loading it, worded as on Windows and the web.
+    func testUnloadedImageLabels() {
+        XCTAssertEqual(ChatMarkdownImages.unloadedLabel("![Chart](https://example.com/chart.png)"), "Image not loaded: Chart")
+        XCTAssertEqual(ChatMarkdownImages.unloadedLabel("![](<HTTP://example.com/a b.png>)"), "Image not loaded")
+        XCTAssertEqual(ChatMarkdownImages.unloadedLabel("![ Plot ](/Users/me/plot.png)"), "Image on the Mac: Plot")
+        XCTAssertEqual(ChatMarkdownImages.unloadedLabel("not an image"), "Image not loaded")
+    }
+
     func testQuestionDecodesPreviewsAndSplitsThemIntoARow() throws {
         let request = try JSONDecoder().decode(CantripInputRequest.self, from: requestJSON())
         let parts = request.presentation(sessionID: sessionID)

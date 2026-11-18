@@ -9,6 +9,9 @@ struct MarkdownContent: View {
     var size: CantripRichText.Size = .body
     /// Progress notes: secondary color.
     var secondary = false
+    /// False shows each image's description instead of loading it, and previews no mentioned image
+    /// files (Private Local loads nothing).
+    var loadsImages = true
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -22,11 +25,17 @@ struct MarkdownContent: View {
                 case .code(let code, _):
                     CodeBlockView(code: code)
                 case .image(let line):
-                    ImageBlock(target: Self.imageTarget(line))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if loadsImages {
+                        ImageBlock(target: Self.imageTarget(line))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Label(Self.unloadedLabel(line), systemImage: "photo")
+                            .font(size == .body ? .callout : .caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-            ForEach(Self.mentionedImages(in: text, shown: segments), id: \.self) { path in
+            ForEach(loadsImages ? Self.mentionedImages(in: text, shown: segments) : [], id: \.self) { path in
                 ImageBlock(target: path)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -81,6 +90,16 @@ struct MarkdownContent: View {
         var target = (line as NSString).substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
         if target.hasPrefix("<"), target.hasSuffix(">") { target = String(target.dropFirst().dropLast()) }
         return target
+    }
+
+    /// What shows instead of an image line that isn't loaded (as on the other clients).
+    static func unloadedLabel(_ line: String) -> String {
+        let target = imageTarget(line).lowercased()
+        let label = target.hasPrefix("https://") || target.hasPrefix("http://") ? "Image not loaded" : "Image on the Mac"
+        let alt = line.firstIndex(of: "[").flatMap { open in
+            line[line.index(after: open)...].firstIndex(of: "]").map { String(line[line.index(after: open)..<$0]) }
+        }?.trimmingCharacters(in: .whitespaces) ?? ""
+        return alt.isEmpty ? label : "\(label): \(alt)"
     }
 
     /// Bare image paths mentioned anywhere in the text (e.g. "PNG: ~/cat.png") whose files exist,

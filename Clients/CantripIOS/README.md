@@ -960,8 +960,10 @@ not the phone. Save while idle; stale/busy writes are rejected and uncertain
 writes are never replayed. The same configuration is available in Cantrip.
 
 This tab cannot be closed, cleared, unlocked or changed into a cloud tab.
-It is text-only: tools, shell/slash execution, Council, shared-memory logging,
-push summaries and automatic external content are disabled. Auto queues locally,
+Shell/slash execution, Council, shared-memory logging, push summaries and
+automatic external content are disabled; read-only tools are optional. Replies
+render Markdown like other tabs, but images are never loaded (each shows its
+description). Auto queues locally,
 and drafts stay with their tabs. Model input context remains bounded even though
 the full saved conversation is retained. The configured server must be
 yours and trusted, not a managed-cloud inference gateway. Cloud aliases,

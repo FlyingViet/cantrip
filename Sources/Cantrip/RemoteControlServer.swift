@@ -5125,11 +5125,11 @@ private extension RemoteControlServer {
         if(source[cursor]==="`"){const end=source.indexOf("`",cursor+1);if(end>=0){flush();const code=document.createElement("code");code.textContent=source.slice(cursor+1,end);parent.append(code);cursor=end+1;continue}}
         if(source[cursor]==="@"&&source[cursor+1]==="["){const mention=source.slice(cursor).match(/^@\\[([^\\[\\]\\n]{1,120})\\]\\(cantrip-tab:([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\\)/);if(mention){flush();parent.append(mentionNode(mention[1],mention[2]));cursor+=mention[0].length;continue}}
         const image=source.slice(cursor).match(/^!\\[([^\\]]*)\\]\\(([^)\\s]+)(?:\\s+["'][^"']*["'])?\\)/);
-        if(image){const preview=inlineImages&&image[2].startsWith("cantrip-preview://image/")?inlineImages.images.get(image[2].slice(24)):null,imageURL=/^https?:\\/\\//i.test(image[2])&&safeURL(image[2],true);flush();
+        if(image){const preview=inlineImages&&image[2].startsWith("cantrip-preview://image/")?inlineImages.images.get(image[2].slice(24)):null,web=/^https?:\\/\\//i.test(image[2]),imageURL=web&&!textOnlyImages&&safeURL(image[2],true);flush();
           if(preview)parent.append(macImage(inlineImages.sessionID,preview,"preview",image[1]||preview.altText||"Generated image"));
           else if(imageURL){const img=document.createElement("img");img.alt=image[1];img.src=imageURL;img.loading="lazy";parent.append(img)}
           // Mac file paths are not served; show the description instead of a broken image.
-          else{const note=document.createElement("span");note.className="image-unavailable";note.textContent=image[1]?`Image on the Mac: ${image[1]}`:"Image on the Mac";parent.append(note)}
+          else{const note=document.createElement("span");note.className="image-unavailable";const label=web?"Image not loaded":"Image on the Mac";note.textContent=image[1]?`${label}: ${image[1]}`:label;parent.append(note)}
           cursor+=image[0].length;continue}
         const link=source.slice(cursor).match(/^\\[([^\\]]+)\\]\\(([^)\\s]+)(?:\\s+["'][^"']*["'])?\\)/),linkPreview=link&&inlineImages&&link[2].startsWith("cantrip-preview://image/")?inlineImages.images.get(link[2].slice(24)):null;
         if(linkPreview){flush();parent.append(previewLink(inlineImages.sessionID,linkPreview,link[1]));cursor+=link[0].length;continue}
@@ -5249,7 +5249,7 @@ private extension RemoteControlServer {
     window.addEventListener("message",event=>{for(const state of mcpApps.values())if(state.frame&&event.source===state.frame.contentWindow){mcpReceive(state,event.data);return}});
     // Mac images (generated previews, iPhone uploads) load through the paired API as
     // data URLs. Each keeps one element so transcript re-renders never refetch or flicker.
-    const macImages=new Map(),macImageStates=new WeakMap(),macImageData=new Map();let inlineImages=null,viewerState=null,viewerRequest=0;
+    const macImages=new Map(),macImageStates=new WeakMap(),macImageData=new Map();let inlineImages=null,textOnlyImages=false,viewerState=null,viewerRequest=0;
     const macImageObserver="IntersectionObserver" in window?new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){macImageObserver.unobserve(entry.target);const state=macImageStates.get(entry.target);if(state)loadMacImage(state)}},{rootMargin:"900px 0px"}):null;
     function macImagePath(sessionID,id,full){return `/api/v1/sessions/${encodeURIComponent(sessionID)}/${id.startsWith("previews/")?"":"attachments/"}${id.split("/").map(encodeURIComponent).join("/")}${full?"":"/thumbnail"}`}
     function macImage(sessionID,image,kind,label){const key=`${sessionID}:${image.id}`;let state=macImages.get(key);
@@ -5498,7 +5498,7 @@ private extension RemoteControlServer {
       // Refit when the card changes size (a rotated phone, a resized window) until the user moves the map.
       if(window.ResizeObserver){let last=0;new ResizeObserver(()=>{if(!wrap.isConnected||wrap.clientWidth===last)return;last=wrap.clientWidth;drawMap()}).observe(wrap)}
       return wrap}
-    function appendReply(row,message,settled,session){const images=message.images||[],text=(images.length&&message.displayText)||message.text||"";inlineImages=images.length&&!session.isLocalPrivate?{sessionID:session.id,images:new Map(images.map(image=>[image.id,image]))}:null;try{appendReplyText(row,message,text,settled,session)}finally{inlineImages=null}if(!session.isLocalPrivate&&Array.isArray(message.cards)&&message.cards.length)appendCards(row,message.cards,message.id)}
+    function appendReply(row,message,settled,session){const images=message.images||[],text=(images.length&&message.displayText)||message.text||"";inlineImages=images.length&&!session.isLocalPrivate?{sessionID:session.id,images:new Map(images.map(image=>[image.id,image]))}:null;textOnlyImages=Boolean(session.isLocalPrivate);try{appendReplyText(row,message,text,settled,session)}finally{inlineImages=null;textOnlyImages=false}if(!session.isLocalPrivate&&Array.isArray(message.cards)&&message.cards.length)appendCards(row,message.cards,message.id)}
     // Notes a reply wrote between tool calls (`work.noteBlocks` blocks) fold above its answer.
     function appendReplyText(row,message,text,settled,session){const work=message.work,live=Boolean(session.isStreaming)&&session.messages?.findLast?.(m=>m.role==="assistant")?.id===message.id;
       if(work&&work.noteBlocks>0&&!session.isLocalPrivate&&(live||work.hasAnswer)){const starts=replyBlockStarts(text),cut=work.noteBlocks<starts.length?starts[work.noteBlocks]:text.length,notes=text.slice(0,cut).replace(/\\s+$/,""),answer=text.slice(cut);
@@ -5508,7 +5508,7 @@ private extension RemoteControlServer {
           details.append(summary,body);row.append(details);appendReplySegments(body,message,notes,settled.filter(agent=>(agent.textBlock??0)<=work.noteBlocks),session,0,true);appendReplySegments(row,message,answer,settled.filter(agent=>(agent.textBlock??0)>work.noteBlocks),session,work.noteBlocks);return}}
       appendReplySegments(row,message,text,settled,session,0)}
     // Reply text with each finished subagent's card after the block it ended on; `base` blocks came before `text`.
-    function appendReplySegments(row,message,text,settled,session,base,notes=false){const appendText=part=>{if(!part)return;if(session.isLocalPrivate){const pre=document.createElement("pre");pre.textContent=part;row.append(pre)}else appendProse(row,part)};
+    function appendReplySegments(row,message,text,settled,session,base,notes=false){const appendText=part=>{if(part)appendProse(row,part)};
       if(!settled.length){appendText(text);return}const groups=new Map();for(const agent of settled){const block=Math.max(0,(agent.textBlock??0)-base);if(!groups.has(block))groups.set(block,[]);groups.get(block).push(agent)}
       const starts=replyBlockStarts(text);let from=0;for(const block of [...groups.keys()].sort((a,b)=>a-b)){const to=Math.max(from,block===0?0:block<starts.length?starts[block]:text.length);appendText(text.slice(from,to).replace(/\\s+$/,""));from=to;appendSubagents(row,groups.get(block),session.id,message.id,block+base)}appendText(text.slice(from))}
     // Running subagents stay pinned at the bottom of the chat; finished ones return to their reply.

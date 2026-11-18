@@ -452,5 +452,29 @@ extension SessionTabTests {
                      "the viewer opens the full-size image: \(result)")
         precondition(result["closed"] as? Bool == true && result["kept"] as? Bool == true,
                      "Done closes it, and re-renders keep the loaded preview element: \(result)")
+
+        // Private Local: Markdown like other tabs, while streaming and after, but no image loads.
+        let markdown = try await webView.callAsyncJavaScript("""
+        const reply=["## Plan","","**Bold** and *italic* with `inline code`.","","- one","- two","","1. first","2. second","",
+          "| Name | Value |","| --- | --- |","| alpha | 1 |","","```swift","let x = 1","```","","[Docs](https://example.com/docs)","",
+          "![Chart](https://example.com/chart.png)"].join("\\n");
+        const shown=(local,streaming)=>{const next=structuredClone(window.imageSession);next.isLocalPrivate=local;next.isStreaming=streaming;
+          next.messages=[{id:"PL-1",role:"user",text:"Show a Markdown sample",activities:[],thinking:""},{id:"PL-2",role:"assistant",text:reply,activities:[],thinking:""}];
+          render(next);const row=[...document.querySelectorAll('#messages .message')].at(-1);
+          return {tags:["h2","strong","em","code","ul","ol","table","td","pre","a"].filter(tag=>row.querySelector(tag)),
+            plain:[...row.querySelectorAll('pre')].filter(pre=>!pre.querySelector('code')).length,raw:row.textContent.includes("**Bold**"),
+            images:row.querySelectorAll('img').length,note:row.querySelector('.image-unavailable')?.textContent||""}};
+        return JSON.stringify({streaming:shown(true,true),done:shown(true,false),regular:shown(false,false)});
+        """, contentWorld: .page) as? String ?? "{}"
+        let views = try JSONSerialization.jsonObject(with: Data(markdown.utf8)) as? [String: [String: Any]] ?? [:]
+        for key in ["streaming", "done"] {
+            let view = views[key] ?? [:]
+            precondition((view["tags"] as? [String])?.count == 10 && view["plain"] as? Int == 0 && view["raw"] as? Bool == false,
+                         "Private Local renders Markdown (\(key)): \(view)")
+            precondition(view["images"] as? Int == 0 && view["note"] as? String == "Image not loaded: Chart",
+                         "Private Local never loads an image (\(key)): \(view)")
+        }
+        precondition(views["regular"]?["images"] as? Int == 1 && (views["regular"]?["tags"] as? [String])?.count == 10,
+                     "Other tabs keep web images: \(views["regular"] ?? [:])")
     }
 }

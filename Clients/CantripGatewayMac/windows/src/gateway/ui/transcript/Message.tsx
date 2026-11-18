@@ -268,8 +268,9 @@ function ReplyParts(props: { text: string; message: RemoteMessage; session: Remo
   const images = session.isLocalPrivate ? null : inlineImages(session.id, message.images);
   const part = (value: string, key: string) => {
     if (!value.trim()) return null;
+    // Private Local renders Markdown like other tabs but never loads an image.
     return session.isLocalPrivate || message.isLocalPrivate
-      ? <pre key={key} class="private-text selectable">{value}</pre>
+      ? <Markdown key={key} text={value} remoteImages={false} />
       : <Markdown key={key} text={value} images={images} />;
   };
   if (!props.settled.length) return <>{part(text, "t")}</>;

@@ -6648,7 +6648,7 @@ private struct CantripRemoteMessageBubble: View {
                     if message.role == "user" {
                         PromptTextView(text: message.presentedText)
                     } else if message.isLocalPrivate == true {
-                        Text(verbatim: message.presentedText)
+                        ChatAssistantText(text: message.presentedText, images: [], remote: model, loadsImages: false)
                     } else {
                         ChatAssistantText(
                             text: message.presentedText,

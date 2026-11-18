@@ -71,6 +71,22 @@ enum ChatMarkdownImages {
         pattern: #"^ {0,3}!\[[^\]\r\n]*\]\((<[^>\r\n]+>|[^()\r\n]+)\)[ \t]*\r?$"#
     )
 
+    /// What shows instead of an image line that isn't loaded (as on Windows and the browser).
+    static func unloadedLabel(_ line: String) -> String {
+        let ns = line as NSString
+        guard let match = imageLine.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else {
+            return "Image not loaded"
+        }
+        let whole = ns.substring(with: match.range)
+        let alt = whole.firstIndex(of: "[").flatMap { open in
+            whole[whole.index(after: open)...].firstIndex(of: "]").map { String(whole[whole.index(after: open)..<$0]) }
+        }?.trimmingCharacters(in: .whitespaces) ?? ""
+        let target = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: CharacterSet(charactersIn: "<>"))
+        let web = target.lowercased().hasPrefix("https://") || target.lowercased().hasPrefix("http://")
+        let label = web ? "Image not loaded" : "Image on the Mac"
+        return alt.isEmpty ? label : "\(label): \(alt)"
+    }
+
     /// "**Before**\n![..](..)" is one paragraph, and MarkdownUI draws nothing for an image
     /// inside text. A blank line between an image line and adjacent text makes it a block.
     static func separatingBlocks(_ text: String) -> String {
@@ -173,6 +189,8 @@ struct ChatAssistantText: View {
     var size: CantripRichText.Size = .body
     /// Progress notes: secondary color.
     var secondary = false
+    /// False shows each image's description instead of loading it (Private Local loads nothing).
+    var loadsImages = true
     @Environment(\.openURL) private var openURL
     @Environment(\.cantripMentionLinks) private var mentionLinks
 
@@ -191,9 +209,15 @@ struct ChatAssistantText: View {
                 case .code(let code, _):
                     CantripCodeBlockText(code: code, size: size, secondary: secondary)
                 case .image(let line):
-                    Markdown(line)
-                        .markdownImageProvider(ChatPreviewImageProvider(images: images, remote: remote))
-                        .environment(\.openURL, OpenURLAction { open($0) })
+                    if loadsImages {
+                        Markdown(line)
+                            .markdownImageProvider(ChatPreviewImageProvider(images: images, remote: remote))
+                            .environment(\.openURL, OpenURLAction { open($0) })
+                    } else {
+                        Label(ChatMarkdownImages.unloadedLabel(line), systemImage: "photo")
+                            .font(size == .body ? .callout : .caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }

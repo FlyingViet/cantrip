@@ -71,8 +71,6 @@
 @media (hover: none) { .icon-btn.message-menu { opacity: 0.55; } }
 .fresh-start { display: flex; align-items: center; gap: 10px; color: var(--secondary); font-size: 11.5px; text-align: center; padding: 6px 0; }
 .fresh-start span { flex: 1; min-width: 16px; height: 1px; background: var(--separator); }
-.private-text { white-space: pre-wrap; font: inherit; margin: 0; }
-
 /* Markdown */
 .prose { width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .prose > :first-child { margin-top: 0; }

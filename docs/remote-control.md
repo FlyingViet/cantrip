@@ -52,6 +52,10 @@ your self-hosted LLM server**. Its identity, history and self-hosted route survi
 restarts. It cannot
 be closed, cleared, unlocked or converted into a cloud-backed tab. It is separate
 from the older **Private mode**, which disables saving and hides a tab from Remote.
+Replies render Markdown like other tabs on every client (the Mac, the browser,
+Cantrip Agent and Windows), while streaming and after. Images are never loaded:
+each shows its description ("Image not loaded: ..."), and the Mac previews no
+image files a reply mentions.
 
 1. Run a trusted Ollama installation, or an OpenAI-compatible server such as
    oMLX, LM Studio or mlx-serve, on your chosen server and install a model

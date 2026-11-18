@@ -3604,11 +3604,8 @@ struct MessageRow: View {
                     })
                 }
                 if !part.isEmpty {
-                    if localOnly {
-                        Text(verbatim: part).textSelection(.enabled)
-                    } else {
-                        MarkdownContent(text: part, size: size, secondary: size == .small)
-                    }
+                    // Private Local renders Markdown like other tabs but never loads an image.
+                    MarkdownContent(text: part, size: size, secondary: size == .small, loadsImages: !localOnly)
                 }
             }
         }
