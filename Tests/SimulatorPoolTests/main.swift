@@ -26,6 +26,7 @@ final class FakeSimctl: @unchecked Sendable {
         var available = true
         var bytes: Int64 = 0
         var lastUsed: Date?
+        var dataPath: String?
     }
 
     private let lock = NSLock()
@@ -94,6 +95,7 @@ final class FakeSimctl: @unchecked Sendable {
                                                     "deviceTypeIdentifier": device.type, "isAvailable": device.available,
                                                     "dataPathSize": device.bytes]
                         if let used = device.lastUsed { entry["lastUsedAt"] = ISO8601DateFormatter().string(from: used) }
+                        if let data = device.dataPath { entry["dataPath"] = data }
                         lists[device.runtime, default: []].append(entry)
                     }
                     return try json(["devices": lists])
@@ -739,6 +741,91 @@ do {
     expect(SimulatorPool.SweepOptions().idleBootMinutes == 15, "idle simulators shut down after 15 minutes by default")
 } catch {
     expect(false, "idle threw \(error)")
+}
+
+// MARK: - Regrowable data in free pool simulators, the iPhone Duo included
+
+do {
+    let fake = FakeSimctl()
+    let fm = FileManager.default
+    let kb: Int64 = 1_024
+    let caches = SimulatorPool.regrowableCaches
+    func udid(_ prefix: String) -> String { prefix + "-0000-0000-0000-000000000000" }
+    /// A data folder with 64 KB in each regrowable folder and an app's save file that must stay.
+    func data(_ name: String) throws -> String {
+        let path = root.appendingPathComponent("devices/\(name)/data")
+        for folder in caches {
+            let url = path.appendingPathComponent(folder)
+            try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            try Data(count: Int(64 * kb)).write(to: url.appendingPathComponent("render-\(name).bin"))
+        }
+        let app = path.appendingPathComponent("Containers/Data/Application/APP/Documents")
+        try fm.createDirectory(at: app, withIntermediateDirectories: true)
+        try Data("save".utf8).write(to: app.appendingPathComponent("save.dat"))
+        return path.path
+    }
+    func leftover(_ path: String) -> Int {
+        caches.reduce(0) { $0 + ((try? fm.contentsOfDirectory(atPath: path + "/" + $1))?.count ?? 0) }
+    }
+    func entry(_ prefix: String, _ type: String, _ runtime: String, bytes: Int64, state: String = "Shutdown",
+               used: TimeInterval = -day) throws -> FakeSimctl.Entry {
+        .init(udid: udid(prefix), name: prefix, state: state, type: type, runtime: runtime, bytes: bytes,
+              lastUsed: now.addingTimeInterval(used), dataPath: try data(prefix))
+    }
+    // Sizes scaled down: the cap and threshold below play the real 10 GB and 1 GB.
+    let watch = "com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-11-46mm"
+    fake.devices = [try entry("DUOTRIM0", FakeSimctl.duo, FakeSimctl.ios271, bytes: 2_000 * kb),
+                    try entry("PROTRIM0", FakeSimctl.pro, FakeSimctl.ios270, bytes: 1_000 * kb),
+                    try entry("IPADBIG0", FakeSimctl.iPadPro, FakeSimctl.ios270, bytes: 2_000 * kb),
+                    try entry("DUOLEASE", FakeSimctl.duo, FakeSimctl.ios272, bytes: 2_000 * kb, state: "Booted"),
+                    try entry("WATCHSML", watch, "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", bytes: 100 * kb)]
+    let c = context(fake, folder: "trim")
+    try c.store.locked { state in
+        state.pool = [("iPhone Duo|27.1", "DUOTRIM0"), ("iPhone 17 Pro|27.0", "PROTRIM0"),
+                      ("iPad Pro 11-inch (M5)|27.0", "IPADBIG0"), ("iPhone Duo|27.2", "DUOLEASE"),
+                      ("Apple Watch Series 11 (46mm)|27.0", "WATCHSML")]
+            .map { SimulatorPool.Member(key: $0.0, udid: udid($0.1)) }
+        state.leases = [.init(id: "lease-trim", udid: udid("DUOLEASE"), key: "iPhone Duo|27.2", temporary: false,
+                              tab: "tab-t", acquiredAt: now, expiresAt: now.addingTimeInterval(3_600))]
+    }
+    var options = SimulatorPool.SweepOptions()
+    options.trimCachesOver = 150 * kb
+    options.poolSizeCap = 900 * kb
+    func kinds(_ report: SimulatorPool.SweepReport) -> [String: [SimulatorPool.Action.Kind]] {
+        Dictionary(grouping: report.actions, by: { String($0.udid.prefix(8)) }).mapValues { $0.map(\.kind) }
+    }
+    expect(SimulatorPool.SweepOptions().trimCachesOver == 1_000_000_000, "regrowable data is cleared past 1 GB by default")
+
+    let preview = SimulatorPool.sweep(options, dryRun: true, context: c)
+    let expected: [String: [SimulatorPool.Action.Kind]] = ["DUOTRIM0": [.trimmed], "PROTRIM0": [.trimmed],
+                                                           "IPADBIG0": [.trimmed, .erased]]
+    expect(kinds(preview) == expected,
+           "clear regrowable data in free pool simulators, the Duo too; erase only one still over the cap; got \(kinds(preview))")
+    let trimmed = preview.actions.first { $0.kind == .trimmed }?.bytes ?? 0
+    expect(trimmed >= 192 * kb && trimmed < 400 * kb, "the cleared size is what the caches held: \(trimmed)")
+    expect(preview.actions.first { $0.kind == .erased }?.bytes == 2_000 * kb - trimmed,
+           "an erase after clearing counts only what was left")
+    expect(preview.removedCount == 3, "a simulator cleared and erased counts once: \(preview.removedCount)")
+    expect(leftover(root.path + "/devices/DUOTRIM0/data") == 3, "a dry run deletes nothing")
+
+    let tidy = try XCTUnwrapLike(SimulatorPool.tidy(dryRun: true, context: c))
+    expect(!tidy.actions.contains { $0.kind == .trimmed }, "the few-minute tidy never walks the caches")
+
+    let real = SimulatorPool.sweep(options, dryRun: false, context: c)
+    expect(kinds(real) == expected && real.errors.isEmpty, "the real run does what the dry run listed: \(real.errors)")
+    for name in ["DUOTRIM0", "PROTRIM0"] {
+        let path = root.path + "/devices/\(name)/data"
+        expect(leftover(path) == 0, "\(name): regrowable folders are emptied")
+        expect(caches.allSatisfy { fm.fileExists(atPath: path + "/" + $0) }, "\(name): the folders themselves stay")
+        expect(fm.fileExists(atPath: path + "/Containers/Data/Application/APP/Documents/save.dat"), "\(name): app data stays")
+    }
+    expect(fake.entry(udid("DUOTRIM0"))?.bytes == 2_000 * kb, "the Duo is never erased")
+    expect(fake.entry(udid("IPADBIG0"))?.bytes == 0, "one still over the cap is erased")
+    expect(leftover(root.path + "/devices/DUOLEASE/data") == 3, "a leased, booted simulator is untouched")
+    expect(leftover(root.path + "/devices/WATCHSML/data") == 3, "a small simulator isn't even sized")
+    expect(fake.mutations().filter { $0.first == "erase" } == [["erase", udid("IPADBIG0")]], "only one erase")
+} catch {
+    expect(false, "trim threw \(error)")
 }
 
 

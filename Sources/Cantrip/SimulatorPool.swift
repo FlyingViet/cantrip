@@ -172,6 +172,8 @@ enum SimulatorPool {
         var dataBytes: Int64
         /// When it was last booted or shut down; for one never booted, when it was made.
         var lastUsed: Date?
+        /// Its `data` folder (the simulated iPhone's disk), when simctl reports one.
+        var dataPath: String? = nil
 
         var isBooted: Bool { state == "Booted" }
     }
@@ -226,7 +228,7 @@ enum SimulatorPool {
                                   runtimeIdentifier: runtime,
                                   isAvailable: entry["isAvailable"] as? Bool ?? false,
                                   dataBytes: (entry["dataPathSize"] as? NSNumber)?.int64Value ?? 0,
-                                  lastUsed: lastUsed)
+                                  lastUsed: lastUsed, dataPath: entry["dataPath"] as? String)
                 }
             }
             .sorted { $0.udid < $1.udid }
@@ -903,6 +905,12 @@ enum SimulatorPool {
         var poolSizeCap: Int64 = 10_000_000_000
         /// A free pool simulator or temporary copy booted longer than this is shut down.
         var idleBootMinutes = Policy().idleMinutes
+        /// A free, shut-down pool simulator whose `regrowableCaches` pass this size has them
+        /// cleared, before the size cap is checked. Its apps and logins stay, so this also covers
+        /// the iPhone Duo, which is never erased (Nov 18: its lock-screen poster renders alone had
+        /// regrown to 14.8 GB). Nil skips it: the pool's few-minute `tidy` passes nil, since sizing
+        /// the caches walks them; the storage cleanup (daily, hourly when low) uses this.
+        var trimCachesOver: Int64? = 1_000_000_000
 
         /// The pool's own upkeep, with the idle time from the settings.
         static func pool(_ policy: Policy) -> SweepOptions {
@@ -945,11 +953,35 @@ enum SimulatorPool {
     static func tidy(dryRun: Bool = false, context c: Context = Context(), log: (String) -> Void = { _ in }) -> SweepReport? {
         let state = c.store.read()
         guard !state.pool.isEmpty || !state.leases.isEmpty || !state.temporaries.isEmpty else { return nil }
-        return sweep(.pool(c.policy), dryRun: dryRun, context: c, log: log)
+        var options = SweepOptions.pool(c.policy)
+        options.trimCachesOver = nil
+        return sweep(options, dryRun: dryRun, context: c, log: log)
+    }
+
+    /// What iOS rebuilds by itself in a simulator's data folder: lock-screen poster renders,
+    /// caches, and downloaded Siri/language assets (fetched again on demand).
+    static let regrowableCaches = ["Library/Application Support/PRBPosterExtensionDataStore", "Library/Caches",
+                                   "private/var/MobileAsset/AssetsV2"]
+
+    static func regrowableBytes(dataPath: String) -> Int64 {
+        regrowableCaches.reduce(0) { total, folder in
+            total + StorageUpkeep.allocatedSize(URL(fileURLWithPath: dataPath).appendingPathComponent(folder))
+        }
+    }
+
+    /// Empties each regrowable folder, keeping the folder itself.
+    static func clearRegrowable(dataPath: String) throws {
+        for folder in regrowableCaches {
+            let url = URL(fileURLWithPath: dataPath).appendingPathComponent(folder)
+            guard let items = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) else {
+                continue
+            }
+            for item in items { try StorageUpkeep.removeTree(item) }
+        }
     }
 
     struct Action: Codable, Equatable {
-        enum Kind: String, Codable { case deleted, erased, shutDown }
+        enum Kind: String, Codable { case deleted, erased, shutDown, trimmed }
         var udid: String
         var name: String
         var kind: Kind
@@ -967,7 +999,7 @@ enum SimulatorPool {
 
         /// Space freed (deleted and erased simulators' data).
         var bytesRemoved: Int64 { actions.filter { $0.kind != .shutDown }.reduce(0) { $0 + $1.bytes } }
-        var removedCount: Int { actions.filter { $0.kind != .shutDown }.count }
+        var removedCount: Int { Set(actions.filter { $0.kind != .shutDown }.map(\.udid)).count }
     }
 
     /// Cleans up simulators: never one with a live lease or a process using it, and never a
@@ -1018,8 +1050,17 @@ enum SimulatorPool {
                             act(.shutDown, device, reason: "pool simulator booted without a lease")
                             shutDown = true
                         }
-                        if shutDown, device.dataBytes > o.poolSizeCap, Family(key: member.key) != .duo {
-                            act(.erased, device, reason: "pool simulator over \(StorageUpkeep.format(o.poolSizeCap))")
+                        var bytes = device.dataBytes
+                        if shutDown, let limit = o.trimCachesOver, bytes >= limit, let path = device.dataPath {
+                            let caches = regrowableBytes(dataPath: path)
+                            if caches >= limit, act(.trimmed, device, bytes: caches,
+                                                    reason: "lock-screen posters, caches and downloaded assets; apps kept",
+                                                    perform: { try clearRegrowable(dataPath: path) }) {
+                                bytes -= caches
+                            }
+                        }
+                        if shutDown, bytes > o.poolSizeCap, Family(key: member.key) != .duo {
+                            act(.erased, device, bytes: bytes, reason: "pool simulator over \(StorageUpkeep.format(o.poolSizeCap))")
                         }
                     } else if o.includeUnmanaged, !device.isBooted {
                         if !device.isAvailable {
@@ -1042,13 +1083,15 @@ enum SimulatorPool {
                 }
             }
             @discardableResult
-            func act(_ kind: Action.Kind, _ device: Device, reason: String, run: Bool = true) -> Bool {
+            func act(_ kind: Action.Kind, _ device: Device, bytes: Int64? = nil, reason: String, run: Bool = true,
+                     perform: (() throws -> Void)? = nil) -> Bool {
                 if !dryRun, run {
                     do {
                         switch kind {
                         case .shutDown: c.simctl.shutdown(device.udid)
                         case .erased: c.simctl.shutdown(device.udid); try c.simctl.erase(device.udid)
                         case .deleted: c.simctl.shutdown(device.udid); try c.simctl.delete(device.udid)
+                        case .trimmed: try perform?()
                         }
                     } catch {
                         report.errors.append("Simulator \(device.name) (\(device.udid)): \(error.localizedDescription)")
@@ -1060,10 +1103,11 @@ enum SimulatorPool {
                 case .deleted: verb = dryRun ? "would delete" : "deleted"
                 case .erased: verb = dryRun ? "would erase" : "erased"
                 case .shutDown: verb = dryRun ? "would shut down" : "shut down"
+                case .trimmed: verb = dryRun ? "would clear regrowable data in" : "cleared regrowable data in"
                 }
-                let bytes = kind == .shutDown ? 0 : device.dataBytes
+                let bytes = kind == .shutDown ? 0 : bytes ?? device.dataBytes
                 report.actions.append(Action(udid: device.udid, name: device.name, kind: kind, bytes: bytes, reason: reason))
-                log("simulator \(device.name) (\(device.udid)) \(verb): \(StorageUpkeep.format(device.dataBytes)), \(reason)")
+                log("simulator \(device.name) (\(device.udid)) \(verb): \(StorageUpkeep.format(kind == .shutDown ? device.dataBytes : bytes)), \(reason)")
                 return true
             }
             if dryRun {
