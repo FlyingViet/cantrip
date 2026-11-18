@@ -193,8 +193,33 @@ draw them as bars. A chart or table may carry a `title` (13 pt semibold, above i
 
 | Client | Views | Blocks |
 |---|---|---|
-| Cantrip Agent (iPhone, iPad, Duo) and Cantrip Gateway for Mac (and the Mac's Home window) | Tasks → Views, pinned first; the view's screen has Refresh, Pin and Delete | `CantripCards.swift` |
-| Browser remote | Tasks panel → Views: a grid of thumbnails (a view's first stats and chart, drawn small) that open its screen; the Views and Tasks headings collapse, remembered per browser | `appendCards` in `RemoteControlServer.swift` |
-| Cantrip Gateway for Windows | Tasks → Views | `Cards.tsx` |
-| Cantrip for Windows | Home window → Tasks → Views, the same thumbnail grid and collapsible sections (read-only window: Refresh and links) | `windows/src/renderer/cards.ts` |
+| Cantrip Agent (iPhone, iPad, Duo) and Cantrip Gateway for Mac (and the Mac's Home window) | Tasks → Views as thumbnails, pinned first; the view's screen has Refresh, Pin and Delete | `CantripCards.swift`; grid in `CantripHomeViewGrid.swift` |
+| Browser remote | Tasks panel → Views as thumbnails (the panel widens to 1440 px for the grid) | `appendCards` in `RemoteControlServer.swift` |
+| Cantrip Gateway for Windows | Tasks → Views as thumbnails; right-click keeps Open, Pin and Delete | `Cards.tsx` |
+| Cantrip for Windows | Home window → Tasks → Views as thumbnails (read-only window: Refresh and links) | `windows/src/renderer/cards.ts` |
 | Mac launcher | (views live in Home) | `CardViews.swift` draws the new blocks in any card |
+
+### The Views grid and folding sections
+
+Every client that lists views draws them the same way on the Tasks screen:
+
+- **Grid.** As many columns as fit: thumbnails at least 160 wide when the grid is under 600 wide,
+  otherwise 240, with a 12 gap, from 1 to 6 columns. Thumbnails are 196 tall (176 under 600).
+- **Thumbnail.** The view's icon, name, pin and lock, its subtitle (or when it was updated), and a
+  small preview of its resolved card drawn by the client's own card blocks at about 60%. The
+  preview is the first tab's blocks only (a `tabs` block owns the blocks after it): up to two
+  stats and the first chart, otherwise the first table, list or key-value block cut to three
+  rows. Headers, sections, actions, notices, badges, progress, images and maps never show. A
+  refreshing view or its first problem shows underneath.
+- **One control.** The whole thumbnail is one button labelled like the old row; the preview can't
+  be touched and is hidden from screen readers. Only a tap or click opens the view; Pin (and
+  Delete where the client has it) stay on the view's screen and in the context menu.
+- **Fetching.** Thumbnails use `GET /home/views/<id>` and nothing else: at most two at a time, while
+  the grid shows, again only when the summary's `updatedAt` or `refreshedAt` moves or the card's
+  `refreshAfter` passes. Opening or refreshing a view updates its thumbnail. A view saved while the
+  screen is open appears at the next Home poll (the list's `revision` changes).
+- **Folding.** The Views and Tasks headings are disclosure buttons: the title, a chevron, and
+  "· 6" while folded; screen readers hear "Views, 6 views" and Collapsed or Expanded. Each device
+  remembers them: `home.tasks.viewsCollapsed` / `home.tasks.tasksCollapsed` in Apple apps'
+  defaults, `cantrip.home.views.collapsed` / `cantrip.home.tasks.collapsed` in the browser's and
+  Windows apps' local storage. Without views, Tasks shows as before, with no headings.
