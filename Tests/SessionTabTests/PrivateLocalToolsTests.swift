@@ -101,7 +101,17 @@ extension SessionTabTests {
             MCPServer(name: "offline", command: "/nonexistent/server"),
         ]
         let socketPath = "/tmp/cantrip-plt-\(getpid()).sock"
-        let relay = MCPRelay(environment: MCPRelay.Environment(server: { name in servers.first { $0.name == name } }), path: socketPath)
+        final class Sessions: @unchecked Sendable {
+            let lock = NSLock()
+            var count = 0
+            func add() { lock.withLock { count += 1 } }
+            var value: Int { lock.withLock { count } }
+        }
+        let sessions = Sessions()
+        let relay = MCPRelay(environment: MCPRelay.Environment(server: { name in
+            sessions.add()
+            return servers.first { $0.name == name }
+        }), path: socketPath)
         relay.start()
         defer { relay.stop(); try? FileManager.default.removeItem(atPath: socketPath) }
         try await Task.sleep(for: .milliseconds(300))
@@ -109,7 +119,14 @@ extension SessionTabTests {
         tools.registry = { servers }
         tools.socketPath = { socketPath }
 
+        // Lookups that arrive together while nothing is cached share one listing: one relay
+        // session per server that isn't blocked (notes, tracker, offline), not one per caller.
+        async let first = tools.catalog(), second = tools.catalog(), third = tools.catalog(), fourth = tools.catalog()
+        let together = await [first, second, third, fourth]
+        precondition(sessions.value == 3 && Set(together.map { $0.map(\.name) }).count == 1,
+                     "Concurrent lookups share one listing: \(sessions.value) sessions")
         let catalog = await tools.catalog()
+        precondition(sessions.value == 3, "A fresh listing is cached")
         let summary = Dictionary(uniqueKeysWithValues: tools.summary(catalog).map { ($0.name, $0) })
         precondition(summary["notes"]?.tools == ["notes_search", "notes_read", "notes_count"]
                      && summary["notes"]?.excluded == ["notes_delete"] && summary["notes"]?.onDemand == false,

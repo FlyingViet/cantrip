@@ -257,6 +257,9 @@ final class PrivateLocalTools: @unchecked Sendable {
 
     private let lock = NSLock()
     private var cached: (at: Date, key: String, servers: [Server])?
+    /// The listing in progress: callers that arrive meanwhile wait for it instead of opening
+    /// their own connection to every server.
+    private var building: (key: String, task: Task<[Server], Never>)?
 
     static func isBlocked(server: String) -> Bool {
         let name = server.lowercased()
@@ -297,16 +300,39 @@ final class PrivateLocalTools: @unchecked Sendable {
         return (allowed, excluded)
     }
 
-    /// Every enabled server and its read-only tools, listed through the relay (cached).
+    /// Every enabled server and its read-only tools, listed through the relay (cached). Callers
+    /// that arrive while a listing runs share it, `refresh` included.
     func catalog(refresh: Bool = false) async -> [Server] {
         let servers = registry().filter(\.enabled)
         let key = servers.map { "\($0.name)|\($0.url ?? $0.command ?? "")|\($0.tools ?? [])" }.joined(separator: ";")
-        if !refresh, let cached = lock.withLock({ cached }), cached.key == key,
-           Date().timeIntervalSince(cached.at) < cacheLifetime {
-            return cached.servers
+        let path = socketPath(), timeout = listTimeout, lifetime = cacheLifetime
+        enum Lookup { case cached([Server]), listing(Task<[Server], Never>) }
+        let lookup = lock.withLock { () -> Lookup in
+            if !refresh, let cached, cached.key == key, Date().timeIntervalSince(cached.at) < lifetime {
+                return .cached(cached.servers)
+            }
+            if let building, building.key == key { return .listing(building.task) }
+            let task = Task { await Self.list(servers, path: path, timeout: timeout) }
+            building = (key, task)
+            return .listing(task)
         }
-        let path = socketPath(), timeout = listTimeout
-        let listed = await withTaskGroup(of: (Int, Server).self) { group in
+        switch lookup {
+        case .cached(let servers):
+            return servers
+        case .listing(let task):
+            let listed = await task.value
+            lock.withLock {
+                guard building?.task == task else { return }
+                building = nil
+                cached = (Date(), key, listed)
+            }
+            return listed
+        }
+    }
+
+    /// One connection per server, all at once.
+    private static func list(_ servers: [MCPServer], path: String, timeout: TimeInterval) async -> [Server] {
+        await withTaskGroup(of: (Int, Server).self) { group in
             for (index, server) in servers.enumerated() {
                 group.addTask {
                     var entry = Server(name: server.name, service: server.url.flatMap { URL(string: $0)?.host })
@@ -333,8 +359,6 @@ final class PrivateLocalTools: @unchecked Sendable {
             for await item in group { result.append(item) }
             return result.sorted { $0.0 < $1.0 }.map(\.1)
         }
-        lock.withLock { cached = (Date(), key, listed) }
-        return listed
     }
 
     /// Which servers' tools go in every request; the rest load on demand.
