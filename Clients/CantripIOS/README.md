@@ -130,6 +130,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | (fields) `supportsTabMentions`, `mentionable` | `@` suggestions in that composer; which tabs may be suggested. Picked tabs travel in the message text as `@[Title](cantrip-tab:<UUID>)` |
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
 | `GET /api/v1/home/artifacts/{id}/file`, `GET /api/v1/home/artifacts/{id}/folder` | Save / Share (`supportsDownloads` on the artifact list): the registered artifact's original bytes, or an uncompressed zip of every registered artifact in its top-level folder, streamed as an attachment with `Content-Length` and the file name in `Content-Disposition` (`filename*` UTF-8). Never gzipped; `404` for an unknown artifact or, for `folder`, one at the top level. Clients write the body straight to disk on both routes |
+| `GET /api/v1/home/views[?revision=]`, `GET`/`DELETE /api/v1/home/views/{id}`, `POST …/{id}/refresh`, `POST …/{id}/pin`, `POST …/{id}/actions/{action}` | Views (`supportsViews` in the tasks snapshot; `docs/views.md`): the list (or `{"unchanged":true}`), a view's summary and resolved card with `refreshAfter`, a refresh (waits up to 20 s, so the app allows 35 s), pin state, delete, and a confirmed button (`{"confirmed":true}`). Each change is sent once, on the route where the views list just confirmed the view still exists |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, usage limits (Copilot at the top level, Claude Code under `claude`, plus `activeBackend`), View Mac |
 | `GET/POST /api/v1/model-tiers` | **Settings › Models › Model tiers** (Mac-wide): `{tiers, backends: [{id, label, models: [{id, label, efforts, price}], cells: [{tier, label, choices: [{model, effort, label, offered, price}], isDefault, model, effort, note}]}], revision}`. A cell's page reorders, removes and adds models and sets each one's effort; each change POSTs `{revision, backend, tier, choices: [{model, effort}]}`, and **Use Cantrip's Defaults** `{revision, backend, tier, reset: true}`. `supportsModelTiers` on session lists; older hosts `404` and the section says to update the Mac |
@@ -761,6 +762,21 @@ VoiceOver offers **Move up** and **Move down** actions. The drop shows
 immediately, is saved on the Mac, and syncs to other devices; a failed save
 restores the previous order. Reordering needs an updated Mac host
 (`supportsReordering`). Scheduled results appear in the Home conversation.
+
+**Views** are screens Cantrip Home builds when you ask for one ("make me a homelab status
+board", "a view of this week across my trackers"; see `docs/views.md`). They list under **Views**
+at the top of Tasks, pinned first, with a lock on views that read a private server. A view opens
+on its own screen: its card at the full readable width, drawn with the card blocks plus sections,
+tabs (a segmented control), tables (rows scroll sideways when they don't fit), line and pie
+charts and the view's buttons. The screen fetches the view again every `refreshAfter` seconds
+while it's showing; pull down or **Refresh** has the Mac read its tools again, and **Pin**/**Unpin**
+and **Delete** (after a confirmation) change it on the Mac. Every button asks first (its
+`confirmTitle` and `confirmMessage`, then its own label or Cancel) and only then posts
+`{"confirmed": true}`; links open only public web pages, a record opens its detail, a started run
+shows its message for a moment and an **Ask Home** button switches to Chat. Chat cards never draw
+a view's buttons. Views need a Mac whose tasks snapshot says `supportsViews`. DEBUG builds draw a
+saved `GET /api/v1/home/views/<id>` answer with `-CantripUITestViewFixture /path/view.json`, and
+`HermesUITests/CantripViewsUITests` drives the screens against a Home host that serves views.
 Documents and media created as Home deliverables are collected automatically in
 Artifacts. Images and videos show thumbnails (videos with a play badge and
 duration); documents and audio keep type icons. Thumbnails load lazily, at most

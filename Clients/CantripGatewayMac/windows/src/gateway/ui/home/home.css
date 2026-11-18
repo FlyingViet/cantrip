@@ -201,3 +201,33 @@
 .ha-menu:hover:not(:disabled), .ha-menu[aria-expanded="true"] { background: rgba(64, 65, 70, 0.92); }
 .ha-menu:disabled { opacity: 0.5; }
 .ha-menu .icon.s12 { color: var(--secondary); }
+
+/* Views (docs/views.md): the list above Tasks and a view's screen */
+.hm-views { padding: 8px 12px 4px; }
+.hm-views-heading { margin: 0; padding: 8px 10px 4px; font-size: 12px; font-weight: 600; color: var(--secondary); }
+.hm-tasks-heading { padding: 10px 22px 0; }
+.hm-views-error { padding: 0 10px 6px; }
+.hm-view-list { list-style: none; margin: 0; padding: 0; }
+.hm-view-item { position: relative; }
+.hm-view-item + .hm-view-item::before {
+  content: ""; position: absolute; top: 0; left: 50px; right: 6px; height: 1px; background: var(--separator); pointer-events: none;
+}
+.hm-view {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 10px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--text); text-align: left;
+}
+.hm-view:hover { background: var(--row-hover); }
+.hm-view:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.hm-view-icon { width: 28px; height: 28px; flex: none; display: grid; place-items: center; }
+.hm-view-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.hm-view-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.hm-view-name { min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hm-view-mark { flex: none; display: inline-grid; color: var(--secondary); }
+.hm-view-subtitle { font-size: 11.5px; color: var(--secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hm-view-chevron { flex: none; color: var(--tertiary, var(--secondary)); }
+.hm-view-private { display: inline-grid; color: var(--secondary); }
+.hm-view-detail { padding: 16px 22px 24px; }
+.hm-view-banner { max-width: var(--readable); margin: 0 auto 10px; }
+.hm-view-card { max-width: var(--readable); margin: 0 auto; }
+.hm-view-card .card-panel { max-width: none; margin-top: 0; }
+.hm-view-fallback { white-space: pre-line; color: var(--secondary); font-size: 13px; }

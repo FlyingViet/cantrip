@@ -1,6 +1,6 @@
 // Icons: Lucide outlines standing in for the Mac app's SF Symbols, keyed by SF Symbol-like names.
 import {
-  Activity, Antenna, Archive, ArrowDown, ArrowLeftRight, ArrowUp, ArrowUpDown, AudioWaveform, BedDouble, Bell, Bot, Box, Brain, BriefcaseMedical,
+  Activity, Antenna, Archive, ArrowDown, BadgeCheck, LayoutDashboard, Users, ArrowLeftRight, ArrowUp, ArrowUpDown, AudioWaveform, BedDouble, Bell, Bot, Box, Brain, BriefcaseMedical,
   CakeSlice, Calendar, Check, Coffee, CreditCard, DollarSign, Dumbbell, Fuel, Globe, GraduationCap, Landmark, Package, Phone, Plane,
   Route, ShoppingBag, ShoppingCart, Tag, Ticket, TreeDeciduous, Truck, Utensils, Wine,
   ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Circle, CircleArrowUp, CircleCheck, CircleDot, CircleEllipsis, CircleHelp,
@@ -9,7 +9,7 @@ import {
   CirclePause, CirclePlay, CirclePlus, CircleStop, CircleX, Clock, Cog, Copy, Download, Ellipsis, Eraser, ExternalLink,
   Eye, EyeOff, File, FileText, Film, Folder, FolderOpen, FolderPlus, Gauge, GitBranch, GripVertical, Hammer, History, Hourglass, House, Image,
   Images, Info, KeyRound, Layers, LayoutGrid, MapPin, Library, Link, ListChecks, ListOrdered, Lock, LogOut, MessagesSquare, Mic, Monitor,
-  PanelLeft, Paperclip, Pause, Pencil, Play, Plus, Power, RadioTower, RotateCw, Rows3, Search, Send, Server, Settings,
+  PanelLeft, Paperclip, Pause, Pencil, Pin, PinOff, Play, Plus, Power, RadioTower, RotateCw, Rows3, Search, Send, Server, Settings,
   Settings2, Shirt, ShieldCheck, ShieldOff, SlidersHorizontal, Sparkles, Square, SquareArrowOutUpRight, Star, Terminal, Timer, Trash2,
   TriangleAlert, Undo2, Unlink, UserRound, Volume2, Wifi, WifiOff, Wrench, X, Zap,
 } from "lucide";
@@ -53,6 +53,9 @@ const ICONS = {
   "arrow.triangle.turn.up.right.diamond.fill": Route, "box.truck.fill": Truck, "creditcard": CreditCard,
   "dollarsign.circle": DollarSign, "tag.fill": Tag, "ticket.fill": Ticket, "exclamationmark.triangle.fill": TriangleAlert,
   "info.circle.fill": Info, "checkmark.circle.fill": CircleCheck, "xmark.circle.fill": CircleX,
+  // Views (docs/views.md): pin state and the icons views' blocks and buttons use most.
+  pin: Pin, "pin.slash": PinOff, "server.rack": Server, lock: Lock, "person.2": Users, "checkmark.seal": BadgeCheck,
+  "square.stack.3d.up": Layers, "rectangle.3.group": LayoutDashboard,
 } satisfies Record<string, IconNode>;
 
 export type IconName = keyof typeof ICONS;

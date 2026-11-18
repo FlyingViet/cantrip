@@ -30,6 +30,10 @@ struct HermesApp: App {
             #if DEBUG
             if CantripUITestFixtures.showsImageViewer {
                 CantripImageViewerFixtureView().preferredColorScheme(.dark)
+            } else if let path = CantripUITestFixtures.viewFixturePath {
+                CantripViewFixtureScreen(path: path, remote: remoteModel)
+                    .preferredColorScheme(.dark)
+                    .task { await CantripUITestFixtures.turnToLandscapeIfAsked() }
             } else {
                 content
             }

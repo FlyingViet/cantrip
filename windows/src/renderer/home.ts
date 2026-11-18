@@ -1,10 +1,11 @@
 // The Cantrip Home window (read-only): Home's recent conversation, its Background runs with their
-// Full Log, and Tasks with their workspaces, as the paired Mac serves them. Mac strings go into
-// textContent; only Home's replies are Markdown, sanitized with DOMPurify. Cards use cards.ts.
+// Full Log, and Tasks with their workspaces and Views, as the paired Mac serves them. Mac strings go
+// into textContent; only Home's replies are Markdown, sanitized with DOMPurify. Cards use cards.ts.
+// The only writes are a view's Refresh and its own refresh and link buttons, each confirmed first.
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import "./home.css";
-import { cardElement } from "./cards";
+import { cardElement, type ButtonModel } from "./cards";
 import {
   appleDate,
   buildDetail,
@@ -39,16 +40,26 @@ import type {
   WorkFold,
 } from "../shared/home";
 import type { CardDocument } from "../shared/cards";
+import { HOME_WINDOW_ACTION_KINDS, parseView, parseViews, viewSubtitle } from "../shared/views";
+import type { HomeViewSummary, ShownView } from "../shared/views";
 
 type View = "home" | "background" | "tasks";
 type Detail =
   | { kind: "log" }
   | { kind: "workspace"; taskID: string }
-  | { kind: "record"; taskID: string; recordID: string };
+  | { kind: "record"; taskID: string; recordID: string }
+  | { kind: "view"; viewID: string };
 
 interface RecordCards {
   key: string;
   cards: CardDocument[];
+  dueAt: number;
+}
+
+interface OpenView {
+  id: string;
+  shown: ShownView;
+  /** When to fetch it again (its `refreshAfter`). */
   dueAt: number;
 }
 
@@ -77,6 +88,11 @@ const state: {
   log: HomeSession | null;
   tasks: HomeTasksSnapshot | null;
   record: RecordCards | null;
+  /** Home's views, pinned first; null while the Mac doesn't serve them. */
+  views: HomeViewSummary[] | null;
+  viewsRevision: string | undefined;
+  openView: OpenView | null;
+  viewRefreshing: boolean;
   error: string;
   loading: boolean;
   updatedAt: Date | null;
@@ -89,12 +105,17 @@ const state: {
   log: null,
   tasks: null,
   record: null,
+  views: null,
+  viewsRevision: undefined,
+  openView: null,
+  viewRefreshing: false,
   error: "",
   loading: false,
   updatedAt: null,
 };
 
 let renderedSignature = "";
+let viewTimer: ReturnType<typeof setTimeout> | undefined;
 /** The view and detail last drawn, so a refresh of the same one keeps its scroll position. */
 let renderedPlace = "";
 let refreshTicket = 0;
@@ -462,10 +483,149 @@ function renderRecord(task: HomeTask, record: HomeTaskRecord): HTMLElement[] {
   return nodes;
 }
 
+// MARK: - Views (docs/views.md)
+
+/** The window's confirmation: the button's own title and message, its label to go ahead, and Cancel. */
+function confirmDialog(request: { title: string; message?: string; confirm: string }): Promise<boolean> {
+  return new Promise((resolve) => {
+    const dialog = el("dialog", "confirm-dialog");
+    const titleID = "confirm-dialog-title";
+    dialog.setAttribute("aria-labelledby", titleID);
+    const title = el("h2", "confirm-title", request.title);
+    title.id = titleID;
+    dialog.append(title);
+    if (request.message) {
+      const message = el("p", "confirm-message", request.message);
+      message.id = "confirm-dialog-message";
+      dialog.setAttribute("aria-describedby", message.id);
+      dialog.append(message);
+    }
+    const buttons = el("div", "confirm-buttons");
+    const cancel = el("button", "secondary-button", "Cancel");
+    cancel.type = "button";
+    const confirm = el("button", "primary-button", request.confirm);
+    confirm.type = "button";
+    confirm.autofocus = true;
+    buttons.append(cancel, confirm);
+    dialog.append(buttons);
+    let answer = false;
+    cancel.addEventListener("click", () => dialog.close());
+    confirm.addEventListener("click", () => {
+      answer = true;
+      dialog.close();
+    });
+    dialog.addEventListener("close", () => {
+      dialog.remove();
+      resolve(answer);
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+
+function showView(shown: ShownView): void {
+  state.openView = { id: shown.view.id, shown, dueAt: Date.now() + shown.refreshMs };
+  if (state.views) state.views = state.views.map((view) => (view.id === shown.view.id ? shown.view : view));
+}
+
+/** Fetches the open view again when its `refreshAfter` comes due (the window's own poll is every 15 s). */
+function scheduleViewRefresh(): void {
+  clearTimeout(viewTimer);
+  viewTimer = undefined;
+  if (state.detail?.kind !== "view" || state.openView?.id !== state.detail.viewID) return;
+  viewTimer = setTimeout(() => void refresh(), Math.max(0, state.openView.dueAt - Date.now()) + 50);
+}
+
+async function refreshShownView(viewID: string): Promise<void> {
+  if (state.viewRefreshing) return;
+  state.viewRefreshing = true;
+  state.error = "";
+  render(true);
+  try {
+    const result = await api.viewWrite({ kind: "refresh", viewID });
+    const shown = result.ok ? parseView(result.data) : null;
+    if (shown) showView(shown);
+    else state.error = result.ok ? "The Mac sent a view this PC can't show." : result.error;
+  } finally {
+    state.viewRefreshing = false;
+    render(true);
+    scheduleViewRefresh();
+  }
+}
+
+/** A confirmed button: only the view's own `refresh` and `open` buttons reach here (the main process checks again). */
+async function runViewAction(viewID: string, button: ButtonModel): Promise<void> {
+  state.error = "";
+  const result = await api.viewWrite({ kind: "action", viewID, actionID: button.id });
+  if (!result.ok) {
+    state.error = result.error;
+    render(true);
+    return;
+  }
+  const answer = (result.data ?? {}) as { result?: unknown; url?: unknown };
+  if (answer.result === "open" && typeof answer.url === "string") {
+    openExternal(answer.url);
+  } else if (answer.result === "refreshed") {
+    const shown = parseView(result.data);
+    if (shown) showView(shown);
+    scheduleViewRefresh();
+  } else {
+    statusLine.textContent = "Done on your Mac.";
+  }
+  render(true);
+}
+
+function viewItem(view: HomeViewSummary): HTMLElement {
+  const item = el("li", "home-item");
+  const open = button("", `view:${view.id}`, () => navigate("tasks", { kind: "view", viewID: view.id }), "record-button view-button");
+  const top = el("span", "view-row-top");
+  top.append(el("span", "item-title", view.name));
+  if (view.pinned) top.append(el("span", "home-badge tone-accent", "Pinned"));
+  if (view.private) top.append(el("span", "home-badge tone-neutral", "Private"));
+  open.append(top);
+  const subtitle = viewSubtitle(view);
+  if (subtitle) open.append(el("span", "item-meta", subtitle));
+  open.setAttribute("aria-label", [view.name, view.pinned ? "pinned" : "", view.private ? "private" : "", subtitle].filter(Boolean).join(", "));
+  item.append(open);
+  return item;
+}
+
+function renderView(viewID: string): HTMLElement[] {
+  const shown = state.openView?.id === viewID ? state.openView.shown : null;
+  const summary = shown?.view ?? state.views?.find((view) => view.id === viewID);
+  const head = el("div", "view-head");
+  head.append(heading(summary?.name ?? "View"));
+  const refreshView = button(state.viewRefreshing ? "Refreshing…" : "Refresh", "view-refresh", () => void refreshShownView(viewID));
+  refreshView.disabled = state.viewRefreshing || !summary;
+  head.append(refreshView);
+  const nodes: HTMLElement[] = [backButton("Tasks", () => navigate("tasks", null)), head];
+  // The card's footer says when its data was read.
+  if (summary?.private) nodes.push(note("Private: it reads a private server", "view-note small"));
+  if (!shown) {
+    nodes.push(note(state.loading ? "Loading…" : "This view couldn't be loaded."));
+    return nodes;
+  }
+  if (shown.view.problems?.length) nodes.push(note(shown.view.problems.join(" "), "view-note warning"));
+  const card = cardElement(shown.card, openExternal, {
+    actionKinds: HOME_WINDOW_ACTION_KINDS,
+    confirm: confirmDialog,
+    onAction: (pressed) => runViewAction(viewID, pressed),
+  });
+  if (card) {
+    const wrap = el("div", "home-cards view-card");
+    wrap.append(card);
+    nodes.push(wrap);
+  } else {
+    nodes.push(note("This view has nothing to show yet."));
+  }
+  return nodes;
+}
+
 function renderTasks(): HTMLElement[] {
   const snapshot = state.tasks;
   if (!snapshot) return [heading("Tasks"), note(state.loading ? "Loading…" : "Tasks couldn't be loaded.")];
   const detail = state.detail;
+  if (detail?.kind === "view") return renderView(detail.viewID);
   if (detail?.kind === "workspace" || detail?.kind === "record") {
     const task = findTask(detail.taskID);
     const record = detail.kind === "record" ? task?.workspace?.records.find((item) => item.id === detail.recordID) : undefined;
@@ -475,6 +635,14 @@ function renderTasks(): HTMLElement[] {
   }
   const nodes: HTMLElement[] = [heading("Tasks")];
   if (snapshot.error) nodes.push(note(snapshot.error, "view-note warning"));
+  const views = snapshot.supportsViews ? state.views ?? [] : [];
+  if (views.length) {
+    nodes.push(heading("Views", "h3"));
+    const list = el("ul", "home-list compact");
+    list.setAttribute("aria-label", "Views");
+    for (const view of views) list.append(viewItem(view));
+    nodes.push(list, heading("Tasks", "h3"));
+  }
   const list = el("ol", "home-list");
   list.setAttribute("aria-label", "Tasks");
   for (const task of snapshot.tasks) list.append(taskItem(task));
@@ -488,7 +656,7 @@ function signature(): string {
   const data =
     state.view === "home" ? state.home
       : state.view === "background" ? (state.detail?.kind === "log" ? state.log : state.background)
-        : [state.tasks, state.record];
+        : [state.tasks, state.record, state.views, state.openView?.shown, state.viewRefreshing];
   return JSON.stringify([state.view, state.detail, state.loading && !data, data]);
 }
 
@@ -526,6 +694,7 @@ function navigate(view: View, detail: Detail | null): void {
   state.view = view;
   state.detail = detail;
   if (detail?.kind !== "record") state.record = null;
+  if (detail?.kind !== "view") state.openView = null;
   state.error = "";
   render(true);
   content.scrollTop = 0;
@@ -566,6 +735,26 @@ async function refresh(): Promise<void> {
       const data = await read(state.tasks?.revision ? { kind: "tasks", revision: state.tasks.revision } : { kind: "tasks" });
       if (ticket !== refreshTicket) return;
       if (data && !(data as { unchanged?: boolean }).unchanged) state.tasks = data as HomeTasksSnapshot;
+      if (state.tasks?.supportsViews) {
+        const answer = await read(state.views && state.viewsRevision ? { kind: "views", revision: state.viewsRevision } : { kind: "views" });
+        if (ticket !== refreshTicket) return;
+        const parsed = parseViews(answer);
+        if (parsed) {
+          state.viewsRevision = parsed.revision;
+          if (!parsed.unchanged) state.views = parsed.views;
+        }
+      } else if (state.tasks) {
+        state.views = null;
+        state.viewsRevision = undefined;
+      }
+      if (detail?.kind === "view" && (state.openView?.id !== detail.viewID || Date.now() >= state.openView.dueAt)) {
+        const answer = await read({ kind: "view", viewID: detail.viewID });
+        if (ticket !== refreshTicket) return;
+        const shown = parseView(answer);
+        if (shown) showView(shown);
+        else if (answer) state.error = "The Mac sent a view this PC can't show.";
+        else if (state.openView?.id === detail.viewID) state.openView.dueAt = Date.now() + 60_000;
+      }
       if (detail?.kind === "record" && state.tasks?.supportsRecordCards && hasRecordCards(findTask(detail.taskID)?.workspace)) {
         const key = `${detail.taskID}/${detail.recordID}`;
         if (state.record?.key !== key || Date.now() >= state.record.dueAt) {
@@ -584,6 +773,7 @@ async function refresh(): Promise<void> {
     if (ticket === refreshTicket) {
       state.loading = false;
       render();
+      scheduleViewRefresh();
     }
   }
 }
@@ -614,6 +804,9 @@ unpairButton.addEventListener("click", async () => {
   state.status = await api.unpair();
   state.home = state.background = state.log = state.tasks = null;
   state.record = null;
+  state.views = null;
+  state.viewsRevision = undefined;
+  state.openView = null;
   renderedSignature = "";
   render(true);
   pairLink.focus();

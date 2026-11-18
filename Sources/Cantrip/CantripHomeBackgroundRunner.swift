@@ -192,6 +192,25 @@ final class CantripHomeBackgroundRunner {
         if added { persist() }
     }
 
+    /// Queues a scheduled task's run now (a view's confirmed Run button); it starts like a due run.
+    func runNow(taskID: UUID, now: Date = Date()) throws -> CantripHomeTask {
+        guard let task = store.tasks.first(where: { $0.id == taskID }) else {
+            throw CantripHomeError(404, "That task was deleted.")
+        }
+        guard task.isScheduled, task.enabled else {
+            throw CantripHomeError(409, "\(task.title) is paused or has no schedule, so it has no run to start.")
+        }
+        guard task.state != .running, !hasJob(forTask: taskID) else {
+            throw CantripHomeError(409, "\(task.title) is already running or waiting to run.")
+        }
+        jobs.append(.init(id: UUID(), kind: .task, label: task.title, taskID: task.id, enqueuedAt: now, dueAt: now,
+                          resources: resources(for: task)))
+        persist()
+        Log.write("home: \(task.title) queued to run now from a view")
+        tick(now: now)
+        return task
+    }
+
     /// A task writes its own workspace and any other task whose ID its prompt names.
     private func resources(for task: CantripHomeTask) -> [String] {
         var keys = ["task:\(task.id.uuidString)"]
@@ -480,6 +499,7 @@ final class CantripHomeBackgroundRunner {
         idleSince[jobID] = nil
         guard let session = live.removeValue(forKey: jobID) else { return }
         session.onTurnCompleted = nil
+        let taskID = jobs.first { $0.id == jobID }?.taskID
         // Content-aware routing (observe only): the run's judged tool results become one log line.
         let sessionID = session.id
         Task.detached(priority: .background) { await PrivacyContentRouting.shared.finish(run: sessionID) }
@@ -492,6 +512,11 @@ final class CantripHomeBackgroundRunner {
         Log.write("home: background run \(jobID.uuidString) finished: \(status)")
         let cards = session.messages.last { $0.role == .assistant }?.cardDocuments(linkPreviews: false) ?? []
         store.complete(runID: jobID, status: status, summary: text, cards: cards)
+        if let taskID {
+            // Views showing this task's tool results, or refreshed after it, follow the run.
+            HomeViews.shared.taskRunFinished(taskID: taskID, status: status,
+                                             activities: session.messages.filter { $0.role == .assistant }.flatMap(\.activities))
+        }
         queueShadow(jobID: jobID, status: status, summary: text)
         // Let the finishing turn settle (notifications read its last reply) before teardown.
         DispatchQueue.main.async { [weak self] in self?.retire(session) }

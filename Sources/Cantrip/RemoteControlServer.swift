@@ -2308,6 +2308,115 @@ final class RemoteControlServer {
         }
     }
 
+    /// `/api/v1/home/views`: Home's saved views (docs/views.md). Clients get cards Cantrip built
+    /// from each view's sources; actions run only with `confirmed: true`.
+    @MainActor
+    private func handleHomeViews(_ request: HTTPRequest, json: [String: Any]?, parts: [Substring],
+                                 manager: SessionManager, on connection: RemoteRequestConnection) {
+        let views = HomeViews.shared
+        do {
+            if parts.count == 4 {
+                guard request.method == "GET" else { throw CantripHomeError(405, "Views are made conversationally in Cantrip Home.") }
+                if views.storageError == nil, request.query("revision") == views.revision.uuidString {
+                    sendJSON(["unchanged": true, "revision": views.revision.uuidString], on: connection)
+                    return
+                }
+                sendJSON(views.listPayload(), on: connection)
+                return
+            }
+            guard let id = UUID(uuidString: String(parts[4])), views.find(id) != nil else {
+                throw CantripHomeError(404, "view not found")
+            }
+            if parts.count == 5 {
+                switch request.method {
+                case "GET":
+                    sendJSON(try views.detail(id), on: connection)
+                case "DELETE":
+                    try views.delete(id)
+                    sendJSON(["deleted": true], on: connection)
+                default:
+                    throw CantripHomeError(405, "method not allowed")
+                }
+                return
+            }
+            guard request.method == "POST", request.body.count <= 4_096 else {
+                throw CantripHomeError(405, "Use POST with a small JSON body.")
+            }
+            switch String(parts[5]) {
+            case "refresh" where parts.count == 6:
+                Task { @MainActor in
+                    _ = await RunCards.bounded(20) { await views.refresh(id); return true }
+                    guard let view = views.find(id) else { return self.sendError(404, "view not found", on: connection) }
+                    self.sendJSON(views.payload(view), on: connection)
+                }
+            case "pin" where parts.count == 6:
+                guard let pinned = json?["pinned"] as? Bool else { throw CantripHomeError(400, "Send {\"pinned\": true or false}.") }
+                let view = try views.setPinned(id, pinned)
+                sendEncoded(on: connection) { try CardDocument.encoder.encode(views.summary(view)) }
+            case "actions" where parts.count == 7:
+                let confirmed = json?["confirmed"] as? Bool == true
+                let action: (button: HomeViewButtonTemplate, shown: CardDocument.Button)
+                do {
+                    action = try views.action(viewID: id, actionID: String(parts[6]), confirmed: confirmed)
+                } catch let needed as HomeViews.ConfirmationRequired {
+                    // Nothing ran: the client shows this confirmation, then posts again with `confirmed`.
+                    sendJSON(["error": "Confirm this action first.",
+                              "confirmation": ["title": needed.button.confirmTitle, "message": needed.button.confirmMessage ?? "",
+                                               "label": needed.button.label]],
+                             status: 428, on: connection)
+                    return
+                }
+                try performViewAction(action.button, viewID: id, manager: manager, on: connection)
+            default:
+                throw CantripHomeError(404, "not found")
+            }
+        } catch let error as CantripHomeError {
+            sendError(error.status, error.message, on: connection)
+        } catch {
+            Log.write("views: request failed: \(error.localizedDescription)")
+            sendError(500, "Could not update the view on the Mac.", on: connection)
+        }
+    }
+
+    /// Runs a confirmed view button: what the Mac does itself, or where the client goes next.
+    @MainActor
+    private func performViewAction(_ button: HomeViewButtonTemplate, viewID: UUID, manager: SessionManager,
+                                   on connection: RemoteRequestConnection) throws {
+        let views = HomeViews.shared
+        switch button.kind {
+        case "open":
+            sendJSON(["result": "open", "url": button.url ?? ""], on: connection)
+        case "openRecord":
+            guard let taskID = button.taskID.flatMap(UUID.init(uuidString:)),
+                  let recordID = button.recordID.flatMap(UUID.init(uuidString:)),
+                  CantripHomeStore.shared.tasks.first(where: { $0.id == taskID })?.workspace?.records
+                    .contains(where: { $0.id == recordID }) == true else {
+                throw CantripHomeError(404, "That record was deleted.")
+            }
+            sendJSON(["result": "record", "taskID": taskID.uuidString, "recordID": recordID.uuidString], on: connection)
+        case "runTask":
+            guard let taskID = button.taskID.flatMap(UUID.init(uuidString:)) else { throw CantripHomeError(404, "That task was deleted.") }
+            let task = try CantripHomeStore.shared.runner.runNow(taskID: taskID)
+            sendJSON(["result": "started", "taskID": taskID.uuidString, "message": "\(task.title) is running."], on: connection)
+        case "refresh":
+            Task { @MainActor in
+                _ = await RunCards.bounded(20) { await views.refresh(viewID); return true }
+                guard let view = views.find(viewID) else { return self.sendError(404, "view not found", on: connection) }
+                var body = views.payload(view)
+                body["result"] = "refreshed"
+                self.sendJSON(body, on: connection)
+            }
+        case "ask":
+            guard let prompt = button.prompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty else {
+                throw CantripHomeError(400, "This button has no question.")
+            }
+            manager.homeSession.submitRemote(prompt, mode: .queue)
+            sendJSON(["result": "sent", "message": "Asked Cantrip Home."], on: connection)
+        default:
+            throw CantripHomeError(400, "This client can't run that action.")
+        }
+    }
+
     @MainActor
     private func handleCantripHome(
         _ request: HTTPRequest,
@@ -2629,6 +2738,8 @@ final class RemoteControlServer {
                 return
             }
             sendJSON(["data": data.base64EncodedString(), "mimeType": "image/png"], on: connection)
+        case "views":
+            handleHomeViews(request, json: json, parts: parts, manager: manager, on: connection)
         case "background":
             if parts.count == 6, parts[5] == "stop" {
                 // POST /api/v1/home/background/<run id>/stop
@@ -3853,6 +3964,17 @@ private extension RemoteControlServer {
     .cd-badge.positive{color:#34d399;background:rgba(52,211,153,.14)}.cd-badge.negative{color:#f87171;background:rgba(248,113,113,.14)}.cd-badge.warning{color:#f5b841;background:rgba(245,184,65,.14)}.cd-badge.accent{color:#8ccaff;background:rgba(140,202,255,.14)}
     .cd-notice{padding:0 16px 14px}.cd-notice-title{display:flex;align-items:center;gap:6px;font-size:13.5px;font-weight:700;color:#fff}.cd-notice-icon{width:16px;height:16px}.cd-notice.warning .cd-notice-icon{color:#f5b841}.cd-notice.negative .cd-notice-icon{color:#f87171}.cd-notice.positive .cd-notice-icon{color:#34d399}
     .cd-head+.cd-notice{margin-top:-8px}
+    .cd-section{display:grid;gap:2px;padding:18px 16px 4px}.cd-section-title{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:650;color:rgba(255,255,255,.72)}.cd-section-icon{width:15px;height:15px}.cd-section-sub{font-size:12px;color:rgba(255,255,255,.6)}
+    .cd-tabs{display:flex;gap:3px;margin:12px 16px 6px;padding:3px;border-radius:9px;background:rgba(255,255,255,.1)}.cd-tab{flex:1;min-height:32px;border:0;border-radius:7px;background:transparent;color:#fff;font:inherit;font-size:13px;font-weight:600;cursor:pointer}.cd-tab[aria-selected=true]{background:rgba(255,255,255,.24)}.cd-tab:focus-visible,.cd-action:focus-visible,.cd-table-wrap:focus-visible{outline:2px solid #7cb4ff;outline-offset:2px}
+    .cd-block-title{padding:12px 16px 2px;font-size:13px;font-weight:650;color:#fff}
+    .cd-table-wrap{overflow-x:auto;padding:4px 0 8px}.cd-table{border-collapse:collapse;min-width:100%;font-size:13px}.cd-table th,.cd-table td{padding:7px 16px;border-bottom:1px solid rgba(255,255,255,.07);white-space:nowrap;text-align:left;font-variant-numeric:tabular-nums}.cd-table thead th{font-size:12px;font-weight:650;color:rgba(255,255,255,.62);border-bottom-color:rgba(255,255,255,.14)}.cd-table tbody th{font-weight:600;color:#fff}.cd-table tr:last-child>*{border-bottom:0}.cd-table .trailing{text-align:right}.cd-table .center{text-align:center}
+    .cd-tone-positive{color:#4ade80}.cd-tone-negative{color:#fb7185}.cd-tone-warning{color:#f5b841}.cd-tone-accent{color:#7cb4ff}.cd-tone-neutral{color:rgba(255,255,255,.72)}
+    .cd-line-chart{display:grid;grid-template-columns:auto 1fr;gap:4px 8px;padding:6px 16px 12px}.cd-line-chart svg{width:100%;height:auto;aspect-ratio:300/110;display:block;overflow:visible}.cd-scale{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.6);text-align:right;font-variant-numeric:tabular-nums}.cd-axis{grid-column:2;display:flex;justify-content:space-between;gap:8px;font-size:11px;color:rgba(255,255,255,.6)}
+    .cd-pie{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:8px 16px 14px}.cd-pie svg{width:118px;height:118px;flex:none;transform:rotate(0deg)}.cd-legend{display:grid;flex:1;min-width:190px;gap:5px;margin:0;padding:0;list-style:none;font-size:13px}.cd-legend li{display:grid;grid-template-columns:10px 1fr auto 40px;align-items:center;gap:8px}.cd-swatch{width:10px;height:10px;border-radius:3px}.cd-legend .pct{color:rgba(255,255,255,.62);text-align:right;font-variant-numeric:tabular-nums}
+    .cd-actions{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px 14px}.cd-action{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:6px 14px;border:1px solid rgba(255,255,255,.3);border-radius:9px;background:transparent;color:#fff;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer}.cd-action.prominent{border-color:#4C9DFF;background:#4C9DFF;color:#061226}.cd-action .cd-icon{width:15px;height:15px}
+    .views-section{margin:0 0 14px}.views-heading{margin:4px 2px 8px;font-size:13px;font-weight:650;color:var(--secondary);text-transform:uppercase;letter-spacing:.02em}.view-card .task-title{display:flex;align-items:center;gap:6px}.view-badge{display:inline-flex;width:15px;height:15px;color:var(--secondary)}.view-badge svg{width:15px;height:15px}
+    .view-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}.view-note{margin:0 0 10px;font-size:13px}.view-card .cd-card{max-width:none}
+    #viewConfirm{width:min(calc(100% - 32px),420px);padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#viewConfirm h2{margin:0 0 8px;font-size:17px}#viewConfirm p{margin:0 0 16px;font-size:14px;color:var(--secondary);overflow-wrap:anywhere}.confirm-buttons{display:flex;justify-content:flex-end;gap:8px}#viewConfirm::backdrop{background:rgba(0,0,0,.35)}
     .cd-lead.positive{color:#34d399}.cd-lead.negative{color:#f87171}.cd-lead.warning{color:#f5b841}.cd-lead.neutral{color:rgba(255,255,255,.75)}
     .cd-progress{padding:0 16px 14px;color:#8ccaff}.cd-progress.positive{color:#34d399}.cd-progress.negative{color:#f87171}.cd-progress.warning{color:#f5b841}.cd-progress.neutral{color:rgba(255,255,255,.75)}
     .cd-progress-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.cd-progress-label{font-size:13px;font-weight:700}
@@ -4028,6 +4150,7 @@ private extension RemoteControlServer {
     <dialog id="threadView" aria-labelledby="threadTitle"><div class="thread-bar"><div class="thread-heading"><strong id="threadTitle">Thread</strong><span id="threadCount"></span></div><button id="threadClose" type="button" aria-label="Close thread">✕</button></div><div id="threadBody"></div></dialog>
     <dialog id="tasksPanel" aria-labelledby="tasksTitle"><div class="tasks-bar"><button id="tasksBack" type="button" class="control hidden" aria-label="Back to tasks">‹ Tasks</button><strong id="tasksTitle" class="grow" tabindex="-1">Tasks</strong><button id="tasksDone" type="button" class="control">Done</button></div>
     <div id="tasksError" role="alert"></div><input id="tasksSearch" class="hidden" type="search" autocomplete="off" aria-label="Search records"><div id="tasksBody"></div><div id="tasksStatus" class="sr-only" role="status" aria-live="polite"></div></dialog>
+    <dialog id="viewConfirm" aria-labelledby="viewConfirmTitle" aria-describedby="viewConfirmMessage"><form method="dialog"><h2 id="viewConfirmTitle"></h2><p id="viewConfirmMessage"></p><div class="confirm-buttons"><button id="viewConfirmCancel" value="cancel" class="control">Cancel</button><button id="viewConfirmGo" value="go" class="control primary">Go</button></div></form></dialog>
     <dialog id="backgroundPanel" aria-labelledby="backgroundTitle"><div class="tasks-bar"><button id="backgroundBack" type="button" class="control hidden" aria-label="Back to background runs">‹ Background</button><strong id="backgroundTitle" class="grow" tabindex="-1">Background</strong><button id="backgroundLog" type="button" class="control">Full Log</button><button id="backgroundDone" type="button" class="control">Done</button></div><div id="backgroundError" role="alert"></div><div id="backgroundBody"></div></dialog>
     <dialog id="artifactsPanel" aria-labelledby="artifactsTitle"><div class="tasks-bar"><strong id="artifactsTitle" class="grow" tabindex="-1">Artifacts</strong><button id="artifactsCreate" type="button" class="control">Create in Chat</button><button id="artifactsDone" type="button" class="control">Done</button></div><div id="artifactsError" role="alert"></div><div id="artifactsBody"></div><div id="artifactsStatus" class="sr-only" role="status" aria-live="polite"></div></dialog>
     <dialog id="imageViewer" aria-labelledby="imageViewerTitle"><div class="viewer-bar"><strong id="imageViewerTitle" class="grow">Preview</strong><button id="imageZoom" type="button" class="control" aria-pressed="false">Actual size</button><button id="imageRetry" type="button" class="control hidden">Retry</button><button id="imageDone" type="button" class="control">Done</button></div>
@@ -5341,7 +5464,9 @@ private extension RemoteControlServer {
       const span=Math.max(maxLat-minLat,maxLon-minLon);if(span>0.5)return 10;if(span>0.2)return 11;if(span>0.08)return 12;if(span>0.03)return 13;return 14}
     // Cards (docs/cards.md): every card under a reply is blocks; one function per block, nothing per card type.
     // Lucide outlines (ISC) for the SF Symbol names cards use; constants, never reply data.
-    const cardIcons={"sun.max.fill":"<circle cx='12' cy='12' r='4'/><path d='M12 2v2'/><path d='M12 20v2'/><path d='m4.93 4.93 1.41 1.41'/><path d='m17.66 17.66 1.41 1.41'/><path d='M2 12h2'/><path d='M20 12h2'/><path d='m6.34 17.66-1.41 1.41'/><path d='m19.07 4.93-1.41 1.41'/>","moon.stars.fill":"<path d='M18 5h4'/><path d='M20 3v4'/><path d='M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401'/>","cloud.sun.fill":"<path d='M12 2v2'/><path d='m4.93 4.93 1.41 1.41'/><path d='M20 12h2'/><path d='m19.07 4.93-1.41 1.41'/><path d='M15.947 12.65a4 4 0 0 0-5.925-4.128'/><path d='M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z'/>","cloud.moon.fill":"<path d='M13 16a3 3 0 0 1 0 6H7a5 5 0 1 1 4.9-6z'/><path d='M18.376 14.512a6 6 0 0 0 3.461-4.127c.148-.625-.659-.97-1.248-.714a4 4 0 0 1-5.259-5.26c.255-.589-.09-1.395-.716-1.248a6 6 0 0 0-4.594 5.36'/>","cloud.fill":"<path d='M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z'/>","cloud.fog.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M16 17H7'/><path d='M17 21H9'/>","cloud.drizzle.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M8 19v1'/><path d='M8 14v1'/><path d='M16 19v1'/><path d='M16 14v1'/><path d='M12 21v1'/><path d='M12 16v1'/>","cloud.rain.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M16 14v6'/><path d='M8 14v6'/><path d='M12 16v6'/>","cloud.heavyrain.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='m9.2 22 3-7'/><path d='m9 13-3 7'/><path d='m17 13-3 7'/>","cloud.sleet.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M8 15h.01'/><path d='M8 19h.01'/><path d='M12 17h.01'/><path d='M12 21h.01'/><path d='M16 15h.01'/><path d='M16 19h.01'/>","cloud.snow.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M8 15h.01'/><path d='M8 19h.01'/><path d='M12 17h.01'/><path d='M12 21h.01'/><path d='M16 15h.01'/><path d='M16 19h.01'/>","cloud.sun.rain.fill":"<path d='M12 2v2'/><path d='m4.93 4.93 1.41 1.41'/><path d='M20 12h2'/><path d='m19.07 4.93-1.41 1.41'/><path d='M15.947 12.65a4 4 0 0 0-5.925-4.128'/><path d='M3 20a5 5 0 1 1 8.9-4H13a3 3 0 0 1 2 5.24'/><path d='M11 20v2'/><path d='M7 19v2'/>","cloud.moon.rain.fill":"<path d='M11 20v2'/><path d='M18.376 14.512a6 6 0 0 0 3.461-4.127c.148-.625-.659-.97-1.248-.714a4 4 0 0 1-5.259-5.26c.255-.589-.09-1.395-.716-1.248a6 6 0 0 0-4.594 5.36'/><path d='M3 20a5 5 0 1 1 8.9-4H13a3 3 0 0 1 2 5.24'/><path d='M7 19v2'/>","cloud.bolt.rain.fill":"<path d='M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973'/><path d='m13 12-3 5h4l-3 5'/>","cloud.hail.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M16 14v2'/><path d='M8 14v2'/><path d='M16 20h.01'/><path d='M8 20h.01'/><path d='M12 16v2'/><path d='M12 22h.01'/>","airplane":"<path d='M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z'/>","link":"<path d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71'/><path d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'/>","star.fill":"<path d='M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z'/>","shippingbox.fill":"<path d='M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z'/><path d='M12 22V12'/><polyline points='3.29 7 12 12 20.71 7'/><path d='m7.5 4.27 9 5.15'/>","location.fill":"<polygon points='3 11 22 2 13 21 11 13 3 11'/>","exclamationmark.icloud":"<path d='M12 12v4'/><path d='M12 20h.01'/><path d='M8.128 16.949A7 7 0 1 1 15.71 8h1.79a1 1 0 0 1 0 9h-1.642'/>","phone":"<path d='M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384'/>","globe":"<circle cx='12' cy='12' r='10'/><path d='M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20'/><path d='M2 12h20'/>","arrow.up.right":"<path d='M7 7h10v10'/><path d='M7 17 17 7'/>","directions":"<polygon points='12 2 19 21 12 17 5 21 12 2'/>","mappin":"<path d='M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0'/><circle cx='12' cy='10' r='3'/>","clock":"<circle cx='12' cy='12' r='10'/><path d='M12 6v6l4 2'/>","calendar":"<path d='M8 2v3'/><path d='M16 2v3'/><rect x='3' y='3' width='18' height='18' rx='2'/><path d='M3 9h18'/>","checkmark.circle":"<circle cx='12' cy='12' r='10'/><path d='m16 9-5.5 5.5L8 12'/>","exclamationmark.triangle":"<path d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/><path d='M12 9v4'/><path d='M12 17h.01'/>","info.circle":"<circle cx='12' cy='12' r='10'/><path d='M12 16v-4'/><path d='M12 8h.01'/>","dollarsign.circle":"<circle cx='12' cy='12' r='10'/><path d='M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8'/><path d='M12 18V6'/>","cart":"<path d='m2.05 2.05 1.099-.028a1 1 0 0 1 1.008.815l2.69 14.347A1 1 0 0 0 7.83 18H18'/><path d='M4.563 5h16.435a1 1 0 0 1 .981 1.204l-1.026 6.226A2 2 0 0 1 18.962 14H6.25'/><circle cx='18' cy='20' r='2'/><circle cx='8' cy='20' r='2'/>","bus":"<path d='M8 6v6'/><path d='M15 6v6'/><path d='M2 12h19.6'/><path d='M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3'/><circle cx='7' cy='18' r='2'/><path d='M9 18h5'/><circle cx='16' cy='18' r='2'/>","tram":"<rect width='16' height='16' x='4' y='3' rx='2'/><path d='M4 11h16'/><path d='M12 3v8'/><path d='m8 19-2 3'/><path d='m18 22-2-3'/><path d='M8 15h.01'/><path d='M16 15h.01'/>","car":"<path d='M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2'/><circle cx='7' cy='17' r='2'/><path d='M9 17h6'/><circle cx='17' cy='17' r='2'/>","bed.double":"<path d='M2 20v-8a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v8'/><path d='M4 10V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4'/><path d='M12 4v6'/><path d='M2 18h20'/>","hammer":"<path d='m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9'/><path d='m18 15 4-4'/><path d='m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-2.26a6 6 0 0 0-4.202-1.756L9 2.96l.92.82A6.18 6.18 0 0 1 12 8.4V10l2 2h1.172a2 2 0 0 1 1.414.586L18.5 14.5'/>","checkmark.circle.fill":"<circle cx='12' cy='12' r='10'/><path d='m9 12 2 2 4-4'/>","xmark.circle.fill":"<circle cx='12' cy='12' r='10'/><path d='m15 9-6 6'/><path d='m9 9 6 6'/>","stop.circle":"<circle cx='12' cy='12' r='10'/><rect x='9' y='9' width='6' height='6' rx='1'/>","questionmark.circle":"<circle cx='12' cy='12' r='10'/><path d='M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3'/><path d='M12 17h.01'/>","arrow.up.circle":"<circle cx='12' cy='12' r='10'/><path d='m16 12-4-4-4 4'/><path d='M12 16V8'/>","arrow.down.circle":"<circle cx='12' cy='12' r='10'/><path d='M12 8v8'/><path d='m8 12 4 4 4-4'/>","arrow.left.arrow.right":"<path d='M8 3 4 7l4 4'/><path d='M4 7h16'/><path d='m16 21 4-4-4-4'/><path d='M20 17H4'/>"};
+    const cardIcons={"sun.max.fill":"<circle cx='12' cy='12' r='4'/><path d='M12 2v2'/><path d='M12 20v2'/><path d='m4.93 4.93 1.41 1.41'/><path d='m17.66 17.66 1.41 1.41'/><path d='M2 12h2'/><path d='M20 12h2'/><path d='m6.34 17.66-1.41 1.41'/><path d='m19.07 4.93-1.41 1.41'/>","moon.stars.fill":"<path d='M18 5h4'/><path d='M20 3v4'/><path d='M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401'/>","cloud.sun.fill":"<path d='M12 2v2'/><path d='m4.93 4.93 1.41 1.41'/><path d='M20 12h2'/><path d='m19.07 4.93-1.41 1.41'/><path d='M15.947 12.65a4 4 0 0 0-5.925-4.128'/><path d='M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z'/>","cloud.moon.fill":"<path d='M13 16a3 3 0 0 1 0 6H7a5 5 0 1 1 4.9-6z'/><path d='M18.376 14.512a6 6 0 0 0 3.461-4.127c.148-.625-.659-.97-1.248-.714a4 4 0 0 1-5.259-5.26c.255-.589-.09-1.395-.716-1.248a6 6 0 0 0-4.594 5.36'/>","cloud.fill":"<path d='M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z'/>","cloud.fog.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M16 17H7'/><path d='M17 21H9'/>","cloud.drizzle.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M8 19v1'/><path d='M8 14v1'/><path d='M16 19v1'/><path d='M16 14v1'/><path d='M12 21v1'/><path d='M12 16v1'/>","cloud.rain.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M16 14v6'/><path d='M8 14v6'/><path d='M12 16v6'/>","cloud.heavyrain.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='m9.2 22 3-7'/><path d='m9 13-3 7'/><path d='m17 13-3 7'/>","cloud.sleet.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M8 15h.01'/><path d='M8 19h.01'/><path d='M12 17h.01'/><path d='M12 21h.01'/><path d='M16 15h.01'/><path d='M16 19h.01'/>","cloud.snow.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M8 15h.01'/><path d='M8 19h.01'/><path d='M12 17h.01'/><path d='M12 21h.01'/><path d='M16 15h.01'/><path d='M16 19h.01'/>","cloud.sun.rain.fill":"<path d='M12 2v2'/><path d='m4.93 4.93 1.41 1.41'/><path d='M20 12h2'/><path d='m19.07 4.93-1.41 1.41'/><path d='M15.947 12.65a4 4 0 0 0-5.925-4.128'/><path d='M3 20a5 5 0 1 1 8.9-4H13a3 3 0 0 1 2 5.24'/><path d='M11 20v2'/><path d='M7 19v2'/>","cloud.moon.rain.fill":"<path d='M11 20v2'/><path d='M18.376 14.512a6 6 0 0 0 3.461-4.127c.148-.625-.659-.97-1.248-.714a4 4 0 0 1-5.259-5.26c.255-.589-.09-1.395-.716-1.248a6 6 0 0 0-4.594 5.36'/><path d='M3 20a5 5 0 1 1 8.9-4H13a3 3 0 0 1 2 5.24'/><path d='M7 19v2'/>","cloud.bolt.rain.fill":"<path d='M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973'/><path d='m13 12-3 5h4l-3 5'/>","cloud.hail.fill":"<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/><path d='M16 14v2'/><path d='M8 14v2'/><path d='M16 20h.01'/><path d='M8 20h.01'/><path d='M12 16v2'/><path d='M12 22h.01'/>","airplane":"<path d='M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z'/>","link":"<path d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71'/><path d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'/>","star.fill":"<path d='M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z'/>","shippingbox.fill":"<path d='M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z'/><path d='M12 22V12'/><polyline points='3.29 7 12 12 20.71 7'/><path d='m7.5 4.27 9 5.15'/>","location.fill":"<polygon points='3 11 22 2 13 21 11 13 3 11'/>","exclamationmark.icloud":"<path d='M12 12v4'/><path d='M12 20h.01'/><path d='M8.128 16.949A7 7 0 1 1 15.71 8h1.79a1 1 0 0 1 0 9h-1.642'/>","phone":"<path d='M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384'/>","globe":"<circle cx='12' cy='12' r='10'/><path d='M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20'/><path d='M2 12h20'/>","arrow.up.right":"<path d='M7 7h10v10'/><path d='M7 17 17 7'/>","directions":"<polygon points='12 2 19 21 12 17 5 21 12 2'/>","mappin":"<path d='M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0'/><circle cx='12' cy='10' r='3'/>","clock":"<circle cx='12' cy='12' r='10'/><path d='M12 6v6l4 2'/>","calendar":"<path d='M8 2v3'/><path d='M16 2v3'/><rect x='3' y='3' width='18' height='18' rx='2'/><path d='M3 9h18'/>","checkmark.circle":"<circle cx='12' cy='12' r='10'/><path d='m16 9-5.5 5.5L8 12'/>","exclamationmark.triangle":"<path d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/><path d='M12 9v4'/><path d='M12 17h.01'/>","info.circle":"<circle cx='12' cy='12' r='10'/><path d='M12 16v-4'/><path d='M12 8h.01'/>","dollarsign.circle":"<circle cx='12' cy='12' r='10'/><path d='M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8'/><path d='M12 18V6'/>","cart":"<path d='m2.05 2.05 1.099-.028a1 1 0 0 1 1.008.815l2.69 14.347A1 1 0 0 0 7.83 18H18'/><path d='M4.563 5h16.435a1 1 0 0 1 .981 1.204l-1.026 6.226A2 2 0 0 1 18.962 14H6.25'/><circle cx='18' cy='20' r='2'/><circle cx='8' cy='20' r='2'/>","bus":"<path d='M8 6v6'/><path d='M15 6v6'/><path d='M2 12h19.6'/><path d='M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3'/><circle cx='7' cy='18' r='2'/><path d='M9 18h5'/><circle cx='16' cy='18' r='2'/>","tram":"<rect width='16' height='16' x='4' y='3' rx='2'/><path d='M4 11h16'/><path d='M12 3v8'/><path d='m8 19-2 3'/><path d='m18 22-2-3'/><path d='M8 15h.01'/><path d='M16 15h.01'/>","car":"<path d='M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2'/><circle cx='7' cy='17' r='2'/><path d='M9 17h6'/><circle cx='17' cy='17' r='2'/>","bed.double":"<path d='M2 20v-8a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v8'/><path d='M4 10V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4'/><path d='M12 4v6'/><path d='M2 18h20'/>","hammer":"<path d='m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9'/><path d='m18 15 4-4'/><path d='m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-2.26a6 6 0 0 0-4.202-1.756L9 2.96l.92.82A6.18 6.18 0 0 1 12 8.4V10l2 2h1.172a2 2 0 0 1 1.414.586L18.5 14.5'/>","checkmark.circle.fill":"<circle cx='12' cy='12' r='10'/><path d='m9 12 2 2 4-4'/>","xmark.circle.fill":"<circle cx='12' cy='12' r='10'/><path d='m15 9-6 6'/><path d='m9 9 6 6'/>","stop.circle":"<circle cx='12' cy='12' r='10'/><rect x='9' y='9' width='6' height='6' rx='1'/>","questionmark.circle":"<circle cx='12' cy='12' r='10'/><path d='M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3'/><path d='M12 17h.01'/>","arrow.up.circle":"<circle cx='12' cy='12' r='10'/><path d='m16 12-4-4-4 4'/><path d='M12 16V8'/>","arrow.down.circle":"<circle cx='12' cy='12' r='10'/><path d='M12 8v8'/><path d='m8 12 4 4 4-4'/>","arrow.left.arrow.right":"<path d='M8 3 4 7l4 4'/><path d='M4 7h16'/><path d='m16 21 4-4-4-4'/><path d='M20 17H4'/>","pin.fill":"<path d='M12 17v5'/><path d='M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z'/>","lock.fill":"<rect width='18' height='11' x='3' y='11' rx='2' ry='2'/><path d='M7 11V7a5 5 0 0 1 10 0v4'/>","arrow.clockwise":"<path d='M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8'/><path d='M21 3v5h-5'/><path d='M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16'/><path d='M8 16H3v5'/>","server.rack":"<rect width='20' height='8' x='2' y='2' rx='2' ry='2'/><rect width='20' height='8' x='2' y='14' rx='2' ry='2'/><path d='M6 6h.01'/><path d='M6 18h.01'/>","play.fill":"<polygon points='6 3 20 12 6 21 6 3'/>","sparkles":"<path d='M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z'/>","person.2":"<path d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/><circle cx='9' cy='7' r='4'/><path d='M22 21v-2a4 4 0 0 0-3-3.87'/><path d='M16 3.13a4 4 0 0 1 0 7.75'/>","creditcard":"<rect width='20' height='14' x='2' y='5' rx='2'/><path d='M2 10h20'/>","square.grid.2x2":"<rect width='7' height='7' x='3' y='3' rx='1'/><rect width='7' height='7' x='14' y='3' rx='1'/><rect width='7' height='7' x='14' y='14' rx='1'/><rect width='7' height='7' x='3' y='14' rx='1'/>","rectangle.3.group":"<rect width='7' height='7' x='3' y='3' rx='1'/><rect width='7' height='7' x='14' y='3' rx='1'/><rect width='7' height='7' x='14' y='14' rx='1'/><rect width='7' height='7' x='3' y='14' rx='1'/>","checkmark.seal":"<path d='M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z'/><path d='m9 12 2 2 4-4'/>","square.stack.3d.up":"<path d='M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z'/><path d='m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65'/><path d='m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65'/>","tray":"<path d='M22 12h-6l-2 3h-4l-2-3H2'/><path d='M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z'/>"};
+    const viewPalette=["#4C9DFF","#34C759","#FFCC00","#AF52DE","#5AC8FA","#FF9F0A","#FF6482","#8E8E93"],viewToneColors={positive:"#34C759",negative:"#FF6B6B",warning:"#FFB340",accent:"#4C9DFF",neutral:"#8E8E93"};
+    const viewActionKinds=new Set(["open","runTask","refresh","openRecord","ask"]),cardTabState=new Map();
     const cardActionIcons={directions:"directions",call:"phone",website:"globe",open:"arrow.up.right"};
     function cdEl(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!=null)node.textContent=String(text);return node}
     function cardIcon(symbol,glyph,cls){const key=cardIcons[symbol]?symbol:null;if(!key&&!glyph)return null;
@@ -5352,10 +5477,10 @@ private extension RemoteControlServer {
       svg.innerHTML=cardIcons[key];node.append(svg);return node}
     function cardURL(url){return typeof url==="string"&&/^(https?:\\/\\/|tel:)/i.test(url)?url:null}
     function cardNum(value){return Number.isFinite(Number(value))?Number(value):null}
-    function appendCards(parent,cards,messageID){let stack=null;
+    function appendCards(parent,cards,messageID,ctx){let stack=null;
       for(const card of cards){if(!card||typeof card!=="object"||!Array.isArray(card.blocks))continue;
         if(card.style==="link"){const node=linkCardNode(card);if(!node)continue;if(!stack){stack=cdEl("div","link-card-stack");parent.append(stack)}stack.append(node);continue}
-        stack=null;parent.append(panelCardNode(card,`${messageID||""}:${card.id||""}`))}}
+        stack=null;parent.append(panelCardNode(card,`${messageID||""}:${card.id||""}`,ctx))}}
     function linkCardNode(card){const url=cardURL(card.action?.url);if(!url||/^tel:/i.test(url))return null;
       const image=card.blocks.find(b=>b?.type==="image"&&b.imageID),header=card.blocks.find(b=>b?.type==="header")||{};
       const link=cdEl("a",`link-card${image?"":" compact"}`);link.href=url;link.target="_blank";link.rel="noopener noreferrer";
@@ -5365,10 +5490,12 @@ private extension RemoteControlServer {
       const body=cdEl("div","link-card-body"),line=cdEl("div","link-card-domain");
       if(header.subtitleImageID){const fav=cdEl("img","link-card-favicon");fav.alt="";fav.decoding="async";fav.hidden=true;fav.onload=()=>{fav.hidden=false};line.append(fav);loadLinkPreviewImage(header.subtitleImageID,fav)}
       line.append(cdEl("span","",domain));body.append(cdEl("div","link-card-title",header.title||domain),line);link.append(body);return link}
-    function panelCardNode(card,key){const wrap=cdEl("section","cd-card");wrap.setAttribute("aria-label",card.accessibilityLabel||card.blocks.find(b=>b?.type==="header")?.title||"Card");const blocks=card.blocks;let drew=0;
+    function panelCardNode(card,key,ctx){const wrap=cdEl("section","cd-card");wrap.setAttribute("aria-label",card.accessibilityLabel||card.blocks.find(b=>b?.type==="header")?.title||"Card");const blocks=card.blocks.slice(0,48);let drew=0;
       for(let i=0;i<blocks.length;i++){const block=blocks[i];if(!block||typeof block!=="object")continue;
+        // Tabs own the next `count` blocks each; only the selected tab's show (docs/views.md).
+        if(block.type==="tabs"){const next=tabsNode(block,blocks,i,`${key}:tabs:${i}`,key,ctx);if(next.node){wrap.append(...next.node);drew++}i=next.end-1;continue}
         if(block.type==="map"){const next=blocks[i+1],legend=next?.type==="list"&&next.mapLinked?next:null;if(legend)i++;const node=mapBlockNode(block,legend,key);if(node){wrap.append(node);wrap.classList.add("has-map");drew++}continue}
-        const node=cardBlockNode(block,`${key}:${i}`);if(node){wrap.append(node);drew++}}
+        const node=cardBlockNode(block,`${key}:${i}`,ctx);if(node){wrap.append(node);drew++}}
       if(!drew)wrap.append(cdEl("div","cd-fallback",card.fallbackText||""));
       const source=card.source||{},updated=source.updatedAt?new Date(source.updatedAt):null;
       if(source.attribution||(updated&&!Number.isNaN(updated.getTime()))){const foot=cdEl("div","cd-foot");
@@ -5376,7 +5503,37 @@ private extension RemoteControlServer {
         if(source.attribution){const url=cardURL(source.url);const attr=cdEl(url?"a":"span","cd-attr",source.attribution);if(url){attr.href=url;attr.target="_blank";attr.rel="noopener noreferrer"}foot.append(attr)}
         wrap.append(foot)}
       return wrap}
-    function cardBlockNode(b,key){switch(b.type){
+    function tabsNode(block,blocks,start,tabKey,key,ctx){const tabs=(Array.isArray(block.tabs)?block.tabs:[]).filter(tab=>tab&&tab.title).slice(0,6);let next=start+1;
+      if(!tabs.length)return {node:null,end:next};const chosen=Math.min(cardTabState.get(tabKey)||0,tabs.length-1),bar=cdEl("div","cd-tabs"),panels=[];
+      bar.setAttribute("role","tablist");bar.setAttribute("aria-label",block.accessibilityLabel||"Sections");
+      const select=(index,focus)=>{cardTabState.set(tabKey,index);Array.from(bar.children).forEach((tab,n)=>{tab.setAttribute("aria-selected",String(n===index));tab.tabIndex=n===index?0:-1});panels.forEach((panel,n)=>{panel.hidden=n!==index});if(focus)bar.children[index].focus()};
+      tabs.forEach((tab,index)=>{const count=Math.max(0,Math.min(Math.floor(Number(tab.count)||0),blocks.length-next)),panel=cdEl("div","cd-tabpanel"),id=`cdtab-${tabKey.replace(/[^A-Za-z0-9]/g,"")}-${index}`;
+        for(let j=next;j<next+count;j++){const child=blocks[j];if(child&&typeof child==="object"&&child.type!=="tabs"){const node=cardBlockNode(child,`${key}:${j}`,ctx);if(node)panel.append(node)}}
+        next+=count;panel.id=id;panel.setAttribute("role","tabpanel");panel.setAttribute("aria-label",tab.title);panel.hidden=index!==chosen;
+        const button=cdEl("button","cd-tab",tab.title);button.type="button";button.setAttribute("role","tab");button.setAttribute("aria-controls",id);button.setAttribute("aria-selected",String(index===chosen));button.tabIndex=index===chosen?0:-1;
+        button.onclick=()=>select(index);button.onkeydown=event=>{const step=event.key==="ArrowRight"?1:event.key==="ArrowLeft"?-1:0;if(step){event.preventDefault();select((index+step+tabs.length)%tabs.length,true)}};
+        bar.append(button);panels.push(panel)});
+      return {node:[bar,...panels],end:next}}
+    function cardBlockTitle(node,title){if(!title)return node;const wrap=cdEl("div","cd-titled");wrap.append(cdEl("div","cd-block-title",title),node);return wrap}
+    function lineChartNode(b){const items=(Array.isArray(b.items)?b.items:[]).slice(0,60).filter(item=>cardNum(item.high)!==null);if(!items.length)return null;
+      const values=items.map(item=>cardNum(item.high)),min=Math.min(cardNum(b.min)??Math.min(...values),...values),max=Math.max(cardNum(b.max)??Math.max(...values),...values),span=Math.max(1e-9,max-min),w=300,h=110,pad=6;
+      const x=n=>items.length===1?w/2:pad+n*(w-2*pad)/(items.length-1),y=v=>h-pad-(v-min)/span*(h-2*pad),ns="http://www.w3.org/2000/svg",svg=document.createElementNS(ns,"svg");
+      svg.setAttribute("viewBox",`0 0 ${w} ${h}`);svg.setAttribute("aria-hidden","true");const line=document.createElementNS(ns,"polyline");
+      for(const [name,value] of [["points",items.map((item,n)=>`${x(n)},${y(cardNum(item.high))}`).join(" ")],["fill","none"],["stroke","#4C9DFF"],["stroke-width","2"],["stroke-linejoin","round"],["stroke-linecap","round"]])line.setAttribute(name,value);svg.append(line);
+      items.forEach((item,n)=>{const dot=document.createElementNS(ns,"circle");dot.setAttribute("cx",String(x(n)));dot.setAttribute("cy",String(y(cardNum(item.high))));dot.setAttribute("r","2.6");dot.setAttribute("fill","#4C9DFF");svg.append(dot)});
+      const node=cdEl("div","cd-line-chart"),scale=cdEl("div","cd-scale"),axis=cdEl("div","cd-axis"),picks=items.length>2?[0,Math.floor((items.length-1)/2),items.length-1]:items.map((_,n)=>n);
+      scale.setAttribute("aria-hidden","true");scale.append(cdEl("span","",max.toLocaleString()),cdEl("span","",min.toLocaleString()));axis.setAttribute("aria-hidden","true");for(const n of picks)axis.append(cdEl("span","",items[n].label||""));
+      const list=cdEl("ul","sr-only");list.setAttribute("aria-label",b.title||b.accessibilityLabel||"Line chart");for(const item of items)list.append(cdEl("li","",item.accessibilityLabel||[item.label,item.highText].filter(Boolean).join(", ")));
+      node.append(scale,svg,axis,list);return cardBlockTitle(node,b.title)}
+    function pieChartNode(b){const items=(Array.isArray(b.items)?b.items:[]).slice(0,8).filter(item=>(cardNum(item.high)||0)>0);if(!items.length)return null;
+      const total=items.reduce((sum,item)=>sum+cardNum(item.high),0),ns="http://www.w3.org/2000/svg",svg=document.createElementNS(ns,"svg"),legend=cdEl("ul","cd-legend"),node=cdEl("div","cd-pie");let offset=0;
+      svg.setAttribute("viewBox","0 0 42 42");svg.setAttribute("aria-hidden","true");legend.setAttribute("aria-label",b.title||b.accessibilityLabel||"Pie chart");
+      items.forEach((item,n)=>{const share=cardNum(item.high)/total*100,color=viewToneColors[item.tone]||viewPalette[n%viewPalette.length],arc=document.createElementNS(ns,"circle"),percent=Math.round(share);
+        for(const [name,value] of [["cx","21"],["cy","21"],["r","15.9155"],["fill","none"],["stroke",color],["stroke-width","6"],["stroke-dasharray",`${share} ${100-share}`],["stroke-dashoffset",String(25-offset)]])arc.setAttribute(name,value);svg.append(arc);offset+=share;
+        const row=cdEl("li"),swatch=cdEl("span","cd-swatch");swatch.style.background=color;swatch.setAttribute("aria-hidden","true");
+        row.append(swatch,cdEl("span","",item.label||""),cdEl("span","",item.highText||""),cdEl("span","pct",`${percent}%`));row.setAttribute("aria-label",item.accessibilityLabel||`${item.label}, ${item.highText}, ${percent} percent`);legend.append(row)});
+      node.append(svg,legend);return cardBlockTitle(node,b.title)}
+    function cardBlockNode(b,key,ctx){switch(b.type){
       case "header":{const head=cdEl("div","cd-head"),info=cdEl("div","cd-info");const lead=cardIcon(b.symbol,null,`cd-lead ${b.tone||""}`);if(lead)head.append(lead);
         info.append(cdEl("div","cd-title",b.title||""));
         if(b.subtitle){const sub=cdEl("div","cd-sub"),icon=cardIcon(b.subtitleSymbol,null,"cd-sub-icon");if(icon)sub.append(icon);sub.append(document.createTextNode(b.subtitle));info.append(sub)}
@@ -5392,13 +5549,14 @@ private extension RemoteControlServer {
       case "strip":{const items=(Array.isArray(b.items)?b.items:[]).slice(0,24);if(!items.length)return null;const node=cdEl("div","cd-strip");node.setAttribute("role","list");node.setAttribute("aria-label",b.accessibilityLabel||"Strip");
         for(const item of items){const cell=cdEl("div","cd-strip-item");cell.setAttribute("role","listitem");cell.setAttribute("aria-label",item.accessibilityLabel||[item.label,item.value,item.note].filter(Boolean).join(", "));
           cell.append(cdEl("span","cd-strip-label",item.label||""),cardIcon(item.symbol,item.glyph,"cd-strip-icon")||cdEl("span","cd-strip-icon"),cdEl("span","cd-note accent",item.note||""),cdEl("span","cd-strip-value",item.value||""));node.append(cell)}return node}
-      case "chart":{const items=(Array.isArray(b.items)?b.items:[]).slice(0,24);if(!items.length)return null;const node=cdEl("div","cd-chart");node.setAttribute("role","list");node.setAttribute("aria-label",b.accessibilityLabel||"Chart");
+      case "chart":{if(b.kind==="line")return lineChartNode(b);if(b.kind==="pie")return pieChartNode(b);
+        const items=(Array.isArray(b.items)?b.items:[]).slice(0,24);if(!items.length)return null;const node=cdEl("div","cd-chart");node.setAttribute("role","list");node.setAttribute("aria-label",b.accessibilityLabel||"Chart");
         const lows=items.map(item=>cardNum(item.low)).filter(v=>v!==null),highs=items.map(item=>cardNum(item.high)).filter(v=>v!==null);
         const min=cardNum(b.min)??Math.min(...lows,...highs),max=cardNum(b.max)??Math.max(...highs),span=Math.max(1e-9,max-min);
         for(const item of items){const row=cdEl("div","cd-chart-row");row.setAttribute("role","listitem");row.setAttribute("aria-label",item.accessibilityLabel||[item.label,item.lowText,item.highText].filter(Boolean).join(", "));
           const low=cardNum(item.low)??min,high=cardNum(item.high)??low,bar=cdEl("span","cd-bar"),fill=cdEl("span");bar.setAttribute("aria-hidden","true");
           const left=Math.min(100,Math.max(0,(low-min)/span*100));fill.style.left=`${left}%`;fill.style.width=`${Math.min(100-left,Math.max(4,(high-low)/span*100))}%`;bar.append(fill);
-          row.append(cdEl("span","cd-chart-label",item.label||""),cardIcon(item.symbol,item.glyph,"cd-chart-icon")||cdEl("span","cd-chart-icon"),cdEl("span","cd-note accent",item.note||""),cdEl("span","cd-chart-low",item.lowText||""),bar,cdEl("span","cd-chart-high",item.highText||""));node.append(row)}return node}
+          row.append(cdEl("span","cd-chart-label",item.label||""),cardIcon(item.symbol,item.glyph,"cd-chart-icon")||cdEl("span","cd-chart-icon"),cdEl("span","cd-note accent",item.note||""),cdEl("span","cd-chart-low",item.lowText||""),bar,cdEl("span","cd-chart-high",item.highText||""));node.append(row)}return cardBlockTitle(node,b.title)}
       case "list":{const items=(Array.isArray(b.items)?b.items:[]).slice(0,24);if(!items.length)return null;const node=cdEl("div","cd-list");
         // A collapsed list (a build card's Earlier steps) opens from its title; the page remembers it while it's open.
         if(b.collapsed===true&&b.title&&key){const openKey=`list:${key}`,open=expanded.has(openKey),toggle=cdEl("button","cd-list-toggle"),rows=cdEl("div","cd-list-rows");
@@ -5412,6 +5570,17 @@ private extension RemoteControlServer {
       case "badges":{const badges=Array.isArray(b.badges)?b.badges:[];if(!badges.length)return null;const node=cdEl("div","cd-badges padded");for(const badge of badges)node.append(cardBadgeNode(badge));return node}
       case "notice":{const node=cdEl("div",`cd-notice ${b.tone||""}`),title=cdEl("div","cd-notice-title"),icon=cardIcon(b.symbol,null,"cd-notice-icon");if(icon)title.append(icon);title.append(document.createTextNode(b.title||""));node.append(title);if(b.text)node.append(cdEl("div","cd-line",b.text));return node}
       case "progress":return b.label||b.startedAt?progressBlockNode(b):null;
+      case "section":{if(!b.title)return null;const node=cdEl("div","cd-section"),title=cdEl("div","cd-section-title"),icon=cardIcon(b.symbol,null,"cd-section-icon");title.setAttribute("role","heading");title.setAttribute("aria-level","3");
+        if(icon)title.append(icon);title.append(document.createTextNode(b.title));node.append(title);if(b.subtitle)node.append(cdEl("div","cd-section-sub",b.subtitle));return node}
+      case "table":{const columns=(Array.isArray(b.columns)?b.columns:[]).slice(0,6),rows=(Array.isArray(b.tableRows)?b.tableRows:[]).slice(0,50);if(!columns.length||!rows.length)return null;
+        const wrap=cdEl("div","cd-table-wrap"),table=cdEl("table","cd-table"),head=cdEl("thead"),headRow=cdEl("tr"),body=cdEl("tbody"),align=column=>column?.align==="trailing"?"trailing":column?.align==="center"?"center":"";
+        for(const column of columns){const cell=cdEl("th",align(column),column.title||"");cell.scope="col";headRow.append(cell)}head.append(headRow);
+        for(const row of rows){const line=cdEl("tr"),cells=Array.isArray(row.cells)?row.cells:[];
+          columns.forEach((column,c)=>{const value=cells[c]||{},cell=cdEl(c===0?"th":"td",[align(column),value.tone?`cd-tone-${value.tone}`:""].filter(Boolean).join(" "),value.text??"");if(c===0)cell.scope="row";line.append(cell)});body.append(line)}
+        table.append(head,body);wrap.append(table);wrap.tabIndex=0;wrap.setAttribute("role","region");wrap.setAttribute("aria-label",b.title||b.accessibilityLabel||"Table");return cardBlockTitle(wrap,b.title)}
+      case "actions":{if(!ctx?.viewID)return null;const buttons=(Array.isArray(b.buttons)?b.buttons:[]).filter(button=>button&&viewActionKinds.has(button.kind)&&button.id&&button.label).slice(0,6);if(!buttons.length)return null;
+        const node=cdEl("div","cd-actions");for(const button of buttons){const control=cdEl("button",`cd-action${button.style==="prominent"?" prominent":""}`),icon=cardIcon(button.symbol,null,"");if(icon)control.append(icon);control.append(document.createTextNode(button.label));
+          control.type="button";control.onclick=()=>confirmViewAction(ctx.viewID,button,control);node.append(control)}return node}
       case "image":{if(!b.imageID)return null;const hero=cdEl("div","link-card-hero"),img=cdEl("img");img.alt=b.accessibilityLabel||"";img.decoding="async";hero.append(img);loadLinkPreviewImage(b.imageID,img);return hero}
       default:return null}}
     // A progress block (build cards): one shared timer ticks every running block's elapsed time.
@@ -5982,18 +6151,23 @@ private extension RemoteControlServer {
       return value}
     function badgeTone(value){const text=value.trim().toLowerCase();
       return text.includes("reject")||text.includes("declin")?"rejected":text.includes("offer")?"offer":text==="applied"||text==="application received"?"applied":""}
-    function openTasks(){closeTasks();tasksState={token,taskID:null,tasks:[],workspaceCards:{},recordCards:new Map(),revision:null,loaded:false,failed:false,loading:false,openRecords:new Set(),timer:setInterval(()=>{loadTasks();refreshOpenRecordCards()},10000)};
+    function openTasks(){closeTasks();tasksState={token,taskID:null,tasks:[],workspaceCards:{},recordCards:new Map(),revision:null,loaded:false,failed:false,loading:false,openRecords:new Set(),
+        views:[],viewsRevision:null,viewsSupported:false,viewsLoading:false,viewID:null,view:null,viewFailed:false,viewFetchedAt:0,timer:setInterval(()=>{loadTasks();refreshOpenRecordCards()},10000)};
       $("tasksSearch").value="";setText($("tasksError"),"");renderTasks();$("tasksPanel").showModal();loadTasks()}
     function closeTasks(){if(tasksState)clearInterval(tasksState.timer);tasksState=null}
     async function loadTasks(){const state=tasksState;if(!state||state.loading)return;state.loading=true;
       try{const data=await api("/api/v1/home/tasks"+(state.loaded&&state.revision?`?revision=${encodeURIComponent(state.revision)}`:""));if(state!==tasksState)return;state.failed=false;
-        if(data.unchanged){setText($("tasksError"),"");return}
-        setText($("tasksError"),data.error||"");
-        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.tasks=data.tasks||[];state.workspaceCards=data.workspaceCards||{};state.loaded=true;renderTasks()}}
+        if(data.unchanged){setText($("tasksError"),"");if(state.viewsSupported)loadViews();return}
+        setText($("tasksError"),data.error||"");if(data.supportsViews===true)state.viewsSupported=true;
+        if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.tasks=data.tasks||[];state.workspaceCards=data.workspaceCards||{};state.loaded=true;renderTasks()}
+        if(state.viewsSupported)loadViews()}
       catch(error){if(state===tasksState){setText($("tasksError"),`Couldn't load tasks: ${error.message}`);if(!state.loaded){state.loaded=true;state.failed=true;renderTasks()}}}
       finally{state.loading=false}}
     // Polling re-renders in place: scroll, open records, collapsed sections and the focused row survive.
     function renderTasks(){const state=tasksState;if(!state)return;const panel=$("tasksPanel"),body=$("tasksBody");
+      if(state.viewID){const summary=state.view?.view||state.views.find(item=>item.id===state.viewID),focused=document.activeElement?.closest?.("#tasksBody [data-focus-key]")?.dataset.focusKey,scroll=panel.scrollTop;
+        $("tasksBack").classList.remove("hidden");setText($("tasksTitle"),summary?.name||"View");$("tasksSearch").classList.add("hidden");body.replaceChildren(viewScreen(state));panel.scrollTop=scroll;
+        if(focused)Array.from(body.querySelectorAll("[data-focus-key]")).find(node=>node.dataset.focusKey===focused)?.focus();return}
       let task=state.taskID?state.tasks.find(item=>item.id===state.taskID):null;if(state.taskID&&!task&&state.loaded&&!state.failed)state.taskID=null;
       const workspace=task?.workspace,focused=document.activeElement?.closest?.("#tasksBody [data-focus-key]")?.dataset.focusKey,scroll=panel.scrollTop;
       $("tasksBack").classList.toggle("hidden",!task);setText($("tasksTitle"),task?task.title:"Tasks");
@@ -6003,16 +6177,75 @@ private extension RemoteControlServer {
     function showTask(id){if(!tasksState)return;const previous=tasksState.taskID;tasksState.taskID=id;tasksState.openRecords.clear();$("tasksSearch").value="";setText($("tasksStatus"),"");renderTasks();$("tasksPanel").scrollTop=0;
       if(id)$("tasksTitle").focus();else Array.from($("tasksBody").querySelectorAll("[data-focus-key]")).find(node=>node.dataset.focusKey===`task:${previous}`)?.focus()}
     function taskListView(state){if(!state.loaded)return homeNode("p","muted tasks-empty","Loading tasks…");
-      if(!state.tasks.length)return homeNode("p","muted tasks-empty",state.failed?"Tasks are unavailable right now.":"No tasks yet. Ask Cantrip Home to track or schedule something.");
+      const views=viewListSection(state);
+      if(!state.tasks.length){const empty=homeNode("p","muted tasks-empty",state.failed?"Tasks are unavailable right now.":"No tasks yet. Ask Cantrip Home to track or schedule something.");
+        if(!views)return empty;const box=homeNode("div");box.append(views,empty);return box}
       const list=homeNode("ul","task-list");
+      if(views){const box=homeNode("div"),heading=homeNode("h3","views-heading","Tasks");box.append(views,heading,list);taskListItems(state,list);return box}
+      taskListItems(state,list);return list}
+    function taskListItems(state,list){
       for(const task of state.tasks){const item=homeNode("li"),card=homeNode("button","task-card");card.type="button";card.dataset.focusKey=`task:${task.id}`;
         const meta=[task.hasSchedule===false?"No schedule":task.enabled?task.schedule.summary:`Paused · ${task.schedule.summary}`];
         if(task.workspace)meta.push(`${task.workspace.records.length} ${homeNoun(task.workspace,task.workspace.records.length)}`);
         if(task.model)meta.push(task.model);if(task.state==="running")meta.push("Running now");
         card.append(homeNode("strong","task-title",task.title),homeNode("span","task-meta",meta.join(" · ")));
         if(task.runs?.[0]?.summary)card.append(homeNode("span","task-run",task.runs[0].summary));
-        card.onclick=()=>showTask(task.id);item.append(card);list.append(item)}
-      return list}
+        card.onclick=()=>showTask(task.id);item.append(card);list.append(item)}}
+    // Views (docs/views.md): Home's saved screens, pinned first. Cantrip sends each as a card built from its sources.
+    function viewListSection(state){const views=state.views||[];if(!state.viewsSupported||!views.length)return null;
+      const section=homeNode("section","views-section"),heading=homeNode("h3","views-heading","Views"),list=homeNode("ul","task-list");heading.id="viewsHeading";section.setAttribute("aria-labelledby","viewsHeading");
+      for(const view of views){const item=homeNode("li"),card=homeNode("button","task-card view-card"),title=homeNode("strong","task-title");card.type="button";card.dataset.focusKey=`view:${view.id}`;
+        const icon=cardIcon(view.pinned?"pin.fill":view.icon,null,"view-badge");if(icon)title.append(icon);title.append(document.createTextNode(view.name||"View"));
+        if(view.private){const lock=cardIcon("lock.fill",null,"view-badge");if(lock)title.append(lock)}
+        const updated=view.refreshedAt?new Date(view.refreshedAt):null,meta=[view.subtitle,updated&&!isNaN(updated)?`Updated ${updated.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}`:null].filter(Boolean);
+        card.append(title,homeNode("span","task-meta",meta.join(" · ")||"View"));
+        card.setAttribute("aria-label",[view.name,view.pinned?"Pinned":null,view.private?"Private":null,...meta].filter(Boolean).join(", "));
+        card.onclick=()=>showView(view.id);item.append(card);list.append(item)}
+      section.append(heading,list);return section}
+    async function loadViews(){const state=tasksState;if(!state||state.viewsLoading)return;state.viewsLoading=true;
+      try{const data=await api("/api/v1/home/views"+(state.viewsRevision?`?revision=${encodeURIComponent(state.viewsRevision)}`:""));if(state!==tasksState)return;
+        if(!data.unchanged){state.viewsRevision=data.revision;state.views=Array.isArray(data.views)?data.views:[];if(!state.taskID)renderTasks()}
+        if(state.viewID&&Date.now()-state.viewFetchedAt>=(state.view?.refreshAfter||30)*1000)loadView()}
+      catch{}finally{state.viewsLoading=false}}
+    async function loadView(){const state=tasksState,id=state?.viewID;if(!id)return;state.viewFetchedAt=Date.now();
+      try{const data=await api(`/api/v1/home/views/${encodeURIComponent(id)}`);if(state!==tasksState||state.viewID!==id)return;state.view=data;state.viewFailed=false;renderTasks()}
+      catch(error){if(state===tasksState&&state.viewID===id){state.viewFailed=true;setText($("tasksError"),`Couldn't load the view: ${error.message}`);renderTasks()}}}
+    function showView(id){const state=tasksState;if(!state)return;const previous=state.viewID;state.viewID=id;state.view=null;state.viewFailed=false;state.taskID=null;
+      setText($("tasksStatus"),"");setText($("tasksError"),"");renderTasks();$("tasksPanel").scrollTop=0;
+      if(id){loadView();$("tasksTitle").focus()}else Array.from($("tasksBody").querySelectorAll("[data-focus-key]")).find(node=>node.dataset.focusKey===`view:${previous}`)?.focus()}
+    function viewScreen(state){const box=homeNode("div","view-screen"),summary=state.view?.view||state.views.find(item=>item.id===state.viewID),bar=homeNode("div","view-toolbar");
+      const refresh=homeNode("button","control","Refresh"),pin=homeNode("button","control",summary?.pinned?"Unpin":"Pin"),remove=homeNode("button","control","Delete");
+      for(const [control,key] of [[refresh,"refresh"],[pin,"pin"],[remove,"delete"]]){control.type="button";control.dataset.focusKey=`view-${key}`}
+      refresh.onclick=()=>refreshView(state.viewID,refresh);pin.onclick=()=>pinView(state.viewID,!summary?.pinned);remove.onclick=()=>deleteView(state.viewID,summary?.name||"this view");
+      bar.append(refresh,pin,remove);box.append(bar);
+      if(summary?.private)box.append(homeNode("p","muted view-note","Private: it reads a private source, refreshes on your Mac only, and no model reads its values."));
+      if(summary?.refreshing)box.append(homeNode("p","muted view-note","Refreshing…"));
+      if(!state.view?.card)box.append(homeNode("p","muted tasks-empty",state.viewFailed?"This view is unavailable right now.":"Loading view…"));
+      else{const holder=homeNode("div","view-card");appendCards(holder,[state.view.card],`view:${state.viewID}`,{viewID:state.viewID});box.append(holder)}
+      return box}
+    async function refreshView(id,control){const state=tasksState;control?.setAttribute("aria-busy","true");setText($("tasksStatus"),"Refreshing…");
+      try{const data=await api(`/api/v1/home/views/${encodeURIComponent(id)}/refresh`,{method:"POST",body:"{}"});if(state!==tasksState||state.viewID!==id)return;
+        state.view=data;state.viewFetchedAt=Date.now();renderTasks();setText($("tasksStatus"),"Refreshed.")}
+      catch(error){setText($("tasksError"),`Couldn't refresh the view: ${error.message}`)}finally{control?.removeAttribute("aria-busy")}}
+    async function pinView(id,pinned){const state=tasksState;
+      try{const data=await api(`/api/v1/home/views/${encodeURIComponent(id)}/pin`,{method:"POST",body:JSON.stringify({pinned})});if(state!==tasksState)return;
+        if(state.view)state.view.view=data;state.views=state.views.map(item=>item.id===id?data:item);state.viewsRevision=null;renderTasks();setText($("tasksStatus"),pinned?"Pinned.":"Unpinned.")}
+      catch(error){setText($("tasksError"),`Couldn't ${pinned?"pin":"unpin"} the view: ${error.message}`)}}
+    async function deleteView(id,name){if(!confirm(`Delete ${name}? It disappears from every device; its sources don't change.`))return;const state=tasksState;
+      try{await api(`/api/v1/home/views/${encodeURIComponent(id)}`,{method:"DELETE"});if(state!==tasksState)return;state.views=state.views.filter(item=>item.id!==id);state.viewsRevision=null;showView(null);setText($("tasksStatus"),`Deleted ${name}.`)}
+      catch(error){setText($("tasksError"),`Couldn't delete the view: ${error.message}`)}}
+    // A view's button runs on the Mac only after this confirmation (POST …/actions/<id> with confirmed: true).
+    function confirmViewAction(viewID,button,control){const dialog=$("viewConfirm"),message=$("viewConfirmMessage");setText($("viewConfirmTitle"),button.confirmTitle||button.label);
+      setText(message,button.confirmMessage||"");message.hidden=!button.confirmMessage;$("viewConfirmGo").textContent=button.label;dialog.returnValue="";
+      dialog.onclose=()=>{dialog.onclose=null;if(control.isConnected)control.focus();if(dialog.returnValue==="go")runViewAction(viewID,button)};dialog.showModal();$("viewConfirmCancel").focus()}
+    async function runViewAction(viewID,button){const state=tasksState;setText($("tasksError"),"");
+      try{const data=await api(`/api/v1/home/views/${encodeURIComponent(viewID)}/actions/${encodeURIComponent(button.id)}`,{method:"POST",body:JSON.stringify({confirmed:true})});
+        if(data.result==="open"){const url=cardURL(data.url);if(url&&!/^tel:/i.test(url))window.open(url,"_blank","noopener,noreferrer")}
+        else if(data.result==="record"&&state===tasksState){state.viewID=null;state.view=null;showTask(data.taskID);if(data.recordID){state.openRecords.add(data.recordID);renderTasks()}}
+        else if(data.result==="refreshed"&&state===tasksState&&state.viewID===viewID){state.view=data;state.viewFetchedAt=Date.now();renderTasks()}
+        else if(data.result==="sent"){$("tasksPanel").close();const home=sessionItems.find(item=>item.isCantripHome);if(home&&selected!==home.id){selectTab(home.id);renderedPayload="";renderProgress(home);refresh()}}
+        setText($("tasksStatus"),data.message||(data.result==="refreshed"?"Refreshed.":""))}
+      catch(error){setText($("tasksError"),`Couldn't ${button.label}: ${error.message}`)}}
     function taskDetailView(task){const view=homeNode("div","task-detail"),facts=homeNode("dl","task-facts");
       const fact=(label,value)=>{if(value)facts.append(homeNode("dt","",label),homeNode("dd","",value))};
       fact("Schedule",task.hasSchedule===false?"No schedule":task.schedule.summary);fact("Status",!task.enabled?"Paused":task.state==="running"?"Running now":"On");
@@ -6225,7 +6458,7 @@ private extension RemoteControlServer {
     $("artifactsPanel").addEventListener("close",()=>{closeArtifacts();$("artifactsBody").replaceChildren();setText($("artifactsStatus"),"")});
     $("homeBackground").onclick=openBackground;$("backgroundDone").onclick=()=>$("backgroundPanel").close();$("backgroundLog").onclick=openBackgroundLog;
     $("backgroundBack").onclick=()=>{if(!backgroundState)return;backgroundState.view="list";renderBackground()};$("backgroundPanel").addEventListener("close",()=>{closeBackground();$("backgroundBody").replaceChildren()});
-    $("homeTasks").onclick=openTasks;$("tasksDone").onclick=()=>$("tasksPanel").close();$("tasksBack").onclick=()=>showTask(null);
+    $("homeTasks").onclick=openTasks;$("tasksDone").onclick=()=>$("tasksPanel").close();$("tasksBack").onclick=()=>{if(tasksState?.viewID)showView(null);else showTask(null)};
     $("tasksSearch").oninput=()=>{if(tasksState){renderTasks();$("tasksPanel").scrollTop=0}};
     $("tasksPanel").addEventListener("close",()=>{closeTasks();$("tasksBody").replaceChildren();setText($("tasksStatus"),"")});
     function readTabLink(){const match=/^#tab=([0-9A-Fa-f-]{36})$/.exec(location.hash);return match?match[1].toUpperCase():null}

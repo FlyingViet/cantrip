@@ -1,7 +1,9 @@
 // Cantrip's generic cards (docs/cards.md) as plain DOM: one function per block, so a new kind of
 // card needs no code here. Card strings only ever go into textContent and attributes; icons are
 // constants. `map` and `image` blocks need the Mac (its map tiles and image cache), so they're skipped.
-import type { Action, Badge, Block, CardDocument, Item, Source, Stat } from "../shared/cards";
+// A view's card (docs/views.md) also draws its `actions` buttons, which run only through `onAction`
+// after `confirm`.
+import type { Action, Badge, Block, CardDocument, Item, Source, Stat, Tone } from "../shared/cards";
 import "./cards.css";
 
 type Open = (url: string) => void;
@@ -57,17 +59,30 @@ const ICONS: Record<string, string> = {
   "arrow.up.circle": "<circle cx='12' cy='12' r='10'/><path d='m16 12-4-4-4 4'/><path d='M12 16V8'/>",
   "arrow.down.circle": "<circle cx='12' cy='12' r='10'/><path d='M12 8v8'/><path d='m8 12 4 4 4-4'/>",
   "arrow.left.arrow.right": "<path d='M8 3 4 7l4 4'/><path d='M4 7h16'/><path d='m16 21 4-4-4-4'/><path d='M20 17H4'/>",
+  // Symbols views use (docs/views.md).
+  "server.rack": "<rect width='20' height='8' x='2' y='2' rx='2' ry='2'/><rect width='20' height='8' x='2' y='14' rx='2' ry='2'/><line x1='6' x2='6.01' y1='6' y2='6'/><line x1='6' x2='6.01' y1='18' y2='18'/>",
+  "checkmark.seal": "<path d='M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z'/><path d='m16 9-5.5 5.5L8 12'/>",
+  "person.2": "<path d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/><path d='M16 3.128a4 4 0 0 1 0 7.744'/><path d='M22 21v-2a4 4 0 0 0-3-3.87'/><circle cx='9' cy='7' r='4'/>",
+  "creditcard": "<rect width='20' height='14' x='2' y='5' rx='2'/><line x1='2' x2='22' y1='10' y2='10'/><path d='M6 14h2'/>",
+  "square.grid.2x2": "<rect width='7' height='7' x='3' y='3' rx='1'/><rect width='7' height='7' x='14' y='3' rx='1'/><rect width='7' height='7' x='14' y='14' rx='1'/><rect width='7' height='7' x='3' y='14' rx='1'/>",
+  "square.stack.3d.up": "<path d='M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z'/><path d='M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12'/><path d='M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17'/>",
+  "rectangle.3.group": "<rect width='7' height='9' x='3' y='3' rx='1'/><rect width='7' height='5' x='14' y='3' rx='1'/><rect width='7' height='9' x='14' y='12' rx='1'/><rect width='7' height='5' x='3' y='16' rx='1'/>",
+  "play.fill": "<path d='M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z'/>",
+  "sparkles": "<path d='M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z'/><path d='M20 2v4'/><path d='M22 4h-4'/><circle cx='4' cy='20' r='2'/>",
+  "arrow.clockwise": "<path d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/><path d='M21 3v5h-5'/>",
   "wineglass.fill": "<path d='M8 22h8'/><path d='M7 10h10'/><path d='M12 15v7'/><path d='M12 15a5 5 0 0 0 5-5c0-2-.5-4-2-8H9c-1.5 4-2 6-2 8a5 5 0 0 0 5 5Z'/>",
 };
 
 /** Solid shapes, where an outline reads poorly at badge size. */
 const FILLED = new Set(["location.fill", "star.fill"]);
 const ACTION_SYMBOLS: Record<string, string> = {
-  open: "arrow.up.right.square", directions: "location.fill", call: "phone.fill", website: "globe",
+  open: "arrow.up.right.square", directions: "location.fill", call: "phone.fill", website: "globe", refresh: "arrow.clockwise",
 };
 const TONES = new Set(["positive", "negative", "warning", "accent", "neutral"]);
 /** The blocks this client draws; anything else (map, image, newer types) is skipped. */
-const DRAWN = new Set(["header", "stat", "keyValue", "strip", "chart", "list", "badges", "notice", "progress"]);
+const DRAWN = new Set(["header", "stat", "keyValue", "strip", "chart", "list", "badges", "notice", "progress", "section", "table", "tabs", "actions"]);
+/** The most blocks a card draws (a view's card has up to 48, nested ones included). */
+export const MAX_CARD_BLOCKS = 48;
 
 const has = (record: Record<string, string>, key: string | undefined): key is string =>
   typeof key === "string" && Object.prototype.hasOwnProperty.call(record, key);
@@ -121,20 +136,204 @@ export function barPosition(low: number, high: number, min: number, max: number)
   return { left: Math.max(0, Math.min(((from - min) / span) * 100, 100 - width)), width };
 }
 
+function hasContent(block: Block): boolean {
+  switch (block.type) {
+    case "header": return Boolean(block.title || block.subtitle || texts(block.lines).length || block.stat?.value);
+    case "stat": return Boolean(block.value);
+    case "keyValue": return entries(block.rows).length > 0;
+    case "chart":
+      if (block.kind === "pie") return pieSlices(block).length > 0;
+      if (block.kind === "line") return entries(block.items).some((item) => Number.isFinite(item.high));
+      return entries(block.items).length > 0;
+    case "strip": case "list": return entries(block.items).length > 0;
+    case "badges": return entries(block.badges).some((badge) => badge.text);
+    case "notice": return Boolean(block.title || block.text);
+    case "progress": return Boolean(block.label || block.startedAt);
+    case "section": return Boolean(block.title || block.subtitle);
+    case "table": return tableModel(block) !== null;
+    case "tabs": return tabsOf(block).length > 0;
+    case "actions": return buttonsOf(block).length > 0;
+    default: return false;
+  }
+}
+
+const known = (block: Block | undefined): block is Block => Boolean(block) && typeof block === "object" && DRAWN.has(block!.type);
+
 /** The blocks this client can draw with something in them; a card with none shows its `fallbackText`. */
 export function drawableBlocks(card: Pick<CardDocument, "blocks">): Block[] {
-  return (Array.isArray(card.blocks) ? card.blocks : []).filter((block) => {
-    if (!block || typeof block !== "object" || !DRAWN.has(block.type)) return false;
-    switch (block.type) {
-      case "header": return Boolean(block.title || block.subtitle || texts(block.lines).length || block.stat?.value);
-      case "stat": return Boolean(block.value);
-      case "keyValue": return entries(block.rows).length > 0;
-      case "strip": case "chart": case "list": return entries(block.items).length > 0;
-      case "badges": return entries(block.badges).some((badge) => badge.text);
-      case "notice": return Boolean(block.title || block.text);
-      case "progress": return Boolean(block.label || block.startedAt);
-      default: return false;
+  return entries(card.blocks).slice(0, MAX_CARD_BLOCKS).filter((block) => known(block) && hasContent(block));
+}
+
+/** What a card draws: blocks, and tabs that own the blocks after them. */
+export type CardNode =
+  | { kind: "block"; block: Block }
+  | { kind: "tabs"; block: Block; tabs: { title: string; symbol?: string; nodes: CardNode[] }[] };
+
+/**
+ * The card's drawable blocks in order, a `tabs` block owning the next `count` blocks for each tab in turn (counted
+ * before anything is skipped, clamped at the end). `actions` blocks show only with `actionKinds` (a view's card).
+ */
+export function cardLayout(card: Pick<CardDocument, "blocks" | "style">, actionKinds?: ReadonlySet<string>): CardNode[] {
+  return layoutOf(entries(card.blocks).slice(0, MAX_CARD_BLOCKS), card.style === "link", actionKinds);
+}
+
+function layoutOf(blocks: Block[], link: boolean, actionKinds: ReadonlySet<string> | undefined): CardNode[] {
+  const nodes: CardNode[] = [];
+  let index = 0;
+  while (index < blocks.length) {
+    const block = blocks[index++];
+    if (!known(block)) continue;
+    if (block.type === "tabs") {
+      // Link cards show every block in order, as clients without tabs do.
+      const tabs = link ? [] : tabsOf(block);
+      if (!tabs.length) continue;
+      nodes.push({
+        kind: "tabs", block,
+        tabs: tabs.map((tab) => {
+          const owned = blocks.slice(index, index + tab.count);
+          index += owned.length;
+          return { title: tab.title, symbol: tab.symbol, nodes: layoutOf(owned, link, actionKinds) };
+        }),
+      });
+      continue;
     }
+    if (block.type === "actions" && (!actionKinds || !buttonsOf(block, actionKinds).length)) continue;
+    if (hasContent(block)) nodes.push({ kind: "block", block });
+  }
+  return nodes;
+}
+
+/** A `tabs` block's tabs: a title (or "Tab 2") and how many of the following blocks it owns. */
+export function tabsOf(block: Block): { title: string; symbol?: string; count: number }[] {
+  return entries(block.tabs).map((tab, index) => ({
+    title: typeof tab.title === "string" && tab.title.trim() ? tab.title : `Tab ${index + 1}`,
+    symbol: typeof tab.symbol === "string" ? tab.symbol : undefined,
+    count: typeof tab.count === "number" && Number.isFinite(tab.count) ? Math.max(0, Math.floor(tab.count)) : 0,
+  }));
+}
+
+/** The kinds of a view's buttons; this client runs the ones its window allows. */
+export const VIEW_ACTION_KINDS: ReadonlySet<string> = new Set(["open", "runTask", "refresh", "openRecord", "ask"]);
+
+export interface ButtonModel {
+  id: string;
+  kind: string;
+  label: string;
+  prominent: boolean;
+  confirmTitle: string;
+  confirmMessage?: string;
+}
+
+/** An `actions` block's buttons of `kinds`; others are hidden. */
+export function buttonsOf(block: Block, kinds: ReadonlySet<string> = VIEW_ACTION_KINDS): ButtonModel[] {
+  return entries(block.buttons).flatMap((button) => {
+    const id = typeof button.id === "string" ? button.id.trim() : "";
+    const label = typeof button.label === "string" ? button.label.trim() : "";
+    if (!id || !label || typeof button.kind !== "string" || !kinds.has(button.kind)) return [];
+    return [{
+      id, kind: button.kind, label, prominent: button.style === "prominent",
+      confirmTitle: typeof button.confirmTitle === "string" && button.confirmTitle.trim() ? button.confirmTitle : `${label}?`,
+      confirmMessage: typeof button.confirmMessage === "string" && button.confirmMessage.trim() ? button.confirmMessage : undefined,
+    }];
+  });
+}
+
+export interface TableModel {
+  title?: string;
+  columns: { title: string; align: "leading" | "trailing" | "center" }[];
+  rows: { label: string; cells: { text: string; tone: string; symbol?: string }[] }[];
+}
+
+/** A `table` block's columns and rows, each row padded or cut to the columns; null when it has no rows. */
+export function tableModel(block: Block): TableModel | null {
+  const columns: TableModel["columns"] = entries(block.columns).map((column) => ({
+    title: typeof column.title === "string" ? column.title : "",
+    align: column.align === "trailing" || column.align === "center" ? column.align : "leading",
+  }));
+  const rows = entries(block.tableRows).filter((row) => Array.isArray(row.cells));
+  const width = columns.length || Math.max(0, ...rows.map((row) => row.cells.length));
+  if (!width || !rows.length) return null;
+  while (columns.length < width) columns.push({ title: "", align: "leading" });
+  return {
+    title: typeof block.title === "string" && block.title ? block.title : undefined,
+    columns,
+    rows: rows.map((row) => {
+      const cells = Array.from({ length: width }, (_, index) => {
+        const cell = row.cells[index];
+        const valid = Boolean(cell) && typeof cell === "object";
+        return {
+          text: valid && typeof cell.text === "string" ? cell.text : "",
+          tone: valid ? toneClass(cell.tone) : "",
+          symbol: valid && typeof cell.symbol === "string" ? cell.symbol : undefined,
+        };
+      });
+      const spoken = cells.map((cell, index) => (cell.text ? (columns[index].title ? `${columns[index].title}: ${cell.text}` : cell.text) : ""))
+        .filter(Boolean).join(", ");
+      return { label: row.accessibilityLabel || spoken, cells };
+    }),
+  };
+}
+
+const numberText = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+/** A `line` chart's points in percent of its box (y down) on its `min`…`max` scale, and which are labelled. */
+export function linePoints(block: Block): { points: { x: number; y: number; label: string; spoken: string }[]; min: number; max: number; labelled: number[] } {
+  const items = entries(block.items).filter((item) => Number.isFinite(item.high));
+  const values = items.map((item) => item.high as number);
+  // `min`…`max`, widened to every point (and to a span when they're all equal), as Cantrip Agent draws it.
+  const lows = Number.isFinite(block.min) ? [block.min as number, ...values] : values;
+  const highs = Number.isFinite(block.max) ? [block.max as number, ...values] : values;
+  const min = lows.length ? Math.min(...lows) : 0;
+  let max = highs.length ? Math.max(...highs) : 1;
+  if (max <= min) max = min + 1;
+  const points = items.map((item, index) => {
+    const fraction = Math.min(1, Math.max(0, ((item.high as number) - min) / (max - min)));
+    const value = item.highText || numberText(item.high as number);
+    return {
+      x: items.length > 1 ? (index / (items.length - 1)) * 100 : 50,
+      y: 100 - fraction * 100,
+      label: item.label ?? "",
+      spoken: item.accessibilityLabel || [item.label, value].filter(Boolean).join(", "),
+    };
+  });
+  const last = points.length - 1;
+  return { points, min, max, labelled: last < 0 ? [] : [...new Set([0, Math.floor(last / 2), last])] };
+}
+
+/** The pie's colors in order; an item's `tone` overrides its slot. */
+export const PIE_PALETTE = ["#4C9DFF", "#34C759", "#FFCC00", "#AF52DE", "#5AC8FA", "#FF9F0A", "#FF6482", "#8E8E93"];
+const TONE_FILLS: Record<Tone, string> = { positive: "#34d399", negative: "#f87171", warning: "#f5b841", accent: "#4c9dff", neutral: "#8e8e93" };
+
+/** "42%", "<1%" for a sliver, "0%". */
+export function percentText(fraction: number): string {
+  const percent = Math.round(fraction * 100);
+  return fraction > 0 && percent < 1 ? "<1%" : `${percent}%`;
+}
+
+/** A `pie` chart's slices: the items with a positive value, each one's share of the total, colored by its tone or
+ *  the palette at its place among the items. */
+export function pieSlices(block: Block): { label: string; valueText: string; fraction: number; start: number; percent: string; color: string; spoken: string }[] {
+  const items = entries(block.items);
+  const positive = (item: Item) => Number.isFinite(item.high) && (item.high as number) > 0;
+  const total = items.reduce((sum, item) => sum + (positive(item) ? (item.high as number) : 0), 0);
+  if (!(total > 0)) return [];
+  let before = 0;
+  return items.flatMap((item, index) => {
+    if (!positive(item)) return [];
+    const value = item.high as number;
+    const fraction = value / total;
+    const start = before / total;
+    before += value;
+    const percent = percentText(fraction);
+    const valueText = item.highText || numberText(value);
+    const tone = typeof item.tone === "string" && TONES.has(item.tone) ? (item.tone as Tone) : undefined;
+    // The Mac's label usually says the share already ("Applied, 9, 41 percent").
+    const given = item.accessibilityLabel;
+    return [{
+      label: item.label ?? "", valueText, fraction, start, percent,
+      color: tone ? TONE_FILLS[tone] : PIE_PALETTE[index % PIE_PALETTE.length],
+      spoken: given ? (/%|percent/i.test(given) ? given : `${given}, ${percent}`) : [item.label, item.highText, percent].filter(Boolean).join(", "),
+    }];
   });
 }
 
@@ -282,7 +481,13 @@ function chartBlock(block: Block): HTMLElement {
       el("span", "card-chart-high", item.highText ?? ""));
     node.append(row);
   }
-  return node;
+  if (!block.title) return node;
+  // A chart's title sits above its rows (13 pt semibold).
+  const wrap = el("div", "card-block card-chart-titled");
+  node.className = "card-chart";
+  label(node, block.accessibilityLabel || block.title);
+  wrap.append(el("div", "card-block-title", block.title), node);
+  return wrap;
 }
 
 function badgeRow(badges: Badge[]): HTMLElement {
@@ -464,19 +669,279 @@ function progressBlock(block: Block): HTMLElement {
   return node;
 }
 
-function drawBlock(block: Block, open: Open, key?: string): HTMLElement | null {
+/** A view's card: its buttons run through `onAction` once `confirm` says yes; only `actionKinds` show. */
+export interface CardOptions {
+  onAction?: (button: ButtonModel) => Promise<unknown> | void;
+  confirm?: (request: { title: string; message?: string; confirm: string }) => Promise<boolean>;
+  actionKinds?: ReadonlySet<string>;
+}
+
+function drawBlock(block: Block, open: Open, key?: string, options: CardOptions = {}): HTMLElement | null {
   switch (block.type) {
     case "header": return headerBlock(block);
     case "stat": return statBlock(block);
     case "keyValue": return keyValueBlock(block);
     case "strip": return stripBlock(block);
-    case "chart": return chartBlock(block);
+    case "chart": return block.kind === "line" ? lineBlock(block) : block.kind === "pie" ? pieBlock(block) : chartBlock(block);
     case "list": return listBlock(block, open, key);
     case "badges": return badgesBlock(block);
     case "notice": return noticeBlock(block);
     case "progress": return progressBlock(block);
+    case "section": return sectionBlock(block);
+    case "table": return tableBlock(block);
+    case "actions": return actionsBlock(block, options, key ?? "");
     default: return null;
   }
+}
+
+function blockTitle(title: string | undefined): HTMLElement | null {
+  return title ? el("div", "card-block-title", title) : null;
+}
+
+/** A grouped-list heading that starts a group of the blocks after it. */
+function sectionBlock(block: Block): HTMLElement {
+  const node = el("div", "card-block card-section");
+  if (block.title) {
+    const title = el("div", "card-section-title");
+    title.setAttribute("role", "heading");
+    title.setAttribute("aria-level", "4");
+    const symbol = icon(block.symbol, "card-icon card-section-icon");
+    if (symbol) title.append(symbol);
+    title.append(el("span", "", block.title));
+    node.append(title);
+  }
+  if (block.subtitle) node.append(el("div", "card-section-subtitle", block.subtitle));
+  return node;
+}
+
+/** A real table (column headers, a label per row) that scrolls sideways when it doesn't fit. */
+function tableBlock(block: Block): HTMLElement | null {
+  const model = tableModel(block);
+  if (!model) return null;
+  const node = el("div", "card-block card-table-block");
+  const title = blockTitle(model.title);
+  if (title) node.append(title);
+  const scroll = el("div", "card-table-scroll");
+  scroll.setAttribute("role", "region");
+  scroll.setAttribute("aria-label", block.accessibilityLabel || model.title || "Table");
+  scroll.tabIndex = 0;
+  const table = el("table", "card-table");
+  const head = el("thead"), headRow = el("tr");
+  for (const column of model.columns) {
+    const th = el("th", `align-${column.align}`, column.title);
+    th.setAttribute("scope", "col");
+    headRow.append(th);
+  }
+  head.append(headRow);
+  const body = el("tbody");
+  for (const row of model.rows) {
+    const tr = el("tr");
+    label(tr, row.label);
+    row.cells.forEach((cell, index) => {
+      const td = el("td", `align-${model.columns[index].align} ${cell.tone}`.trim());
+      const symbol = icon(cell.symbol, "card-icon card-table-icon");
+      if (symbol) td.append(symbol);
+      td.append(document.createTextNode(cell.text));
+      tr.append(td);
+    });
+    body.append(tr);
+  }
+  table.append(head, body);
+  scroll.append(table);
+  node.append(scroll);
+  return node;
+}
+
+const SVG = "http://www.w3.org/2000/svg";
+
+function svg(tag: string, attributes: Record<string, string>): SVGElement {
+  const node = document.createElementNS(SVG, tag) as SVGElement;
+  for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
+  return node;
+}
+
+/** A line through the points in order on its min…max scale, the first, middle and last labels under it; each
+ *  point is focusable with its own label. The dots are HTML so they stay round while the line stretches. */
+function lineBlock(block: Block): HTMLElement | null {
+  const chart = linePoints(block);
+  if (!chart.points.length) return null;
+  const node = el("div", "card-block card-linechart-block");
+  const title = blockTitle(block.title);
+  if (title) node.append(title);
+  const row = el("div", "card-linechart");
+  const scale = el("div", "card-linechart-scale");
+  scale.setAttribute("aria-hidden", "true");
+  scale.append(el("span", "", numberText(chart.max)), el("span", "", numberText(chart.min)));
+  const body = el("div", "card-linechart-body");
+  const plot = el("div", "card-linechart-plot");
+  plot.setAttribute("role", "group");
+  plot.setAttribute("aria-label", block.accessibilityLabel || block.title || "Line chart");
+  const drawing = svg("svg", { class: "card-linechart-svg", viewBox: "0 0 100 100", preserveAspectRatio: "none", "aria-hidden": "true" });
+  for (const y of ["0", "100"]) drawing.append(svg("line", { class: "card-linechart-grid", x1: "0", x2: "100", y1: y, y2: y, "vector-effect": "non-scaling-stroke" }));
+  if (chart.points.length > 1) {
+    drawing.append(svg("polyline", {
+      class: "card-linechart-path", points: chart.points.map((point) => `${point.x},${point.y}`).join(" "), "vector-effect": "non-scaling-stroke",
+    }));
+  }
+  plot.append(drawing);
+  for (const point of chart.points) {
+    const dot = el("span", "card-linechart-dot");
+    dot.style.left = `${point.x}%`;
+    dot.style.top = `${point.y}%`;
+    dot.tabIndex = 0;
+    dot.setAttribute("role", "img");
+    label(dot, point.spoken);
+    dot.title = point.spoken;
+    plot.append(dot);
+  }
+  const labels = el("div", "card-linechart-labels");
+  labels.setAttribute("aria-hidden", "true");
+  const last = chart.points.length - 1;
+  for (const index of chart.labelled) {
+    const place = last > 0 && index === 0 ? "first" : last > 0 && index === last ? "last" : "middle";
+    const text = el("span", place, chart.points[index].label);
+    if (place === "middle") text.style.left = `${chart.points[index].x}%`;
+    labels.append(text);
+  }
+  body.append(plot, labels);
+  row.append(scale, body);
+  node.append(row);
+  return node;
+}
+
+/** A donut of the items' shares with a legend: label, value and percentage. */
+function pieBlock(block: Block): HTMLElement | null {
+  const slices = pieSlices(block);
+  if (!slices.length) return null;
+  const node = el("div", "card-block card-pie-block");
+  const title = blockTitle(block.title);
+  if (title) node.append(title);
+  const pie = el("div", "card-pie");
+  // A circumference of 100, so each slice's dash is its percentage; it starts at the top.
+  const radius = "15.915494309189533";
+  const drawing = svg("svg", { class: "card-pie-svg", viewBox: "0 0 42 42", "aria-hidden": "true" });
+  drawing.append(svg("circle", { class: "card-pie-track", cx: "21", cy: "21", r: radius }));
+  for (const slice of slices) {
+    if (slice.fraction <= 0) continue;
+    drawing.append(svg("circle", {
+      cx: "21", cy: "21", r: radius, fill: "none", stroke: slice.color, "stroke-width": "6",
+      "stroke-dasharray": `${slice.fraction * 100} ${100 - slice.fraction * 100}`, "stroke-dashoffset": String(25 - slice.start * 100),
+    }));
+  }
+  const legend = el("ul", "card-pie-legend");
+  legend.setAttribute("aria-label", block.accessibilityLabel || block.title || "Pie chart");
+  for (const slice of slices) {
+    const item = el("li", "card-pie-row");
+    label(item, slice.spoken);
+    const swatch = el("span", "card-pie-swatch");
+    swatch.style.background = slice.color;
+    swatch.setAttribute("aria-hidden", "true");
+    item.append(swatch, el("span", "card-pie-label", slice.label), el("span", "card-pie-value", slice.valueText), el("span", "card-pie-percent", slice.percent));
+    legend.append(item);
+  }
+  pie.append(drawing, legend);
+  node.append(pie);
+  return node;
+}
+
+/** The selected tab of each tabs block, by card and block, while the window is open (cards redraw in place). */
+const selectedTabs = new Map<string, number>();
+
+function domID(key: string): string {
+  return `card-${key.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
+
+/** A segmented tab bar (an ARIA tablist: arrows, Home and End move between tabs) over the selected tab's blocks. */
+function tabsBlock(node: Extract<CardNode, { kind: "tabs" }>, open: Open, key: string, options: CardOptions): HTMLElement {
+  const wrap = el("div", "card-block card-tabs");
+  const bar = el("div", "card-tabs-bar");
+  bar.setAttribute("role", "tablist");
+  label(bar, node.block.accessibilityLabel);
+  const base = domID(key);
+  const count = node.tabs.length;
+  const buttons: HTMLButtonElement[] = [];
+  const panels: HTMLElement[] = [];
+  const select = (index: number, focus = false) => {
+    selectedTabs.set(key, index);
+    buttons.forEach((button, at) => {
+      button.setAttribute("aria-selected", String(at === index));
+      button.tabIndex = at === index ? 0 : -1;
+      button.classList.toggle("selected", at === index);
+    });
+    panels.forEach((panel, at) => { panel.hidden = at !== index; });
+    if (focus) buttons[index]?.focus();
+  };
+  node.tabs.forEach((tab, index) => {
+    const button = el("button", "card-tab") as HTMLButtonElement;
+    button.type = "button";
+    button.id = `${base}-tab-${index}`;
+    button.dataset.key = `tab:${key}:${index}`;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-controls", `${base}-panel-${index}`);
+    const symbol = icon(tab.symbol, "card-icon card-tab-icon");
+    if (symbol) button.append(symbol);
+    button.append(el("span", "", tab.title));
+    button.addEventListener("click", () => select(index));
+    buttons.push(button);
+    bar.append(button);
+    const panel = el("div", "card-tab-panel");
+    panel.id = `${base}-panel-${index}`;
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", button.id);
+    panel.tabIndex = 0;
+    drawNodes(tab.nodes, panel, open, `${key}/${index}`, options);
+    panels.push(panel);
+  });
+  bar.addEventListener("keydown", (event) => {
+    const current = Math.min(count - 1, Math.max(0, selectedTabs.get(key) ?? 0));
+    const keys: Record<string, number> = { ArrowRight: current + 1, ArrowLeft: current - 1, Home: 0, End: count - 1 };
+    if (!(event.key in keys)) return;
+    event.preventDefault();
+    select((keys[event.key] + count) % count, true);
+  });
+  wrap.append(bar, ...panels);
+  select(Math.min(count - 1, Math.max(0, selectedTabs.get(key) ?? 0)));
+  return wrap;
+}
+
+/** A view's buttons in a wrapping row; each asks first (`confirm`) and only then runs (`onAction`). */
+function actionsBlock(block: Block, options: CardOptions, key: string): HTMLElement | null {
+  const { onAction, confirm } = options;
+  if (!onAction || !confirm) return null;
+  const buttons = buttonsOf(block, options.actionKinds ?? VIEW_ACTION_KINDS);
+  if (!buttons.length) return null;
+  const row = el("div", "card-block card-view-actions card-flow");
+  row.setAttribute("role", "group");
+  row.setAttribute("aria-label", block.accessibilityLabel || "Actions");
+  for (const model of buttons) {
+    const button = el("button", `card-view-action${model.prominent ? " prominent" : ""}`) as HTMLButtonElement;
+    button.type = "button";
+    button.dataset.key = `action:${key}:${model.id}`;
+    button.dataset.kind = model.kind;
+    button.setAttribute("aria-haspopup", "dialog");
+    const symbol = icon(ACTION_SYMBOLS[model.kind === "refresh" ? "refresh" : "open"], "card-icon card-action-icon");
+    if (symbol) button.append(symbol);
+    button.append(el("span", "", model.label));
+    button.addEventListener("click", async () => {
+      if (!(await confirm({ title: model.confirmTitle, message: model.confirmMessage, confirm: model.label }))) return;
+      button.disabled = true;
+      try {
+        await onAction(model);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    row.append(button);
+  }
+  return row;
+}
+
+function drawNodes(nodes: CardNode[], parent: HTMLElement, open: Open, keyPrefix: string, options: CardOptions): void {
+  nodes.forEach((node, index) => {
+    const key = `${keyPrefix}:${index}`;
+    const drawn = node.kind === "tabs" ? tabsBlock(node, open, key, options) : drawBlock(node.block, open, key, options);
+    if (drawn) parent.append(drawn);
+  });
 }
 
 /** "Updated 3:39 PM" and the attribution, linked to the source's page. */
@@ -501,19 +966,20 @@ function footer(source: Source | undefined, open: Open): HTMLElement | null {
   return foot.childElementCount ? foot : null;
 }
 
-/** The card as DOM, or null when there's nothing to show (no drawable block and no fallback text). */
-export function cardElement(card: CardDocument, open: Open): HTMLElement | null {
-  const blocks = drawableBlocks(card);
+/**
+ * The card as DOM, or null when there's nothing to show (no drawable block and no fallback text). `options` makes
+ * it a view's card, whose `actions` buttons run through `options.onAction` after `options.confirm`.
+ */
+export function cardElement(card: CardDocument, open: Open, options: CardOptions = {}): HTMLElement | null {
+  const actionKinds = options.onAction && options.confirm ? options.actionKinds ?? VIEW_ACTION_KINDS : undefined;
+  const nodes = cardLayout(card, actionKinds);
   const fallback = typeof card.fallbackText === "string" ? card.fallbackText.trim() : "";
-  if (!blocks.length && !fallback) return null;
+  if (!nodes.length && !fallback) return null;
   const isLink = card.style === "link";
   const wrap = el("section", isLink ? "card-panel card-link" : "card-panel");
   label(wrap, card.accessibilityLabel || fallback.split("\n")[0] || "Card");
-  blocks.forEach((block, index) => {
-    const node = drawBlock(block, open, typeof card.id === "string" ? `${card.id}:${index}` : undefined);
-    if (node) wrap.append(node);
-  });
-  if (!blocks.length) wrap.append(el("div", "card-block card-fallback", fallback));
+  drawNodes(nodes, wrap, open, typeof card.id === "string" ? card.id : "", { ...options, actionKinds });
+  if (!nodes.length) wrap.append(el("div", "card-block card-fallback", fallback));
   const url = isLink ? safeUrl(card.action?.url) : null;
   if (url) {
     wrap.setAttribute("role", "link");
@@ -533,8 +999,8 @@ export function cardElement(card: CardDocument, open: Open): HTMLElement | null 
 }
 
 /** Draws `card` into `container` (hidden when there's nothing to show). */
-export function renderCard(container: HTMLElement, card: CardDocument, openExternal: Open): void {
-  const node = card && typeof card === "object" ? cardElement(card, openExternal) : null;
+export function renderCard(container: HTMLElement, card: CardDocument, openExternal: Open, options: CardOptions = {}): void {
+  const node = card && typeof card === "object" ? cardElement(card, openExternal, options) : null;
   if (!node) {
     container.replaceChildren();
     container.classList.add("hidden");

@@ -1,16 +1,19 @@
 // Generic cards (`RemoteMessage.cards`, docs/cards.md): one component per block, so a new kind of card
 // needs no code here. Panel cards share the weather card's container; `link` cards look like link
-// previews. Strings are only ever drawn as text, and actions open public http(s) pages only.
+// previews. Strings are only ever drawn as text, and actions open public http(s) pages only. A view's
+// card (docs/views.md) also draws its `actions` buttons, which only run through the view's `onAction`.
+import { signal } from "@preact/signals";
 import type { ComponentChildren, JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import type { RemoteCardAction, RemoteCardBadge, RemoteCardBlock, RemoteCardDocument, RemoteCardItem } from "../../api/types";
 import { bridge } from "../../bridge";
 import { Icon, symbolIcon } from "../icons";
+import { confirmDialog } from "../kit";
 import { MapComposition, type LegendState, type MapSpec } from "./CardMap";
 import {
-  actionSymbol, cardBadges, cardFallback, cardFooter, cardGlyph, cardItems, cardLabel, cardLines, cardParts, cardRows, cardStyle, cardText,
-  cardTone, chartBar, chartColumns, chartScale, itemLabel, mapAttribution, mapPins, mapRegion, progressState, safeActionUrl, statLabel,
-  telNumber, type CardPart,
+  actionSymbol, buttonSymbol, cardBadges, cardButtons, cardFallback, cardFooter, cardGlyph, cardItems, cardLabel, cardLines, cardParts,
+  cardRows, cardStyle, cardTable, cardText, cardTone, chartBar, chartColumns, chartScale, itemLabel, lineChart, mapAttribution, mapPins,
+  mapRegion, pieSlices, progressState, safeActionUrl, statLabel, telNumber, VIEW_ACTION_KINDS, type CardButtonModel, type CardPart,
 } from "./cardLogic";
 import { LinkDomain, useLinkPreviewImage } from "./RichCards";
 import { weatherIcon, weatherTint } from "./richCardLogic";
@@ -39,38 +42,38 @@ export function CardStack(props: { cards: RemoteCardDocument[] | undefined }): J
   );
 }
 
-export function CardView(props: { card: RemoteCardDocument }): JSX.Element | null {
-  const { card } = props;
-  const parts = cardParts(card);
+/** Runs a view's `actions` button once the user confirmed it (the view posts it to the Mac). */
+export type CardActionHandler = (button: CardButtonModel) => Promise<unknown> | void;
+
+/**
+ * A card. `onAction` is the view the card belongs to: only then are its `actions` buttons drawn (`actionKinds`, the
+ * kinds this client runs); a chat reply's card never shows them.
+ */
+export function CardView(props: { card: RemoteCardDocument; onAction?: CardActionHandler; actionKinds?: ReadonlySet<string> }): JSX.Element | null {
+  const { card, onAction } = props;
+  const parts = cardParts(card, { actionKinds: onAction ? props.actionKinds ?? VIEW_ACTION_KINDS : undefined });
   if (!parts.length) {
     const fallback = cardFallback(card);
     return fallback ? <div class="card-fallback selectable">{fallback}</div> : null;
   }
-  return cardStyle(card) === "link" ? <LinkCard card={card} parts={parts} /> : <PanelCard card={card} parts={parts} />;
+  return cardStyle(card) === "link" ? <LinkCard card={card} parts={parts} />
+    : <PanelCard card={card} parts={parts} onAction={onAction} actionKinds={props.actionKinds ?? VIEW_ACTION_KINDS} />;
 }
 
-const FLOW_BLOCKS = new Set(["header", "stat", "notice", "badges", "progress"]);
+const FLOW_BLOCKS = new Set(["header", "stat", "notice", "badges", "progress", "actions"]);
 
-function PanelCard(props: { card: RemoteCardDocument; parts: CardPart[] }): JSX.Element {
+interface PartContext {
+  onAction?: CardActionHandler;
+  actionKinds: ReadonlySet<string>;
+}
+
+function PanelCard(props: { card: RemoteCardDocument; parts: CardPart[]; onAction?: CardActionHandler; actionKinds: ReadonlySet<string> }): JSX.Element {
   const { card, parts } = props;
   const footer = cardFooter(card.source);
+  const context: PartContext = { onAction: props.onAction, actionKinds: props.actionKinds };
   return (
     <section class="card-panel" aria-label={cardLabel(card)}>
-      {parts.map((part, index) => {
-        if (part.kind === "map") {
-          return (
-            <div key={index} class={`card-block card-map${part.divided ? " card-divided" : ""}`}>
-              <MapBlock map={part.map} legend={part.legend} />
-            </div>
-          );
-        }
-        const flow = FLOW_BLOCKS.has(part.block.type);
-        return (
-          <div key={index} class={`card-block card-${part.block.type}-block${flow ? " card-flow" : ""}${part.divided ? " card-divided" : ""}`}>
-            <BlockView block={part.block} stateKey={`${typeof card.id === "string" ? card.id : ""}:${index}`} />
-          </div>
-        );
-      })}
+      <CardParts parts={parts} keyPrefix={typeof card.id === "string" ? card.id : ""} context={context} />
       {footer ? (
         <div class="card-foot">
           {footer.updated ? <span>{footer.updated}</span> : null}
@@ -82,6 +85,40 @@ function PanelCard(props: { card: RemoteCardDocument; parts: CardPart[] }): JSX.
         </div>
       ) : null}
     </section>
+  );
+}
+
+/** A card's parts in order; a tabs part draws its selected tab's parts the same way. */
+function CardParts(props: { parts: CardPart[]; keyPrefix: string; context: PartContext }): JSX.Element {
+  const { parts, keyPrefix, context } = props;
+  return (
+    <>
+      {parts.map((part, index) => {
+        const stateKey = `${keyPrefix}:${index}`;
+        const divided = part.divided ? " card-divided" : "";
+        if (part.kind === "map") {
+          return (
+            <div key={index} class={`card-block card-map${divided}`}>
+              <MapBlock map={part.map} legend={part.legend} />
+            </div>
+          );
+        }
+        if (part.kind === "tabs") {
+          return (
+            <div key={index} class={`card-block card-tabs-block${divided}`}>
+              <TabsBlock part={part} stateKey={stateKey}
+                panel={(parts, key) => <CardParts parts={parts} keyPrefix={key} context={context} />} />
+            </div>
+          );
+        }
+        const flow = FLOW_BLOCKS.has(part.block.type);
+        return (
+          <div key={index} class={`card-block card-${part.block.type}-block${flow ? " card-flow" : ""}${divided}`}>
+            <BlockView block={part.block} stateKey={stateKey} context={context} />
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -122,14 +159,21 @@ function LinkHeader(props: { block: RemoteCardBlock }): JSX.Element {
   );
 }
 
-function BlockView(props: { block: RemoteCardBlock; stateKey?: string }): JSX.Element | null {
-  const { block } = props;
+function BlockView(props: { block: RemoteCardBlock; stateKey?: string; context?: PartContext }): JSX.Element | null {
+  const { block, context } = props;
   switch (block.type) {
     case "header": return <HeaderBlock block={block} />;
     case "stat": return <StatBlock block={block} />;
     case "keyValue": return <KeyValueBlock block={block} />;
     case "strip": return <StripBlock block={block} />;
-    case "chart": return <ChartBlock block={block} />;
+    case "chart": return block.kind === "line" ? <LineChartBlock block={block} />
+      : block.kind === "pie" ? <PieChartBlock block={block} />
+        : <ChartBlock block={block} />;
+    case "section": return <SectionBlock block={block} />;
+    case "table": return <TableBlock block={block} />;
+    case "actions": return context?.onAction
+      ? <ActionsBlock block={block} onAction={context.onAction} kinds={context.actionKinds} stateKey={props.stateKey ?? ""} />
+      : null;
     case "list": return block.collapsed === true && cardText(block.title) && props.stateKey
       ? <CollapsedList block={block} stateKey={props.stateKey} />
       : <ListBlock block={block} />;
@@ -217,8 +261,11 @@ function ChartBlock(props: { block: RemoteCardBlock }): JSX.Element {
   const columns = chartColumns(items);
   const symbols = items.some((item) => typeof item.symbol === "string" && item.symbol);
   const notes = items.some((item) => cardText(item.note));
+  const title = cardText(block.title);
   return (
-    <div class="card-chart" role="list" aria-label={cardText(block.accessibilityLabel)}>
+    <>
+    {title ? <div class="card-block-title">{title}</div> : null}
+    <div class="card-chart" role="list" aria-label={cardText(block.accessibilityLabel) ?? title}>
       {items.map((item, index) => {
         const bar = chartBar(item, scale, block.kind);
         return (
@@ -235,6 +282,7 @@ function ChartBlock(props: { block: RemoteCardBlock }): JSX.Element {
         );
       })}
     </div>
+    </>
   );
 }
 
@@ -456,5 +504,232 @@ function MapBlock(props: { map: RemoteCardBlock; legend?: RemoteCardBlock }): JS
       pinDot={(pin) => dot(pin.id)}
       legend={legend ? (state) => <ListBlock block={legend} legend={state} /> : undefined}
     />
+  );
+}
+
+// MARK: Blocks views add (docs/views.md "New blocks in resolved cards")
+
+/** A grouped-list heading that starts a group of the blocks after it. */
+function SectionBlock(props: { block: RemoteCardBlock }): JSX.Element {
+  const { block } = props;
+  const title = cardText(block.title), subtitle = cardText(block.subtitle);
+  const icon = symbolNode(block.symbol, undefined, 14);
+  return (
+    <div class="card-section">
+      {title ? <div class="card-section-title" role="heading" aria-level={4}>{icon}{title}</div> : null}
+      {subtitle ? <div class="card-section-subtitle">{subtitle}</div> : null}
+    </div>
+  );
+}
+
+/** A real table (column headers, a label per row) that scrolls sideways when it doesn't fit. */
+function TableBlock(props: { block: RemoteCardBlock }): JSX.Element | null {
+  const table = cardTable(props.block);
+  if (!table) return null;
+  const label = cardText(props.block.accessibilityLabel) ?? table.title;
+  return (
+    <>
+      {table.title ? <div class="card-block-title">{table.title}</div> : null}
+      <div class="card-table-scroll" role="region" aria-label={label ?? "Table"} tabIndex={0}>
+        <table class="card-table">
+          <thead>
+            <tr>
+              {table.columns.map((column, index) => (
+                <th key={index} scope="col" class={`align-${column.align}`}>{column.title}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {table.rows.map((row) => (
+              <tr key={row.key} aria-label={row.label}>
+                {row.cells.map((cell, index) => (
+                  <td key={index} class={`align-${table.columns[index].align}${cell.tone ? ` tone-${cell.tone}` : ""}`}>
+                    {cell.symbol ? symbolNode(cell.symbol, undefined, 12) : null}
+                    {cell.text}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+/** A line through the points in order (accent blue, dots at each point) on its min…max scale, with the first,
+ *  middle and last labels under it. Each point is focusable with its own label; the dots are HTML so they stay
+ *  round while the line stretches to the card's width. */
+function LineChartBlock(props: { block: RemoteCardBlock }): JSX.Element | null {
+  const { block } = props;
+  const chart = lineChart(block, 100, 100);
+  if (!chart.points.length) return null;
+  const title = cardText(block.title);
+  const scaleText = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const last = chart.points.length - 1;
+  return (
+    <>
+      {title ? <div class="card-block-title">{title}</div> : null}
+      <div class="card-linechart">
+        <div class="card-linechart-scale" aria-hidden="true">
+          <span>{scaleText(chart.max)}</span>
+          <span>{scaleText(chart.min)}</span>
+        </div>
+        <div class="card-linechart-body">
+          <div class="card-linechart-plot" role="group" aria-label={cardText(block.accessibilityLabel) ?? title ?? "Line chart"}>
+            <svg class="card-linechart-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <line class="card-linechart-grid" x1="0" x2="100" y1="0" y2="0" vector-effect="non-scaling-stroke" />
+              <line class="card-linechart-grid" x1="0" x2="100" y1="100" y2="100" vector-effect="non-scaling-stroke" />
+              {last > 0 ? (
+                <polyline class="card-linechart-path" points={chart.points.map((point) => `${point.x},${point.y}`).join(" ")}
+                  vector-effect="non-scaling-stroke" />
+              ) : null}
+            </svg>
+            {chart.points.map((point, index) => (
+              <span key={index} class="card-linechart-dot" style={{ left: `${point.x}%`, top: `${point.y}%` }} tabIndex={0} role="img"
+                aria-label={point.spoken} title={point.spoken} />
+            ))}
+          </div>
+          <div class="card-linechart-labels" aria-hidden="true">
+            {chart.labelled.map((index) => {
+              const place = last > 0 && index === 0 ? "first" : last > 0 && index === last ? "last" : "middle";
+              return (
+                <span key={index} class={place} style={place === "middle" ? { left: `${chart.points[index].x}%` } : undefined}>
+                  {chart.points[index].label}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+const PIE_RADIUS = 15.915494309189533; // a circumference of 100
+
+/** A donut of the items' shares with a legend: label, value and percentage. */
+function PieChartBlock(props: { block: RemoteCardBlock }): JSX.Element | null {
+  const { block } = props;
+  const slices = pieSlices(block);
+  if (!slices.length) return null;
+  const title = cardText(block.title);
+  return (
+    <>
+      {title ? <div class="card-block-title">{title}</div> : null}
+      <div class="card-pie">
+        <svg class="card-pie-svg" viewBox="0 0 42 42" aria-hidden="true">
+          <circle class="card-pie-track" cx="21" cy="21" r={PIE_RADIUS} />
+          {slices.filter((slice) => slice.fraction > 0).map((slice, index) => (
+            <circle key={index} cx="21" cy="21" r={PIE_RADIUS} fill="none" stroke={slice.color} stroke-width="6"
+              stroke-dasharray={`${slice.fraction * 100} ${100 - slice.fraction * 100}`}
+              stroke-dashoffset={String(25 - slice.start * 100)} />
+          ))}
+        </svg>
+        <ul class="card-pie-legend" aria-label={cardText(block.accessibilityLabel) ?? title ?? "Pie chart"}>
+          {slices.map((slice, index) => (
+            <li key={index} class="card-pie-row" aria-label={slice.spoken}>
+              <span class="card-pie-swatch" style={{ background: slice.color }} aria-hidden="true" />
+              <span class="card-pie-label">{slice.label}</span>
+              <span class="card-pie-value">{slice.valueText}</span>
+              <span class="card-pie-percent">{slice.percent}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </>
+  );
+}
+
+/** The selected tab of each tabs block, by card and block, while the app runs (a refreshed card keeps it). */
+const selectedTabs = signal<ReadonlyMap<string, number>>(new Map());
+
+function domID(key: string): string {
+  return `card-${key.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
+
+/** A segmented tab bar (an ARIA tablist: arrows, Home and End move between tabs) over the selected tab's blocks. */
+export function TabsBlock(props: {
+  part: Extract<CardPart, { kind: "tabs" }>;
+  stateKey: string;
+  panel: (parts: CardPart[], key: string) => ComponentChildren;
+}): JSX.Element {
+  const { part, stateKey } = props;
+  const count = part.tabs.length;
+  const selected = Math.min(count - 1, Math.max(0, selectedTabs.value.get(stateKey) ?? 0));
+  const base = domID(stateKey);
+  const select = (index: number) => { selectedTabs.value = new Map(selectedTabs.value).set(stateKey, index); };
+  const onKeyDown = (event: KeyboardEvent) => {
+    const keys: Record<string, number> = { ArrowRight: selected + 1, ArrowLeft: selected - 1, Home: 0, End: count - 1 };
+    if (!(event.key in keys)) return;
+    event.preventDefault();
+    const next = (keys[event.key] + count) % count;
+    select(next);
+    (event.currentTarget as HTMLElement | null)?.querySelectorAll<HTMLElement>("[role='tab']")[next]?.focus();
+  };
+  return (
+    <div class="card-tabs">
+      <div class="card-tabs-bar" role="tablist" aria-label={cardText(part.block.accessibilityLabel)} onKeyDown={onKeyDown}>
+        {part.tabs.map((tab, index) => (
+          <button key={index} type="button" role="tab" id={`${base}-tab-${index}`} class={`card-tab${index === selected ? " selected" : ""}`}
+            aria-selected={index === selected} aria-controls={`${base}-panel-${index}`} tabIndex={index === selected ? 0 : -1}
+            onClick={() => select(index)}>
+            {symbolNode(tab.symbol, undefined, 14)}
+            <span>{tab.title}</span>
+          </button>
+        ))}
+      </div>
+      {part.tabs.map((tab, index) => (
+        <div key={index} role="tabpanel" id={`${base}-panel-${index}`} aria-labelledby={`${base}-tab-${index}`} class="card-tab-panel"
+          hidden={index !== selected} tabIndex={0}>
+          {index === selected ? props.panel(tab.parts, `${stateKey}/${index}`) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** View buttons waiting on their action, by card block and button. */
+const runningActions = signal<ReadonlySet<string>>(new Set());
+
+/**
+ * Asks before running a view button (its confirmTitle and confirmMessage, the button's label to go ahead, Cancel)
+ * and runs `onAction` only once the user confirms. Returns whether it ran.
+ */
+export async function confirmViewAction(button: CardButtonModel, onAction: CardActionHandler, key = button.id): Promise<boolean> {
+  const confirmed = await confirmDialog({
+    title: button.confirmTitle, message: button.confirmMessage, confirm: button.label, cancel: "Cancel",
+  });
+  if (!confirmed) return false;
+  runningActions.value = new Set(runningActions.value).add(key);
+  try {
+    await onAction(button);
+  } finally {
+    const next = new Set(runningActions.value);
+    next.delete(key);
+    runningActions.value = next;
+  }
+  return true;
+}
+
+/** A view's buttons in a wrapping row; each asks first. Kinds this client doesn't run are hidden. */
+export function ActionsBlock(props: { block: RemoteCardBlock; onAction: CardActionHandler; kinds: ReadonlySet<string>; stateKey: string }): JSX.Element | null {
+  const buttons = cardButtons(props.block, props.kinds);
+  if (!buttons.length) return null;
+  return (
+    <div class="card-view-actions" role="group" aria-label={cardText(props.block.accessibilityLabel) ?? "Actions"}>
+      {buttons.map((button) => {
+        const key = `${props.stateKey}:${button.id}`;
+        const icon = symbolIcon(button.symbol) ?? symbolIcon(buttonSymbol(button.kind));
+        return (
+          <button key={button.id} type="button" class={`card-view-action${button.prominent ? " prominent" : ""}`} aria-haspopup="dialog"
+            disabled={runningActions.value.has(key)} data-kind={button.kind}
+            onClick={() => void confirmViewAction(button, props.onAction, key).catch(() => {})}>
+            {icon ? <Icon name={icon} size={14} /> : null}
+            <span>{button.label}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }

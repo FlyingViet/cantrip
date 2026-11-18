@@ -95,12 +95,14 @@ struct CardPanelView: View {
     enum Section {
         case block(CardDocument.Block)
         case map(CardDocument.Block, legend: CardDocument.Block?)
+        /// A tabs block and the blocks each of its tabs owns.
+        case tabs(CardDocument.Block, [[CardDocument.Block]])
 
         /// Content blocks sit under a hairline; headers, stats, badges and notices run on.
         var hasDivider: Bool {
             switch self {
-            case .map: true
-            case .block(let block): ["strip", "chart", "list", "keyValue"].contains(block.type)
+            case .map, .tabs: true
+            case .block(let block): ["strip", "chart", "list", "keyValue", "table"].contains(block.type)
             }
         }
     }
@@ -116,6 +118,15 @@ struct CardPanelView: View {
                 let legend = next?.type == "list" && next?.mapLinked == true ? next : nil
                 if legend != nil { index += 1 }
                 if !(block.pins ?? []).isEmpty { sections.append(.map(block, legend: legend)) }
+            } else if block.type == "tabs" {
+                // Each tab owns the next `count` blocks; counts past the end stop there.
+                var panels: [[CardDocument.Block]] = []
+                for tab in (block.tabs ?? []).prefix(6) {
+                    let end = Swift.min(blocks.count, index + Swift.max(0, tab.count))
+                    panels.append(blocks[index..<end].filter { $0.type != "tabs" && draws($0) })
+                    index = end
+                }
+                if !panels.isEmpty { sections.append(.tabs(block, panels)) }
             } else if draws(block) {
                 sections.append(.block(block))
             }
@@ -132,6 +143,8 @@ struct CardPanelView: View {
         case "badges": !(block.badges ?? []).isEmpty
         case "notice": block.title != nil || block.text != nil
         case "progress": block.label != nil || block.startedAt != nil
+        case "section": block.title != nil
+        case "table": !(block.columns ?? []).isEmpty && !(block.tableRows ?? []).isEmpty
         default: false
         }
     }
@@ -153,6 +166,8 @@ struct CardPanelView: View {
                     CardMapView(block: map, legend: legend)
                 case .block(let block):
                     CardBlockView(block: block, isFirst: index == 0, stateKey: "\(card.id):\(index)")
+                case .tabs(let block, let panels):
+                    CardTabsView(block: block, panels: panels, stateKey: "\(card.id):\(index)")
                 }
             }
             footer
@@ -232,8 +247,12 @@ struct CardBlockView: View {
         case "stat": stat
         case "keyValue": keyValue
         case "strip": strip
-        case "chart": chart
+        case "chart" where block.kind == "line": CardLineChartView(block: block)
+        case "chart" where block.kind == "pie": CardPieChartView(block: block)
+        case "chart": CardBlockTitle(title: block.title) { chart }
         case "list": list
+        case "section": CardSectionView(block: block, isFirst: isFirst)
+        case "table": CardTableView(block: block)
         case "badges":
             FlowLayout(spacing: 6, lineSpacing: 6) {
                 ForEach(Array((block.badges ?? []).enumerated()), id: \.offset) { _, badge in CardBadgeView(badge: badge) }

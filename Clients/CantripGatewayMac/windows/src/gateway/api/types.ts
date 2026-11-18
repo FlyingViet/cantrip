@@ -646,7 +646,52 @@ export interface RemoteCardPin {
   symbol?: string;
 }
 
-/** `type`: header, stat, keyValue, strip, chart, list, map, image, badges or notice (others are skipped). */
+/** table: a column's heading; `align` "leading" (default), "trailing" or "center". */
+export interface RemoteCardColumn {
+  title: string;
+  align?: string;
+}
+
+/** table: one cell; its text is tinted by `tone` ({@link RemoteCardTone}). */
+export interface RemoteCardCell {
+  text: string;
+  tone?: string;
+  symbol?: string;
+}
+
+/** table: one row, a cell per column; screen readers read `accessibilityLabel`. */
+export interface RemoteCardTableRow {
+  id?: string;
+  cells: RemoteCardCell[];
+  accessibilityLabel?: string;
+}
+
+/** tabs: the next `count` blocks after the tabs block belong to this tab (each tab in turn). */
+export interface RemoteCardTab {
+  title: string;
+  symbol?: string;
+  count: Int;
+}
+
+/**
+ * actions (views only, docs/views.md): a button the client confirms, then posts to
+ * `POST /api/v1/home/views/<id>/actions/<button id>`. `kind`: "open", "runTask", "refresh", "openRecord" or "ask".
+ */
+export interface RemoteCardButton {
+  id: string;
+  kind: string;
+  label: string;
+  symbol?: string;
+  /** "prominent": a filled accent button. */
+  style?: string;
+  confirmTitle?: string;
+  confirmMessage?: string;
+}
+
+/**
+ * `type`: header, stat, keyValue, strip, chart, list, map, image, badges, notice, progress, section, table, tabs or
+ * actions (others are skipped).
+ */
 export interface RemoteCardBlock {
   type: string;
   title?: string;
@@ -662,9 +707,16 @@ export interface RemoteCardBlock {
   detail?: string;
   text?: string;
   tone?: string;
-  /** chart: "range" or "bar". */
+  /** chart: "range", "bar", "line" or "pie". */
   kind?: string;
   rows?: RemoteCardRow[];
+  /** table: its columns and rows. */
+  columns?: RemoteCardColumn[];
+  tableRows?: RemoteCardTableRow[];
+  /** tabs: each tab owns the next `count` blocks. */
+  tabs?: RemoteCardTab[];
+  /** actions: a view's buttons. */
+  buttons?: RemoteCardButton[];
   items?: RemoteCardItem[];
   badges?: RemoteCardBadge[];
   min?: number;
@@ -1674,6 +1726,65 @@ export interface HomeTasksSnapshot {
   workspaceCards?: Record<UUIDString, RemoteCardDocument[]>;
   /** The Mac answers `GET /api/v1/home/tasks/<task>/records/<record>/cards`. */
   supportsRecordCards?: true;
+  /** The Mac serves Views (`/api/v1/home/views`); clients show them only then. */
+  supportsViews?: true;
+}
+
+// MARK: - Cantrip Home: views (docs/views.md)
+
+/** A view's summary: the list's rows and the `view` of a view answer. Times are ISO 8601 (Apple reference seconds are read too). */
+export interface HomeViewSummary {
+  id: string;
+  name: string;
+  subtitle?: string | null;
+  /** SF Symbol name. */
+  icon?: string | null;
+  pinned: boolean;
+  /** Reads a private server: shown with a lock. */
+  private: boolean;
+  /** Its source kinds ("records", "tasks", "tool", "run", "checked"). */
+  sources?: string[];
+  createdAt?: ISO8601String | number;
+  updatedAt?: ISO8601String | number;
+  /** When its data was last read. */
+  refreshedAt?: ISO8601String | number | null;
+  refreshing?: boolean;
+  problems?: string[];
+}
+
+/** GET /api/v1/home/views (changed): pinned first, then newest. */
+export interface HomeViewsSnapshot {
+  views: HomeViewSummary[];
+  revision: string;
+  supportsViewActions?: boolean;
+}
+
+/** GET /api/v1/home/views?revision=<same>. */
+export interface HomeViewsUnchanged {
+  unchanged: true;
+  revision: string;
+}
+
+export type HomeViewsResponse = HomeViewsSnapshot | HomeViewsUnchanged;
+
+/** GET /api/v1/home/views/<id> and POST …/<id>/refresh: the view resolved into an ordinary card. */
+export interface HomeViewResponse {
+  view: HomeViewSummary;
+  card: RemoteCardDocument;
+  /** Seconds until the client fetches it again while it stays open. */
+  refreshAfter?: Int;
+}
+
+/** POST /api/v1/home/views/<id>/actions/<action id> `{"confirmed": true}`. */
+export interface HomeViewActionResponse {
+  /** "open" (open `url`), "record" (show `taskID`/`recordID`), "started" (`message`), "refreshed" (`view`, `card`) or "sent" (Home's chat). */
+  result: string;
+  url?: string;
+  taskID?: string;
+  recordID?: string;
+  message?: string;
+  view?: HomeViewSummary;
+  card?: RemoteCardDocument;
 }
 
 /** GET /api/v1/home/tasks/<taskID>/records/<recordID>/cards: a record's live weather and map cards. */

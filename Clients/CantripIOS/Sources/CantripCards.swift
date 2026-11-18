@@ -80,6 +80,114 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
         var symbol: String?
     }
 
+    /// table: a column's heading and alignment ("leading", "trailing" or "center").
+    struct Column: Codable, Equatable, Sendable {
+        var title: String?
+        var align: String?
+    }
+
+    struct Cell: Codable, Equatable, Sendable {
+        var text: String?
+        var tone: String?
+        var symbol: String?
+    }
+
+    /// table: one row, a cell per column. A malformed cell reads as an empty one, so the row's
+    /// other cells stay under their columns.
+    struct TableRow: Codable, Equatable, Sendable {
+        var id: String?
+        var cells: [Cell]
+        var accessibilityLabel: String?
+
+        init(id: String? = nil, cells: [Cell], accessibilityLabel: String? = nil) {
+            self.id = id
+            self.cells = cells
+            self.accessibilityLabel = accessibilityLabel
+        }
+
+        private enum Keys: String, CodingKey { case id, cells, accessibilityLabel }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: Keys.self)
+            id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? nil
+            let cells = (try? c.decodeIfPresent([CantripLossy<Cell>].self, forKey: .cells)) ?? nil
+            self.cells = (cells ?? []).prefix(CantripCard.maximumColumns).map { cell in
+                var cell = cell.value ?? Cell()
+                cell.text = cell.text.map { String($0.prefix(400)) }
+                return cell
+            }
+            accessibilityLabel = ((try? c.decodeIfPresent(String.self, forKey: .accessibilityLabel)) ?? nil)
+                .flatMap { $0.isEmpty ? nil : String($0.prefix(400)) }
+        }
+    }
+
+    /// tabs: the next `count` blocks belong to this tab.
+    struct Tab: Codable, Equatable, Sendable {
+        var title: String?
+        var symbol: String?
+        var count: Int
+
+        init(title: String?, symbol: String? = nil, count: Int) {
+            self.title = title
+            self.symbol = symbol
+            self.count = count
+        }
+
+        private enum Keys: String, CodingKey { case title, symbol, count }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: Keys.self)
+            title = ((try? c.decodeIfPresent(String.self, forKey: .title)) ?? nil).flatMap { $0.isEmpty ? nil : String($0.prefix(60)) }
+            symbol = (try? c.decodeIfPresent(String.self, forKey: .symbol)) ?? nil
+            let count = ((try? c.decodeIfPresent(Double.self, forKey: .count)) ?? nil) ?? 0
+            self.count = count.isFinite ? Int(Swift.min(Swift.max(0, count), 48)) : 0
+        }
+    }
+
+    /// actions (views only): a button the app confirms, then posts to the view's action route.
+    struct ActionButton: Codable, Equatable, Sendable {
+        var id: String?
+        /// "open", "runTask", "refresh", "openRecord" or "ask".
+        var kind: String?
+        var label: String?
+        var symbol: String?
+        /// "prominent" for a filled button.
+        var style: String?
+        var confirmTitle: String?
+        var confirmMessage: String?
+
+        static let kinds: Set<String> = ["open", "runTask", "refresh", "openRecord", "ask"]
+
+        /// Buttons this app knows how to run (with an ID to post); others are hidden.
+        static func shown(_ buttons: [ActionButton]?) -> [ActionButton] {
+            (buttons ?? []).filter { button in
+                button.kind.map(kinds.contains) == true && !(button.id ?? "").isEmpty
+            }
+        }
+
+        var title: String {
+            if let label, !label.isEmpty { return label }
+            switch kind {
+            case "open": return "Open"
+            case "runTask": return "Run now"
+            case "refresh": return "Refresh"
+            case "openRecord": return "Open record"
+            default: return "Ask Home"
+            }
+        }
+
+        var systemImage: String {
+            if let symbol, CantripCardStyle.symbolExists(symbol) { return symbol }
+            switch kind {
+            case "open": return "arrow.up.right.square"
+            case "runTask": return "play"
+            case "refresh": return "arrow.clockwise"
+            case "openRecord": return "doc.text"
+            default: return "bubble.left"
+            }
+        }
+    }
+
     struct Block: Codable, Equatable, Sendable {
         var type: String
         var title: String?
@@ -121,13 +229,20 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
         var expectedSeconds: Double?
         /// progress: 0–1 from the tool's own step counter.
         var fraction: Double?
+        /// table: its columns and rows.
+        var columns: [Column]?
+        var tableRows: [TableRow]?
+        /// tabs: each tab owns the next `count` blocks after this one, in turn.
+        var tabs: [Tab]?
+        /// actions: a view's buttons (drawn only on the view's own screen).
+        var buttons: [ActionButton]?
 
         init(type: String) { self.type = type }
 
         private enum Keys: String, CodingKey {
             case type, title, subtitle, subtitleSymbol, subtitleImageID, symbol, lines, stat, value, label, detail, text, tone, kind, rows, items
             case badges, min, max, pins, latitude, longitude, latitudeDelta, longitudeDelta, mapLinked, collapsed, attribution, imageID
-            case accessibilityLabel, status, startedAt, finishedAt, expectedSeconds, fraction
+            case accessibilityLabel, status, startedAt, finishedAt, expectedSeconds, fraction, columns, tableRows, tabs, buttons
         }
 
         init(from decoder: Decoder) throws {
@@ -156,7 +271,7 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
             tone = text(.tone)
             kind = text(.kind)
             rows = list(.rows, max: 20)
-            items = list(.items)
+            items = list(.items, max: type == "chart" ? 60 : 24)
             badges = list(.badges, max: 8)
             min = number(.min)
             max = number(.max)
@@ -175,8 +290,17 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
             finishedAt = text(.finishedAt)
             expectedSeconds = number(.expectedSeconds).flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
             fraction = number(.fraction).flatMap { $0.isFinite ? Swift.min(1, Swift.max(0, $0)) : nil }
+            columns = list(.columns, max: CantripCard.maximumColumns)
+            tableRows = list(.tableRows, max: 50)
+            tabs = list(.tabs, max: 6)
+            buttons = list(.buttons, max: 6)
         }
     }
+
+    /// A table's columns (and cells per row); the Mac sends at most 6.
+    static let maximumColumns = 6
+    /// Blocks a card draws; a view's card can have up to 48 (the Mac keeps chat cards to 12).
+    static let maximumBlocks = 48
 
     var id: String
     var type: String?
@@ -218,7 +342,7 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
         source = (try? c.decodeIfPresent(Source.self, forKey: .source)) ?? nil
         fallbackText = text(.fallbackText).map { String($0.prefix(4_000)) }
         let decoded = (try? c.decodeIfPresent([CantripLossy<Block>].self, forKey: .blocks)) ?? nil
-        blocks = Array((decoded ?? []).compactMap(\.value).filter { !$0.type.isEmpty }.prefix(12))
+        blocks = Array((decoded ?? []).compactMap(\.value).filter { !$0.type.isEmpty }.prefix(Self.maximumBlocks))
     }
 
     var isLink: Bool { style == "link" }
@@ -464,49 +588,99 @@ struct CantripCardStack: View {
 struct CantripCardPanel: View {
     let card: CantripCard
     @ObservedObject var remote: CantripRemoteModel
+    /// 680 pt under a reply; a view's own screen fills its readable width.
+    var maxWidth: CGFloat = 680
     @Environment(\.openURL) private var openURL
+    /// Set only on a view's screen: its `actions` buttons post there. Chat cards draw none.
+    @Environment(\.cantripCardActions) private var actions
+    @ObservedObject private var tabSelections = CantripCardTabSelections.shared
 
     enum Section {
         case block(CantripCard.Block)
         case map(CantripCard.Block, legend: CantripCard.Block?)
+        /// A segmented control choosing which of the blocks after it show.
+        case tabs(CantripCard.Block)
 
         /// Content blocks sit under a hairline; headers, stats, badges and notices run on.
         var hasDivider: Bool {
             switch self {
             case .map: true
-            case .block(let block): ["strip", "chart", "list", "keyValue"].contains(block.type)
+            case .tabs: false
+            case .block(let block): ["strip", "chart", "list", "keyValue", "table"].contains(block.type)
             }
         }
     }
 
-    static func sections(_ blocks: [CantripCard.Block]) -> [Section] {
-        var sections: [Section] = []
-        var index = 0
-        while index < blocks.count {
+    /// A section and the place of its (first) block in the card, which keys its state.
+    struct Entry {
+        let index: Int
+        let section: Section
+    }
+
+    static func sections(_ blocks: [CantripCard.Block], selectedTab: (Int) -> Int = { _ in 0 },
+                         allowsActions: Bool = false) -> [Section] {
+        entries(blocks, selectedTab: selectedTab, allowsActions: allowsActions).map(\.section)
+    }
+
+    /// The sections to draw. A `tabs` block owns the `count` blocks after it for each tab in turn
+    /// (clamped to the blocks there are); only `selectedTab(index of the tabs block)`'s show.
+    static func entries(_ blocks: [CantripCard.Block], selectedTab: (Int) -> Int = { _ in 0 },
+                        allowsActions: Bool = false) -> [Entry] {
+        var entries: [Entry] = []
+        append(blocks, in: 0..<blocks.count, to: &entries, selectedTab: selectedTab, allowsActions: allowsActions)
+        return entries
+    }
+
+    private static func append(_ blocks: [CantripCard.Block], in range: Range<Int>, to entries: inout [Entry],
+                               selectedTab: (Int) -> Int, allowsActions: Bool) {
+        var index = range.lowerBound
+        while index < range.upperBound {
             let block = blocks[index]
+            let start = index
             index += 1
             if block.type == "map" {
-                let next = index < blocks.count ? blocks[index] : nil
+                let next = index < range.upperBound ? blocks[index] : nil
                 let legend = next?.type == "list" && next?.mapLinked == true ? next : nil
                 if legend != nil { index += 1 }
-                if !CantripCardMapView.pins(block).isEmpty { sections.append(.map(block, legend: legend)) }
-            } else if draws(block) {
-                sections.append(.block(block))
+                if !CantripCardMapView.pins(block).isEmpty { entries.append(Entry(index: start, section: .map(block, legend: legend))) }
+            } else if block.type == "tabs" {
+                let groups = tabGroups(block, after: start, end: range.upperBound)
+                guard let last = groups.last else { continue }
+                if groups.count > 1 { entries.append(Entry(index: start, section: .tabs(block))) }
+                let selected = Swift.min(Swift.max(0, selectedTab(start)), groups.count - 1)
+                append(blocks, in: groups[selected], to: &entries, selectedTab: selectedTab, allowsActions: allowsActions)
+                index = last.upperBound
+            } else if draws(block, allowsActions: allowsActions) {
+                entries.append(Entry(index: start, section: .block(block)))
             }
         }
-        return sections
     }
 
-    static func draws(_ block: CantripCard.Block) -> Bool {
+    /// Each tab's blocks: the `count` blocks after the tabs block (at `index`), in turn, ending at `end`.
+    static func tabGroups(_ block: CantripCard.Block, after index: Int, end: Int) -> [Range<Int>] {
+        var cursor = Swift.min(index + 1, end)
+        return (block.tabs ?? []).map { tab in
+            let upper = Swift.min(end, cursor + Swift.max(0, tab.count))
+            defer { cursor = upper }
+            return cursor..<upper
+        }
+    }
+
+    static func draws(_ block: CantripCard.Block, allowsActions: Bool = false) -> Bool {
         switch block.type {
         case "header": block.title != nil || block.stat?.value != nil
         case "stat": block.value != nil
         case "keyValue": !(block.rows ?? []).filter { $0.key != nil || $0.value != nil }.isEmpty
+        case "chart" where block.kind == "line": !CantripCardLineChart.points(block).isEmpty
+        case "chart" where block.kind == "pie": !CantripCardPieChart.slices(block).isEmpty
         case "strip", "chart", "list": !(block.items ?? []).isEmpty
         case "badges": !(block.badges ?? []).filter { $0.text != nil }.isEmpty
         case "notice": block.title != nil || block.text != nil
         case "image": block.imageID.map(CantripLinkPreview.validImageID) ?? false
         case "progress": block.label != nil || block.startedAt != nil
+        case "section": block.title != nil || block.subtitle != nil
+        case "table": (block.tableRows ?? []).contains { !$0.cells.isEmpty }
+        case "actions": allowsActions && !CantripCard.ActionButton.shown(block.buttons).isEmpty
         default: false
         }
     }
@@ -521,28 +695,36 @@ struct CantripCardPanel: View {
         }
     }
 
+    private func stateKey(_ index: Int) -> String { "\(card.id):\(index)" }
+
     var body: some View {
-        let sections = Self.sections(card.blocks)
+        let entries = Self.entries(card.blocks, selectedTab: { tabSelections.selection(stateKey($0)) },
+                                   allowsActions: actions != nil)
         VStack(alignment: .leading, spacing: 0) {
-            if sections.isEmpty {
+            if entries.isEmpty {
                 Text(card.fallbackText ?? card.spokenLabel)
                     .font(.footnote)
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
-                if index > 0, section.hasDivider { divider }
-                switch section {
+            ForEach(Array(entries.enumerated()), id: \.element.index) { position, entry in
+                if position > 0, entry.section.hasDivider { divider }
+                switch entry.section {
                 case .map(let map, let legend):
                     CantripCardMapView(block: map, legend: legend)
+                case .tabs(let block):
+                    CantripCardTabsControl(block: block, isFirst: position == 0, selection: Binding(
+                        get: { tabSelections.selection(stateKey(entry.index)) },
+                        set: { tabSelections.select($0, for: stateKey(entry.index)) }
+                    ))
                 case .block(let block):
-                    CantripCardBlockView(block: block, isFirst: index == 0, remote: remote, stateKey: "\(card.id):\(index)")
+                    CantripCardBlockView(block: block, isFirst: position == 0, remote: remote, stateKey: stateKey(entry.index))
                 }
             }
             footer
         }
         .foregroundStyle(.white)
-        .frame(maxWidth: 680, alignment: .leading)
+        .frame(maxWidth: maxWidth, alignment: .leading)
         .background(hasMap ? AnyShapeStyle(CantripCardStyle.panel)
                            : AnyShapeStyle(LinearGradient(colors: [CantripCardStyle.panelTop, CantripCardStyle.panel],
                                                           startPoint: .top, endPoint: .bottom)))
@@ -617,7 +799,7 @@ struct CantripCardBlockView: View {
         case "stat": stat
         case "keyValue": keyValue
         case "strip": strip
-        case "chart": chart
+        case "chart": titledChart
         case "list": list
         case "badges":
             CantripChildFlowLayout(spacing: 6, lineSpacing: 6) {
@@ -629,7 +811,24 @@ struct CantripCardBlockView: View {
         case "notice": notice
         case "image": CantripCardImage(imageID: block.imageID ?? "", label: block.accessibilityLabel, remote: remote)
         case "progress": CantripCardProgressView(block: block, isFirst: isFirst)
+        case "section": CantripCardSectionHeading(block: block, isFirst: isFirst)
+        case "table": CantripCardTable(block: block, isFirst: isFirst)
+        case "actions": CantripCardActionsRow(block: block, isFirst: isFirst)
         default: EmptyView()
+        }
+    }
+
+    /// A chart under its optional title: a line or donut for `line` and `pie`, rows of bars otherwise.
+    private var titledChart: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let title = block.title {
+                CantripCardBlockTitle(title: title, isFirst: isFirst)
+            }
+            switch block.kind {
+            case "line": CantripCardLineChart(block: block)
+            case "pie": CantripCardPieChart(block: block)
+            default: chart
+            }
         }
     }
 
@@ -773,6 +972,9 @@ struct CantripCardBlockView: View {
         let highs = items.compactMap { $0.high ?? $0.low }
         let lowest = block.min ?? lows.min() ?? 0
         let span = Swift.max(1e-9, (block.max ?? highs.max() ?? 1) - lowest)
+        // Bars by category (a view's chart) have no icons, notes or low values: their names get
+        // the room those columns would take. Forecast rows keep their columns.
+        let plain = !items.contains { $0.symbol != nil || $0.glyph != nil || $0.note != nil || $0.lowText != nil }
         return VStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 let low = item.low ?? lowest
@@ -781,19 +983,21 @@ struct CantripCardBlockView: View {
                 HStack(spacing: 8) {
                     Text(item.label ?? "")
                         .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
-                        .frame(width: 50, alignment: .leading)
-                    CantripCardIcon(symbol: item.symbol, glyph: item.glyph, size: 16, multicolor: true)
-                        .frame(width: 26)
-                    Text(item.note ?? "")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(CantripCardStyle.tone(item.tone ?? "accent"))
-                        .frame(width: 36, alignment: .leading)
-                    Text(item.lowText ?? "")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.75))
-                        .monospacedDigit()
-                        .frame(width: 36, alignment: .trailing)
+                        .lineLimit(plain ? 2 : 1)
+                        .frame(width: plain ? 120 : 50, alignment: .leading)
+                    if !plain {
+                        CantripCardIcon(symbol: item.symbol, glyph: item.glyph, size: 16, multicolor: true)
+                            .frame(width: 26)
+                        Text(item.note ?? "")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(CantripCardStyle.tone(item.tone ?? "accent"))
+                            .frame(width: 36, alignment: .leading)
+                        Text(item.lowText ?? "")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.75))
+                            .monospacedDigit()
+                            .frame(width: 36, alignment: .trailing)
+                    }
                     CantripWeatherRangeBar(range: start...Swift.min(1, Swift.max(start, (high - lowest) / span)))
                         .frame(height: 5)
                     Text(item.highText ?? "")

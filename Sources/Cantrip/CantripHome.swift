@@ -633,6 +633,8 @@ struct CantripHomeTasksSnapshot: Encodable {
     var workspaceCards: [String: [CardDocument]]? = nil
     /// `GET …/tasks/<id>/records/<record id>/cards` answers a record's weather and map cards.
     var supportsRecordCards = true
+    /// `/api/v1/home/views` lists Home's saved views (docs/views.md).
+    var supportsViews = true
 
     /// What clients get: run cards as they are now (the latest run's forecast stays live) and the
     /// workspaces' record cards.
@@ -2358,6 +2360,8 @@ extension ChatSession {
                : cantripHomeBackgroundGuidance + CantripHomeDelegations.shared.instructions)
                 + "\n\n" + PlaceCardResolver.agentGuidance
                 + "\n\n" + CardComposer.richCardGuidance(command: TabInsight.command)
+                + "\n\n" + HomeViews.protocolGuidance
+                + (compact ? "" : HomeViews.shared.index().isEmpty ? "" : "\n" + HomeViews.shared.index())
         let zoneText = compact ? "Each message gives the current time zone." : "Current time zone: \(zone)."
         let modelText = compact ? "Each message lists the tiers and model IDs." : "Models: \(modelList)."
         let treatText = compact
@@ -2536,6 +2540,7 @@ extension ChatSession {
         )
         let tabs = CantripHomeDelegations.shared.homeTabsData
         let background = cantripHomeBackgroundData
+        let views = HomeViews.shared.index()
         homeDataSections = [HomeRepeatedData.tasks(index, file: CantripHomeStore.tasksFile.path),
                             HomeRepeatedData.tabs(tabs), HomeRepeatedData.background(background)]
         return """
@@ -2547,7 +2552,7 @@ extension ChatSession {
         Existing tasks (use the UUID in `id` when the user asks to change one):
         \(index.isEmpty ? "- none" : index)
         \(mentioned)\(tabs)
-        \(background))
+        \(background)\(views.isEmpty ? "" : "\n" + views))
         """
     }
 
@@ -2609,15 +2614,16 @@ extension ChatSession {
         var processed: [CantripHomeBlock.Kind: Int] = [:]
         for block in blocks where block.kind != .delegate {
             do {
-                guard processed[block.kind, default: 0] < (block.kind == .muse ? 2 : 8),
-                      block.payload.utf8.count <= CantripHomeProtocol.payloadLimit else {
+                guard processed[block.kind, default: 0] < (block.kind == .muse ? 2 : block.kind == .view ? 3 : 8),
+                      block.payload.utf8.count <= (block.kind == .view ? 32_768 : CantripHomeProtocol.payloadLimit) else {
                     throw CantripHomeError(413, "Too many or oversized Home items in one reply.")
                 }
                 processed[block.kind, default: 0] += 1
-                notices.append(try saveCantripHomeBlock(block, lintBlocking: lintBlocking))
+                notices.append(try saveCantripHomeBlock(block, lintBlocking: lintBlocking, messageIndex: index))
             } catch {
                 let message = CantripHomeProtocol.describe(error)
-                let notice = "Could not save \(block.kind == .artifact ? "artifact" : block.kind == .muse ? "Muse request" : "task"): \(message)"
+                let item = [.artifact, .muse, .view].contains(block.kind) ? block.kind.item : "task"
+                let notice = "Could not save \(item): \(message)"
                 if CantripHomeProtocol.isCorrectable(error) {
                     failures.append(.init(kind: block.kind, payload: block.payload, message: message, notice: notice))
                 } else {
@@ -2642,9 +2648,17 @@ extension ChatSession {
         return failures
     }
 
-    private func saveCantripHomeBlock(_ block: CantripHomeBlock, lintBlocking: Bool) throws -> String {
+    private func saveCantripHomeBlock(_ block: CantripHomeBlock, lintBlocking: Bool, messageIndex: Int) throws -> String {
         let store = CantripHomeStore.shared
         switch block.kind {
+        case .view:
+            guard isCantripHome else {
+                throw CantripHomeError(403, "Only the Cantrip Home chat can make views. Tell the user what view to ask for instead.")
+            }
+            let proposal = try CantripHomeProtocol.decode(HomeViewProposal.self, from: block.payload)
+            let saved = try HomeViews.shared.apply(proposal, activities: messages[messageIndex].activities)
+            if let view = saved.view { showViewPreview(view, messageID: messages[messageIndex].id) }
+            return saved.notice
         case .records:
             let batch = try CantripHomeProtocol.decode(CantripHomeTaskRecordBatch.self, from: block.payload)
             let result = try store.apply(batch)
@@ -2688,6 +2702,28 @@ extension ChatSession {
             }
         case .delegate:
             throw CantripHomeError(500, "Handoffs are saved with the other handoffs.")
+        }
+    }
+}
+
+extension ChatSession {
+    /// A saved view's preview under the reply that made it: built now, and again once its tools
+    /// have answered (a few seconds at most), so the preview shows real data.
+    func showViewPreview(_ view: HomeView, messageID: UUID) {
+        let views = HomeViews.shared
+        func place(_ card: CardDocument) {
+            guard let index = messages.firstIndex(where: { $0.id == messageID }) else { return }
+            messages[index].cards.removeAll { $0.id == card.id }
+            messages[index].cards.insert(card, at: 0)
+        }
+        place(views.preview(view))
+        guard view.template.data.values.contains(where: { $0.tool != nil }) else { return }
+        let id = view.id
+        Task { @MainActor [weak self] in
+            _ = await RunCards.bounded(20) { await views.refresh(id); return true }
+            guard let self, let current = views.find(id) else { return }
+            place(views.preview(current))
+            self.persistTranscript()
         }
     }
 }

@@ -111,6 +111,11 @@ If a control shows an update notice, update and relaunch Cantrip on the host Mac
 
 - **Tasks:** a task opens its records, and a record its details; each shows a back button at
   the top left, beside its title (⌘[ or Esc also goes back).
+- **Views:** screens Home builds on request (`docs/views.md`) list above the tasks, pinned first.
+  A view's screen draws its card across the window (tabs, tables, line and pie charts) with
+  Refresh, Pin and Delete in the toolbar; its buttons ask before they run on the host. The same
+  screens show in Cantrip's Home window. Debug builds draw a saved view with
+  `-CantripUITestViewFixture /path/view.json`.
 - **Sidebar:** Pip shows Home's mood. Below Pip are Chat, Tasks and Artifacts, with
   badges for questions waiting and running tasks, then **Tabs · N**: every project tab on
   the Mac with a spinner while it works (or a question mark while it waits for you), an idle

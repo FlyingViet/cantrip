@@ -673,3 +673,46 @@ code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Views (docs/views.md): rows in Tasks and a view's page */
+.view-row-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.home-cards.view-card {
+  max-width: 820px;
+}
+
+.confirm-dialog {
+  width: min(420px, calc(100vw - 48px));
+  padding: 20px;
+  color: #f2f2f3;
+  background: #232325;
+  border: 1px solid #4a4a4e;
+  border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.confirm-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.confirm-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.confirm-message {
+  margin: 0 0 16px;
+  color: #c8c8cc;
+  white-space: pre-wrap;
+}
+
+.confirm-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

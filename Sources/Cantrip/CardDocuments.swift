@@ -111,7 +111,47 @@ struct CardDocument: Codable, Equatable, Sendable, Identifiable {
         var symbol: String?
     }
 
-    /// `type`: header, stat, keyValue, strip, chart, list, map, image, badges or notice.
+    /// table: a column's heading and alignment ("leading", "trailing" or "center").
+    struct Column: Codable, Equatable, Sendable {
+        var title: String
+        var align: String?
+    }
+
+    struct Cell: Codable, Equatable, Sendable {
+        var text: String
+        var tone: String?
+        var symbol: String?
+    }
+
+    /// table: one row, a cell per column.
+    struct TableRow: Codable, Equatable, Sendable {
+        var id: String?
+        var cells: [Cell]
+        var accessibilityLabel: String?
+    }
+
+    /// tabs: the next `count` blocks belong to this tab.
+    struct Tab: Codable, Equatable, Sendable {
+        var title: String
+        var symbol: String?
+        var count: Int
+    }
+
+    /// actions (views only): a button the client confirms, then posts to the view's action route.
+    struct Button: Codable, Equatable, Sendable {
+        var id: String
+        /// "open", "runTask", "refresh", "openRecord" or "ask".
+        var kind: String
+        var label: String
+        var symbol: String?
+        /// "prominent" for a filled button.
+        var style: String?
+        var confirmTitle: String
+        var confirmMessage: String?
+    }
+
+    /// `type`: header, stat, keyValue, strip, chart, list, map, image, badges, notice, progress,
+    /// table, section, tabs or actions.
     struct Block: Codable, Equatable, Sendable {
         var type: String
         var title: String?
@@ -158,14 +198,23 @@ struct CardDocument: Codable, Equatable, Sendable, Identifiable {
         var expectedSeconds: Double?
         /// progress: 0–1 from the tool's own step counter or transfer progress.
         var fraction: Double?
+        /// table: its columns and rows.
+        var columns: [Column]?
+        var tableRows: [TableRow]?
+        /// tabs: the tabs, each owning the next `count` blocks.
+        var tabs: [Tab]?
+        /// actions: the view's buttons.
+        var buttons: [Button]?
 
         init(type: String) { self.type = type }
     }
 
     static let version = 1
     /// Blocks a tool or model card may use. `progress` is only for cards Cantrip builds itself
-    /// from a command it watched (build cards), so its times are always real.
-    static let blockTypes: Set<String> = ["header", "stat", "keyValue", "strip", "chart", "list", "map", "image", "badges", "notice"]
+    /// from a command it watched (build cards), so its times are always real; `actions` only for
+    /// views, whose buttons post to the view they're on.
+    static let blockTypes: Set<String> = ["header", "stat", "keyValue", "strip", "chart", "list", "map", "image", "badges",
+                                          "notice", "table", "section", "tabs"]
 
     var version = CardDocument.version
     var id: String
@@ -247,6 +296,7 @@ struct CardDocument: Codable, Equatable, Sendable, Identifiable {
                 lines.append((block.items ?? []).map { [$0.label, $0.value, $0.note].compactMap { $0 }.joined(separator: " ") }
                     .joined(separator: " · "))
             case "chart":
+                if let title = block.title { lines.append(title) }
                 lines += (block.items ?? []).map { item in
                     [item.label, item.note, [item.lowText, item.highText].compactMap { $0 }.joined(separator: "–")]
                         .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
@@ -261,6 +311,15 @@ struct CardDocument: Codable, Equatable, Sendable, Identifiable {
                 lines.append([block.title, block.text].compactMap { $0 }.joined(separator: ": "))
             case "progress":
                 lines.append([block.label, Self.progressTime(block), block.detail].compactMap { $0 }.joined(separator: " · "))
+            case "section":
+                lines.append(([block.title] + [block.subtitle]).compactMap { $0 }.joined(separator: " — ").uppercased())
+            case "table":
+                if let title = block.title { lines.append(title) }
+                let columns = (block.columns ?? []).map(\.title)
+                if !columns.isEmpty { lines.append(columns.joined(separator: " | ")) }
+                lines += (block.tableRows ?? []).map { $0.cells.map(\.text).joined(separator: " | ") }
+            case "actions":
+                break
             default:
                 break
             }
@@ -775,6 +834,9 @@ enum CardVerifier {
             if let stat = block.stat { texts += [stat.value, stat.label, stat.detail].compactMap { $0 } }
             texts += (block.rows ?? []).flatMap { [$0.key, $0.value] }
             texts += (block.badges ?? []).map(\.text)
+            texts += (block.columns ?? []).map(\.title)
+            texts += (block.tableRows ?? []).flatMap { $0.cells.map(\.text) }
+            texts += (block.tabs ?? []).map(\.title)
             for item in block.items ?? [] {
                 texts += [item.label, item.title, item.subtitle, item.detail, item.value, item.note, item.lowText,
                           item.highText, item.trailing].compactMap { $0 }
@@ -819,6 +881,16 @@ enum CardValidation {
             block.pins = block.pins.map { Array($0.prefix(20)).filter { abs($0.latitude) <= 90 && abs($0.longitude) <= 180 } }
             block.imageID = nil
             block.subtitleImageID = nil
+            block.buttons = nil
+            block.columns = block.columns.map { Array($0.prefix(6)).map { .init(title: clip($0.title, 60), align: $0.align) } }
+            block.tableRows = block.tableRows.map { rows in
+                Array(rows.prefix(50)).map { row in
+                    var row = row
+                    row.cells = Array(row.cells.prefix(6)).map { .init(text: clip($0.text), tone: $0.tone, symbol: $0.symbol) }
+                    return row
+                }
+            }
+            block.tabs = block.tabs.map { Array($0.prefix(6)).map { .init(title: clip($0.title, 40), symbol: $0.symbol, count: max(0, $0.count)) } }
             block.items = block.items.map { items in
                 Array(items.prefix(24)).map { item in
                     var item = item

@@ -212,6 +212,10 @@ struct SessionTabTests {
             try await testPrivateLocalLive()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "views" {
+            try await testHomeViews()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "settings" {
             try testSettingsIdentity()
             try testCLIPathRepair()
@@ -351,6 +355,7 @@ struct SessionTabTests {
         try await testCardDocuments()
         try await testBuildCards()
         try await testHomeCards()
+        try await testHomeViews()
         try testCantripHomeSchedules()
         try testCantripHomeMonthlySchedules()
         try await testCantripHome()

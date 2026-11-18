@@ -72,6 +72,16 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   map cards opens with the event's forecast and venue map on top, refreshed every `refreshAfter`
   seconds while it stays open (the last cards stay through a failed refresh, retried a minute
   later) and never once it closes. Older Macs that send no cards show runs and records as before.
+- **Views.** Screens Cantrip Home builds on request from live data ([Views](../../../docs/views.md)): **Views** sits
+  above the tasks in Tasks, pinned first, each with its icon, a pin and a lock (private views), and its subtitle or
+  when it was updated (right-click to Pin, Unpin or Delete). A view opens in place with Back, **Refresh**, **Pin**/**Unpin**
+  and **Delete** (asks first), its card at a readable width, fetched again every `refreshAfter` seconds while it's
+  open. Views draw the new blocks: section headings, tables (real column headers, a label per row, scrolling
+  sideways), tabs (a tab list; arrows, Home and End move between tabs), line and donut charts with a legend and
+  each point labelled for screen readers, and the view's buttons, which ask first (the button's own question,
+  **Cancel**) and then run on the Mac: a link opens in the browser (web pages only), a record opens in its workspace
+  (Back returns to the view), a task's run says it started, Refresh redraws the view, and a question goes to Home's
+  chat. Buttons only appear on a view's screen, never under a chat reply. Macs without views show none.
 - **Sheets.** Background runs (answer a waiting run in place; every tab's running background
   tasks under **In tabs**, with Stop; the Mac's long jobs (builds taking turns and other long work, each with a bar of its steps) under **Jobs**; **Full Log**
   opens Cantrip Home's background log, every run's report with its cards, read-only with no
