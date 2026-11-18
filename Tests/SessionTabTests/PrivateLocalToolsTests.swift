@@ -78,7 +78,7 @@ extension SessionTabTests {
                         {"name": "notes_delete", "annotations": {"readOnlyHint": False}, "inputSchema": {"type": "object"}}]
             pad = "Synthetic tracker tool for a demo project. " * 40
             return [{"name": "get_issue_%d" % i if i else "get_issue", "description": pad,
-                     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}}} for i in range(12)] + [
+                     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}}} for i in range(20)] + [
                     {"name": "create_issue", "description": "Create", "inputSchema": {"type": "object"}}]
         for line in sys.stdin:
             m = json.loads(line)
@@ -114,8 +114,15 @@ extension SessionTabTests {
         precondition(summary["notes"]?.tools == ["notes_search", "notes_read", "notes_count"]
                      && summary["notes"]?.excluded == ["notes_delete"] && summary["notes"]?.onDemand == false,
                      "A small server is offered up front, without its delete tool: \(String(describing: summary["notes"]))")
-        precondition(summary["tracker"]?.tools.count == 12 && summary["tracker"]?.excluded == ["create_issue"]
+        precondition(summary["tracker"]?.tools.count == 20 && summary["tracker"]?.excluded == ["create_issue"]
                      && summary["tracker"]?.onDemand == true, "A large server loads on demand")
+        let sized = { (name: String, characters: Int) in
+            PrivateLocalTools.Server(name: name, tools: [PrivateLocalTools.Tool(server: name, name: "\(name)_read",
+                description: "", schema: ["type": "object", "description": String(repeating: "x", count: characters)])])
+        }
+        let direct = PrivateLocalTools.directServers([sized("mail", 9_000), sized("home", 7_500), sized("db", 5_000), sized("big", 14_000)])
+        precondition(direct == ["mail", "home", "db"],
+                     "Mail- and home-sized servers stay direct together; a bigger one loads on demand: \(direct)")
         precondition(summary["bitwarden"]?.blocked == true && summary["bitwarden"]?.tools.isEmpty == true,
                      "Blocked servers are listed but never started")
         precondition(summary["offline"]?.problem != nil && summary["offline"]?.tools.isEmpty == true,

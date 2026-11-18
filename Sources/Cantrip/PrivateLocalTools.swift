@@ -217,9 +217,11 @@ final class PrivateLocalTools: @unchecked Sendable {
     ]
     static let resultCharacters = 16_000
     static let maxSteps = 25
-    /// Servers whose tools together fit in about this many tokens are offered up front.
-    static let directServerTokens = 2_000
-    static let directTotalTokens = 6_000
+    /// Servers whose tools together fit in about this many tokens are offered up front. Loading a server
+    /// on demand costs a whole extra model step (search_tools, then the call), more than its schemas.
+    /// Sized so personal (~3K) and homelab (~2.5K) stay direct beside a small service server.
+    static let directServerTokens = 3_500
+    static let directTotalTokens = 8_000
 
     struct Tool {
         let server: String
