@@ -347,6 +347,10 @@ struct CantripHomeTasksView: View {
         _detailError = State(initialValue: remote.detailError)
     }
 
+    /// Folded sections, remembered on this device.
+    @AppStorage(CantripHomeListSection.views.defaultsKey) private var viewsCollapsed = false
+    @AppStorage(CantripHomeListSection.tasks.defaultsKey) private var tasksCollapsed = false
+
     /// Views show only when the Mac serves them (`supportsViews`) and has some.
     private var shownViews: [CantripHomeViewSummary] { viewsSupported ? views : [] }
 
@@ -380,13 +384,21 @@ struct CantripHomeTasksView: View {
                     if shownViews.isEmpty {
                         taskRows
                     } else {
-                        Section("Views") { viewRows }
-                        Section("Tasks") {
-                            if tasks.isEmpty, !isLoadingHomeData {
-                                Label("No tasks yet", systemImage: "checklist")
-                                    .foregroundStyle(.secondary)
+                        Section {
+                            if !viewsCollapsed { viewGrid }
+                        } header: {
+                            CantripHomeSectionHeader(section: .views, count: shownViews.count, collapsed: $viewsCollapsed)
+                        }
+                        Section {
+                            if !tasksCollapsed {
+                                if tasks.isEmpty, !isLoadingHomeData {
+                                    Label("No tasks yet", systemImage: "checklist")
+                                        .foregroundStyle(.secondary)
+                                }
+                                taskRows
                             }
-                            taskRows
+                        } header: {
+                            CantripHomeSectionHeader(section: .tasks, count: tasks.count, collapsed: $tasksCollapsed)
                         }
                     }
                 }
@@ -457,20 +469,17 @@ struct CantripHomeTasksView: View {
         return waiting
     }
 
-    /// Home's views, pinned first: each opens its own screen in this stack.
-    @ViewBuilder private var viewRows: some View {
+    /// Home's views, pinned first, as thumbnails across the width: each opens its own screen in this stack.
+    @ViewBuilder private var viewGrid: some View {
         if let viewsError {
             Label(viewsError, systemImage: "exclamationmark.triangle.fill")
                 .font(.caption)
                 .foregroundStyle(.orange)
         }
-        ForEach(shownViews) { view in
-            NavigationLink {
-                CantripHomeViewScreen(remote: remote, summary: view, showChat: showChat ?? { openChat(nil) })
-            } label: {
-                CantripHomeViewRow(view: view)
-            }
-        }
+        CantripHomeViewGridView(views: shownViews, remote: remote, showChat: showChat ?? { openChat(nil) })
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 12, trailing: 16))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
     }
 
     private var taskRows: some View {

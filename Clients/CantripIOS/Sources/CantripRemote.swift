@@ -3373,6 +3373,8 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var homeViewsSupported = false
     /// Why the views list couldn't be read (the last list stays shown).
     @Published private(set) var homeViewsError: String?
+    /// Each listed view's resolved card for its thumbnail, by view ID (a view's screen keeps it current too).
+    @Published private(set) var homeViewThumbnails: [String: CantripHomeViewDetail] = [:]
     @Published private(set) var homeBackground: CantripHomeBackgroundSnapshot?
     /// The hidden run (by session ID) the Background sheet should reveal, e.g. from a push.
     @Published var homeBackgroundFocus: String?
@@ -3520,6 +3522,8 @@ final class CantripRemoteModel: ObservableObject {
     private var homeArtifactsFetched: (revision: String, artifacts: [CantripHomeArtifact])?
     private var homeViewsFetched: (revision: String, views: [CantripHomeViewSummary])?
     private var homeViewsRefreshInFlight = false
+    private var homeViewThumbnailsFetchedAt: [String: Date] = [:]
+    private var homeViewThumbnailsInFlight = false
     private var pollingTask: Task<Void, Never>?
     private var detailRefreshTask: Task<Void, Never>?
     private var detailRefreshKey: String?
@@ -3966,6 +3970,8 @@ final class CantripRemoteModel: ObservableObject {
             homeViewsSupported = false
             homeViewsError = nil
             homeViewsFetched = nil
+            homeViewThumbnails = [:]
+            homeViewThumbnailsFetchedAt = [:]
             homeBuilds = nil
             homeBuildsError = nil
             homeBackground = nil
@@ -4037,6 +4043,8 @@ final class CantripRemoteModel: ObservableObject {
             homeViewsSupported = false
             homeViewsError = nil
             homeViewsFetched = nil
+            homeViewThumbnails = [:]
+            homeViewThumbnailsFetchedAt = [:]
             homeBuilds = nil
             homeBuildsError = nil
             homeBackground = nil
@@ -4377,13 +4385,57 @@ final class CantripRemoteModel: ObservableObject {
     func homeView(id: String) async throws -> CantripHomeViewDetail {
         let detail = try await performHistoryRead { try await $0.homeView(id: id) }
         replaceHomeViewSummary(detail.view)
+        keepThumbnail(detail)
         return detail
+    }
+
+    /// Whether a thumbnail needs its view fetched: nothing cached yet, the Mac changed the view
+    /// since (its update or data time moved), or its `refreshAfter` has passed.
+    static func thumbnailNeedsFetch(_ summary: CantripHomeViewSummary, cached: CantripHomeViewDetail?,
+                                    fetchedAt: Date?, now: Date = Date()) -> Bool {
+        guard let cached, let fetchedAt else { return true }
+        if cached.view.updatedAt != summary.updatedAt || cached.view.refreshedAt != summary.refreshedAt { return true }
+        return now.timeIntervalSince(fetchedAt) >= Double(cached.refreshAfter)
+    }
+
+    /// Fetches the resolved card of each listed view whose thumbnail is missing or out of date,
+    /// two at a time. Only reads (`GET …/views/<id>`); never asks the Mac to refresh a view.
+    func refreshHomeViewThumbnails() async {
+        guard isHomeSelected, isConfigured, homeViewsSupported, !homeViewThumbnailsInFlight else { return }
+        homeViewThumbnailsInFlight = true
+        defer { homeViewThumbnailsInFlight = false }
+        let listed = Set(homeViews.map(\.id))
+        if homeViewThumbnails.keys.contains(where: { !listed.contains($0) }) {
+            homeViewThumbnails = homeViewThumbnails.filter { listed.contains($0.key) }
+            homeViewThumbnailsFetchedAt = homeViewThumbnailsFetchedAt.filter { listed.contains($0.key) }
+        }
+        let due = homeViews.filter {
+            Self.thumbnailNeedsFetch($0, cached: homeViewThumbnails[$0.id], fetchedAt: homeViewThumbnailsFetchedAt[$0.id])
+        }
+        for pair in stride(from: 0, to: due.count, by: 2) {
+            guard !Task.isCancelled, isHomeSelected else { return }
+            let ids = due[pair..<Swift.min(pair + 2, due.count)].map(\.id)
+            await withTaskGroup(of: CantripHomeViewDetail?.self) { group in
+                for id in ids {
+                    group.addTask { [weak self] in try? await self?.performHistoryRead { try await $0.homeView(id: id) } }
+                }
+                for await detail in group {
+                    if let detail { keepThumbnail(detail) }
+                }
+            }
+        }
+    }
+
+    private func keepThumbnail(_ detail: CantripHomeViewDetail) {
+        homeViewThumbnailsFetchedAt[detail.view.id] = Date()
+        if homeViewThumbnails[detail.view.id] != detail { homeViewThumbnails[detail.view.id] = detail }
     }
 
     /// Refresh: the Mac reads the view's tool sources again.
     func refreshHomeView(id: String) async throws -> CantripHomeViewDetail {
         let detail = try await performHomeViewWrite(id: id) { try await $0.refreshHomeView(id: id) }
         replaceHomeViewSummary(detail.view)
+        keepThumbnail(detail)
         return detail
     }
 

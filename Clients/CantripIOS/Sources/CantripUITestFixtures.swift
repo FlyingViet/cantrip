@@ -201,7 +201,9 @@ struct CantripViewFixtureScreen: View {
             NavigationStack(path: $stack) {
                 List {
                     Section("Views") {
-                        NavigationLink(value: detail.view.id) { CantripHomeViewRow(view: detail.view) }
+                        NavigationLink(value: detail.view.id) { CantripHomeViewThumbnail(view: detail.view, detail: detail, remote: remote) }
+                            .buttonStyle(.plain)
+                            .viewThumbnailAccessibility(detail.view)
                     }
                 }
                 .listStyle(.plain)

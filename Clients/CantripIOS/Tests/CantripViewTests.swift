@@ -401,6 +401,75 @@ final class CantripViewTests: XCTestCase {
         XCTAssertNil(list.views.compactMap(\.value).last?.refreshedAt, "records and tasks are read live: no tool time")
     }
 
+    func testGridFitsAsManyColumnsAsTheWidthAllows() {
+        let widths: [CGFloat: Int] = [0: 1, 320: 1, 375: 2, 599: 3, 600: 2, 700: 2, 1_000: 4, 1_600: 6, 2_000: 6]
+        for (width, columns) in widths {
+            XCTAssertEqual(CantripHomeViewGrid.columns(width: width), columns, "\(width) pt")
+        }
+        XCTAssertEqual(CantripHomeViewGrid.columns(width: .infinity), 1)
+    }
+
+    func testThumbnailsPreviewTheFirstTabsStatsAndChart() throws {
+        let homelab = try JSONDecoder().decode(CantripHomeViewDetail.self, from: Data(resolvedHomelab.utf8))
+        XCTAssertEqual(CantripHomeViewGrid.previewBlocks(homelab.card).map(\.type), ["stat"],
+                       "the header, section heading, table and buttons stay on the view's screen")
+        let dashboard = try JSONDecoder().decode(CantripHomeViewDetail.self, from: Data(resolvedDashboard.utf8))
+        XCTAssertEqual(CantripHomeViewGrid.previewBlocks(dashboard.card).map(\.label), ["Active interview loops"],
+                       "the charts belong to the other tabs")
+
+        let mixed = try card(#"""
+        {"blocks":[{"type":"header","title":"Mixed"},{"type":"notice","title":"Heads up"},
+          {"type":"stat","label":"A","value":"1"},{"type":"chart","kind":"bar","items":[{"title":"x","high":2,"highText":"2"}]},
+          {"type":"stat","label":"B","value":"2"},{"type":"stat","label":"C","value":"3"},
+          {"type":"chart","kind":"bar","items":[{"title":"y","high":4,"highText":"4"}]}]}
+        """#)
+        XCTAssertEqual(CantripHomeViewGrid.previewBlocks(mixed).map { $0.label ?? $0.type }, ["A", "chart", "B"],
+                       "two stats and the first chart, in the card's order")
+
+        let rows = (1...5).map { #"{"cells":[{"text":"Row \#($0)"}]}"# }.joined(separator: ",")
+        let tableOnly = try card(#"{"blocks":[{"type":"header","title":"Trips"},{"type":"table","tableRows":[\#(rows)]},{"type":"list","items":[{"title":"x"}]}]}"#)
+        let preview = CantripHomeViewGrid.previewBlocks(tableOnly)
+        XCTAssertEqual(preview.map(\.type), ["table"])
+        XCTAssertEqual(preview.first?.tableRows?.map { $0.cells.first?.text }, ["Row 1", "Row 2", "Row 3"])
+        XCTAssertEqual(CantripHomeViewGrid.previewBlocks(try card(#"{"blocks":[{"type":"header","title":"Only"}]}"#)).count, 0)
+    }
+
+    func testSectionsRememberBeingFolded() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "CantripViewTests.sections"))
+        defaults.removePersistentDomain(forName: "CantripViewTests.sections")
+        defer { defaults.removePersistentDomain(forName: "CantripViewTests.sections") }
+        XCTAssertFalse(CantripHomeListSection.tasks.isCollapsed(in: defaults), "open until folded")
+        CantripHomeListSection.tasks.setCollapsed(true, in: defaults)
+        XCTAssertTrue(CantripHomeListSection.tasks.isCollapsed(in: defaults))
+        XCTAssertFalse(CantripHomeListSection.views.isCollapsed(in: defaults), "each section on its own")
+        XCTAssertTrue(defaults.bool(forKey: "home.tasks.tasksCollapsed"), "the key @AppStorage reads on the next launch")
+        CantripHomeListSection.tasks.setCollapsed(false, in: defaults)
+        XCTAssertNil(defaults.object(forKey: "home.tasks.tasksCollapsed"))
+        XCTAssertEqual(CantripHomeListSection.tasks.headerText(count: 4, collapsed: true), "Tasks · 4")
+        XCTAssertEqual(CantripHomeListSection.views.headerText(count: 6, collapsed: false), "Views")
+        XCTAssertEqual(CantripHomeListSection.views.spokenLabel(count: 1), "Views, 1 view")
+        XCTAssertEqual(CantripHomeListSection.tasks.spokenLabel(count: 4), "Tasks, 4 tasks")
+    }
+
+    func testThumbnailsFetchOnlyWhatChanged() throws {
+        let homelab = try JSONDecoder().decode(CantripHomeViewDetail.self, from: Data(resolvedHomelab.utf8))
+        let summary = homelab.view
+        let fetched = Date(timeIntervalSince1970: 1_000)
+        func needs(_ summary: CantripHomeViewSummary, cached: CantripHomeViewDetail? = homelab, at seconds: Double) -> Bool {
+            CantripRemoteModel.thumbnailNeedsFetch(summary, cached: cached, fetchedAt: cached == nil ? nil : fetched,
+                                                   now: fetched.addingTimeInterval(seconds))
+        }
+        XCTAssertTrue(needs(summary, cached: nil, at: 0), "nothing cached yet")
+        XCTAssertFalse(needs(summary, at: 5), "cached and current")
+        XCTAssertTrue(needs(summary, at: Double(homelab.refreshAfter)), "its refreshAfter passed")
+        var updated = summary
+        updated.updatedAt = (summary.updatedAt ?? fetched).addingTimeInterval(60)
+        XCTAssertTrue(needs(updated, at: 5), "the Mac changed the view")
+        var reread = summary
+        reread.refreshedAt = (summary.refreshedAt ?? fetched).addingTimeInterval(60)
+        XCTAssertTrue(needs(reread, at: 5), "the Mac read its tools again")
+    }
+
     private struct ResolvedList: Decodable {
         let views: [CantripLossy<CantripHomeViewSummary>]
     }

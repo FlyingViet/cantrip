@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Home's views (docs/views.md): screens Home builds on request, each a card document the Mac
-// resolves from live data. Listed under Tasks → Views; a view's screen draws its card with the
+// resolves from live data. Shown as thumbnails under Tasks → Views (CantripHomeViewGrid.swift); a view's screen draws its card with the
 // card block views, refreshes it, and runs its confirmed buttons on the Mac.
 
 // MARK: - Models
@@ -112,7 +112,7 @@ struct CantripHomeViewsSnapshot: Equatable {
 }
 
 /// `GET /api/v1/home/views/<id>` (and a refresh): the view and its card, resolved on the Mac.
-struct CantripHomeViewDetail: Decodable, Equatable {
+struct CantripHomeViewDetail: Decodable, Equatable, Sendable {
     var view: CantripHomeViewSummary
     var card: CantripCard
     /// Seconds until the open view is worth fetching again.
@@ -195,62 +195,6 @@ struct CantripHomeViewActionResult: Decodable, Equatable {
 struct CantripHomeViewRecordTarget: Hashable {
     let taskID: UUID
     let recordID: UUID
-}
-
-// MARK: - List
-
-/// A view in Tasks → Views: its icon, name, a lock when it's private, its subtitle or when it was
-/// updated, and a pin when it's pinned.
-struct CantripHomeViewRow: View {
-    let view: CantripHomeViewSummary
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: view.symbol)
-                .font(.title3)
-                .foregroundStyle(.tint)
-                .frame(width: 28, height: 28)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(view.name)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    if view.isPrivate {
-                        Image(systemName: "lock.fill")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if let line = view.detailLine {
-                    Text(line)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                if view.refreshing {
-                    Label("Refreshing…", systemImage: "arrow.clockwise")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if let problem = view.problems.first {
-                    Label(problem, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
-                }
-            }
-            Spacer(minLength: 8)
-            if view.pinned {
-                Image(systemName: "pin.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(45))
-            }
-        }
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(view.spokenLabel)
-        .accessibilityIdentifier("home.view.\(view.id)")
-    }
 }
 
 // MARK: - A view's screen
