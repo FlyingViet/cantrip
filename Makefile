@@ -44,7 +44,7 @@ test-process-runner:
 test-upcoming:
 	@BIN="/tmp/cantrip-upcoming-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/UpcomingSchedule.swift Sources/Cantrip/MacLaunchJobs.swift Tests/UpcomingTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/UpcomingSchedule.swift Sources/Cantrip/MacLaunchJobs.swift Sources/Cantrip/MachineJobs.swift Sources/Cantrip/ProcessRunner.swift Tests/UpcomingTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-iso-date:
 	@BIN="/tmp/cantrip-iso-date-tests-$$$$"; \

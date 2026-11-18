@@ -166,3 +166,19 @@ enum UpcomingNames {
         return ownNames.contains(owner.lowercased()) ? job : "\(humanize(owner)) · \(job)"
     }
 }
+
+/// Background jobs a tab's Copilot shell started (`detach`) that nobody registered.
+enum UpcomingJobs {
+    static let wrapperMarker = "__copilot_pid_path="
+
+    /// Each job wrapper's command, skipping the wrappers themselves and jobs already listed as a
+    /// registered wait, whether the wait names the job or its wrapper.
+    static func unregistered(in rows: [Int32: MachineJobs.ProcessRow], registered: Set<Int32>,
+                             uid: UInt32) -> [MachineJobs.ProcessRow] {
+        let wrappers = Set(rows.values.filter { $0.arguments.contains(wrapperMarker) }.map(\.pid))
+        return rows.values.filter {
+            wrappers.contains($0.ppid) && !$0.arguments.contains(wrapperMarker) && $0.uid == uid
+                && !registered.contains($0.pid) && !registered.contains($0.ppid)
+        }.sorted { $0.pid < $1.pid }
+    }
+}

@@ -125,6 +125,26 @@ do {
     expect(UpcomingNames.commandTitle("/bin/bash -c command -v git > /dev/null") == "Git", "a shell builtin is skipped")
 }
 
+// MARK: Jobs nobody registered
+
+do {
+    let ps = """
+      100     1   100   501 Ss    01:00:00   0.0   1000 sh -c __copilot_pid_path=$1; __copilot_exit_path=$2; wait copilot-detached-supervisor /tmp/a.pid /tmp/a.exit /bin/bash /tmp/check.sh
+      101   100   100   501 S     01:00:00   0.0   1000 /bin/bash /tmp/check.sh
+      200     1   200   501 Ss    01:00:00   0.0   1000 sh -c __copilot_pid_path=$1; __copilot_exit_path=$2; wait copilot-detached-supervisor /tmp/b.pid /tmp/b.exit /bin/bash /tmp/waker.sh
+      201   200   200   501 S     01:00:00   0.0   1000 /bin/bash /tmp/waker.sh
+      301   300   300   501 S     01:00:00   0.0   1000 /bin/bash /tmp/not-detached.sh
+      401   100   100     0 S     01:00:00   0.0   1000 /bin/bash /tmp/root-owned.sh
+    """
+    let rows = MachineJobs.parse(ps: ps)
+    expect(UpcomingJobs.unregistered(in: rows, registered: [], uid: 501).map(\.pid) == [101, 201],
+           "the wrappers' own jobs, this user's only")
+    expect(UpcomingJobs.unregistered(in: rows, registered: [100], uid: 501).map(\.pid) == [201],
+           "a wait registered on the wrapper hides its job")
+    expect(UpcomingJobs.unregistered(in: rows, registered: [201], uid: 501).map(\.pid) == [101],
+           "a wait registered on the job hides it")
+}
+
 // MARK: The store
 
 do {

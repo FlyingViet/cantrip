@@ -220,7 +220,7 @@ final class HomeUpcoming {
                 owner: owner(wait.tabID), ownerTabID: wait.tabID?.uuidString, state: .waiting, cancelLabel: "Stop",
                 confirm: "Stop “\(wait.title)”? It stops waiting and won't do its next step."))
         }
-        for job in Self.detachedJobs(in: rows) where !shown.contains(job.pid) {
+        for job in UpcomingJobs.unregistered(in: rows, registered: shown, uid: getuid()) {
             let tab = Self.tabID(of: job.pid, rows: rows)
             let title = UpcomingNames.commandTitle(job.arguments) ?? UpcomingNames.humanize(job.name)
             items.append(Item(
@@ -358,10 +358,7 @@ final class HomeUpcoming {
     /// Jobs a tab's Copilot shell started in the background (`detach`): a job wrapper's own
     /// command, skipping the wrappers themselves.
     static func detachedJobs(in rows: [Int32: MachineJobs.ProcessRow]) -> [MachineJobs.ProcessRow] {
-        let marker = "__copilot_pid_path="
-        let wrappers = Set(rows.values.filter { $0.arguments.contains(marker) }.map(\.pid))
-        return rows.values.filter { wrappers.contains($0.ppid) && !$0.arguments.contains(marker) && $0.uid == getuid() }
-            .sorted { $0.pid < $1.pid }
+        UpcomingJobs.unregistered(in: rows, registered: [], uid: getuid())
     }
 
     /// The tab whose agent started a job: the nearest ancestor with `CANTRIP_TAB_ID` (Copilot keeps
