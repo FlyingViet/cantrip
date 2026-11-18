@@ -25,6 +25,21 @@ enum CodeMode {
         var scriptCharacters = 20_000
         var outputCharacters = 12_000
         var logCharacters = 2_000
+        /// Programs one task may run. Past `programNudge` each result reminds the model to finish
+        /// (replays: local models kept writing one more search instead of answering).
+        var programNudge = 5
+        var programsPerTask = 15
+    }
+
+    /// Added to a program's result once its task has run more than `programNudge` programs.
+    static func budgetNote(program: Int, limits: Limits) -> String {
+        guard program > limits.programNudge else { return "" }
+        return "\n\n[Program \(program) of at most \(limits.programsPerTask) for this task. If you have what the task needs, "
+            + "answer now. Otherwise put every remaining lookup into one program; don't rerun a lookup with reworded queries.]"
+    }
+
+    static func budgetRefusal(_ limits: Limits) -> String {
+        "This task already ran \(limits.programsPerTask) programs, the limit. Answer now with what you have and say what you couldn't check."
     }
 
     /// Backends read their MCP configs when they start: rewrite them with or without `cantrip_code`.
@@ -380,6 +395,10 @@ enum CodeModeAPI {
         var text = """
         Run one JavaScript program that chains read-only tool calls on the Mac; only its return value comes back. \
         Use it instead of calling tools one by one when a result feeds the next call (search, then read each match). \
+        Plan the whole lookup first and put it in ONE program: independent calls in Promise.all, every search wording \
+        in the same program (or one call when a tool takes a list), then return only what the task needs. Run another \
+        program only for what the results point to (reading specific ids), never to retry a lookup reworded; a tool \
+        that sweeps or summarizes in one call beats many small searches. A task may run \(limits.programsPerTask) programs. \
         Write the body of an async function: each server is a global object whose tools are async functions taking \
         the tool's arguments and returning its parsed JSON result (or text). Use Promise.all for independent calls, \
         try/catch for calls that may fail, `args` for the call's args, `log(...)` for notes, and `return` only the \

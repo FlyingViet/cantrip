@@ -175,6 +175,8 @@ extension SessionTabTests {
         host.socketPath = { socketPath }
         host.recipes = { [recipe] }
         host.shapes = shapes
+        host.limits.programNudge = 1
+        host.limits.programsPerTask = 3
         nonisolated(unsafe) var restricted = false
         host.resolveCaller = { hello in
             var caller = CodeModeHost.Caller(hello: hello)
@@ -216,6 +218,29 @@ extension SessionTabTests {
         let relisted = try await client.listTools()
         let restrictedDescription = relisted.first { $0["name"] as? String == CodeMode.runTool }?["description"] as? String ?? ""
         precondition(!restrictedDescription.contains("declare const notes"), "Nor see its declarations")
+        let (third, thirdFailed) = try await client.callTool(CodeMode.runTool, arguments: ["script": "return 3;"])
+        let (fourth, fourthFailed) = try await client.callTool(CodeMode.runTool, arguments: ["script": "return 4;"])
+        precondition(!thirdFailed && third.hasPrefix("3") && third.contains("[Program 3 of at most 3 for this task")
+                     && fourthFailed && fourth.contains("already ran 3 programs"),
+                     "Past the nudge each result says to finish; past the limit programs are refused: \(third) / \(fourth)")
+        precondition(restrictedDescription.contains("A task may run 3 programs"), "The description states the limit")
+
+        // A connection's count starts over after it sits idle (its backend moved on to another turn).
+        let budget = CodeModeProgramBudget(idleReset: 60)
+        nonisolated(unsafe) var clock = Date(timeIntervalSince1970: 1_000)
+        budget.now = { clock }
+        var two = CodeMode.Limits()
+        two.programsPerTask = 2
+        let first = budget.begin(limits: two), second = budget.begin(limits: two), refused = budget.begin(limits: two)
+        budget.finished()
+        clock += 30
+        let stillRefused = budget.begin(limits: two)
+        clock += 61
+        precondition(first == 1 && second == 2 && refused == nil && stillRefused == nil && budget.begin(limits: two) == 1,
+                     "Programs count per task, and a new task starts after the idle gap")
+        precondition(CodeMode.budgetNote(program: 5, limits: CodeMode.Limits()).isEmpty
+                     && CodeMode.budgetNote(program: 6, limits: CodeMode.Limits()).contains("Program 6 of at most 15"),
+                     "The default nudge starts after five programs")
 
         // Backend configs: cantrip_code only while code mode is on; Claude's per-tab config names the tab.
         let snapshot = MCPRegistry.Snapshot(servers: servers)

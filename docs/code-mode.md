@@ -48,6 +48,12 @@ processes, timers, `fetch`, `require` or WebAssembly. Limits per program: 120 s,
 characters of result (Private Local: its tool-result size). An error, a refused call or a limit
 returns a message saying what happened and how many calls ran.
 
+A task may run 15 programs. After the fifth, each result ends with a reminder to answer now or
+put every remaining lookup in one program; past the limit a program is refused with a message to
+answer with what the run has. Private Local counts per reply. A backend's relay connection
+outlives a turn, so its count starts over after 5 minutes without a program. (Replays showed the
+local model writing one more reworded search per step instead of answering.)
+
 ## What a program may call
 
 Only read-only tools, chosen by the same rule as Private Local's tools (no write word in the
@@ -94,3 +100,10 @@ caller's program with the same checks and limits.
 Before it's turned on for Home tasks, real Home task runs are replayed with and without code
 mode on the self-hosted model (counts only: model turns, tool calls, tokens, time, and the score
 against the real run's records). See the Home shadow test.
+
+Programs only pay off when one call can do a task's whole lookup. The first replays (2026-11-17)
+won on the bills tracker (8 model requests instead of 31) but lost on the trip tracker and the
+Bass Compass briefing, whose real runs used shell scripts the MCP servers didn't expose: the
+model rebuilt the work with dozens of small searches. Those tasks now have one-call tools in
+their servers (a booking-mail sweep with place, date and code filters; a calendar trip check; a
+production briefing), and the program budget above caps runaway loops.

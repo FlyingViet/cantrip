@@ -521,7 +521,10 @@ final class PrivateLocalToolSession: @unchecked Sendable {
         guard let script = arguments["script"] as? String, !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return ("run_tool_script needs a `script`: the body of an async function that returns the result.", false, true)
         }
-        let runner = CodeModeRunner(tools: tools, recipes: recipes, limits: codeModeLimits, shapes: shapes) { [weak self] tool, arguments in
+        let limits = codeModeLimits
+        let program = lock.withLock { programs + 1 }
+        guard program <= limits.programsPerTask else { return (CodeMode.budgetRefusal(limits), false, true) }
+        let runner = CodeModeRunner(tools: tools, recipes: recipes, limits: limits, shapes: shapes) { [weak self] tool, arguments in
             guard let self else { return .refused("Stopped.") }
             let result = await self.call(PrivateLocalTools.Tool(server: tool.server, name: tool.name, description: "", schema: [:]).functionName,
                                          arguments: arguments)
@@ -534,7 +537,7 @@ final class PrivateLocalToolSession: @unchecked Sendable {
         }
         Log.write("code mode: Private Local ran a program: \(result.toolCalls) calls, \(result.refused) refused, "
                   + String(format: "%.1f s", result.seconds) + (result.error == nil ? "" : ", ended with an error"))
-        return (result.reply, result.error == nil, true)
+        return (result.reply + CodeMode.budgetNote(program: program, limits: limits), result.error == nil, true)
     }
 
     private func connection(_ server: String) async throws -> MCPRelayClient {

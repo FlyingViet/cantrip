@@ -114,8 +114,9 @@ final class CodeModeHost: @unchecked Sendable {
         ]
     }
 
-    /// `tools/call`: the reply text and whether it's an error.
-    func callTool(_ name: String, arguments: [String: Any], hello: MCPRelay.Hello) async -> (text: String, isError: Bool) {
+    /// `tools/call`: the reply text and whether it's an error. `budget` counts this connection's programs.
+    func callTool(_ name: String, arguments: [String: Any], hello: MCPRelay.Hello,
+                  budget: CodeModeProgramBudget = CodeModeProgramBudget()) async -> (text: String, isError: Bool) {
         let caller = resolveCaller(hello)
         let tools = await tools(for: caller)
         let recipes = recipes().filter { $0.available(with: tools) }
@@ -133,9 +134,11 @@ final class CodeModeHost: @unchecked Sendable {
             }
             var limits = limits
             limits.outputCharacters = caller.outputCharacters
+            guard let program = budget.begin(limits: limits) else { return (CodeMode.budgetRefusal(limits), true) }
             let result = await run(script, arguments: arguments["args"] as? [String: Any] ?? [:], tools: tools,
                                    recipes: recipes, caller: caller, limits: limits)
-            return (result.reply, result.error != nil)
+            budget.finished()
+            return (result.reply + CodeMode.budgetNote(program: program, limits: limits), result.error != nil)
         default:
             return ("cantrip_code has no tool \(name).", true)
         }
@@ -218,9 +221,36 @@ final class CodeModeConnections: @unchecked Sendable {
 }
 
 /// `cantrip_code` as a relay upstream: answers the backend's JSON-RPC in the host.
+/// Counts a task's programs. A relay connection outlives a turn (a backend keeps its MCP servers for the
+/// whole session), so the count starts over after `idleReset` without a program.
+final class CodeModeProgramBudget: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var last = Date.distantPast
+    let idleReset: TimeInterval
+    var now: () -> Date = Date.init
+
+    init(idleReset: TimeInterval = 300) { self.idleReset = idleReset }
+
+    /// This program's number in its task, or nil when the task has run all it may.
+    func begin(limits: CodeMode.Limits) -> Int? {
+        lock.withLock {
+            let time = now()
+            if time.timeIntervalSince(last) > idleReset { count = 0 }
+            last = time
+            guard count < limits.programsPerTask else { return nil }
+            count += 1
+            return count
+        }
+    }
+
+    func finished() { lock.withLock { last = now() } }
+}
+
 final class CodeModeUpstream: Upstream, @unchecked Sendable {
     private let hello: MCPRelay.Hello
     private let host: CodeModeHost
+    private let budget = CodeModeProgramBudget()
     private let deliver: (Data) -> Void
     private let lock = NSLock()
     private var tasks: [Task<Void, Never>] = []
@@ -247,8 +277,8 @@ final class CodeModeUpstream: Upstream, @unchecked Sendable {
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
-            start(id: id) { [host, hello] in
-                let (text, isError) = await host.callTool(name, arguments: arguments, hello: hello)
+            start(id: id) { [host, hello, budget] in
+                let (text, isError) = await host.callTool(name, arguments: arguments, hello: hello, budget: budget)
                 return ["content": [["type": "text", "text": text]], "isError": isError]
             }
         default:
