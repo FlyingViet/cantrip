@@ -1,9 +1,10 @@
 import SwiftUI
 import AppKit
 
-/// An assistant reply's markdown. Prose between code fences and images is one selectable text
-/// view (`CantripRichText`), so a selection runs across paragraphs, lists, headings and tables;
-/// code fences keep their Copy box, and images (and image files the text mentions) preview below.
+/// An assistant reply's markdown. Prose between code fences, tables and images is one selectable
+/// text view (`CantripRichText`), so a selection runs across paragraphs, lists and headings; code
+/// fences keep their Copy box, tables are grids, and images (and image files the text mentions)
+/// preview below.
 struct MarkdownContent: View {
     let text: String
     var size: CantripRichText.Size = .body
@@ -24,6 +25,9 @@ struct MarkdownContent: View {
                                         secondary: secondary) { openURL($0) }
                 case .code(let code, _):
                     CodeBlockView(code: code)
+                case .table(let table):
+                    CantripMarkdownTable(markdown: TabMentions.markdown(table), size: size,
+                                         secondary: secondary) { openURL($0) }
                 case .image(let line):
                     if loadsImages {
                         ImageBlock(target: Self.imageTarget(line))

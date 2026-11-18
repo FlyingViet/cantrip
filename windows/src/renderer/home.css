@@ -550,14 +550,25 @@ code {
   background: none;
 }
 
+/* Cells wrap between words to fit the message; a table too wide even then scrolls sideways. */
 .markdown table {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
+  overflow-wrap: normal;
 }
 
 .markdown th,
 .markdown td {
   padding: 4px 8px;
   border: 1px solid #3a3a3d;
+  vertical-align: top;
+}
+
+.markdown th:not([align]) {
+  text-align: left;
 }
 
 /* A long job's steps: done, the one it's on and those to come, over their names. */

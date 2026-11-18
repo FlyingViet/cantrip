@@ -84,8 +84,20 @@ final class WorkNotesMacRenderTests: XCTestCase {
         XCTAssertFalse(texts.contains { $0.contains("Checking the build log") }, "Notes stay folded: \(texts)")
         let reply = try XCTUnwrap(textViews(in: host).first { $0.string.hasPrefix("The build passed") }, "\(texts)")
         XCTAssertTrue(reply.isSelectable && !reply.isEditable)
-        XCTAssertTrue(reply.string.contains("Tests\t12 min"), "Paragraphs, list and table share one view")
-        XCTAssertGreaterThan(reply.frame.height, 80)
+        XCTAssertTrue(reply.string.contains("the pruner now removes it"), "Paragraphs and the list share one view")
+        XCTAssertFalse(reply.string.contains("12 min"), "The table is a grid of its own")
+        XCTAssertGreaterThan(reply.frame.height, 40)
+
+        func cell(_ text: String) throws -> NSTextView {
+            try XCTUnwrap(textViews(in: host).first { $0.string == text }, "No cell \"\(text)\" in \(texts)")
+        }
+        func frame(_ text: String) throws -> CGRect { let view = try cell(text); return view.convert(view.bounds, to: nil) }
+        XCTAssertEqual(try frame("Build").minX, try frame("Tests").minX, accuracy: 0.5, "Each column's cells line up")
+        XCTAssertEqual(try frame("Tests").midY, try frame("12 min").midY, accuracy: 0.5, "Each row's cells line up")
+        XCTAssertGreaterThan(try frame("12 min").minX, try frame("Tests").maxX)
+        let time = try XCTUnwrap(cell("12 min").textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+        XCTAssertEqual(time.alignment, .right, "Right-aligned columns stay right-aligned")
+        XCTAssertTrue(try cell("12 min").isSelectable)
     }
 
     /// Sizing like `Text`: no room at the minimum, the unwrapped text as the ideal, wrapped to a

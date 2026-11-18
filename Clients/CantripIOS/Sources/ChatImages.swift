@@ -179,8 +179,8 @@ enum ChatMarkdownImages {
     private static func isBlank(_ line: String) -> Bool { line.allSatisfy(\.isWhitespace) }
 }
 
-/// A reply's markdown. Prose between code fences and images is one selectable text view, so a
-/// selection runs across paragraphs, lists and headings (`CantripRichText`).
+/// A reply's markdown. Prose between code fences, tables and images is one selectable text view,
+/// so a selection runs across paragraphs, lists and headings (`CantripRichText`); tables are grids.
 struct ChatAssistantText: View {
     let text: String
     let images: [ChatMessageImage]
@@ -208,6 +208,10 @@ struct ChatAssistantText: View {
                     }
                 case .code(let code, _):
                     CantripCodeBlockText(code: code, size: size, secondary: secondary)
+                case .table(let table):
+                    CantripMarkdownTable(markdown: table, size: size, secondary: secondary) { url in
+                        _ = open(url)
+                    }
                 case .image(let line):
                     if loadsImages {
                         Markdown(line)

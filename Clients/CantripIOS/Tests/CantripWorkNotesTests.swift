@@ -110,8 +110,14 @@ final class CantripWorkNotesTests: XCTestCase {
         XCTAssertFalse(texts.contains { $0.contains("Checking the build log") }, "Notes stay folded: \(texts)")
         let reply = try XCTUnwrap(views.first { $0.attributedText.string.hasPrefix("The build passed") }, "\(texts)")
         XCTAssertTrue(reply.isSelectable && !reply.isEditable)
-        XCTAssertTrue(reply.attributedText.string.contains("Tests\t12 min"), "Paragraphs, list and table share one view")
-        XCTAssertGreaterThan(reply.bounds.height, 100)
+        XCTAssertTrue(reply.attributedText.string.contains("the pruner now removes it"), "Paragraphs and the list share one view")
+        XCTAssertFalse(reply.attributedText.string.contains("12 min"), "The table is a grid of its own")
+        XCTAssertGreaterThan(reply.bounds.height, 60)
+        let tests = try XCTUnwrap(views.first { $0.attributedText.string == "Tests" }, "\(texts)")
+        let time = try XCTUnwrap(views.first { $0.attributedText.string == "12 min" }, "\(texts)")
+        XCTAssertTrue(tests.isSelectable && time.isSelectable)
+        XCTAssertEqual(tests.convert(tests.bounds, to: window).midY, time.convert(time.bounds, to: window).midY, accuracy: 0.5,
+                       "A row's cells line up")
 
         // A selection across paragraphs and list items copies as plain lines.
         reply.selectedRange = NSRange(location: 0, length: (reply.attributedText.string as NSString).range(of: "pruner").location)

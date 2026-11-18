@@ -2047,8 +2047,14 @@ for you, or a run that stopped) uses its last note as the answer and folds the
 earlier ones. Replies saved before this, and Private Local replies, show as before.
 
 Reply text selects like a document on every client: a selection can run across
-paragraphs, list items, headings and tables, and copies as plain lines (tables
-as tab-separated columns). Code blocks and images keep their own boxes.
+paragraphs, list items and headings, and copies as plain lines. Code blocks and
+images keep their own boxes. Tables are grids: each column is as wide as its
+cells on one line, narrowed to fit the reply by wrapping between words (never
+inside one), and a table too wide even then scrolls sideways. In Cantrip Agent,
+Gateway Mac and the Mac panel each cell selects on its own and its menu adds
+**Copy Table**, which copies the whole table as tab-separated columns; in the
+browser and Windows clients a selection across the table copies the same way.
+VoiceOver reads each row as its cells in order, each after its column's heading.
 
 ## Web link previews and inline place cards
 

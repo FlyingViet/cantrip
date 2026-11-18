@@ -6,9 +6,9 @@ import AppKit
 #endif
 
 /// Markdown drawn as one selectable text view, so a selection can run across paragraphs, list
-/// items, headings and tables (SwiftUI draws each markdown block as its own `Text`, and a
-/// selection stops at the block's edge). Fenced code and image lines are separate segments that
-/// callers draw as boxes and previews.
+/// items and headings (SwiftUI draws each markdown block as its own `Text`, and a selection
+/// stops at the block's edge). Fenced code, image lines and tables are separate segments that
+/// callers draw as boxes, previews and grids.
 ///
 /// Keep this file identical in Sources/Cantrip (the Mac panel) and Clients/CantripIOS/Sources
 /// (iPhone, iPad, Gateway Mac and the Home window).
@@ -26,6 +26,8 @@ enum CantripRichText {
         case code(String, language: String)
         /// One markdown image line, e.g. `![Chart](cantrip-preview://…)`.
         case image(String)
+        /// A top-level table's lines: header, delimiter row and body rows (`CantripMarkdownTable`).
+        case table(String)
     }
 
     enum Size: Hashable {
@@ -38,18 +40,54 @@ enum CantripRichText {
         pattern: #"^ {0,3}!\[[^\]\r\n]*\]\((<[^>\r\n]+>|[^()\r\n]+)\)[ \t]*\r?$"#
     )
 
-    /// `markdown` cut into prose, top-level code fences and image lines, in order. Fences
-    /// indented under a list item stay in the prose so the list keeps its numbering.
+    private static let tableDelimiter = try! NSRegularExpression(
+        pattern: #"^ {0,3}\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*\r?$"#
+    )
+    private static let listOrQuoteStart = try! NSRegularExpression(pattern: #"^ {0,3}([-*+]|\d{1,9}[.)])([ \t]|$)|^ {0,3}>"#)
+
+    /// A table row's cells: split at pipes that aren't escaped, without the outer pipes.
+    static func tableCells(_ line: String) -> [String] {
+        var text = line.trimmingCharacters(in: .whitespaces)
+        if text.hasPrefix("|") { text.removeFirst() }
+        if text.hasSuffix("|"), !text.hasSuffix("\\|") { text.removeLast() }
+        var cells: [String] = []
+        var cell = ""
+        var escaped = false
+        for character in text {
+            if character == "|", !escaped {
+                cells.append(cell.trimmingCharacters(in: .whitespaces))
+                cell = ""
+            } else {
+                cell.append(character)
+            }
+            escaped = character == "\\" && !escaped
+        }
+        cells.append(cell.trimmingCharacters(in: .whitespaces))
+        return cells
+    }
+
+    private static func matches(_ regex: NSRegularExpression, _ line: String) -> Bool {
+        regex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) != nil
+    }
+
+    /// `markdown` cut into prose, top-level code fences, image lines and tables, in order. Fences
+    /// and tables inside a list item or quote stay in the prose so the list keeps its numbering.
     static func segments(_ markdown: String) -> [Segment] {
         var segments: [Segment] = []
         var prose: [String] = []
         var fence: (mark: Character, count: Int, language: String, lines: [String], separate: Bool)?
+        // Inside a list item or quote, until a blank line ends it.
+        var nested = false
         func flushProse() {
             let text = prose.joined(separator: "\n").trimmingCharacters(in: .newlines)
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { segments.append(.prose(text)) }
             prose = []
         }
-        for line in markdown.components(separatedBy: "\n") {
+        let lines = markdown.components(separatedBy: "\n")
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            index += 1
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if let open = fence {
                 let closes = trimmed.prefix(while: { $0 == open.mark }).count >= open.count
@@ -84,6 +122,25 @@ enum CantripRichText {
                 segments.append(.image(trimmed))
                 continue
             }
+            let indent = line.prefix(while: { $0 == " " }).count
+            if trimmed.isEmpty {
+                nested = false
+            } else if indent >= 2 || matches(listOrQuoteStart, line) {
+                nested = true
+            }
+            if !nested, trimmed.contains("|"), index < lines.count, lines[index].contains("|"),
+               matches(tableDelimiter, lines[index]), tableCells(line).count == tableCells(lines[index]).count {
+                flushProse()
+                var table = [line, lines[index]]
+                index += 1
+                while index < lines.count, lines[index].contains("|"),
+                      !lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
+                    table.append(lines[index])
+                    index += 1
+                }
+                segments.append(.table(table.joined(separator: "\n")))
+                continue
+            }
             prose.append(line)
         }
         if let open = fence, open.separate {
@@ -110,7 +167,8 @@ enum CantripRichText {
     }()
 
     /// `markdown` (prose only; see `segments`) as attributed text: headings, emphasis, inline
-    /// code, links, lists with hanging indents, quotes, and tables as tab-aligned columns.
+    /// code, links, lists with hanging indents, quotes, and tables nested in a list or quote as
+    /// tab-aligned columns.
     static func attributed(_ markdown: String, style: Style) -> NSAttributedString {
         let key = "\(style.key)\u{0}\(markdown)" as NSString
         if let hit = cache.object(forKey: key) { return hit }
@@ -170,15 +228,12 @@ enum CantripRichText {
         }
     }
 
-    private static func render(_ markdown: String, style: Style) -> NSAttributedString {
-        let base = PlatformFont.systemFont(ofSize: style.size)
+    private static func blocks(_ markdown: String, style: Style) -> [Block]? {
         let color = style.secondary ? secondaryColor : labelColor
         let options = AttributedString.MarkdownParsingOptions(
             allowsExtendedAttributes: false, interpretedSyntax: .full,
             failurePolicy: .returnPartiallyParsedIfPossible)
-        guard let parsed = try? AttributedString(markdown: markdown, options: options) else {
-            return NSAttributedString(string: markdown, attributes: [.font: base, .foregroundColor: color])
-        }
+        guard let parsed = try? AttributedString(markdown: markdown, options: options) else { return nil }
         var blocks: [Block] = []
         for run in parsed.runs {
             let components = run.presentationIntent?.components ?? []
@@ -197,6 +252,15 @@ enum CantripRichText {
             }
             block.content.append(NSAttributedString(string: text, attributes: inlineAttributes(
                 inline, link: run.link, block: block, style: style, color: color)))
+        }
+        return blocks
+    }
+
+    private static func render(_ markdown: String, style: Style) -> NSAttributedString {
+        let base = PlatformFont.systemFont(ofSize: style.size)
+        let color = style.secondary ? secondaryColor : labelColor
+        guard let blocks = blocks(markdown, style: style) else {
+            return NSAttributedString(string: markdown, attributes: [.font: base, .foregroundColor: color])
         }
 
         let out = NSMutableAttributedString()
@@ -379,6 +443,152 @@ enum CantripRichText {
         return out
     }
 
+    // MARK: - Tables
+
+    /// A top-level table (`Segment.table`) as cells for `CantripMarkdownTable`.
+    final class Table {
+        /// Every row, the header included, has one cell per column.
+        let header: [NSAttributedString]
+        let rows: [[NSAttributedString]]
+        let metrics: TableMetrics
+
+        init(header: [NSAttributedString], rows: [[NSAttributedString]], metrics: TableMetrics) {
+            self.header = header
+            self.rows = rows
+            self.metrics = metrics
+        }
+
+        /// The header and rows as tab-separated lines, so a copied table pastes as columns.
+        var tabSeparated: String {
+            ([header] + rows).map { row in
+                row.map { CantripRichText.plain($0.string).replacingOccurrences(of: "\t", with: " ") }.joined(separator: "\t")
+            }.joined(separator: "\n")
+        }
+
+        /// A body row for VoiceOver: each cell after its column's heading, in order.
+        func spoken(_ row: Int) -> String {
+            rows[row].enumerated().compactMap { column, cell in
+                let text = CantripRichText.plain(cell.string).trimmingCharacters(in: .whitespaces)
+                guard !text.isEmpty else { return nil }
+                let title = CantripRichText.plain(header[column].string).trimmingCharacters(in: .whitespaces)
+                return title.isEmpty ? text : "\(title): \(text)"
+            }.joined(separator: ", ")
+        }
+    }
+
+    /// Joins a slash to the character after it inside a word ("tok/s", "41/50"), so a narrow
+    /// column wraps between words instead of after the slash.
+    static let wordJoiner = "\u{2060}"
+
+    /// `text` without the word joiners table cells add.
+    static func plain(_ text: String) -> String { text.replacingOccurrences(of: wordJoiner, with: "") }
+
+    /// A table's columns: each one's widest cell on one line (`natural`) and its longest word
+    /// (`minimum`), so cells wrap between words rather than inside them.
+    struct TableMetrics: Hashable {
+        var natural: [CGFloat]
+        var minimum: [CGFloat]
+        var gap: CGFloat
+        /// The widest a column gets in a table that scrolls sideways.
+        var widest: CGFloat
+
+        /// The columns side by side, with the gaps between them.
+        func width(_ widths: [CGFloat]) -> CGFloat {
+            widths.reduce(0, +) + gap * CGFloat(max(0, widths.count - 1))
+        }
+
+        /// Columns that fit in `available`: one line each when they can, else each column narrowed
+        /// in proportion to how much of it wraps, down to its longest word. Nil when even that
+        /// is too wide.
+        func fitting(_ available: CGFloat) -> [CGFloat]? {
+            let room = available - gap * CGFloat(max(0, natural.count - 1))
+            let most = natural.reduce(0, +)
+            let least = minimum.reduce(0, +)
+            if most <= room { return natural }
+            guard least <= room, most > least else { return nil }
+            let share = (room - least) / (most - least)
+            return zip(natural, minimum).map { $1 + ($0 - $1) * share }
+        }
+
+        /// Columns for a table that scrolls sideways: one line up to `widest`, wrapping beyond it.
+        var scrolling: [CGFloat] { zip(natural, minimum).map { max($1, min($0, widest)) } }
+    }
+
+    private static let tables: NSCache<NSString, Table> = {
+        let cache = NSCache<NSString, Table>()
+        cache.countLimit = 100
+        return cache
+    }()
+    private static let word = try! NSRegularExpression(pattern: #"\S+"#)
+
+    /// One `Segment.table` as cells, or nil when it doesn't parse as a table.
+    static func table(_ markdown: String, style: Style) -> Table? {
+        let key = "\(style.key)\u{0}\(markdown)" as NSString
+        if let hit = tables.object(forKey: key) { return hit }
+        guard let cells = blocks(markdown, style: style)?.filter({ $0.table != nil }),
+              let kind = cells.first?.table?.kind, cells.first?.row?.kind == .tableHeaderRow else { return nil }
+        var rows: [[Block]] = []
+        var rowID: Int?
+        for cell in cells {
+            if cell.row?.identity != rowID || rows.isEmpty { rows.append([]); rowID = cell.row?.identity }
+            rows[rows.count - 1].append(cell)
+        }
+        var alignments: [PresentationIntent.TableColumn.Alignment] = []
+        if case .table(let described) = kind { alignments = described.map(\.alignment) }
+        let columns = max(alignments.count, (cells.map(\.column).max() ?? 0) + 1)
+        let grid: [[NSAttributedString]] = rows.map { row in
+            (0..<columns).map { column in
+                let content = NSMutableAttributedString(
+                    attributedString: row.first { $0.column == column }?.content ?? NSAttributedString())
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.lineSpacing = style.size * 0.1
+                switch column < alignments.count ? alignments[column] : .left {
+                case .right: paragraph.alignment = .right
+                case .center: paragraph.alignment = .center
+                default: paragraph.alignment = .natural
+                }
+                content.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: content.length))
+                let string = content.string as NSString
+                for index in stride(from: string.length - 2, through: 1, by: -1) where string.character(at: index) == 0x2F {
+                    let around = [string.character(at: index - 1), string.character(at: index + 1)]
+                    guard !around.contains(where: { UnicodeScalar($0).map(CharacterSet.whitespaces.contains) ?? true }) else { continue }
+                    content.insert(NSAttributedString(string: wordJoiner, attributes: content.attributes(at: index, effectiveRange: nil)),
+                                   at: index + 1)
+                }
+                return content
+            }
+        }
+        // Text measures a little differently in each text system: a point of slack keeps a
+        // column that fits on one line from wrapping its last word.
+        var natural = Array(repeating: CGFloat(0), count: columns)
+        var minimum = natural
+        let longestWord = style.size * 8
+        for row in grid {
+            for (column, cell) in row.enumerated() {
+                natural[column] = max(natural[column], ceil(cell.size().width) + 1)
+                let string = cell.string as NSString
+                for match in word.matches(in: cell.string, range: NSRange(location: 0, length: string.length)) {
+                    let width = ceil(cell.attributedSubstring(from: match.range).size().width) + 1
+                    minimum[column] = max(minimum[column], min(width, longestWord))
+                }
+            }
+        }
+        natural = zip(natural, minimum).map { max($0, $1) }
+        let table = Table(header: grid[0], rows: Array(grid.dropFirst()), metrics: TableMetrics(
+            natural: natural, minimum: minimum, gap: style.size * 0.75, widest: style.size * 14))
+        tables.setObject(table, forKey: key)
+        return table
+    }
+
+    static func copy(_ text: String) {
+        #if canImport(UIKit)
+        UIPasteboard.general.string = text
+        #else
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
+
     // MARK: - Platform
 
     #if canImport(UIKit)
@@ -501,17 +711,131 @@ struct CantripCodeBlockText: View {
     }
 }
 
+/// A top-level markdown table (`CantripRichText.Segment.table`) as a grid. Columns are as wide as
+/// their cells on one line, narrowed to fit by wrapping between words; a table too wide even then
+/// scrolls sideways. Each cell selects like the prose and its menu adds Copy Table (tab-separated
+/// columns); VoiceOver reads each row as its cells in order, each after its column's heading.
+struct CantripMarkdownTable: View {
+    let markdown: String
+    var size: CantripRichText.Size = .body
+    var secondary = false
+    var onOpenURL: (URL) -> Void = { _ in }
+    #if canImport(UIKit)
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// A step below the prose (subheadline, or footnote in notes), so a phone fits more columns.
+    private var points: CGFloat {
+        let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(dynamicTypeSize))
+        return UIFont.preferredFont(forTextStyle: size == .body ? .subheadline : .footnote, compatibleWith: traits).pointSize
+    }
+    #else
+    private var points: CGFloat { CantripMarkdownText.pointSize(size, dynamicTypeSize: .large) }
+    #endif
+    @Environment(\.displayScale) private var displayScale
+
+    static let inset: CGFloat = 10
+
+    var body: some View {
+        if let table = CantripRichText.table(markdown, style: CantripRichText.Style(size: points, secondary: secondary)) {
+            ViewThatFits(in: .horizontal) {
+                grid(table, scrolls: false)
+                ScrollView(.horizontal) { grid(table, scrolls: true) }
+                    .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Table")
+        } else {
+            CantripMarkdownText(markdown: markdown, size: size, secondary: secondary, onOpenURL: onOpenURL)
+        }
+    }
+
+    private func grid(_ table: CantripRichText.Table, scrolls: Bool) -> some View {
+        let copy = table.tabSeparated
+        return VStack(alignment: .leading, spacing: 0) {
+            row(table.header, table: table, scrolls: scrolls)
+                .accessibilityHidden(true)
+            ForEach(Array(table.rows.enumerated()), id: \.offset) { index, cells in
+                row(cells, table: table, scrolls: scrolls)
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(Color.primary.opacity(index == 0 ? 0.22 : 0.1))
+                            .frame(height: 1 / displayScale)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(table.spoken(index))
+                    .accessibilityAction(named: "Copy Table") { CantripRichText.copy(copy) }
+            }
+        }
+        .padding(.horizontal, Self.inset)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func row(_ cells: [NSAttributedString], table: CantripRichText.Table, scrolls: Bool) -> some View {
+        CantripTableRowLayout(metrics: table.metrics, scrolls: scrolls) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                CantripSelectableText(text: cell, onOpenURL: onOpenURL, copyTable: table.tabSeparated)
+            }
+        }
+        .padding(.vertical, points * 0.4)
+    }
+}
+
+/// A table row: its cells side by side at the table's column widths for the proposed width
+/// (`TableMetrics`), as tall as its tallest cell. Every row of a table gets the same proposal,
+/// so their columns line up.
+struct CantripTableRowLayout: Layout {
+    let metrics: CantripRichText.TableMetrics
+    /// Columns for a sideways-scrolling table, whatever the proposal.
+    let scrolls: Bool
+
+    /// Without a width (the ideal size), the narrowest the columns go.
+    func widths(_ proposed: CGFloat?) -> [CGFloat] {
+        if scrolls { return metrics.scrolling }
+        guard let proposed, proposed.isFinite else { return metrics.minimum }
+        return metrics.fitting(proposed) ?? metrics.minimum
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let widths = widths(proposal.width)
+        var height: CGFloat = 0
+        for (subview, width) in zip(subviews, widths) {
+            height = max(height, subview.sizeThatFits(ProposedViewSize(width: width, height: nil)).height)
+        }
+        return CGSize(width: metrics.width(widths), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        for (subview, width) in zip(subviews, widths(proposal.width)) {
+            subview.place(at: CGPoint(x: x, y: bounds.minY), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: width, height: nil))
+            x += width + metrics.gap
+        }
+    }
+}
+
 #if canImport(UIKit)
+/// Copies without the word joiners table cells add (`CantripRichText.wordJoiner`).
+final class CantripTextView: UITextView {
+    override func copy(_ sender: Any?) {
+        super.copy(sender)
+        if let copied = UIPasteboard.general.string, copied.contains(CantripRichText.wordJoiner) {
+            UIPasteboard.general.string = CantripRichText.plain(copied)
+        }
+    }
+}
+
 /// Read-only attributed text with native range selection (handles, Copy, Look Up, Translate)
 /// that sizes to its width like `Text`.
 struct CantripSelectableText: UIViewRepresentable {
     let text: NSAttributedString
     var onOpenURL: (URL) -> Void = { _ in }
+    /// A table cell's whole table as tab-separated text, offered as Copy Table in the edit menu.
+    var copyTable: String?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView(usingTextLayoutManager: true)
+        let view = CantripTextView(usingTextLayoutManager: true)
         view.isEditable = false
         view.isSelectable = true
         view.isScrollEnabled = false
@@ -527,6 +851,7 @@ struct CantripSelectableText: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.onOpenURL = onOpenURL
+        context.coordinator.copyTable = copyTable
         // Same text (often a new copy of it): leave the view alone, so layout doesn't restart.
         if context.coordinator.text?.isEqual(to: text) != true {
             context.coordinator.text = text
@@ -546,6 +871,7 @@ struct CantripSelectableText: UIViewRepresentable {
         var text: NSAttributedString?
         var sizes: [CGFloat: CGSize] = [:]
         var onOpenURL: (URL) -> Void = { _ in }
+        var copyTable: String?
 
         func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem,
                       defaultAction: UIAction) -> UIAction? {
@@ -559,19 +885,43 @@ struct CantripSelectableText: UIViewRepresentable {
             if case .link(let url) = textItem.content, url.scheme != "https", url.scheme != "http" { return nil }
             return UITextItem.MenuConfiguration(menu: defaultMenu)
         }
+
+        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
+                      suggestedActions: [UIMenuElement]) -> UIMenu? {
+            guard let table = copyTable else { return nil }
+            var actions = suggestedActions
+            actions.insert(UIAction(title: "Copy Table", image: UIImage(systemName: "tablecells")) { _ in
+                CantripRichText.copy(table)
+            }, at: min(1, actions.count))
+            return UIMenu(children: actions)
+        }
     }
 }
 #else
+/// Copies without the word joiners table cells add (`CantripRichText.wordJoiner`).
+final class CantripTextView: NSTextView {
+    override func copy(_ sender: Any?) {
+        super.copy(sender)
+        let pasteboard = NSPasteboard.general
+        if let copied = pasteboard.string(forType: .string), copied.contains(CantripRichText.wordJoiner) {
+            pasteboard.clearContents()
+            pasteboard.setString(CantripRichText.plain(copied), forType: .string)
+        }
+    }
+}
+
 /// Read-only attributed text with native selection (drag, Copy, Look Up) that sizes to its width
 /// like `Text`.
 struct CantripSelectableText: NSViewRepresentable {
     let text: NSAttributedString
     var onOpenURL: (URL) -> Void = { url in NSWorkspace.shared.open(url) }
+    /// A table cell's whole table as tab-separated text, offered as Copy Table in the context menu.
+    var copyTable: String?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSTextView {
-        let view = NSTextView(usingTextLayoutManager: false)
+        let view = CantripTextView(usingTextLayoutManager: false)
         view.isEditable = false
         view.isSelectable = true
         view.drawsBackground = false
@@ -590,6 +940,7 @@ struct CantripSelectableText: NSViewRepresentable {
 
     func updateNSView(_ view: NSTextView, context: Context) {
         context.coordinator.onOpenURL = onOpenURL
+        context.coordinator.copyTable = copyTable
         // Same text (often a new copy of it): leave the view alone, so layout doesn't restart.
         if context.coordinator.text?.isEqual(to: text) != true {
             context.coordinator.text = text
@@ -610,11 +961,25 @@ struct CantripSelectableText: NSViewRepresentable {
         var text: NSAttributedString?
         var sizes: [CGFloat: CGSize] = [:]
         var onOpenURL: (URL) -> Void = { _ in }
+        var copyTable: String?
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) else { return false }
             onOpenURL(url)
             return true
+        }
+
+        func textView(_ view: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
+            guard copyTable != nil else { return menu }
+            let item = NSMenuItem(title: "Copy Table", action: #selector(copyTableText), keyEquivalent: "")
+            item.target = self
+            let copy = menu.items.firstIndex { $0.action == #selector(NSText.copy(_:)) }
+            menu.insertItem(item, at: copy.map { $0 + 1 } ?? 0)
+            return menu
+        }
+
+        @objc func copyTableText() {
+            if let copyTable { CantripRichText.copy(copyTable) }
         }
     }
 }
