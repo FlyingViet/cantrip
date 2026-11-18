@@ -7,7 +7,7 @@ import { bridge } from "../../bridge";
 import * as nav from "../../state/nav";
 import * as remote from "../../state/remote";
 import {
-  CONFIRMED_ACTION, orderedViews, parseView, viewActionOutcome, viewActionPath, viewPath, viewSummary, type ShownView,
+  CONFIRMED_ACTION, orderedViews, parseView, viewActionOutcome, viewActionPath, viewPath, viewSummary, type CachedView, type ShownView,
   type ViewActionOutcome,
 } from "../../state/views";
 import { toast } from "../kit";
@@ -25,8 +25,20 @@ export interface OpenViewState {
 
 /** The view whose screen is open. */
 export const openView = signal<OpenViewState | null>(null);
-/** The last answer for each view this run, so reopening one shows it at once while it loads. */
-const lastShown = new Map<string, ShownView>();
+/**
+ * Each view's last answer this run and when it came: the grid's thumbnails draw it, and reopening a view shows it at
+ * once while it loads. The view's screen, its Refresh and the thumbnails all keep it current.
+ */
+export const viewDetails = signal<ReadonlyMap<string, CachedView>>(new Map());
+/** More than the Mac keeps (30 views), so a listed view's answer is never dropped. */
+const MAX_CACHED_VIEWS = 40;
+
+function forget(id: string): void {
+  if (!viewDetails.peek().has(id)) return;
+  const next = new Map(viewDetails.peek());
+  next.delete(id);
+  viewDetails.value = next;
+}
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -45,7 +57,7 @@ function replaceSummary(summary: HomeViewSummary): void {
 
 /** Opens a view's screen with what this PC last saw of it. */
 export function showView(id: string): void {
-  const cached = lastShown.get(id) ?? null;
+  const cached = viewDetails.peek().get(id)?.shown ?? null;
   openView.value = { id, shown: cached, loading: !cached, refreshing: false, error: null };
 }
 
@@ -53,11 +65,13 @@ export function closeView(id: string): void {
   if (openView.value?.id === id) openView.value = null;
 }
 
-/** A fresh answer for a view: shown if its screen is open, and its row updated. */
-export function applyShown(id: string, shown: ShownView): void {
-  lastShown.delete(id);
-  lastShown.set(id, shown);
-  while (lastShown.size > 12) lastShown.delete(lastShown.keys().next().value!);
+/** A fresh answer for a view: cached for its thumbnail, shown if its screen is open, and its row updated. */
+export function applyShown(id: string, shown: ShownView, fetchedAt = Date.now()): void {
+  const next = new Map(viewDetails.peek());
+  next.delete(id);
+  next.set(id, { shown, fetchedAt });
+  while (next.size > MAX_CACHED_VIEWS) next.delete(next.keys().next().value!);
+  viewDetails.value = next;
   update(id, { shown, loading: false, error: null });
   replaceSummary(shown.view);
 }
@@ -66,7 +80,7 @@ export function loadFailed(id: string, error: unknown): void {
   update(id, { loading: false, error: `Couldn't load this view: ${message(error)}` });
 }
 
-/** `GET /api/v1/home/views/<id>` (the open view's poller). */
+/** `GET /api/v1/home/views/<id>` (the open view's poller and the grid's thumbnails). */
 export function fetchView(id: string): Promise<unknown> {
   return api<unknown>(viewPath(id));
 }
@@ -109,7 +123,7 @@ export async function deleteView(view: HomeViewSummary): Promise<boolean> {
     update(view.id, { error: `Couldn't delete this view: ${message(error)}` });
     return false;
   }
-  lastShown.delete(view.id);
+  forget(view.id);
   const list = remote.homeViews.value;
   if (list) remote.homeViews.value = list.filter((item) => item.id !== view.id);
   closeView(view.id);

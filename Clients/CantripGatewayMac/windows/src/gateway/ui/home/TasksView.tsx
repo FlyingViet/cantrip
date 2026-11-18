@@ -1,6 +1,6 @@
-// Home's Tasks (CantripHomeTasksView): Views first (when the Mac serves them), then every task with its schedule,
-// latest run and pause switch; a workspace task opens its records, any other task its Edit sheet. Drag, Alt+Up/Down
-// or the row menu reorders.
+// Home's Tasks (CantripHomeTasksView): Views first (when the Mac serves them, a thumbnail grid), then every task with
+// its schedule, latest run and pause switch; a workspace task opens its records, any other task its Edit sheet. Drag,
+// Alt+Up/Down or the row menu reorders. With views listed, the Views and Tasks headings collapse their sections.
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { HomeTask } from "../../api/types";
@@ -11,7 +11,7 @@ import { Icon, StatusIcon } from "../icons";
 import { confirmDialog, MenuButton, Spinner, type MenuEntry } from "../kit";
 import { isScheduled, taskStatusKind, taskSubtitle, taskTimeLine, waitingRuns } from "./homeLogic";
 import { deleteTask, homeDataError, moveTask, moveTaskBy, pendingEnabled, updateTask } from "./homeState";
-import { contextMenuAt, ErrorLine, HomeGate, RunSummary, ScrollArea, Unavailable } from "./parts";
+import { contextMenuAt, ErrorLine, HomeGate, RunSummary, ScrollArea, SectionHeading, Unavailable } from "./parts";
 import { NeedsInputGlyph, PausedGlyph, ScheduledGlyph, SymbolIcon, WarningGlyph } from "./symbols";
 import { RecordEditorSheet, TaskEditSheet } from "./TaskSheets";
 import { RecordDetailView, WorkspaceView } from "./TaskWorkspace";
@@ -89,10 +89,12 @@ function TaskList(): JSX.Element {
         action={<button type="button" class="btn primary large" onClick={() => nav.openChat("Create a task for ")}>Create in Chat</button>} />
     );
     if (!listedViews().length) return empty;
+    const collapsed = tasksNav.sectionCollapsed("tasks");
     return (
       <ScrollArea scrollKey="list" saved={tasksNav.savedScroll} onSave={tasksNav.saveScroll} onRendered={tasksNav.restoreFocus}>
         <ViewsSection />
-        {empty}
+        <TasksHeading count={0} collapsed={collapsed} />
+        <div id="hm-tasks-body" class="hm-section-body" hidden={collapsed}>{collapsed ? null : empty}</div>
       </ScrollArea>
     );
   }
@@ -131,13 +133,16 @@ function TaskList(): JSX.Element {
     rows[index + offset]?.focus();
   };
 
+  // With views listed, Tasks is a section of its own that collapses; with none, the list shows as it always has.
+  const sectioned = listedViews().length > 0;
+  const collapsed = sectioned && tasksNav.sectionCollapsed("tasks");
   return (
     <ScrollArea scrollKey="list" saved={tasksNav.savedScroll} onSave={tasksNav.saveScroll} onRendered={tasksNav.restoreFocus}>
       <ErrorLine text={error} class="hm-error-banner" />
       <ViewsSection />
-      {listedViews().length ? <h3 class="hm-views-heading hm-tasks-heading" id="hm-tasks-title">Tasks</h3> : null}
-      <ul ref={listRef} class="hm-task-list" aria-label="Tasks" onKeyDown={onKeyDown}>
-        {tasks.map((task) => (
+      {sectioned ? <TasksHeading count={tasks.length} collapsed={collapsed} /> : null}
+      <ul ref={listRef} id="hm-tasks-body" class="hm-task-list hm-section-body" aria-label="Tasks" hidden={collapsed} onKeyDown={onKeyDown}>
+        {collapsed ? null : tasks.map((task) => (
           <TaskRow key={task.id} task={task} waitingSession={waiting.get(task.id.toUpperCase())} draggable={canReorder}
             entries={() => menu(task)}
             dropClass={drag && drag.over === task.id && drag.id !== task.id ? (drag.after ? " drop-after" : " drop-before") : drag?.id === task.id ? " dragging" : ""}
@@ -151,6 +156,14 @@ function TaskList(): JSX.Element {
         ))}
       </ul>
     </ScrollArea>
+  );
+}
+
+/** "Tasks" under the views: collapses the task list, remembered on this PC. */
+export function TasksHeading(props: { count: number; collapsed: boolean }): JSX.Element {
+  return (
+    <SectionHeading id="hm-tasks-title" class="hm-tasks-heading" title="Tasks" count={props.count} noun={["task", "tasks"]}
+      collapsed={props.collapsed} controls="hm-tasks-body" onToggle={() => tasksNav.toggleSection("tasks")} />
   );
 }
 

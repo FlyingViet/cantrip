@@ -229,6 +229,56 @@ function partsOf(blocks: RemoteCardBlock[], style: "panel" | "link", options: Ca
   return parts;
 }
 
+/** Rows a thumbnail's fallback table, list or key-value block keeps. */
+export const PREVIEW_ROWS = 3;
+
+/** The blocks a card shows with its tabs resolved to the first tab: the other tabs' blocks are left out. */
+function firstTabBlocks(blocks: RemoteCardBlock[]): RemoteCardBlock[] {
+  const shown: RemoteCardBlock[] = [];
+  let index = 0;
+  while (index < blocks.length) {
+    const block = blocks[index++];
+    if (block.type !== "tabs") {
+      shown.push(block);
+      continue;
+    }
+    const counts = cardTabs(block).map((tab) => tab.count);
+    shown.push(...firstTabBlocks(blocks.slice(index, index + (counts[0] ?? 0))));
+    index += counts.reduce((sum, count) => sum + count, 0);
+  }
+  return shown;
+}
+
+/**
+ * What a view's thumbnail draws (the views grid spec's previewBlocks): the resolved card is flat, so a `tabs` block
+ * keeps only its first tab's blocks. Up to 2 stats and the first chart, in document order; when there are none, the
+ * first table, list or key-value block cut to its first 3 rows. Headings, sections, buttons, notices, badges, progress,
+ * images and maps never show.
+ */
+export function previewBlocks(card: RemoteCardDocument | null | undefined): RemoteCardBlock[] {
+  const blocks = firstTabBlocks(list(card?.blocks).slice(0, MAX_CARD_BLOCKS)).filter((block) => isKnownBlock(block) && blockHasContent(block));
+  let stats = 0, chart = false;
+  const chosen = blocks.filter((block) => {
+    if (block.type === "stat" && stats < 2) {
+      stats += 1;
+      return true;
+    }
+    if (block.type === "chart" && !chart) {
+      chart = true;
+      return true;
+    }
+    return false;
+  });
+  if (chosen.length) return chosen;
+  const fallback = blocks.find((block) => block.type === "table" || block.type === "list" || block.type === "keyValue");
+  if (!fallback) return [];
+  switch (fallback.type) {
+    case "table": return [{ ...fallback, tableRows: list(fallback.tableRows).slice(0, PREVIEW_ROWS) }];
+    case "list": return [{ ...fallback, items: list(fallback.items).slice(0, PREVIEW_ROWS) }];
+    default: return [{ ...fallback, rows: list(fallback.rows).slice(0, PREVIEW_ROWS) }];
+  }
+}
+
 /** The map's region: the block's, or one around its pins when it has none. */
 export function mapRegion(block: RemoteCardBlock): { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number } {
   const pins = mapPins(block);

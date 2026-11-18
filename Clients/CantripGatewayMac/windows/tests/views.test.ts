@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { h } from "preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The card renderer, kit and Home state touch the page and the preload bridge when they load.
@@ -41,14 +42,20 @@ import type { HomeTasksSnapshot, RemoteCardBlock, RemoteCardDocument } from "../
 import * as nav from "../src/gateway/state/nav";
 import * as remote from "../src/gateway/state/remote";
 import {
-  parseView, parseViews, supportsViews, viewActionOutcome, viewActionPath, viewPath, ViewPoller, viewsPath, viewSubtitle,
+  parseView, parseViews, supportsViews, ThumbnailLoader, thumbnailNeedsFetch, viewActionOutcome, viewActionPath, viewColumns, viewPath,
+  ViewPoller, viewRowLabel, viewsPath, viewSubtitle, type CachedView,
 } from "../src/gateway/state/views";
-import { listedViews } from "../src/gateway/ui/home/ViewsView";
-import { deleteView, openView, refreshView, setViewPinned, showView, viewActionHandler } from "../src/gateway/ui/home/viewsState";
+import { TasksHeading } from "../src/gateway/ui/home/TasksView";
+import { listedViews, ViewPreview, ViewsSection, ViewTile, ViewTiles } from "../src/gateway/ui/home/ViewsView";
+import {
+  applyShown, deleteView, openView, refreshView, setViewPinned, showView, viewActionHandler, viewDetails,
+} from "../src/gateway/ui/home/viewsState";
 import * as tasksNav from "../src/gateway/ui/home/tasksNav";
 import { confirmDialog, toast } from "../src/gateway/ui/kit";
 import { CardView } from "../src/gateway/ui/transcript/Cards";
-import { cardButtons, cardParts, cardTable, lineChart, pieSlices, VIEW_ACTION_KINDS, type CardPart } from "../src/gateway/ui/transcript/cardLogic";
+import {
+  cardButtons, cardParts, cardTable, lineChart, pieSlices, previewBlocks, VIEW_ACTION_KINDS, type CardPart,
+} from "../src/gateway/ui/transcript/cardLogic";
 
 const apiMock = vi.mocked(api);
 const confirmMock = vi.mocked(confirmDialog);
@@ -68,6 +75,8 @@ function render(value: unknown): Node[] {
   if (Array.isArray(value)) return value.flatMap(render);
   if (typeof value === "string" || typeof value === "number") return [String(value)];
   if (!isVNode(value)) return [];
+  // The grid measures itself and loads thumbnails with hooks: it stays a leaf here (its tiles are drawn on their own).
+  if (typeof value.type === "function" && value.type.name === "ViewsGrid") return [{ tag: "ViewsGrid", props: value.props, children: [] }];
   if (typeof value.type === "function") return render((value.type as (props: unknown) => unknown)(value.props));
   const { children, ...props } = value.props;
   return [{ tag: String(value.type), props, children: render(children) }];
@@ -467,5 +476,203 @@ describe("views gating", () => {
     await remote.refreshViews();
     expect(apiMock).toHaveBeenLastCalledWith("/api/v1/home/views?revision=r1");
     expect(listedViews().map((view) => view.id)).toEqual(["V1"]);
+  });
+});
+
+// MARK: The views grid (the views grid spec): columns, collapsing, thumbnails and their fetch policy
+
+describe("views grid", () => {
+  const shownOf = (name: string): CachedView => ({ shown: parseView(fixture(name)), fetchedAt: 1_000 });
+
+  afterEach(() => {
+    localStorage.removeItem("cantrip.home.views.collapsed");
+    localStorage.removeItem("cantrip.home.tasks.collapsed");
+    viewDetails.value = new Map();
+  });
+
+  it("fits as many columns as the width allows, 1 to 6", () => {
+    const widths = [320, 375, 599, 600, 700, 1000, 1600, 2000];
+    expect(widths.map(viewColumns)).toEqual([1, 2, 3, 2, 2, 4, 6, 6]);
+    expect([0, -5, Number.NaN].map(viewColumns)).toEqual([1, 1, 1]);
+    const tiles = render(ViewTiles({ views: [VIEW], columns: 4, compact: false, at: new Date(), preview: () => h("i", null) }));
+    expect(find(tiles, tag("ul"))[0].props).toMatchObject({ class: "hm-view-grid", style: { gridTemplateColumns: "repeat(4, minmax(0, 1fr))" } });
+    expect(find(render(ViewTiles({ views: [VIEW], columns: 1, compact: true, at: new Date(), preview: () => h("i", null) })), tag("ul"))[0].props.class)
+      .toBe("hm-view-grid compact");
+  });
+
+  it("collapses Views and Tasks, remembering each on this PC", () => {
+    remote.homeTasks.value = TASKS;
+    remote.homeViews.value = [VIEW, { ...VIEW, id: "V2", name: "Week" }];
+    const heading = (nodes: Node[]) => find(nodes, (element) => element.props.class === "hm-section-toggle")[0];
+
+    let nodes = render(ViewsSection());
+    expect(heading(nodes).props).toMatchObject({ "aria-expanded": "true", "aria-controls": "hm-views-body", "aria-label": "Views, 2 views" });
+    expect(text([heading(nodes)])).toBe("Views");
+    expect(find(nodes, (element) => element.props.id === "hm-views-body")[0].props.hidden).toBe(false);
+    expect(find(nodes, tag("ViewsGrid"))).toHaveLength(1);
+
+    (heading(nodes).props.onClick as () => void)();
+    expect(localStorage.getItem("cantrip.home.views.collapsed")).toBe("1");
+    nodes = render(ViewsSection());
+    expect(heading(nodes).props).toMatchObject({ "aria-expanded": "false", "aria-label": "Views, 2 views" });
+    expect(text([heading(nodes)])).toBe("Views· 2");
+    expect(find(nodes, (element) => element.props.id === "hm-views-body")[0].props.hidden).toBe(true);
+    expect(find(nodes, tag("ViewsGrid"))).toHaveLength(0);
+    (heading(nodes).props.onClick as () => void)();
+    expect(localStorage.getItem("cantrip.home.views.collapsed")).toBe("0");
+    expect(tasksNav.sectionCollapsed("views")).toBe(false);
+
+    // A flag stored earlier (another launch) is read back on the next render.
+    localStorage.setItem("cantrip.home.tasks.collapsed", "1");
+    expect(tasksNav.sectionCollapsed("tasks")).toBe(true);
+    const tasks = heading(render(TasksHeading({ count: 1, collapsed: tasksNav.sectionCollapsed("tasks") })));
+    expect(tasks.props).toMatchObject({ "aria-expanded": "false", "aria-controls": "hm-tasks-body", "aria-label": "Tasks, 1 task" });
+    expect(text([tasks])).toBe("Tasks· 1");
+    (tasks.props.onClick as () => void)();
+    expect(localStorage.getItem("cantrip.home.tasks.collapsed")).toBe("0");
+    expect(tasksNav.sectionCollapsed("views")).toBe(false);
+  });
+
+  it("previews the first tab's stats and charts of a flat card", () => {
+    // Real resolved cards: This week's charts belong to its other tabs; Homelab's section is only a heading.
+    expect(previewBlocks(shownOf("view-dashboard").shown.card).map((block) => [block.type, block.label])).toEqual([["stat", "Active interview loops"]]);
+    expect(previewBlocks(shownOf("view-homelab").shown.card).map((block) => [block.type, block.label])).toEqual([["stat", "Services up"]]);
+
+    const pie: RemoteCardBlock = { type: "chart", kind: "pie", title: "By stage", items: [{ label: "Applied", high: 4 }] };
+    const bar: RemoteCardBlock = { type: "chart", kind: "bar", title: "By category", items: [{ label: "Rent", high: 2 }] };
+    const picked = previewBlocks(card([
+      { type: "header", title: "Pipeline" }, { type: "notice", title: "Heads up" }, { type: "badges", badges: [{ text: "New" }] },
+      { type: "progress", label: "Reading" }, { type: "actions", buttons: [{ id: "a", kind: "refresh", label: "Refresh" }] },
+      { type: "section", title: "Numbers" }, pie, stat("Loops"), bar, stat("Offers"), stat("Rejected"),
+    ]));
+    expect(picked).toEqual([pie, stat("Loops"), stat("Offers")]);
+
+    // Tabs own the next `count` blocks each, nested tabs included; only the first tab's show.
+    expect(previewBlocks(card([
+      { type: "tabs", tabs: [{ title: "Now", count: 3 }, { title: "Later", count: 2 }] },
+      { type: "tabs", tabs: [{ title: "Inner", count: 1 }, { title: "Other", count: 1 }] }, stat("Inner"), stat("Other inner"),
+      stat("Later one"), bar,
+      stat("After"),
+    ])).map((block) => block.label ?? block.title)).toEqual(["Inner", "After"]);
+  });
+
+  it("falls back to the first table, list or key-value block, cut to three rows", () => {
+    const rows = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `r${index}`, cells: [{ text: `Trip ${index}` }] }));
+    const table: RemoteCardBlock = { type: "table", title: "Trips", columns: [{ title: "Trip" }], tableRows: rows(5) };
+    const list: RemoteCardBlock = { type: "list", title: "Latest", items: [1, 2, 3, 4].map((index) => ({ title: `Item ${index}` })) };
+    const keyValue: RemoteCardBlock = { type: "keyValue", rows: [1, 2, 3, 4].map((index) => ({ key: `Key ${index}`, value: `${index}` })) };
+    const [trimmed] = previewBlocks(card([{ type: "header", title: "Trips" }, table, list]));
+    expect(trimmed.type).toBe("table");
+    expect(trimmed.tableRows?.map((row) => row.id)).toEqual(["r0", "r1", "r2"]);
+    expect(table.tableRows).toHaveLength(5);
+    expect(previewBlocks(card([list, table]))[0].items?.map((item) => item.title)).toEqual(["Item 1", "Item 2", "Item 3"]);
+    expect(previewBlocks(card([keyValue]))[0].rows?.map((row) => row.key)).toEqual(["Key 1", "Key 2", "Key 3"]);
+    expect(previewBlocks(card([{ type: "header", title: "Empty" }, { type: "notice", title: "Nothing to show" }]))).toEqual([]);
+    // A table hidden in the second tab doesn't count.
+    expect(previewBlocks(card([{ type: "tabs", tabs: [{ title: "A", count: 1 }, { title: "B", count: 1 }] },
+      { type: "notice", title: "Soon" }, table]))).toEqual([]);
+  });
+
+  it("draws a tile as one labelled button over an inert preview", () => {
+    const at = new Date("2026-11-17T22:00:00Z");
+    const view = { ...VIEW, pinned: true, private: true, subtitle: "Service health", problems: ["The homelab server didn't answer."] };
+    const nodes = render(ViewTile({ view, at, preview: h(ViewPreview, { cached: shownOf("view-homelab") }) }));
+    const buttons = find(nodes, tag("button"));
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].props).toMatchObject({
+      "data-focus-key": "view:V1", "data-id": "home.view.V1", "aria-label": "Homelab, pinned, private, Service health, 1 problem",
+    });
+    expect(find(nodes, (element) => element.props.class === "hm-view-mark").map((mark) => mark.props.title))
+      .toEqual(["Pinned", "Private: it reads a private server"]);
+    const preview = find(nodes, (element) => element.props.class === "hm-view-preview")[0];
+    expect(preview.props).toMatchObject({ inert: true, "aria-hidden": "true" });
+    expect(find([preview], (element) => element.props.class === "card-stat")).toHaveLength(1);
+    expect(text(find([preview], (element) => element.props.class === "card-stat-value"))).toBe("2");
+    expect(find([preview], (element) => element.props.class === "card-foot")).toEqual([]);
+    expect(text(find(nodes, (element) => element.props.class === "hm-view-status warning"))).toBe("The homelab server didn't answer.");
+
+    const refreshing = render(ViewTile({ view: { ...view, refreshing: true }, at, preview: h(ViewPreview, { cached: undefined }) }));
+    expect(find(refreshing, tag("button"))[0].props["aria-label"]).toBe("Homelab, pinned, private, Service health, refreshing, 1 problem");
+    expect(text(find(refreshing, (element) => element.props.class === "hm-view-status"))).toBe("Refreshing…");
+    expect(find(refreshing, (element) => element.props.class === "hm-view-placeholder loading")).toHaveLength(1);
+    expect(viewRowLabel({ ...VIEW, subtitle: "Every service" })).toBe("Homelab, Every service");
+  });
+
+  it("fetches a thumbnail with nothing cached, a changed summary or an elapsed refreshAfter", () => {
+    const cached = shownOf("view-homelab");
+    const summary = cached.shown.view;
+    const refreshMs = cached.shown.refreshMs;
+    expect(refreshMs).toBe(30_000);
+    expect(thumbnailNeedsFetch(summary, undefined, 1_000)).toBe(true);
+    expect(thumbnailNeedsFetch(summary, cached, 1_000 + refreshMs - 1)).toBe(false);
+    expect(thumbnailNeedsFetch({ ...summary }, cached, 1_000 + refreshMs)).toBe(true);
+    expect(thumbnailNeedsFetch({ ...summary, updatedAt: "2030-01-01T00:00:00Z" }, cached, 2_000)).toBe(true);
+    expect(thumbnailNeedsFetch({ ...summary, refreshedAt: "2030-01-01T00:00:00Z" }, cached, 2_000)).toBe(true);
+    // The same moment written another way is no change.
+    const refreshed = new Date(String(summary.refreshedAt)).toISOString();
+    expect(thumbnailNeedsFetch({ ...summary, refreshedAt: refreshed }, cached, 2_000)).toBe(false);
+  });
+
+  it("loads at most two thumbnails at a time, in list order, and wakes when the next one is due", async () => {
+    let clock = 0;
+    const cache = new Map<string, CachedView>();
+    const pending: { callback: () => void; ms: number }[] = [];
+    const timers = { set: (callback: () => void, ms: number) => pending.push({ callback, ms }), clear: vi.fn() };
+    const answers = new Map<string, (value: unknown) => void>();
+    const load = vi.fn((id: string) => new Promise((resolve) => answers.set(id, resolve)));
+    const answer = (id: string) => answers.get(id)!({ view: { ...VIEW, id, name: id }, card: VIEW_CARD, refreshAfter: 30 });
+    const loader = new ThumbnailLoader({
+      load, cached: (id) => cache.get(id), now: () => clock, timers,
+      onView: (id, shown) => cache.set(id, { shown, fetchedAt: clock }),
+    });
+    const views = ["A", "B", "C"].map((id) => ({ ...VIEW, id, name: id }));
+    loader.update(views);
+    expect(load.mock.calls.map(([id]) => id)).toEqual(["A", "B"]);
+    loader.update(views);
+    expect(load).toHaveBeenCalledTimes(2);
+
+    clock = 500;
+    answer("A");
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+    expect(load.mock.calls[2][0]).toBe("C");
+    answer("B");
+    answer("C");
+    await vi.waitFor(() => expect(loader.loading.size).toBe(0));
+    expect(cache.size).toBe(3);
+
+    // Everything is cached and current: nothing to fetch until A's refreshAfter runs out.
+    loader.update(views);
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(pending.at(-1)?.ms).toBe(30_000);
+
+    // The list says B changed: only B is fetched again.
+    loader.update([views[0], { ...views[1], updatedAt: "2030-01-01T00:00:00Z" }, views[2]]);
+    expect(load.mock.calls.slice(3).map(([id]) => id)).toEqual(["B"]);
+
+    loader.stop();
+    clock = 60_000;
+    pending.at(-1)?.callback();
+    expect(load).toHaveBeenCalledTimes(4);
+  });
+
+  it("shares one cache with the view's screen, which shows the last answer at once", () => {
+    remote.homeTasks.value = TASKS;
+    remote.homeViews.value = [VIEW];
+    const shown = parseView({ view: { ...VIEW, refreshedAt: "2026-11-17T21:30:00Z" }, card: VIEW_CARD, refreshAfter: 45 });
+    applyShown("V1", shown, 12_345);
+    expect(viewDetails.value.get("V1")).toEqual({ shown, fetchedAt: 12_345 });
+    expect(thumbnailNeedsFetch(remote.homeViews.value![0], viewDetails.value.get("V1"), 12_345 + 44_000)).toBe(false);
+    showView("V1");
+    expect(openView.value).toMatchObject({ id: "V1", loading: false, shown });
+  });
+
+  it("lists a view saved on the Mac at the next poll", async () => {
+    remote.homeTasks.value = TASKS;
+    apiMock.mockResolvedValueOnce({ views: [VIEW], revision: "r1" });
+    await remote.refreshViews();
+    apiMock.mockResolvedValueOnce({ views: [VIEW, { ...VIEW, id: "V9", name: "Follow-ups", pinned: false }], revision: "r2" });
+    await remote.refreshViews();
+    expect(apiMock).toHaveBeenLastCalledWith("/api/v1/home/views?revision=r1");
+    expect(listedViews().map((view) => view.name)).toEqual(["Homelab", "Follow-ups"]);
   });
 });

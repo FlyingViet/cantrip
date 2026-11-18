@@ -73,8 +73,12 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   seconds while it stays open (the last cards stay through a failed refresh, retried a minute
   later) and never once it closes. Older Macs that send no cards show runs and records as before.
 - **Views.** Screens Cantrip Home builds on request from live data ([Views](../../../docs/views.md)): **Views** sits
-  above the tasks in Tasks, pinned first, each with its icon, a pin and a lock (private views), and its subtitle or
-  when it was updated (right-click to Pin, Unpin or Delete). A view opens in place with Back, **Refresh**, **Pin**/**Unpin**
+  above the tasks in Tasks as a grid of thumbnails (as many columns as fit, up to 6), pinned first, each with its
+  icon, a pin and a lock (private views), its subtitle or when it was updated, and a small preview of its first
+  numbers and chart drawn from its live card (refreshing or a problem shows under it; right-click to Pin, Unpin or
+  Delete). The **Views** and **Tasks** headings collapse their sections (remembered on this PC); thumbnails load only
+  while the grid shows, two at a time, again when the view changes or its `refreshAfter` runs out, and never ask the
+  Mac to refresh. A view saved on the Mac appears at the next poll. A view opens in place with Back, **Refresh**, **Pin**/**Unpin**
   and **Delete** (asks first), its card at a readable width, fetched again every `refreshAfter` seconds while it's
   open. Views draw the new blocks: section headings, tables (real column headers, a label per row, scrolling
   sideways), tabs (a tab list; arrows, Home and End move between tabs), line and donut charts with a legend and

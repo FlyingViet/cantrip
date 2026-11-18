@@ -142,3 +142,32 @@ export function contextMenuAt(event: MouseEvent, entries: MenuEntry[], label: st
   }
   openMenu(point, entries, { label });
 }
+
+/**
+ * A collapsible section's heading: one disclosure button (chevron down when open, right when collapsed, the title,
+ * and "· 6" while collapsed) inside an h3, named "Views, 6 views" and controlling the section's body.
+ */
+export function SectionHeading(props: {
+  id: string;
+  title: string;
+  count: number;
+  /** The counted thing, singular and plural: ["view", "views"]. */
+  noun: readonly [string, string];
+  collapsed: boolean;
+  controls: string;
+  onToggle: () => void;
+  class?: string;
+}): JSX.Element {
+  const { title, count, collapsed } = props;
+  return (
+    <h3 id={props.id} class={`hm-section-heading${props.class ? ` ${props.class}` : ""}`}>
+      <button type="button" class="hm-section-toggle" aria-expanded={collapsed ? "false" : "true"} aria-controls={props.controls}
+        aria-label={`${title}, ${count} ${count === 1 ? props.noun[0] : props.noun[1]}`} data-focus-key={`section:${props.id}`}
+        onClick={props.onToggle}>
+        <Icon name={collapsed ? "chevron.right" : "chevron.down"} size={12} class="hm-section-chevron" />
+        <span class="hm-section-title">{title}</span>
+        {collapsed ? <span class="hm-section-count">· {count}</span> : null}
+      </button>
+    </h3>
+  );
+}

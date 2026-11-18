@@ -169,9 +169,165 @@ export function viewSubtitle(view: HomeViewSummary, now = new Date(), locale?: s
   return `Updated ${when}`;
 }
 
-/** The row's name for screen readers: "Homelab, pinned, private, Updated 3:39 PM". */
+/** The row's name for screen readers: "Homelab, pinned, private, Updated 3:39 PM, refreshing, 1 problem". */
 export function viewRowLabel(view: HomeViewSummary, now = new Date(), locale?: string): string {
-  return [view.name, view.pinned ? "pinned" : "", view.private ? "private" : "", viewSubtitle(view, now, locale)].filter(Boolean).join(", ");
+  const problems = Array.isArray(view.problems) ? view.problems.filter((problem) => typeof problem === "string" && problem.trim()).length : 0;
+  return [
+    view.name, view.pinned ? "pinned" : "", view.private ? "private" : "", viewSubtitle(view, now, locale),
+    view.refreshing === true ? "refreshing" : "", problems ? `${problems} ${problems === 1 ? "problem" : "problems"}` : "",
+  ].filter(Boolean).join(", ");
+}
+
+/** A view's first problem, for the line under its thumbnail. */
+export function viewProblem(view: HomeViewSummary): string | null {
+  return (Array.isArray(view.problems) ? view.problems : []).map(text).find((problem) => problem !== undefined) ?? null;
+}
+
+// MARK: The views grid (the views grid spec): columns and thumbnails
+
+/** Space between thumbnails, in pixels. */
+export const VIEW_GRID_GAP = 12;
+/** Below this width the grid is compact: narrower and shorter thumbnails. */
+export const VIEW_GRID_COMPACT_WIDTH = 600;
+
+/** How many thumbnails fit across a grid `width` pixels wide (its content box): 1 to 6. */
+export function viewColumns(width: number): number {
+  if (!Number.isFinite(width) || width <= 0) return 1;
+  const minimum = width < VIEW_GRID_COMPACT_WIDTH ? 160 : 240;
+  return Math.min(6, Math.max(1, Math.floor((width + VIEW_GRID_GAP) / (minimum + VIEW_GRID_GAP))));
+}
+
+/** A view's last answer on this PC and when it arrived (ms). Thumbnails and the view's screen share these. */
+export interface CachedView {
+  shown: ShownView;
+  fetchedAt: number;
+}
+
+function stamp(value: unknown): number | null {
+  return viewDate(value)?.getTime() ?? null;
+}
+
+/**
+ * When a thumbnail's view should be fetched again (ms): now (-Infinity) with nothing cached or when the list's
+ * updatedAt/refreshedAt moved past the cached answer's, else once its `refreshAfter` runs out.
+ */
+export function thumbnailDueAt(summary: HomeViewSummary, cached: CachedView | undefined): number {
+  if (!cached) return -Infinity;
+  const view = cached.shown.view;
+  if (stamp(summary.updatedAt) !== stamp(view.updatedAt) || stamp(summary.refreshedAt) !== stamp(view.refreshedAt)) return -Infinity;
+  return cached.fetchedAt + cached.shown.refreshMs;
+}
+
+/** Whether a thumbnail needs `GET /api/v1/home/views/<id>` at `now`. */
+export function thumbnailNeedsFetch(summary: HomeViewSummary, cached: CachedView | undefined, now: number): boolean {
+  return thumbnailDueAt(summary, cached) <= now;
+}
+
+/** Thumbnail requests at once. */
+export const THUMBNAIL_MAX_IN_FLIGHT = 2;
+
+/**
+ * Keeps the listed views' thumbnails current while the grid shows: fetches each view with nothing cached, a changed
+ * summary or an elapsed `refreshAfter`, at most two at a time, in list order, and checks again when the next one is
+ * due. A failed fetch waits a minute. It only ever reads (`GET`); it never asks the Mac to refresh a view.
+ */
+export class ThumbnailLoader {
+  private views: HomeViewSummary[] = [];
+  private readonly inFlight = new Set<string>();
+  private readonly failedAt = new Map<string, number>();
+  private timer: unknown = null;
+  private paused = false;
+  private stopped = false;
+
+  constructor(private readonly options: {
+    load: (id: string) => Promise<unknown>;
+    cached: (id: string) => CachedView | undefined;
+    onView: (id: string, shown: ShownView) => void;
+    now?: () => number;
+    timers?: PollerTimers;
+    maxInFlight?: number;
+  }) {}
+
+  /** The views being fetched now. */
+  get loading(): ReadonlySet<string> {
+    return this.inFlight;
+  }
+
+  /** The views the grid lists now (pinned first): fetches the ones that are due. */
+  update(views: HomeViewSummary[]): void {
+    this.views = views;
+    this.pump();
+  }
+
+  /** Stops asking while the grid can't be seen (requests already sent still land); `resume` picks up again. */
+  pause(): void {
+    this.paused = true;
+    this.clearTimer();
+  }
+
+  resume(): void {
+    this.paused = false;
+    this.pump();
+  }
+
+  stop(): void {
+    this.stopped = true;
+    this.clearTimer();
+  }
+
+  private now(): number {
+    return (this.options.now ?? Date.now)();
+  }
+
+  private get timers(): PollerTimers {
+    return this.options.timers ?? defaultTimers;
+  }
+
+  private clearTimer(): void {
+    if (this.timer !== null) this.timers.clear(this.timer);
+    this.timer = null;
+  }
+
+  private dueAt(view: HomeViewSummary): number {
+    const failed = this.failedAt.get(view.id);
+    return Math.max(failed === undefined ? -Infinity : failed + VIEW_RETRY_MS, thumbnailDueAt(view, this.options.cached(view.id)));
+  }
+
+  private pump(): void {
+    this.clearTimer();
+    if (this.stopped || this.paused) return;
+    const limit = this.options.maxInFlight ?? THUMBNAIL_MAX_IN_FLIGHT;
+    const now = this.now();
+    let next = Infinity;
+    for (const view of this.views) {
+      if (this.inFlight.has(view.id)) continue;
+      const due = this.dueAt(view);
+      if (due > now) next = Math.min(next, due);
+      else if (this.inFlight.size < limit) this.fetch(view.id);
+    }
+    // A full queue picks up again as each request lands; otherwise wake for the next view that comes due.
+    if (this.inFlight.size < limit && Number.isFinite(next)) {
+      this.timer = this.timers.set(() => {
+        this.timer = null;
+        this.pump();
+      }, Math.max(0, next - now));
+    }
+  }
+
+  private fetch(id: string): void {
+    this.inFlight.add(id);
+    void this.options.load(id)
+      .then((data) => {
+        const shown = parseView(data);
+        this.failedAt.delete(id);
+        this.options.onView(id, shown);
+      })
+      .catch(() => { this.failedAt.set(id, this.now()); })
+      .finally(() => {
+        this.inFlight.delete(id);
+        this.pump();
+      });
+  }
 }
 
 export interface PollerTimers {

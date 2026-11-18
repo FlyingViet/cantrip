@@ -203,28 +203,66 @@
 .ha-menu .icon.s12 { color: var(--secondary); }
 
 /* Views (docs/views.md): the list above Tasks and a view's screen */
-.hm-views { padding: 8px 12px 4px; }
-.hm-views-heading { margin: 0; padding: 8px 10px 4px; font-size: 12px; font-weight: 600; color: var(--secondary); }
+.hm-views { padding: 8px 22px 4px; }
+.hm-views-error { padding: 0 0 6px; }
+
+/* Collapsible section headings (Views, Tasks): one disclosure button each */
+.hm-section-heading { margin: 0; padding: 6px 0 4px; font-size: 12px; font-weight: 600; color: var(--secondary); }
 .hm-tasks-heading { padding: 10px 22px 0; }
-.hm-views-error { padding: 0 10px 6px; }
-.hm-view-list { list-style: none; margin: 0; padding: 0; }
-.hm-view-item { position: relative; }
-.hm-view-item + .hm-view-item::before {
-  content: ""; position: absolute; top: 0; left: 50px; right: 6px; height: 1px; background: var(--separator); pointer-events: none;
+.hm-section-toggle {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: -6px; padding: 3px 8px 3px 6px; border: 0; border-radius: 6px;
+  background: transparent; color: inherit; font: inherit;
 }
-.hm-view {
-  display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 10px; border: 0; border-radius: 8px;
-  background: transparent; color: var(--text); text-align: left;
+.hm-section-toggle:hover { background: var(--row-hover); color: var(--text); }
+.hm-section-chevron { flex: none; }
+.hm-section-count { color: var(--tertiary); font-weight: 500; }
+.hm-section-body[hidden] { display: none; }
+
+/* The views grid: thumbnails in viewColumns(width) equal columns */
+.hm-view-grid { list-style: none; margin: 0; padding: 4px 0 10px; display: grid; gap: 12px; }
+.hm-view-tile {
+  position: relative; min-width: 0; height: 196px; display: flex; flex-direction: column; gap: 6px; padding: 10px 10px 10px;
+  border-radius: 12px; border: 0.5px solid rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.035);
 }
-.hm-view:hover { background: var(--row-hover); }
-.hm-view:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
-.hm-view-icon { width: 28px; height: 28px; flex: none; display: grid; place-items: center; }
-.hm-view-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.hm-view-grid.compact .hm-view-tile { height: 176px; }
+.hm-view-tile:hover { background: rgba(255, 255, 255, 0.06); }
+.hm-view-tile:has(.hm-view-open:active) { background: rgba(255, 255, 255, 0.08); }
+/* The tile's button stretches over the whole tile, so the preview (which ignores the pointer) opens it too. */
+.hm-view-open {
+  flex: none; display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 0; border: 0; background: transparent;
+  color: var(--text); font: inherit; text-align: left;
+}
+.hm-view-open::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.hm-view-open:focus-visible { box-shadow: none; }
+.hm-view-open:focus-visible::after { box-shadow: var(--focus); }
+.hm-view-icon { width: 20px; height: 20px; flex: none; display: grid; place-items: center; }
 .hm-view-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .hm-view-name { min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hm-view-mark { flex: none; display: inline-grid; color: var(--secondary); }
 .hm-view-subtitle { font-size: 11.5px; color: var(--secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hm-view-chevron { flex: none; color: var(--tertiary, var(--secondary)); }
+.hm-view-preview {
+  position: relative; flex: 1; min-height: 0; overflow: hidden; border-radius: 9px; pointer-events: none; user-select: none;
+  border: 0.5px solid rgba(255, 255, 255, 0.1); background: linear-gradient(180deg, #21304a 0%, #181a1f 70%);
+}
+/* The card renderer's blocks at 60%: laid out 1/0.6 as wide, then scaled down into the tile. */
+.hm-view-preview-scale { width: calc(100% / 0.6); transform: scale(0.6); transform-origin: 0 0; }
+.hm-view-preview .card-panel { max-width: none; margin: 0; border: 0; border-radius: 0; background: transparent; }
+.hm-view-preview .card-table-scroll { overflow: hidden; }
+.hm-view-placeholder { display: flex; flex-direction: column; gap: 9px; padding: 14px 12px; }
+.hm-view-placeholder span { height: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.07); }
+.hm-view-placeholder span:nth-child(1) { width: 38%; }
+.hm-view-placeholder span:nth-child(2) { width: 72%; height: 18px; }
+.hm-view-placeholder span:nth-child(3) { width: 56%; }
+.hm-view-placeholder.loading span { animation: hm-view-pulse 1.6s ease-in-out infinite; }
+@keyframes hm-view-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .hm-view-placeholder.loading span { animation: none; } }
+.hm-view-status {
+  flex: none; display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; color: var(--secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
+}
+.hm-view-status.warning { color: var(--orange); }
+.hm-view-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hm-view-status .icon { flex: none; }
 .hm-view-private { display: inline-grid; color: var(--secondary); }
 .hm-view-detail { padding: 16px 22px 24px; }
 .hm-view-banner { max-width: var(--readable); margin: 0 auto 10px; }

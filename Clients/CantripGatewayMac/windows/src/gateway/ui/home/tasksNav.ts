@@ -70,3 +70,36 @@ export function savedScroll(key: string): number {
 export function saveScroll(key: string, top: number): void {
   scrolls.set(key, top);
 }
+
+// MARK: Collapsible sections (the views grid spec): remembered on this PC
+
+export type TasksSection = "views" | "tasks";
+
+/** localStorage keys: "1" collapsed, absent or "0" expanded. */
+export const SECTION_COLLAPSED_KEYS: Readonly<Record<TasksSection, string>> = {
+  views: "cantrip.home.views.collapsed",
+  tasks: "cantrip.home.tasks.collapsed",
+};
+
+type FlagStorage = Pick<Storage, "getItem" | "setItem">;
+
+function storage(): FlagStorage | null {
+  try { return globalThis.localStorage ?? null; } catch { return null; }
+}
+
+/** Bumped by every change so sections redraw; the flags themselves live in storage. */
+const collapseChanges = signal(0);
+
+export function sectionCollapsed(section: TasksSection, store: FlagStorage | null = storage()): boolean {
+  void collapseChanges.value;
+  try { return store?.getItem(SECTION_COLLAPSED_KEYS[section]) === "1"; } catch { return false; }
+}
+
+export function setSectionCollapsed(section: TasksSection, collapsed: boolean, store: FlagStorage | null = storage()): void {
+  try { store?.setItem(SECTION_COLLAPSED_KEYS[section], collapsed ? "1" : "0"); } catch { /* storage unavailable */ }
+  collapseChanges.value += 1;
+}
+
+export function toggleSection(section: TasksSection, store: FlagStorage | null = storage()): void {
+  setSectionCollapsed(section, !sectionCollapsed(section, store), store);
+}
