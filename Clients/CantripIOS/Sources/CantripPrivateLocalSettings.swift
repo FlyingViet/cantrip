@@ -170,6 +170,9 @@ struct CantripPrivateLocalSettingsView: View {
                     }
                 }
             }
+            // Grouped scrolls on the Mac too (like Model Settings); the default Mac form grew past
+            // the sheet with the tools list and drew under Cancel and Save.
+            .formStyle(.grouped)
             .disabled(loading || saving)
             .navigationTitle("Private Local")
             .navigationBarTitleDisplayMode(.inline)

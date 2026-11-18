@@ -12,6 +12,21 @@ struct PrivateLocalSettingsView: View {
     @State private var loadingTools = false
 
     var body: some View {
+        // Everything but the buttons scrolls: with the tools list the sheet is taller than a short
+        // window, and without a scroll view it spilled over the buttons.
+        VStack(spacing: 0) {
+            ScrollView {
+                fields.padding(24)
+            }
+            Divider()
+            buttons.padding(.horizontal, 24).padding(.vertical, 14)
+        }
+        .frame(width: 580)
+        .frame(minHeight: 360, idealHeight: 720)
+        .onAppear(perform: reload)
+    }
+
+    private var fields: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label("Private Local Settings", systemImage: "lock.shield")
                 .font(.headline)
@@ -42,35 +57,36 @@ struct PrivateLocalSettingsView: View {
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             toolsSection
             if let error { Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
-            HStack {
-                Button("Reload settings", action: reload)
-                Button("Load server models") {
-                    loading = true
-                    let draft = configuration
-                    Task {
-                        let client = PrivateLocalClient()
-                        defer { client.close(); loading = false }
-                        do { models = try await client.models(draft); error = nil }
-                        catch { self.error = error.localizedDescription }
-                    }
-                }
-                if loading { ProgressView().controlSize(.small) }
-                Spacer()
-                Button("Cancel") { dismiss() }
-                Button("Save") {
-                    guard let revision else { return }
-                    do {
-                        try session.updatePrivateLocalSettings(configuration, revision: revision)
-                        dismiss()
-                    } catch { self.error = error.localizedDescription }
-                }
-                .disabled(revision == nil || session.isStreaming || !session.queued.isEmpty)
-                .keyboardShortcut(.defaultAction)
-            }
-            .disabled(loading)
         }
-        .padding(24).frame(width: 580)
-        .onAppear(perform: reload)
+    }
+
+    private var buttons: some View {
+        HStack {
+            Button("Reload settings", action: reload)
+            Button("Load server models") {
+                loading = true
+                let draft = configuration
+                Task {
+                    let client = PrivateLocalClient()
+                    defer { client.close(); loading = false }
+                    do { models = try await client.models(draft); error = nil }
+                    catch { self.error = error.localizedDescription }
+                }
+            }
+            if loading { ProgressView().controlSize(.small) }
+            Spacer()
+            Button("Cancel") { dismiss() }
+            Button("Save") {
+                guard let revision else { return }
+                do {
+                    try session.updatePrivateLocalSettings(configuration, revision: revision)
+                    dismiss()
+                } catch { self.error = error.localizedDescription }
+            }
+            .disabled(revision == nil || session.isStreaming || !session.queued.isEmpty)
+            .keyboardShortcut(.defaultAction)
+        }
+        .disabled(loading)
     }
 
     private func reload() {
@@ -108,33 +124,30 @@ struct PrivateLocalSettingsView: View {
                 Text("Tools need an OpenAI-compatible server API.").font(.caption).foregroundStyle(.orange)
             }
             if configuration.tools.enabled {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(toolServers, id: \.name) { server in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Toggle(server.name, isOn: server.blocked || server.tools.isEmpty
-                                       ? .constant(false) : serverBinding(server.name))
-                                    .disabled(server.blocked || server.tools.isEmpty)
-                                Text(server.detail).font(.caption).foregroundStyle(server.problem == nil ? Color.secondary : Color.orange)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                if !server.tools.isEmpty {
-                                    DisclosureGroup("Allowed tools (\(server.tools.count))") {
-                                        Text(server.tools.joined(separator: ", ")).font(.caption.monospaced())
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(toolServers, id: \.name) { server in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Toggle(server.name, isOn: server.blocked || server.tools.isEmpty
+                                   ? .constant(false) : serverBinding(server.name))
+                                .disabled(server.blocked || server.tools.isEmpty)
+                            Text(server.detail).font(.caption).foregroundStyle(server.problem == nil ? Color.secondary : Color.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if !server.tools.isEmpty {
+                                DisclosureGroup("Allowed tools (\(server.tools.count))") {
+                                    Text(server.tools.joined(separator: ", ")).font(.caption.monospaced())
+                                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                                    if !server.excluded.isEmpty {
+                                        Text("Left out: " + server.excluded.joined(separator: ", "))
+                                            .font(.caption.monospaced()).foregroundStyle(.secondary)
                                             .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                                        if !server.excluded.isEmpty {
-                                            Text("Left out: " + server.excluded.joined(separator: ", "))
-                                                .font(.caption.monospaced()).foregroundStyle(.secondary)
-                                                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                                        }
                                     }
-                                    .font(.caption)
                                 }
+                                .font(.caption)
                             }
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 260)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
