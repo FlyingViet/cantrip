@@ -1,7 +1,8 @@
 // Read-only Cantrip Home for this PC: every request is a GET the service builds itself from a
 // checked `HomeRead`, sent over the paired Mac's encrypted routes with the pairing token, which
 // never leaves the main process. The only writes are a view's Refresh and the view's own `refresh`
-// and `open` buttons, and only buttons the Mac sent for that view in its last answer.
+// and `open` buttons, and only buttons the Mac sent for that view in its last answer. Upcoming is
+// read-only here: its cancel and resume posts stay on the phone and the Mac.
 import { UUID_PATTERN } from "../../shared/home";
 import type { HomePairResult, HomeRead, HomeReadResult, HomeStatus, HomeViewWrite } from "../../shared/home";
 import { HOME_WINDOW_ACTION_KINDS, VIEW_ID_PATTERN, viewActionIDs } from "../../shared/views";
@@ -48,6 +49,11 @@ export function homeReadPath(read: unknown, logSessionID: string | null): string
     }
     case "view":
       return viewPath(request.viewID);
+    case "upcoming": {
+      if (request.revision === undefined) return "/api/v1/home/upcoming";
+      if (typeof request.revision !== "string" || !REVISION.test(request.revision)) throw new Error("Invalid Home request.");
+      return `/api/v1/home/upcoming?revision=${encodeURIComponent(request.revision)}`;
+    }
     default:
       throw new Error("Invalid Home request.");
   }

@@ -11,3 +11,4 @@
 | `home.ts` | Cantrip Home window: Home, Background (+ Full Log) and Tasks from the paired Mac |
 | `home.css` | Cantrip Home window presentation |
 | `viewsGrid.ts` | Tasks → Views thumbnails: grid columns, preview blocks, collapsed sections, when to fetch a thumbnail |
+| `upcoming.ts` | Tasks → Upcoming (read-only): reading the Mac's list, its groups and Show all, each row's when/schedule/owner line |

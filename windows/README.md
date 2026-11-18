@@ -25,7 +25,9 @@ capture, updates, and platform limitations.
   Home's conversation, Background runs with their cards and full log (plus each tab's running
   background tasks and the Mac's long jobs, builds and other long work, with their steps), and Tasks with their latest runs,
   workspaces and record cards, and Home's **Views** (a grid of thumbnails, pinned first, above collapsible Tasks; a view's page has **Refresh**, and of its buttons
-  only refresh and links, each confirmed first; pin, delete and the other buttons stay in Cantrip Gateway)
+  only refresh and links, each confirmed first; pin, delete and the other buttons stay in Cantrip Gateway), and
+  **Upcoming** above the tasks (everything set to run later, grouped as Next up, Waiting, Repeating and Paused, with
+  when each runs in this PC's time; read-only: cancel or pause from Cantrip on your phone or Mac)
 - Hash-approved plugins with sandboxed dashboards, bounded data sources, MCP
   injection, and live reload
 - Safe-by-default plan mode with an explicit **Allow agent actions** switch

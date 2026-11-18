@@ -735,6 +735,40 @@ code {
   font-weight: 500;
 }
 
+/* Upcoming (docs/cantrip-home.md "Upcoming"): read-only rows grouped under small headings */
+.home-section-toggle[aria-controls="home-upcoming-body"] .home-section-count {
+  color: #a1a1a6;
+}
+
+.upcoming-note {
+  margin: 0 0 10px;
+}
+
+.upcoming-group {
+  margin: 0 0 14px;
+}
+
+.upcoming-group-title {
+  margin: 0 0 6px;
+  color: #a1a1a6;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.upcoming-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.upcoming-row .item-meta {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.upcoming-more {
+  margin-top: 8px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .home-section-chevron {
     transition: none;

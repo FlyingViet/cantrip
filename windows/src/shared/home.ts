@@ -13,7 +13,9 @@ export type HomeRead =
   | { kind: "recordCards"; taskID: string; recordID: string }
   /** Home's views (docs/views.md), only when the tasks snapshot has `supportsViews`. */
   | { kind: "views"; revision?: string }
-  | { kind: "view"; viewID: string };
+  | { kind: "view"; viewID: string }
+  /** Home's Upcoming list (docs/cantrip-home.md "Upcoming"), shown without its Cancel and Resume buttons. */
+  | { kind: "upcoming"; revision?: string };
 
 /**
  * The only writes the read-only window may ask for: a view's Refresh, and one of the view's own `refresh` or

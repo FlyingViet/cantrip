@@ -1,5 +1,5 @@
 // Tasks → Views as a grid of thumbnails (the same rules on every client): the grid's column count, the blocks a
-// thumbnail previews, the Views and Tasks sections' collapsed state, and when a thumbnail's view is fetched again.
+// thumbnail previews, the Views, Upcoming and Tasks sections' collapsed state, and when a thumbnail's view is fetched again.
 import type { Block, CardDocument } from "../shared/cards";
 import type { HomeViewSummary, ShownView } from "../shared/views";
 import { viewSubtitle } from "../shared/views";
@@ -17,9 +17,10 @@ export function gridColumns(width: number): number {
   return Math.min(6, Math.max(1, Math.floor((width + GRID_GAP) / (min + GRID_GAP))));
 }
 
-export type HomeSection = "views" | "tasks";
+export type HomeSection = "views" | "upcoming" | "tasks";
 export const SECTION_KEYS: Readonly<Record<HomeSection, string>> = {
   views: "cantrip.home.views.collapsed",
+  upcoming: "cantrip.home.upcoming.collapsed",
   tasks: "cantrip.home.tasks.collapsed",
 };
 type FlagStore = Pick<Storage, "getItem" | "setItem">;
@@ -46,9 +47,9 @@ export function sectionLabel(title: string, count: number, noun: string): string
   return `${title}, ${count} ${count === 1 ? noun : `${noun}s`}`;
 }
 
-/** The count after a collapsed heading's title ("· 6"); nothing while it's expanded. */
-export function sectionCount(count: number, collapsed: boolean): string {
-  return collapsed ? `· ${count}` : "";
+/** The count after a collapsed heading's title ("· 6"); nothing while it's expanded, unless it always shows (Upcoming). */
+export function sectionCount(count: number, collapsed: boolean, always = false): string {
+  return collapsed || always ? `· ${count}` : "";
 }
 
 const isBlock = (value: unknown): value is Block => Boolean(value) && typeof value === "object" && typeof (value as Block).type === "string";

@@ -1,7 +1,8 @@
 // The Cantrip Home window (read-only): Home's recent conversation, its Background runs with their
-// Full Log, and Tasks with their workspaces and Views, as the paired Mac serves them. Mac strings go
-// into textContent; only Home's replies are Markdown, sanitized with DOMPurify. Cards use cards.ts.
-// The only writes are a view's Refresh and its own refresh and link buttons, each confirmed first.
+// Full Log, and Tasks with their workspaces, Views and Upcoming, as the paired Mac serves them. Mac
+// strings go into textContent; only Home's replies are Markdown, sanitized with DOMPurify. Cards use
+// cards.ts. The only writes are a view's Refresh and its own refresh and link buttons, each confirmed
+// first; Upcoming has no Cancel or Resume here.
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import "./home.css";
@@ -19,6 +20,7 @@ import {
   type HomeSection,
   type ThumbEntry,
 } from "./viewsGrid";
+import { parseUpcoming, upcomingMeta, upcomingSections, UPCOMING_READ_ONLY_NOTE, type UpcomingItem } from "./upcoming";
 import {
   appleDate,
   buildDetail,
@@ -106,6 +108,11 @@ const state: {
   viewsRevision: string | undefined;
   openView: OpenView | null;
   viewRefreshing: boolean;
+  /** Home's Upcoming list in the Mac's order; null while the Mac doesn't serve it. */
+  upcoming: UpcomingItem[] | null;
+  upcomingRevision: string | undefined;
+  /** Next up lists everything once Show all is pressed (until the window closes). */
+  upcomingShowAll: boolean;
   error: string;
   loading: boolean;
   updatedAt: Date | null;
@@ -122,6 +129,9 @@ const state: {
   viewsRevision: undefined,
   openView: null,
   viewRefreshing: false,
+  upcoming: null,
+  upcomingRevision: undefined,
+  upcomingShowAll: false,
   error: "",
   loading: false,
   updatedAt: null,
@@ -135,6 +145,9 @@ const thumbsLoading = new Set<string>();
 /** The views grid's last measured width, so a re-render starts with the right columns. */
 let gridWidth = 0;
 let gridObserver: ResizeObserver | undefined;
+/** A Mac without Upcoming (404) is asked again only after this. */
+let upcomingRetryAt = 0;
+const UPCOMING_RETRY_MS = 5 * 60_000;
 /** The view and detail last drawn, so a refresh of the same one keeps its scroll position. */
 let renderedPlace = "";
 let refreshTicket = 0;
@@ -626,7 +639,7 @@ async function runViewAction(viewID: string, button: ButtonModel): Promise<void>
 }
 
 /** A collapsible section's heading: one disclosure button with a chevron, the title and, collapsed, the count. */
-function sectionHeading(section: HomeSection, title: string, count: number, noun: string, body: HTMLElement): HTMLElement[] {
+function sectionHeading(section: HomeSection, title: string, count: number, noun: string, body: HTMLElement, alwaysCount = false): HTMLElement[] {
   const collapsed = sectionCollapsed(localStorage, section);
   const head = el("h3", "home-section-heading");
   const toggle = button("", `section:${section}`, () => {
@@ -642,7 +655,7 @@ function sectionHeading(section: HomeSection, title: string, count: number, noun
   chevron.setAttribute("aria-hidden", "true");
   chevron.innerHTML = "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>";
   toggle.append(chevron, el("span", "home-section-title", title));
-  const countText = sectionCount(count, collapsed);
+  const countText = sectionCount(count, collapsed, alwaysCount);
   if (countText) toggle.append(el("span", "home-section-count", countText));
   head.append(toggle);
   body.id = `home-${section}-body`;
@@ -764,15 +777,17 @@ function renderTasks(): HTMLElement[] {
   const nodes: HTMLElement[] = [heading("Tasks")];
   if (snapshot.error) nodes.push(note(snapshot.error, "view-note warning"));
   const views = snapshot.supportsViews ? state.views ?? [] : [];
+  const upcoming = state.upcoming;
   const list = el("ol", "home-list");
   list.setAttribute("aria-label", "Tasks");
   const empty = "No tasks yet. Ask Cantrip Home to set one up.";
-  if (!views.length) {
+  if (!views.length && !upcoming) {
     for (const task of snapshot.tasks) list.append(taskItem(task));
     nodes.push(list.childElementCount ? list : note(empty));
     return nodes;
   }
-  nodes.push(...sectionHeading("views", "Views", views.length, "view", viewsGrid(views)));
+  if (views.length) nodes.push(...sectionHeading("views", "Views", views.length, "view", viewsGrid(views)));
+  if (upcoming) nodes.push(...sectionHeading("upcoming", "Upcoming", upcoming.length, "item", upcomingBody(upcoming), true));
   const tasksBody = el("div", "home-section-body");
   if (!sectionCollapsed(localStorage, "tasks")) {
     for (const task of snapshot.tasks) list.append(taskItem(task));
@@ -782,7 +797,56 @@ function renderTasks(): HTMLElement[] {
   return nodes;
 }
 
+/**
+ * Upcoming, read-only: the note saying where to cancel, then Next up (6 until Show all), Waiting, Repeating and
+ * Paused, each item's title, when (or its schedule) · schedule · who set it up, and its detail.
+ */
+function upcomingBody(items: UpcomingItem[]): HTMLElement {
+  const body = el("div", "home-section-body upcoming-body");
+  if (sectionCollapsed(localStorage, "upcoming")) return body;
+  body.append(note(UPCOMING_READ_ONLY_NOTE, "view-note small upcoming-note"));
+  if (!items.length) {
+    body.append(note("Nothing scheduled", "view-note upcoming-empty"));
+    return body;
+  }
+  const now = new Date();
+  for (const section of upcomingSections(items, state.upcomingShowAll)) {
+    const group = el("div", "upcoming-group");
+    const title = el("h4", "upcoming-group-title", section.title);
+    title.id = `upcoming-${section.id}`;
+    const list = el("ul", "home-list compact upcoming-list");
+    list.setAttribute("aria-labelledby", title.id);
+    for (const item of section.items) {
+      const row = el("li", "home-item upcoming-row");
+      // Focusable only from code, so Show all can move to the first row it reveals.
+      row.tabIndex = -1;
+      row.append(el("span", "upcoming-title", item.title), el("span", "item-meta upcoming-meta", upcomingMeta(item, now)));
+      if (item.detail) row.append(el("span", "item-meta upcoming-detail", item.detail));
+      list.append(row);
+    }
+    group.append(title, list);
+    if (section.items.length < section.total) {
+      const shown = section.items.length;
+      const more = button(`Show all ${section.total}`, "upcoming-more", () => {
+        state.upcomingShowAll = true;
+        render(true);
+        content.querySelectorAll<HTMLElement>(`#upcoming-${section.id} + .upcoming-list > li`)[shown]?.focus();
+      }, "secondary-button upcoming-more");
+      more.setAttribute("aria-label", `Show all ${section.total} in ${section.title}`);
+      group.append(more);
+    }
+    body.append(group);
+  }
+  return body;
+}
+
 // MARK: - Shell
+
+/** Upcoming as drawn: its items, Show all, collapsed, and today's date (its "Today"/"Tomorrow" labels move at midnight). */
+function upcomingSignature(): unknown {
+  if (state.view !== "tasks" || state.detail || !state.upcoming) return null;
+  return [state.upcoming, state.upcomingShowAll, sectionCollapsed(localStorage, "upcoming"), new Date().toDateString()];
+}
 
 /** The tasks list's thumbnails as drawn: each one's preview blocks (not when they were fetched) and the sections' state. */
 function thumbSignature(): unknown {
@@ -798,7 +862,7 @@ function signature(): string {
   const data =
     state.view === "home" ? state.home
       : state.view === "background" ? (state.detail?.kind === "log" ? state.log : state.background)
-        : [state.tasks, state.record, state.views, state.openView?.shown, state.viewRefreshing, thumbSignature()];
+        : [state.tasks, state.record, state.views, state.openView?.shown, state.viewRefreshing, thumbSignature(), upcomingSignature()];
   return JSON.stringify([state.view, state.detail, state.loading && !data, data]);
 }
 
@@ -889,6 +953,20 @@ async function refresh(): Promise<void> {
         state.views = null;
         state.viewsRevision = undefined;
       }
+      // Upcoming with the list; an older Mac answers 404, which hides the section without an error.
+      if (!detail && Date.now() >= upcomingRetryAt) {
+        const result = await api.read(state.upcoming && state.upcomingRevision ? { kind: "upcoming", revision: state.upcomingRevision } : { kind: "upcoming" });
+        if (ticket !== refreshTicket) return;
+        const parsed = result.ok ? parseUpcoming(result.data) : null;
+        if (parsed) {
+          state.upcomingRevision = parsed.revision;
+          if (!parsed.unchanged) state.upcoming = parsed.items;
+        } else if (!result.ok && (result.status === 404 || result.status === 405)) {
+          state.upcoming = null;
+          state.upcomingRevision = undefined;
+          upcomingRetryAt = Date.now() + UPCOMING_RETRY_MS;
+        }
+      }
       if (detail?.kind === "view" && (state.openView?.id !== detail.viewID || Date.now() >= state.openView.dueAt)) {
         const answer = await read({ kind: "view", viewID: detail.viewID });
         if (ticket !== refreshTicket) return;
@@ -950,6 +1028,9 @@ unpairButton.addEventListener("click", async () => {
   state.views = null;
   state.viewsRevision = undefined;
   state.openView = null;
+  state.upcoming = null;
+  state.upcomingRevision = undefined;
+  upcomingRetryAt = 0;
   thumbs.clear();
   renderedSignature = "";
   render(true);
