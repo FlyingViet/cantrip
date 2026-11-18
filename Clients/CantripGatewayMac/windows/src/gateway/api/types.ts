@@ -1086,6 +1086,9 @@ export interface HomeInputGroup {
 
 /** GET /api/v1/sessions. */
 export interface SessionsListResponse {
+  /** Optional private artwork is fetched separately and kept only in memory. */
+  privateMascotRevision?: string | null;
+  privateMascotError?: string;
   /** Visible tabs in Mac order (Home and background sessions are not included). */
   sessions: RemoteSessionSummary[];
   /** Hash of the host's embedded web app; browser clients reload when it changes. */

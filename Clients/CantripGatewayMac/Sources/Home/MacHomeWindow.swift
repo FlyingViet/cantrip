@@ -45,6 +45,7 @@ struct MacHomeWindow: View {
         .focusedSceneValue(\.startFreshTabID, startFreshTabID)
         .modifier(MacHomeSheets(remote: remote, voice: voice, navigation: navigation, vm: vm,
                                 usageModel: usageModel, directLocal: directLocal))
+        .cantripPersonalMascot(remote.privateMascot)
         .confirmationDialog("Clear the local conversation?", isPresented: $confirmingDirectLocalClear) {
             Button("Clear Conversation", role: .destructive) { directLocal.clear() }
         } message: {

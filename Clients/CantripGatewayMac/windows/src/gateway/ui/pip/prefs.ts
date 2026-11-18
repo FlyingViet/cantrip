@@ -21,6 +21,13 @@ function write(key: string, value: string): void {
 }
 
 const parseOutfit = (raw: string | null): OutfitID => (isOutfitID(raw) ? raw : DEFAULT_OUTFIT);
+export const PERSONAL_MASCOT_KEY = "cantrip.mascot.personal.enabled";
+export const personalMascotEnabled = signal(read(PERSONAL_MASCOT_KEY) !== "false");
+
+export function setPersonalMascotEnabled(enabled: boolean): void {
+  personalMascotEnabled.value = enabled;
+  write(PERSONAL_MASCOT_KEY, String(enabled));
+}
 
 /** The saved outfit; unknown stored values fall back to Starry Plush. */
 export const mascotOutfit = signal<OutfitID>(parseOutfit(read(MASCOT_OUTFIT_KEY)));
@@ -32,6 +39,7 @@ export const mascotName = signal<string>(read(MASCOT_NAME_KEY) ?? "");
 export const mascotDisplayName = computed(() => displayName(mascotName.value));
 
 export function setMascotOutfit(outfit: OutfitID): void {
+  setPersonalMascotEnabled(false);
   mascotOutfit.value = outfit;
   write(MASCOT_OUTFIT_KEY, outfit);
 }
@@ -55,9 +63,11 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key === MASCOT_OUTFIT_KEY) mascotOutfit.value = parseOutfit(event.newValue);
     else if (event.key === MASCOT_NAME_KEY) mascotName.value = event.newValue ?? "";
+    else if (event.key === PERSONAL_MASCOT_KEY) personalMascotEnabled.value = event.newValue !== "false";
     else if (event.key === null) {
       mascotOutfit.value = parseOutfit(read(MASCOT_OUTFIT_KEY));
       mascotName.value = read(MASCOT_NAME_KEY) ?? "";
+      personalMascotEnabled.value = read(PERSONAL_MASCOT_KEY) !== "false";
     }
   });
 }

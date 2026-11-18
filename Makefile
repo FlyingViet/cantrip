@@ -114,7 +114,7 @@ test-rich-cards:
 test-remote-images:
 	@BIN="/tmp/cantrip-remote-image-tests-$$$$"; \
 	trap 'rm -f "$$BIN"' EXIT; \
-	swiftc Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/RemoteImageAttachments.swift Sources/Cantrip/RemoteGeneratedImages.swift Sources/Cantrip/SessionOutputFolders.swift Sources/Cantrip/CantripPaths.swift Tests/RemoteImageTests/main.swift -o "$$BIN" && "$$BIN"
+	swiftc Sources/Cantrip/Log.swift Sources/Cantrip/SecretMasking.swift Sources/Cantrip/RemoteImageAttachments.swift Sources/Cantrip/RemoteGeneratedImages.swift Sources/Cantrip/PrivateMascot.swift Sources/Cantrip/SessionOutputFolders.swift Sources/Cantrip/CantripPaths.swift Tests/RemoteImageTests/main.swift -o "$$BIN" && "$$BIN"
 
 test-context:
 	@BIN="/tmp/cantrip-context-tests-$$$$"; \

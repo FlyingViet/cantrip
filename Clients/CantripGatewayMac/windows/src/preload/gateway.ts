@@ -7,7 +7,7 @@ interface Hello {
   platform: string;
   server: string;
   focused: boolean;
-  status: { connected: boolean; route: string; message: string; server: string };
+  status: { connected: boolean; route: string; message: string; server: string; connectionID: string };
 }
 
 const hello = ipcRenderer.sendSync("gateway:hello") as Hello | null;

@@ -29,6 +29,8 @@
   padding: 8px 4px 24px;
 }
 .pip-scroll > * { flex: none; }
+.pip-personal { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+.pip-personal input { accent-color: var(--pip-accent); }
 
 /* Live preview */
 .pip-preview {

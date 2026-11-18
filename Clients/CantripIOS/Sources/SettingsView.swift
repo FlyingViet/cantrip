@@ -32,6 +32,7 @@ struct SettingsView: View {
             if showsSideBySide { split } else { stack }
         }
         .environment(\.cantripSettings, macSettings)
+        .cantripPersonalMascot(remote.privateMascot)
         .task {
             macSettings.attach(remote)
             await macSettings.load()

@@ -49,6 +49,8 @@ final class RemoteControlServer {
     private let notifications: RemoteNotifications
     private let liveStatus: RemoteLiveStatus
     private let generatedImages = RemoteGeneratedImages.Store()
+    private let privateMascot = PrivateMascot.Store()
+    private var privateMascotError: String?
     private var maintenance: RemoteMaintenance?
     /// Single-use MCP App view addresses (main actor), valid for a minute.
     private var mcpAppViewTokens: [String: (sessionID: UUID, appID: String, expires: Date)] = [:]
@@ -933,6 +935,7 @@ final class RemoteControlServer {
                 || request.path == "/api/v1/skills"
                 || request.path == "/api/v1/secrets"
                 || request.path == "/api/v1/settings"
+                || request.path == "/api/v1/mascot"
                 || request.path == "/api/v1/link-previews/image"
                 || request.path.hasPrefix("/api/v1/link-previews/image/")
                 || request.path == "/api/v1/map-tile" else {
@@ -941,6 +944,27 @@ final class RemoteControlServer {
         }
         guard authorized(request.headers["authorization"]) else {
             sendError(401, "invalid pairing token", on: connection)
+            return
+        }
+        if request.path == "/api/v1/mascot" {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            do {
+                guard let pack = try privateMascot.snapshot() else {
+                    sendError(404, "No personal mascot is configured on this Mac.", on: connection)
+                    return
+                }
+                if let revision = request.query("revision"), revision != pack.revision {
+                    sendError(409, "The personal mascot changed. Refresh the tab list and try again.", on: connection)
+                    return
+                }
+                sendEncoded(on: connection) { try JSONEncoder().encode(pack) }
+            } catch {
+                Log.write("private-mascot: \(error.localizedDescription)")
+                sendError(500, "The personal mascot could not be loaded. Check its files on the Mac.", on: connection)
+            }
             return
         }
         if request.path == "/api/v1/mac-access" || request.path.hasPrefix("/api/v1/desktop/") {
@@ -1357,6 +1381,17 @@ final class RemoteControlServer {
                                               "sections": manager.tabSections.map(\.json), "supportsTabSections": true,
                                               "supportsUsageFallback": true, "supportsModelTiers": true,
                                               "supportsSettings": true, "settingsRevision": SettingsManifest.revision()]
+                do {
+                    listing["privateMascotRevision"] = try privateMascot.snapshot()?.revision ?? NSNull()
+                    privateMascotError = nil
+                } catch {
+                    if privateMascotError != error.localizedDescription {
+                        Log.write("private-mascot: \(error.localizedDescription)")
+                        privateMascotError = error.localizedDescription
+                    }
+                    listing["privateMascotRevision"] = NSNull()
+                    listing["privateMascotError"] = "The personal mascot could not be loaded. Check its files on the Mac."
+                }
                 if AppSettings.shared.cantripHomeEnabled {
                     // Web clients pin it as their first tab; tab-list clients ignore it.
                     listing["home"] = snapshot(manager.homeSession, includeMessages: false, on: connection)
@@ -4019,10 +4054,14 @@ private extension RemoteControlServer {
     .place-attr{position:absolute;right:10px;bottom:8px;z-index:3;padding:2px 7px;border-radius:999px;background:rgba(15,17,21,.78);color:#9ca3af;font-size:10px;text-decoration:none}
     @media(max-width:620px){.place-card{display:flex;flex-direction:column;min-height:460px}.place-map-viewport{position:relative;height:220px;flex:none}.place-list{width:auto;max-height:240px;margin:8px}}
     .place-card.stacked{display:flex;flex-direction:column;min-height:0}.place-card.stacked .place-map-viewport{position:relative;height:220px;flex:none}.place-card.stacked .place-list{width:auto;max-height:none;margin:8px}
+    .personal-mascot-header{display:flex;align-items:center;gap:10px;padding:8px 16px 0;min-height:44px;flex-wrap:wrap}
+    .personal-mascot-header canvas{width:40px;height:40px;flex:none}.personal-mascot-header label{display:flex;align-items:center;gap:6px;margin-left:auto;font-size:12px;color:var(--secondary)}
+    #personalMascotError{flex-basis:100%;color:var(--orange);font-size:12px;overflow-wrap:anywhere}#personalMascotError:empty{display:none}
     </style></head><body>
     <section id="pair"><h2>Pair Cantrip Remote</h2><p class="muted">Paste the token from Cantrip Settings. It stays in this browser only.</p>
     <div id="pairControls"><input id="token" class="grow" type="password" placeholder="Pairing token" autocomplete="off"><button id="pairButton" class="control primary">Connect</button></div><p id="pairError" class="muted"></p></section>
     <main id="app" class="hidden"><aside id="sessionSidebar" class="hidden" aria-labelledby="sessionSidebarTitle"><div id="sessionSidebarHeader"><strong id="sessionSidebarTitle">Tabs</strong></div></aside><header class="workspace">
+    <div id="personalMascotHeader" class="personal-mascot-header hidden"><canvas id="personalMascotCanvas" width="80" height="80" aria-hidden="true"></canvas><span>Cantrip Home</span><label><input id="personalMascotEnabled" type="checkbox">Personal mascot</label><div id="personalMascotError" role="status"></div></div>
     <div class="prompt-row"><input id="draft" type="text" placeholder="How can I help you?" autocomplete="off" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="slashList"><div id="slashPopover" class="slash-popover hidden"><div id="slashList" role="listbox" aria-label="Commands"></div><div id="slashLoading" class="slash-info hidden"><span class="spinner" aria-hidden="true"></span>Loading commands…</div><div id="slashInfo" class="slash-info hidden"></div></div><div id="slashStatus" class="sr-only" role="status" aria-live="polite"></div><div id="mentionPopover" class="slash-popover hidden"><div id="mentionList" role="listbox" aria-label="Tab suggestions"></div><div id="mentionInfo" class="slash-info hidden"></div></div><div id="mentionStatus" class="sr-only" role="status" aria-live="polite"></div><button id="locationButton" class="round" aria-haspopup="dialog" aria-label="Location sharing is off" title="Location: Off. Share this device's location with your messages"><svg class="location-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 1.5 1.5 7l5.5 2 2 5.5z"/></svg></button><button id="resume" class="control quiet hidden">Resume</button><button id="stop" class="round danger hidden" title="Stop" aria-label="Stop">■</button><button id="send" class="round primary" title="Send" aria-label="Send">↑</button></div>
     <div id="mentionChips" class="mention-chips" role="list" aria-label="Mentioned tabs"></div>
     <div class="tools"><nav id="sessions" aria-label="Remote sessions"></nav><button id="newSection" class="round hidden" title="New section" aria-label="New section"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M1.5 4.5v8a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1H8L6.5 3.5h-4a1 1 0 0 0-1 1z"/><path d="M8 7.5v4M6 9.5h4"/></svg></button><button id="newSession" class="round" title="New remote session" aria-label="New remote session">+</button><button id="homeTasks" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home tasks">Tasks</button><button id="homeArtifacts" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home artifacts">Artifacts</button><button id="homeBackground" class="control quiet hidden" aria-haspopup="dialog" title="Cantrip Home background runs">Background</button><span class="tools-spacer"></span>
@@ -4247,7 +4286,7 @@ private extension RemoteControlServer {
     // Native shells (Mac Remote, Cantrip Gateway for Windows) get the left tab list and an unpair hook.
     const sidebarLayout=Boolean(window.webkit?.messageHandlers?.cantripRemoteUnpair||window.cantripGateway?.sidebarLayout);
     if(sidebarLayout){document.documentElement.classList.add("remote-sidebar");$("sessionSidebar").classList.remove("hidden");$("sessionSidebar").append($("sessions"));$("sessionSidebarHeader").append($("newSection"),$("newSession"));$("sessionProgress").prepend(brainIndicator())}
-    function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false";const label=document.querySelector(".connection-label");if(label)label.textContent=active?"Connected":"Reconnecting…";updateProgressConnection()}
+    function connection(active){document.documentElement.dataset.cantripConnected=active?"true":"false";const label=document.querySelector(".connection-label");if(label)label.textContent=active?"Connected":"Reconnecting…";updateProgressConnection();renderPersonalMascot()}
     function brainIndicator(){const icon=document.createElementNS("http://www.w3.org/2000/svg","svg");icon.setAttribute("class","brain-indicator");icon.setAttribute("viewBox","0 0 24 24");icon.setAttribute("aria-hidden","true");icon.setAttribute("focusable","false");
       const path=document.createElementNS(icon.namespaceURI,"path");path.setAttribute("d","M12 5C12 1 6 1 6 5C3 5 2 8 4 10C1 12 2 16 5 17C4 21 10 23 12 19C14 23 20 21 19 17C22 16 23 12 20 10C22 8 21 5 18 5C18 1 12 1 12 5V19M6 5C6 8 9 7 9 10M4 10C7 10 8 12 6 14M5 17C8 16 10 17 10 19M18 5C18 8 15 7 15 10M20 10C17 10 16 12 18 14M19 17C16 16 14 17 14 19");path.setAttribute("fill","none");path.setAttribute("stroke","currentColor");path.setAttribute("stroke-width","1.5");path.setAttribute("stroke-linecap","round");path.setAttribute("stroke-linejoin","round");icon.append(path);return icon}
     function setText(node,text){if(node.textContent!==text)node.textContent=text}
@@ -4294,18 +4333,20 @@ private extension RemoteControlServer {
       const controller=(!options.method||options.method==="GET")?new AbortController():null;
       const segments=path.split("?")[0].split("/").filter(Boolean),historyRead=segments.slice(0,3).join("/")==="api/v1/sessions"&&(segments.length===4||(segments.length===6&&segments[4]==="messages"));
       if(sidebarLayout&&controller&&historyRead&&segments.length===4&&!new URLSearchParams(path.split("?")[1]).has("before"))path+="&recentExchanges=3";
+      const externalSignal=options.signal,abort=()=>controller?.abort();
+      if(externalSignal?.aborted)abort();else externalSignal?.addEventListener("abort",abort,{once:true});
       const deadline=controller?setTimeout(()=>controller.abort(),historyRead||options.wait?20000:8000):null;if(controller)options.signal=controller.signal;
       if(!controller)uiActiveWrites++;
       try{const response=await fetch(path,options);const data=await response.json();if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;error.data=data;throw error}return data}
       catch(error){if(!controller)uiMutationWarning=`A Remote action failed: ${error.message}. Check the conversation before retrying; it was not resent.`;throw error}
-      finally{if(deadline!==null)clearTimeout(deadline);if(!controller){uiActiveWrites--;scheduleUIReload()}}}
-    function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){connection(false);if(timer){clearInterval(timer);timer=null}}}
+      finally{externalSignal?.removeEventListener("abort",abort);if(deadline!==null)clearTimeout(deadline);if(!controller){uiActiveWrites--;scheduleUIReload()}}}
+    function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){resetPersonalMascot();connection(false);if(timer){clearInterval(timer);timer=null}}}
     let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,draggedSectionID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;
     // Sections come from the Mac; which ones are collapsed is this browser's choice.
     const collapsedSectionsKey="cantrip.collapsedSections",looseSectionID="tabs";let tabSections=[],sectionsSupported=false,collapsedSections=new Set();
     try{collapsedSections=new Set(JSON.parse(localStorage.getItem(collapsedSectionsKey)||"[]"))}catch{}
     const tabDrafts=new Map(),tabMentionLists=new Map();
-    function selectTab(id){if(selected)tabDrafts.set(selected,$("draft").value);selected=id;$("draft").value=tabDrafts.get(id)||"";if(typeof syncSlashCommands==="function")syncSlashCommands();if(typeof renderMentionChips==="function"){renderMentionChips();syncMentions()}}
+    function selectTab(id){if(selected)tabDrafts.set(selected,$("draft").value);selected=id;$("draft").value=tabDrafts.get(id)||"";renderPersonalMascot();if(typeof syncSlashCommands==="function")syncSlashCommands();if(typeof renderMentionChips==="function"){renderMentionChips();syncMentions()}}
     // historyPaused: tabs whose last older page failed; automatic loading waits for Retry.
     const historyCache=new Map(),expandedHistory=new Set(),historyPaused=new Map(),initialHistoryGroups=sidebarLayout?3:11;
     function historySuffix(messages,groups){if(groups<=0)return [];const prompts=messages.flatMap((m,i)=>m.role==="user"?[i]:[]);return prompts.length>groups?messages.slice(prompts[prompts.length-groups]):messages}
@@ -4342,9 +4383,9 @@ private extension RemoteControlServer {
       const busy=sessionItems.some(s=>s.id===selected&&(s.isStreaming||s.queuedCount))||$("historyError").textContent||document.documentElement.dataset.cantripConnected!=="true";
       timer=setTimeout(refresh,busy?1500:5000)}
     function refresh(){refreshRequested=true;if(refreshTask)return refreshTask;
-      refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision;
+      refreshTask=(async()=>{while(refreshRequested&&token){refreshRequested=false;const requestedID=selected,requestToken=token,orderRevision=tabOrderRevision,mascotEpoch=personalConnectionEpoch;
         let listedSuccessfully=false,requestSelection=requestedID;
-        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision)continue;connection(true);listedSuccessfully=true;observeUIRevision(listed.uiRevision);if(typeof noteMacSettings==="function")noteMacSettings(listed);tabSections=listed.sections||[];sectionsSupported=listed.supportsTabSections===true;$("newSection").classList.toggle("hidden",!sectionsSupported);renderHomeInputs(listed.homeInputs||[]);
+        try{const listed=await api("/api/v1/sessions");if(token!==requestToken||orderRevision!==tabOrderRevision||mascotEpoch!==personalConnectionEpoch)continue;connection(true);listedSuccessfully=true;observePersonalMascot(listed);observeUIRevision(listed.uiRevision);if(typeof noteMacSettings==="function")noteMacSettings(listed);tabSections=listed.sections||[];sectionsSupported=listed.supportsTabSections===true;$("newSection").classList.toggle("hidden",!sectionsSupported);renderHomeInputs(listed.homeInputs||[]);
           // Cantrip Home is pinned first when the Mac has it on; it is never closed or moved.
           const sessions=listed.home?[listed.home,...listed.sessions]:listed.sessions;$("homeTasks").classList.toggle("hidden",!listed.home);$("homeArtifacts").classList.toggle("hidden",!listed.home);$("homeBackground").classList.toggle("hidden",!listed.home);
           for(const id of historyCache.keys())if(!sessions.some(s=>s.id===id)){historyCache.delete(id);expandedHistory.delete(id);historyPaused.delete(id)}
@@ -4356,10 +4397,10 @@ private extension RemoteControlServer {
             if(cached)render(cached);else if(renderedSession!==detailID)render(null);
             if(!cached?.historyRevision||cached.historyRevision!==summary.historyRevision){
               const suffix=cached?.historyRevision?`?revision=${encodeURIComponent(cached.historyRevision)}`:"";
-              const data=await api(`/api/v1/sessions/${detailID}${suffix}`);if(token!==requestToken||orderRevision!==tabOrderRevision)continue;if(selected!==detailID){refreshRequested=true;continue}
+              const data=await api(`/api/v1/sessions/${detailID}${suffix}`);if(token!==requestToken||orderRevision!==tabOrderRevision||mascotEpoch!==personalConnectionEpoch)continue;if(selected!==detailID){refreshRequested=true;continue}
               if(data.session)render(cacheSession(data.session));else if(!data.unchanged||!cached)throw new Error("Invalid conversation update")}
           }else render(null);$("historyError").textContent=""}
-        catch(error){if(token!==requestToken||selected!==requestSelection)continue;
+        catch(error){if(token!==requestToken||selected!==requestSelection||mascotEpoch!==personalConnectionEpoch)continue;
           if(!listedSuccessfully||error.status===401)connection(false);
           $("historyError").textContent=`${listedSuccessfully?"Could not update this conversation":"Could not refresh tabs"}: ${error.message}. Retrying...`;
           // While this browser moves to a new pairing token, the Mac may still refuse it for a moment.
@@ -5913,6 +5954,7 @@ private extension RemoteControlServer {
         list.append(row)}
       return list}
     function render(session,prepend=false){const root=document.scrollingElement||document.documentElement,previousTop=root.scrollTop,previousHeight=root.scrollHeight,anchor=prepend?visibleHistoryAnchor():null;
+      if(session?.isCantripHome){personalHome=session;renderPersonalMascot()}
       $("inputBanner").classList.toggle("hidden",!session?.pendingInputs?.some(r=>r.kind==="secret"));$("inputBanner").textContent="Enter password securely";
       renderProgress(session);updateHistoryControls(session);const liveBox=$("messages"),box=document.createElement("div"),sessionID=session?.id||null,payload=JSON.stringify(session);if(sessionID===renderedSession&&payload===renderedPayload)return;
       const sameSession=sessionID===renderedSession,shouldFollow=!prepend&&(followOutput||!sameSession),scrollRevision=++renderScrollRevision;renderedSession=sessionID;renderedPayload=payload;suppressScroll=true;historyScrollIntent=false;if(!sameSession)historyReading=false;$("resume").classList.toggle("hidden",!session?.canResume||Boolean(session?.continuableMessageIDs?.length));$("stop").classList.toggle("hidden",!session?.isStreaming);
@@ -5943,7 +5985,7 @@ private extension RemoteControlServer {
     async function action(name,body){if(!selected)return;await api(`/api/v1/sessions/${selected}/${name}`,{method:"POST",body:body?JSON.stringify(body):undefined});await refresh()}
     async function closeSession(id){$("actionError").textContent="";try{const data=await api(`/api/v1/sessions/${id}/close`,{method:"POST"});if(selected===id)selectTab(data.session.id);renderedPayload="";await refresh()}
       catch(error){$("actionError").textContent=`Close failed: ${error.message}`}}
-    $("pairButton").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();historyCache.clear();clearMacImages();expandedHistory.clear();historyPaused.clear();tabDrafts.clear();selected=null;$("draft").value="";tokenHandoff=null;token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
+    $("pairButton").onclick=async()=>{resetPersonalMascot();if(desktopState)await endDesktop();clearUIReloadState();historyCache.clear();clearMacImages();expandedHistory.clear();historyPaused.clear();tabDrafts.clear();selected=null;$("draft").value="";tokenHandoff=null;token=$("token").value.trim();try{await api("/api/v1/sessions");localStorage.cantripToken=token;connection(true);pair(false);refresh()}
       catch(error){$("pairError").textContent=error.message}};
     // Location: off by default. While on, each message carries this device's location (about 1 km
     // unless Precise) and time zone; a fix is reused for up to 15 minutes. Needs a secure (https) page.
@@ -6132,7 +6174,7 @@ private extension RemoteControlServer {
     addEventListener("resize",placeMentionPopover);window.visualViewport?.addEventListener("resize",placeMentionPopover);
     $("draft").onkeydown=event=>{if(mentionKeydown(event))return;if(slashKeydown(event))return;if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selectTab(data.session.id);refresh()};
-    $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");artifactThumbs.clear();viewThumbs.clear();if($("artifactsPanel").open)$("artifactsPanel").close();historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();tabMentionLists.clear();renderMentionChips();selected=null;$("draft").value="";token="";tokenHandoff=null;connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null);window.cantripGateway?.unpair?.()};
+    $("forget").onclick=async()=>{resetPersonalMascot();if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");artifactThumbs.clear();viewThumbs.clear();if($("artifactsPanel").open)$("artifactsPanel").close();historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();tabMentionLists.clear();renderMentionChips();selected=null;$("draft").value="";token="";tokenHandoff=null;connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null);window.cantripGateway?.unpair?.()};
     // Home Tasks: the task list, each workspace's records (grouped when its list declares a groupField) and record details.
     const appleEpochSeconds=978307200,workspaceGroupsKey="cantrip.workspaceGroups.",otherGroupID=String.fromCharCode(1)+"other";
     let tasksState=null;
@@ -6528,6 +6570,100 @@ private extension RemoteControlServer {
     $("tasksPanel").addEventListener("close",()=>{closeTasks();$("tasksBody").replaceChildren();setText($("tasksStatus"),"")});
     function readTabLink(){const match=/^#tab=([0-9A-Fa-f-]{36})$/.exec(location.hash);return match?match[1].toUpperCase():null}
     let tabLink=readTabLink();window.addEventListener("hashchange",()=>{tabLink=readTabLink();if(tabLink&&token)refresh()});
+    // Private artwork: one decoded pack in memory, never in history, storage, URLs or logs.
+    const personalMascotKey="cantrip.mascot.personal.enabled",personalCelebrationDuration=1.2;
+    function readPersonalMascotEnabled(){try{return localStorage.getItem(personalMascotKey)!=="false"}catch{return true}}
+    let personalEnabled=readPersonalMascotEnabled(),personalHome=null,personalConnectionEpoch=0;
+    let personalState={revision:null,pack:null,error:null,hostError:null,attempts:0,retryAt:0,loading:false,controller:null,token};
+    let personalFrame=0,personalLastFrame=0,personalOnScreen=true,personalMood="idle",personalHop=null;
+    const personalMotion=matchMedia("(prefers-reduced-motion: reduce)"),personalDark=matchMedia("(prefers-color-scheme: dark)");
+    function clearPersonalPack(revision=null,hostError=null){
+      personalState.controller?.abort();personalState.pack?.dispose();
+      personalState={revision,pack:null,error:hostError,hostError,attempts:0,retryAt:0,loading:false,controller:null,token};
+      personalHop=null;const canvas=$("personalMascotCanvas");canvas.getContext("2d")?.clearRect(0,0,canvas.width,canvas.height);
+      if(personalFrame)cancelAnimationFrame(personalFrame);personalFrame=0}
+    function resetPersonalMascot(){personalConnectionEpoch++;clearPersonalPack();personalHome=null;renderPersonalMascot()}
+    function personalRevision(value){return typeof value==="string"&&/^[a-f0-9]{64}$/.test(value)?value:null}
+    function personalPNG(value){
+      if(typeof value!=="string"||!value.length||value.length>2666668||value.length%4||!/^[A-Za-z0-9+/]*={0,2}$/.test(value))throw Error("Invalid personal mascot PNG.");
+      const bytes=Uint8Array.from(atob(value),char=>char.charCodeAt(0));
+      if(bytes.length<33||bytes.length>2000000||[137,80,78,71,13,10,26,10].some((byte,index)=>bytes[index]!==byte))throw Error("Invalid personal mascot PNG.");
+      const header=new DataView(bytes.buffer),size=header.getUint32(16);
+      if(header.getUint32(8)!==13||header.getUint32(12)!==0x49484452||size<1||size>1024||size!==header.getUint32(20))throw Error("Personal mascot images must be square, up to 1024 pixels.");
+      return {bytes,size}}
+    async function decodePersonalMascot(data,revision){
+      if(!data||data.version!==1||personalRevision(data.revision)!==revision||![data.sparkX,data.sparkY].every(point=>typeof point==="number"&&Number.isFinite(point)&&point>=0&&point<=1))throw Error("Invalid personal mascot pack or revision.");
+      const portrait=personalPNG(data.portrait),blink=personalPNG(data.blink),decoded=[];
+      if(portrait.size!==blink.size)throw Error("Personal mascot images must have matching sizes.");
+      try{for(const image of [portrait,blink]){const bitmap=await createImageBitmap(new Blob([image.bytes],{type:"image/png"}));decoded.push(bitmap);
+          if(bitmap.width!==image.size||bitmap.height!==image.size)throw Error("Invalid image size.")}
+        return {portrait:decoded[0],blink:decoded[1],sparkX:data.sparkX,sparkY:data.sparkY,dispose:()=>decoded.forEach(image=>image.close())}}
+      catch{decoded.forEach(image=>image.close());throw Error("Could not decode personal mascot PNGs.")}}
+    function observePersonalMascot(listed){
+      personalHome=listed.home||null;const revision=personalRevision(listed.privateMascotRevision),error=typeof listed.privateMascotError==="string"&&listed.privateMascotError?`Personal mascot: ${listed.privateMascotError}`:null;
+      if(personalState.revision!==revision||personalState.hostError!==error||personalState.token!==token)clearPersonalPack(revision,error);
+      renderPersonalMascot();loadPersonalMascot()}
+    async function loadPersonalMascot(){
+      const state=personalState;
+      if(!personalEnabled||!token||!state.revision||state.hostError||state.pack||state.loading||state.attempts>=3||Date.now()<state.retryAt)return;
+      state.loading=true;state.attempts++;state.controller=new AbortController();
+      try{const data=await api(`/api/v1/mascot?revision=${state.revision}`,{cache:"no-store",signal:state.controller.signal,wait:true});
+        if(state!==personalState||state.token!==token)return;
+        const pack=await decodePersonalMascot(data,state.revision);
+        if(state!==personalState||state.token!==token){pack.dispose();return}state.pack=pack;state.error=null}
+      catch(error){if(state!==personalState||state.token!==token)return;
+        if(error.status===404||error.status===409)state.attempts=3;
+        state.retryAt=Date.now()+(state.attempts===1?2000:8000);state.error=`Personal mascot unavailable: ${error.message||"Could not load the pack."}`}
+      finally{if(state===personalState){state.loading=false;state.controller=null;renderPersonalMascot()}}}
+    function personalBusy(mood){return ["thinking","searching","working","writing"].includes(mood)}
+    function resolvePersonalMood(){
+      if(document.documentElement.dataset.cantripConnected!=="true")return "sleeping";
+      if(personalHome?.pendingInputCount)return "curious";
+      const messages=personalHome?.messages||[],reply=messages.findLast(message=>message.role!=="handoff");
+      if(personalHome?.isStreaming){
+        if(reply?.role==="assistant"){const tool=reply.activities?.findLast(activity=>activity.state==="running");
+          if(tool){const name=String(tool.toolName||tool.title||"").toLowerCase();return ["view","read","grep","glob","rg","ls","find","fetch"].includes(name)||["search","fetch","get_","list_","lookup","browse"].some(part=>name.includes(part))?"searching":"working"}
+          if(!String(personalHome.status||"").trim()&&reply.text)return "writing";
+          if(reply.subagents?.some(agent=>!["completed","failed","cancelled"].includes(agent.status)))return "working"}
+        return "thinking"}
+      return reply?.role==="error"?"concerned":"idle"}
+    function personalPose(mood,time,reduced,celebration){
+      return {closed:mood==="sleeping"||(!reduced&&((time%4.8)+4.8)%4.8>=4.65),
+        scale:reduced?1:1+.012*Math.sin(time*Math.PI*2/3.2),
+        tilt:reduced?0:(mood==="thinking"?4:1.5)*Math.PI/180*Math.sin(time*Math.PI*2/(mood==="thinking"?2.6:7)),
+        hop:reduced||celebration===null||celebration>=personalCelebrationDuration?0:-.065*Math.sin(Math.PI*Math.max(0,celebration)/personalCelebrationDuration),
+        spark:personalBusy(mood)||mood==="listening"||mood==="speaking"?(reduced?0.8:.7+.3*Math.sin(time*Math.PI*2/1.2)):0}}
+    function paintPersonalMascot(){
+      const pack=personalState.pack,canvas=$("personalMascotCanvas"),ctx=canvas.getContext("2d");if(!pack||!ctx)return;
+      const pixels=Math.max(1,Math.round(40*(devicePixelRatio||1)));if(canvas.width!==pixels||canvas.height!==pixels){canvas.width=pixels;canvas.height=pixels}
+      const elapsed=personalHop===null?null:(performance.now()-personalHop)/1000;if(elapsed>=personalCelebrationDuration)personalHop=null;
+      const pose=personalPose(personalMood,personalMotion.matches?1:Date.now()/1000,personalMotion.matches,elapsed);
+      ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,pixels,pixels);ctx.save();ctx.scale(pixels,pixels);
+      ctx.beginPath();ctx.arc(.5,.5,.5,0,Math.PI*2);ctx.fillStyle=personalDark.matches?"#30213f":"#fff4df";ctx.fill();ctx.clip();
+      ctx.translate(.5,.5+pose.hop);ctx.rotate(pose.tilt);ctx.scale(pose.scale,pose.scale);ctx.drawImage(pose.closed?pack.blink:pack.portrait,-.5,-.5,1,1);
+      if(pose.spark){ctx.translate(pack.sparkX-.5,pack.sparkY-.5);ctx.scale(pose.spark,pose.spark);ctx.beginPath();
+        for(let index=0;index<8;index++){const angle=index*Math.PI/4,radius=index%2?.015:.06,x=Math.sin(angle)*radius,y=-Math.cos(angle)*radius;if(index)ctx.lineTo(x,y);else ctx.moveTo(x,y)}
+        ctx.closePath();ctx.fillStyle="#ffd777";ctx.fill()}ctx.restore()}
+    function personalVisible(){return personalEnabled&&personalState.pack&&personalHome?.id===selected&&personalOnScreen&&!document.hidden&&!$("app").classList.contains("hidden")}
+    function personalTick(now){personalFrame=0;if(!personalVisible()||personalMotion.matches)return;
+      if(now-personalLastFrame>=1000/30-2){paintPersonalMascot();personalLastFrame=now}personalFrame=requestAnimationFrame(personalTick)}
+    function updatePersonalAnimation(){
+      if(personalFrame)cancelAnimationFrame(personalFrame);personalFrame=0;
+      if(!personalVisible())return;paintPersonalMascot();if(!personalMotion.matches)personalFrame=requestAnimationFrame(personalTick)}
+    function renderPersonalMascot(){
+      const mood=resolvePersonalMood();if(mood!==personalMood&&personalBusy(personalMood)&&mood==="idle")personalHop=performance.now();personalMood=mood;
+      $("personalMascotHeader").classList.toggle("hidden",!(personalHome?.id===selected&&(personalState.revision||personalState.error)));
+      $("personalMascotCanvas").classList.toggle("hidden",!personalState.pack);
+      $("personalMascotEnabled").checked=personalEnabled;const error=personalState.error||"";if($("personalMascotError").textContent!==error)$("personalMascotError").textContent=error;
+      updatePersonalAnimation()}
+    function setPersonalEnabled(enabled){personalEnabled=enabled;clearPersonalPack(personalState.revision,personalState.hostError);renderPersonalMascot();loadPersonalMascot()}
+    $("personalMascotEnabled").onchange=()=>{const enabled=$("personalMascotEnabled").checked;try{localStorage.setItem(personalMascotKey,String(enabled))}catch{}setPersonalEnabled(enabled)};
+    window.addEventListener("storage",event=>{if(event.key===personalMascotKey||event.key===null)setPersonalEnabled(readPersonalMascotEnabled());if(event.key==="cantripToken"){resetPersonalMascot();token=event.newValue||"";if(token)refresh();else pair(true)}});
+    const personalObserver=typeof IntersectionObserver==="function"?new IntersectionObserver(entries=>{personalOnScreen=entries[entries.length-1]?.isIntersecting===true;updatePersonalAnimation()}):null;
+    personalObserver?.observe($("personalMascotCanvas"));
+    document.addEventListener("visibilitychange",updatePersonalAnimation);
+    personalMotion.addEventListener("change",updatePersonalAnimation);personalDark.addEventListener("change",updatePersonalAnimation);
+    window.addEventListener("resize",updatePersonalAnimation);window.addEventListener("pagehide",resetPersonalMascot);
     async function startRemoteUI(){
       if(token){const focus=await restoreUIState();if(!token)return;pair(false);
         if(focus){$("draft").focus();if(Number.isInteger(focus.start)&&Number.isInteger(focus.end))$("draft").setSelectionRange(focus.start,focus.end)}

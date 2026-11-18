@@ -18,6 +18,7 @@ import { plainMentions, plainMentionsDeep, plainSession } from "./tabMentions";
 import { dropDeletedMessages, resetThreads } from "./threads";
 import { messageLocation } from "./location";
 import { parseViews, supportsViews, viewsPath } from "./views";
+import { privateMascotLoader } from "./privateMascot";
 
 export type Detail = PagedRemoteSessionDetail;
 
@@ -165,13 +166,17 @@ export function refresh(): Promise<void> {
 
 async function refreshOnce(): Promise<void> {
   let list: SessionsListResponse;
+  const mascotConnection = privateMascotLoader.connectionEpoch;
   const requestedAt = Date.now();
   try {
     list = plainList(await api<SessionsListResponse>("/api/v1/sessions"));
   } catch (error) {
+    if (mascotConnection !== privateMascotLoader.connectionEpoch) return;
     failed(error);
     return;
   }
+  if (mascotConnection !== privateMascotLoader.connectionEpoch) return;
+  privateMascotLoader.observe(list.privateMascotRevision, list.privateMascotError);
   lastSuccess = Date.now();
   const now = Date.now();
   for (const [id, at] of answeredHomeInputs) if (now - at > 60000) answeredHomeInputs.delete(id);
@@ -702,6 +707,7 @@ export async function stopBackgroundRun(runID: string): Promise<void> {
 
 /** Forgets cached state when the app pairs with a different Mac. */
 export function reset(): void {
+  privateMascotLoader.reset();
   batch(() => {
     sessions.value = [];
     tabSections.value = [];

@@ -24,6 +24,7 @@ export interface RequestOptions {
   /** Adds recentExchanges=3 (session reads and session-returning writes). */
   recent?: boolean;
   signal?: AbortSignal;
+  cache?: RequestCache;
 }
 
 let activeWrites = 0;
@@ -58,7 +59,9 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   const controller = new AbortController();
   const bytes = options.raw?.byteLength ?? (typeof body === "string" ? body.length : 0);
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? defaultTimeout(path, method, bytes));
-  options.signal?.addEventListener("abort", () => controller.abort(), { once: true });
+  const abort = () => controller.abort();
+  if (options.signal?.aborted) abort();
+  else options.signal?.addEventListener("abort", abort, { once: true });
   const write = method !== "GET";
   if (write) {
     activeWrites++;
@@ -67,7 +70,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   try {
     let response: Response;
     try {
-      response = await fetch(url, { method, headers, body, signal: controller.signal });
+      response = await fetch(url, { method, headers, body, signal: controller.signal, cache: options.cache });
     } catch (error) {
       if (controller.signal.aborted) {
         throw new APIError(write ? "The Mac didn't answer in time. Check before trying again; it may have gone through." : "The Mac didn't answer in time.", 0);
@@ -86,6 +89,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
     return data as T;
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener("abort", abort);
     if (write) {
       activeWrites--;
       for (const listener of writeListeners) listener(activeWrites);

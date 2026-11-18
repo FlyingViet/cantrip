@@ -218,32 +218,44 @@ struct CantripMascotView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.cantripPrivateMascot) private var personal
+    @AppStorage(CantripPrivateMascot.enabledKey) private var personalEnabled = true
     let mood: CantripMascotMood
     var outfit: CantripMascotOutfit = .starryPlush
     var size: CGFloat = 58
     /// Renders one deterministic frame for tests and previews.
     var frameTime: TimeInterval? = nil
     var celebrationProgress: TimeInterval? = nil
+    var usesPersonal = true
     @State private var celebrationStart: Date?
+    @State private var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
 
     static let celebrationDuration: TimeInterval = 1.2
 
     private var animates: Bool {
-        frameTime == nil && !reduceMotion && scenePhase != .background
-            && !ProcessInfo.processInfo.isLowPowerModeEnabled
+        frameTime == nil && !reduceMotion && scenePhase == .active
+            && !lowPowerMode
     }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animates)) { timeline in
             let time = frameTime ?? (animates ? timeline.date.timeIntervalSinceReferenceDate : 1)
             Canvas { context, canvasSize in
-                CantripMascotRenderer(
-                    mood: mood, outfit: outfit, time: time,
-                    celebration: celebrationProgress ?? celebration(at: timeline.date),
-                    motion: animates || frameTime != nil,
-                    dark: colorScheme == .dark
-                )
-                .draw(in: &context, size: canvasSize)
+                if usesPersonal, personalEnabled, let personal {
+                    CantripPrivateMascotRenderer(
+                        pack: personal, mood: mood, time: time,
+                        celebration: celebrationProgress ?? celebration(at: timeline.date),
+                        motion: animates || frameTime != nil, dark: colorScheme == .dark
+                    ).draw(in: &context, size: canvasSize)
+                } else {
+                    CantripMascotRenderer(
+                        mood: mood, outfit: outfit, time: time,
+                        celebration: celebrationProgress ?? celebration(at: timeline.date),
+                        motion: animates || frameTime != nil,
+                        dark: colorScheme == .dark
+                    )
+                    .draw(in: &context, size: canvasSize)
+                }
             }
         }
         .frame(width: size, height: size)
@@ -251,6 +263,9 @@ struct CantripMascotView: View {
         .clipShape(Circle())
         .overlay { Circle().strokeBorder(.white.opacity(0.7), lineWidth: 1) }
         .shadow(color: .black.opacity(0.2), radius: 8, y: 3)
+        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
+            lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        }
         .onChange(of: mood) { old, new in
             guard old.isBusy, new == .idle else { return }
             let start = Date()
@@ -1224,6 +1239,9 @@ struct CantripMascotHeaderFade: View {
 /// Outfit picker with a live preview. The choice is saved on this device and applies immediately.
 struct CantripMascotCustomizationView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.cantripPrivateMascot) private var personal
+    @Environment(\.cantripPrivateMascotError) private var personalError
+    @AppStorage(CantripPrivateMascot.enabledKey) private var personalEnabled = true
     /// A page inside Settings, without its own navigation and Done.
     var embedded = false
     @AppStorage(CantripMascotOutfit.storageKey) private var outfit: CantripMascotOutfit = .starryPlush
@@ -1233,6 +1251,7 @@ struct CantripMascotCustomizationView: View {
     @FocusState private var nameFocused: Bool
 
     private var name: String { CantripMascotName.display(storedName) }
+    private var lookTitle: String { personal != nil && personalEnabled ? "Personal mascot" : outfit.title }
 
     var body: some View {
         CantripSheetStack(embedded: embedded) {
@@ -1242,19 +1261,36 @@ struct CantripMascotCustomizationView: View {
                         CantripMascotView(mood: previewMood, outfit: outfit, size: 168)
                         Text(name)
                             .font(.title2.weight(.bold))
-                        Text(outfit.title)
+                        Text(lookTitle)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     .padding(.top, 8)
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(name) in \(outfit.title), \(previewMood.title.lowercased())")
+                    .accessibilityLabel("\(name) in \(lookTitle), \(previewMood.title.lowercased())")
                     .accessibilityAddTraits(.isImage)
                     .accessibilityIdentifier("mascot.preview")
 
                     moodPicker
 
                     nameField
+
+                    if personal != nil {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Toggle("Use this Mac's personal mascot", isOn: $personalEnabled)
+                                .accessibilityIdentifier("mascot.personal.enabled")
+                            Text("Shared securely by your paired Mac. The artwork is not included in Cantrip.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal)
+                    }
+                    if let personalError {
+                        Text(personalError)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .padding(.horizontal)
+                    }
 
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Looks")
@@ -1369,12 +1405,13 @@ struct CantripMascotCustomizationView: View {
     }
 
     private func outfitCard(_ option: CantripMascotOutfit) -> some View {
-        let selected = option == outfit
+        let selected = option == outfit && !(personal != nil && personalEnabled)
         return Button {
+            personalEnabled = false
             outfit = option
         } label: {
             VStack(spacing: 8) {
-                CantripMascotView(mood: .idle, outfit: option, size: 92, frameTime: 1)
+                CantripMascotView(mood: .idle, outfit: option, size: 92, frameTime: 1, usesPersonal: false)
                 Text(option.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)

@@ -1256,6 +1256,8 @@ struct CantripSessionsResponse: Decodable {
     var supportsTabSections: Bool?
     /// Moves whenever one of the Mac's settings changes (`/api/v1/settings`); nil from older Macs.
     var settingsRevision: String?
+    var privateMascotRevision: String?
+    var privateMascotError: String?
 }
 
 struct CantripTabSectionsResponse: Decodable {
@@ -1899,6 +1901,7 @@ struct CantripRemoteAPI {
             parts == ["api", "v1", "maintenance"]
                 // The Mac holds a live-view request until the agent's page changes (up to about 8 s).
                 || parts == ["api", "v1", "browser", "frame"]
+                || parts == ["api", "v1", "mascot"]
                 || parts.starts(with: ["api", "v1", "home"])
                 || parts == ["api", "v1", "memory"] || parts == ["api", "v1", "memory", "document"]
                 || parts == ["api", "v1", "link-previews", "image"]
@@ -2164,6 +2167,11 @@ struct CantripRemoteAPI {
         let frame: CantripBrowserFrame = try await request(path: Self.browserFramePath(width: width, after: after))
         guard !frame.data.isEmpty, frame.data.count <= 8_000_000 else { throw CantripRemoteError.invalidResponse }
         return frame
+    }
+
+    func privateMascot(revision: String) async throws -> CantripPrivateMascot.Payload {
+        guard CantripPrivateMascot.validRevision(revision) else { throw CantripRemoteError.invalidResponse }
+        return try await request(path: "/api/v1/mascot?revision=\(revision)")
     }
 
     func imageData(sessionID: String, imageID: String, thumbnail: Bool) async throws -> Data {
@@ -3315,6 +3323,7 @@ struct CantripSelectionLoad: Equatable {
 
 @MainActor
 final class CantripRemoteModel: ObservableObject {
+    let privateMascot = CantripPrivateMascotStore()
     @Published var modelSettingsSession: CantripRemoteSession?
     @Published var inputRequestsSession: CantripRemoteSession?
     @Published var inputContext: CantripInputContext?
@@ -3936,6 +3945,7 @@ final class CantripRemoteModel: ObservableObject {
             stopPolling()
             lanBrowser.stop()
             configurationGeneration += 1
+            privateMascot.reset()
             usageIdentity = UUID()
             imageCache.removeAllObjects()
             artifactThumbnails.removeAll()
@@ -4008,6 +4018,7 @@ final class CantripRemoteModel: ObservableObject {
             stopPolling()
             lanBrowser.stop()
             configurationGeneration += 1
+            privateMascot.reset()
             usageIdentity = UUID()
             imageCache.removeAllObjects()
             artifactThumbnails.removeAll()
@@ -5952,6 +5963,12 @@ final class CantripRemoteModel: ObservableObject {
                 supportsTabSections = listing.supportsTabSections == true
             }
             if settingsRevision != listing.settingsRevision { settingsRevision = listing.settingsRevision }
+            privateMascot.update(revision: listing.privateMascotRevision, hostError: listing.privateMascotError) { [weak self] revision in
+                guard let self else { throw CancellationError() }
+                return try await self.performAuthenticated(allowFallback: true) { api in
+                    try await api.privateMascot(revision: revision)
+                }
+            }
             if errorMessage != nil { errorMessage = nil }
             syncLiveStatusPairing()
             liveStatus?.refreshIfDue(anyStreaming: listed.contains { $0.isStreaming }

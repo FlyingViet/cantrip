@@ -10,7 +10,8 @@ import {
   DEFAULT_MASCOT_NAME, MASCOT_NAME_MAX_LENGTH, MOODS, OUTFITS, graphemes, moodTitle, outfitFor, type MascotMood,
 } from "./mascot";
 import { Pip } from "./Pip";
-import { mascotDisplayName, mascotName, mascotOutfit, resetMascotName, setMascotName, setMascotOutfit } from "./prefs";
+import { mascotDisplayName, mascotName, mascotOutfit, personalMascotEnabled, resetMascotName, setMascotName, setMascotOutfit, setPersonalMascotEnabled } from "./prefs";
+import { personalMascot } from "../../state/privateMascot";
 import "./pip.css";
 
 type IconNode = [string, Record<string, string | number | undefined>][];
@@ -77,6 +78,8 @@ function onRadioKeys(event: KeyboardEvent, count: number, current: number, choos
 export function MascotCustomization(props: { onDone: () => void }): JSX.Element {
   const outfit = outfitFor(mascotOutfit.value);
   const name = mascotDisplayName.value;
+  const personal = personalMascot.value;
+  const lookTitle = personal.pack ? "Personal mascot" : outfit.title;
   const [previewMood, setPreviewMood] = useState<MascotMood>("idle");
   const [draft, setDraftState] = useState(() => (mascotName.peek() === "" ? DEFAULT_MASCOT_NAME : mascotDisplayName.peek()));
   const draftRef = useRef(draft);
@@ -139,11 +142,11 @@ export function MascotCustomization(props: { onDone: () => void }): JSX.Element 
         <div
           class="pip-preview"
           role="img"
-          aria-label={`${name} in ${outfit.title}, ${moodTitle(previewMood).toLowerCase()}`}
+          aria-label={`${name} in ${lookTitle}, ${moodTitle(previewMood).toLowerCase()}`}
         >
           <Pip mood={previewMood} outfit={outfit.id} size={168} />
           <div class="pip-preview-name">{name}</div>
-          <div class="pip-preview-outfit">{outfit.title}</div>
+          <div class="pip-preview-outfit">{lookTitle}</div>
         </div>
 
         <div
@@ -207,6 +210,13 @@ export function MascotCustomization(props: { onDone: () => void }): JSX.Element 
 
         <section class="pip-section" aria-labelledby={looksHeading}>
           <h3 class="pip-heading" id={looksHeading}>Looks</h3>
+          <label class="pip-personal">
+            <input type="checkbox" checked={personalMascotEnabled.value}
+              onChange={(event) => setPersonalMascotEnabled(event.currentTarget.checked)} />
+            Use this Mac's personal mascot
+          </label>
+          <p class="pip-footnote">Private artwork stays in memory on this paired device. Choosing a built-in look turns personal mode off.</p>
+          <p class="pip-footnote" role="status">{personal.error || (personal.loading ? "Loading personal mascot…" : !personal.revision ? "No personal mascot configured on this Mac." : "")}</p>
           <div
             class="pip-outfits"
             role="radiogroup"
@@ -227,7 +237,7 @@ export function MascotCustomization(props: { onDone: () => void }): JSX.Element 
                   aria-describedby={`${ids}-${option.id}-summary`}
                   onClick={() => setMascotOutfit(option.id)}
                 >
-                  <Pip mood="idle" outfit={option.id} size={92} frameTime={1} />
+                  <Pip mood="idle" outfit={option.id} size={92} frameTime={1} personal={false} />
                   <span class="pip-outfit-title" id={`${ids}-${option.id}-title`}>{option.title}</span>
                   <span class="pip-outfit-summary" id={`${ids}-${option.id}-summary`}>{option.summary}</span>
                   {selected ? <SelectedBadge /> : null}

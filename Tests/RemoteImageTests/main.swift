@@ -351,6 +351,40 @@ private func checkSessionOutputFolders(base: URL) throws {
            "exact unique prompt evidence assigns the folder")
 }
 
+private func checkPrivateMascot(in directory: URL) throws {
+    let store = PrivateMascot.Store(directory: directory)
+    expect(try store.snapshot() == nil, "no personal pack leaves the built-in mascot alone")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let manifest = directory.appendingPathComponent("manifest.json")
+    let portrait = directory.appendingPathComponent("portrait.png")
+    let blink = directory.appendingPathComponent("blink.png")
+    let square = try jpeg(width: 16, height: 16, type: .png)
+    try Data(#"{"version":1,"sparkX":0.8,"sparkY":0.6}"#.utf8).write(to: manifest, options: .atomic)
+    try square.write(to: portrait, options: .atomic)
+    try square.write(to: blink, options: .atomic)
+    let first = try store.snapshot()
+    expect(first?.portrait == square && first?.blink == square, "private pack returns exact PNG bytes")
+    expect(first?.revision.count == 64, "private pack has a content-addressed revision")
+    expect(try store.snapshot()?.revision == first?.revision, "unchanged private pack reuses its revision")
+    try Data(#"{"version":1,"sparkX":0.3,"sparkY":0.6}"#.utf8).write(to: manifest, options: .atomic)
+    expect(try store.snapshot()?.revision != first?.revision, "changing a spark point invalidates the revision")
+    try jpeg(width: 16, height: 8, type: .png).write(to: blink, options: .atomic)
+    do {
+        _ = try store.snapshot()
+        expect(false, "private mascot rejects mismatched non-square frames")
+    } catch is PrivateMascot.Failure {}
+    try square.write(to: blink, options: .atomic)
+    expect(try store.snapshot() != nil, "correcting the private pack recovers without restart")
+    try FileManager.default.removeItem(at: blink)
+    try FileManager.default.createSymbolicLink(at: blink, withDestinationURL: portrait)
+    do {
+        _ = try store.snapshot()
+        expect(false, "private mascot does not follow image symlinks")
+    } catch is PrivateMascot.Failure {}
+    try FileManager.default.removeItem(at: manifest)
+    expect(try store.snapshot() == nil, "removing the manifest clears cached private artwork")
+}
+
 let root = FileManager.default.temporaryDirectory
     .appendingPathComponent("cantrip-image-tests-\(UUID().uuidString)", isDirectory: true)
 do {
@@ -588,6 +622,7 @@ do {
     )! as NSDictionary
     expect(resizedProperties[kCGImagePropertyPixelWidth] as? Int == 4096,
            "full-screen generated previews respect the 4096-pixel bound")
+    try checkPrivateMascot(in: root.appendingPathComponent("personal-mascot"))
 } catch {
     failures += 1
     fputs("FAIL: \(error)\n", stderr)

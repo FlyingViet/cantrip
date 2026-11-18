@@ -60,7 +60,7 @@ let mainWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
 let pendingLink: string | null = null;
 let pendingNotice: string | null = null;
-let status = { connected: false, route: "", message: "", server: "" };
+let status = { connected: false, route: "", message: "", server: "", connectionID: "" };
 /** The selected Mac's settings support and revision from the main window's tab-list poll (null until it polls). */
 let macSettings: { supportsSettings: boolean; settingsRevision: string } | null = null;
 
@@ -83,10 +83,9 @@ function log(line: string): void {
 
 // MARK: - Host bridge
 
-function sendRoute(route: Route, request: HostRequest): Promise<HostResponse> {
-  if (!pairing) throw new Error("Not paired.");
+function sendRoute(route: Route, request: HostRequest, token: string): Promise<HostResponse> {
   return route.kind === "direct"
-    ? sendOverPSK(route, pairing.token, request)
+    ? sendOverPSK(route, token, request)
     : sendOverHTTPS(route.origin, request, net.fetch.bind(net));
 }
 
@@ -103,8 +102,10 @@ function downloadRoute(route: Route, request: HostRequest, destination: string):
 }
 
 function configureRouter(): void {
-  router = pairing
-    ? new HostRouter(routesFor(pairing.server), sendRoute, (route) => {
+  const selectedPairing = pairing;
+  router = selectedPairing
+    ? new HostRouter(routesFor(selectedPairing.server), (route, request) => sendRoute(route, request, selectedPairing.token), (route) => {
+      if (pairing !== selectedPairing) return;
       log(`route: ${describeRoute(route)}`);
       updateStatus({ route: describeRoute(route) });
     })
@@ -112,6 +113,7 @@ function configureRouter(): void {
   status = {
     connected: false, route: router ? describeRoute(router.current) : "", message: "",
     server: pairing ? displayName(pairing.server) : "",
+    connectionID: store.list().selectedID ?? "",
   };
 }
 
@@ -156,6 +158,7 @@ async function handleHostRequest(request: Request): Promise<Response> {
   // MCP App views load from single-use URLs the host mints; they never carry the token.
   if (!isAPI && !url.pathname.startsWith("/mcp-app/") && url.pathname !== "/health") return serveGatewayFile(url.pathname);
   if (!router || !pairing) return jsonError(503, "This PC isn't paired with a Mac yet.");
+  const requestedRouter = router;
   const headers = forwardedHeaders(request.headers);
   delete headers.authorization;
   if (isAPI && request.headers.get("x-cantrip-gateway") === GATEWAY_KEY) headers.authorization = `Bearer ${pairing.token}`;
@@ -165,13 +168,16 @@ async function handleHostRequest(request: Request): Promise<Response> {
     headers,
     body: request.method === "GET" || request.method === "HEAD" ? undefined : Buffer.from(await request.arrayBuffer()),
   };
+  if (router !== requestedRouter) return jsonError(503, "The paired connection changed.");
   try {
-    const response = await router.request(hostRequest);
+    const response = await requestedRouter.request(hostRequest);
+    if (router !== requestedRouter) return jsonError(503, "The paired connection changed.");
     if (!status.connected) log(`connected: ${describeRoute(router.current)}`);
     updateStatus({ connected: true, route: describeRoute(router.current), message: "" });
     const empty = request.method === "HEAD" || [204, 304].includes(response.status);
     return new Response(empty ? null : new Uint8Array(response.body), { status: response.status, headers: response.headers });
   } catch (error) {
+    if (router !== requestedRouter) return jsonError(503, "The paired connection changed.");
     const message = error instanceof Error ? error.message : String(error);
     if (status.connected || status.message !== message) log(`unreachable: ${message}`);
     updateStatus({ connected: false, message });
@@ -419,6 +425,7 @@ function pushSettingsState(): void {
 function activateSelection(source: string): void {
   pairing = store.load();
   configureRouter();
+  mainWindow?.webContents.send("gateway:status", status);
   macSettings = null;
   settingsWindow?.webContents.send("gateway:settings-revision", null);
   log(`${source}: ${pairing ? `routes ${routesFor(pairing.server).map(describeRoute).join(", ")}` : "no Mac selected"}`);
@@ -665,6 +672,7 @@ async function adoptPairingToken(token: string, body: unknown): Promise<{ status
     if (!selectedID || !previous) throw new Error("No Mac is selected.");
     store.setToken(selectedID, validateToken(token));
     pairing = { server: previous.server, token };
+    configureRouter();
   } catch (error) {
     log("settings: couldn't save the replaced pairing token");
     const message = error instanceof Error ? error.message : String(error);
@@ -686,7 +694,10 @@ async function adoptPairingToken(token: string, body: unknown): Promise<{ status
   }
   log(`settings: the replaced pairing token wasn't kept (${outcome.reason}); back to the previous token`);
   try { store.setToken(selectedID, previous.token); } catch { /* the token in memory still works */ }
-  if (pairing?.token === token) pairing = previous;
+  if (pairing?.token === token) {
+    pairing = previous;
+    configureRouter();
+  }
   pushSettingsState();
   const message = outcome.reason === "undone"
     ? "The Mac undid the new pairing token, so this PC still uses the old one."

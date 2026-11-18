@@ -142,6 +142,7 @@ targets:
       - path: ../CantripIOS/Tests/CantripTabSwitchTests.swift
       - path: ../CantripIOS/Tests/CantripMutationTests.swift
       - path: ../CantripIOS/Tests/CantripImageTransportTests.swift
+      - path: ../CantripIOS/Tests/CantripPrivateMascotTests.swift
       - path: ../CantripIOS/Tests/ServerProfilesTests.swift
       - path: ../CantripIOS/Tests/CantripDirectAddressTests.swift
       - path: ../CantripIOS/Tests/CantripPairingLinkTests.swift

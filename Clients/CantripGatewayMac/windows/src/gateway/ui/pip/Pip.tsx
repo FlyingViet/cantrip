@@ -3,6 +3,8 @@
 import type { JSX } from "preact";
 import { useLayoutEffect, useRef } from "preact/hooks";
 import { CELEBRATION_DURATION, drawMascot, isBusy, type MascotMood, type OutfitID } from "./mascot";
+import { personalMascot } from "../../state/privateMascot";
+import { drawPrivateMascot, type PrivateMascotPack } from "./privateMascot";
 
 const FRAME_INTERVAL = 1000 / 30;
 
@@ -14,21 +16,26 @@ export interface PipProps {
   class?: string;
   /** Renders one deterministic frame at this time (seconds), like Swift's `frameTime`, for previews. */
   frameTime?: number;
+  /** Outfit thumbnails always opt out. */
+  personal?: boolean;
 }
 
 interface Live extends PipProps {
+  pack: PrivateMascotPack | null;
   /** `performance.now()` when the current celebration hop started. */
   celebrationStart: number | null;
 }
 
 /** Decorative: the caller labels the control that hosts Pip. */
 export function Pip(props: PipProps): JSX.Element {
+  const pack = props.personal === false ? null : personalMascot.value.pack;
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const live = useRef<Live>({ ...props, celebrationStart: null });
+  const live = useRef<Live>({ ...props, pack, celebrationStart: null });
   const refresh = useRef<() => void>(() => {});
   const previousMood = useRef(props.mood);
+  const previousPack = useRef(pack);
   Object.assign(live.current, {
-    mood: props.mood, outfit: props.outfit, size: props.size, frameTime: props.frameTime,
+    mood: props.mood, outfit: props.outfit, size: props.size, frameTime: props.frameTime, pack,
   });
 
   useLayoutEffect(() => {
@@ -36,6 +43,7 @@ export function Pip(props: PipProps): JSX.Element {
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const dark = window.matchMedia("(prefers-color-scheme: dark)");
     let onScreen = true;
     let frame = 0;
     let lastDraw = -Infinity;
@@ -63,14 +71,16 @@ export function Pip(props: PipProps): JSX.Element {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, pixels, pixels);
       ctx.setTransform(pixels / size, 0, 0, pixels / size, 0, 0);
-      drawMascot(ctx, {
+      const options = {
         mood: state.mood,
         outfit: state.outfit,
         size,
         time: state.frameTime ?? (motion ? Date.now() / 1000 : 1),
         reduceMotion: !motion && state.frameTime === undefined,
         celebration,
-      });
+      };
+      if (state.pack) drawPrivateMascot(ctx, state.pack, { ...options, dark: dark.matches });
+      else drawMascot(ctx, options);
     };
 
     const tick = (now: number) => {
@@ -125,6 +135,7 @@ export function Pip(props: PipProps): JSX.Element {
     };
     document.addEventListener("visibilitychange", onVisibility);
     reducedMotion.addEventListener("change", onMotionChange);
+    dark.addEventListener("change", onMotionChange);
     window.addEventListener("resize", onResize);
     refresh.current();
 
@@ -134,12 +145,19 @@ export function Pip(props: PipProps): JSX.Element {
       observer?.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
       reducedMotion.removeEventListener("change", onMotionChange);
+      dark.removeEventListener("change", onMotionChange);
       window.removeEventListener("resize", onResize);
       refresh.current = () => {};
     };
   }, []);
 
   useLayoutEffect(() => {
+    if (pack !== previousPack.current) {
+      previousPack.current = pack;
+      live.current.celebrationStart = null;
+      const canvas = canvasRef.current;
+      if (canvas) canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    }
     const previous = previousMood.current;
     previousMood.current = props.mood;
     // Finishing a turn earns a hop: a busy mood settling back to idle.
@@ -147,7 +165,7 @@ export function Pip(props: PipProps): JSX.Element {
       live.current.celebrationStart = performance.now();
     }
     refresh.current();
-  }, [props.mood, props.outfit, props.size, props.frameTime]);
+  }, [props.mood, props.outfit, props.size, props.frameTime, pack]);
 
   return (
     <canvas

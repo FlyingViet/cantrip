@@ -1559,6 +1559,7 @@ struct ChatView: View {
                 vm.syncRemoteTranscript()
             }
         }
+        .cantripPersonalMascot(remote.privateMascot)
         .onAppear {
             homeSnapshotsAllowedFrom = Date().addingTimeInterval(2.5)
             voice.requestAuth()

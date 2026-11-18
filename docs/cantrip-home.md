@@ -14,6 +14,34 @@ per-session model controls, tools, attachments, input requests and history as
 [Cantrip Remote](remote-control.md). Cantrip must remain running for scheduled
 work.
 
+## Personal mascot
+
+A paired Mac can supply private artwork for the animated Home mascot. It is not
+included in the app, source repository, or releases. Clients use it by default
+when that Mac supplies it; **Settings > Appearance > Mascot** can turn it off,
+and choosing a built-in look returns to that look. Names remain device-local.
+
+On the host, create `~/Library/Application Support/Cantrip/PrivateMascot/` with
+`portrait.png` (open eyes), `blink.png` (the same pose with closed eyes), and
+`manifest.json`:
+
+```json
+{"version":1,"sparkX":0.8,"sparkY":0.6}
+```
+
+Both frames must be square PNGs of the same dimensions, no larger than 1024 by
+1024 pixels or 2 MB each. Transparent backgrounds work best. `sparkX` and
+`sparkY` locate the wand tip or other sparkle in normalized 0-to-1 coordinates.
+Only install artwork you are entitled to use. Keep the directory private
+(`0700`, files `0600`); do not place it inside a source checkout.
+
+Paired clients fetch the pack through the authenticated API and keep it only in
+memory, clearing it when switching Macs or when the host removes the manifest.
+Replacing a file changes the advertised revision without restarting the host.
+Breathing, blinks, state-driven sparkles and completion hops stop for Reduce
+Motion and inactive views; native clients also stop for Low Power Mode. Invalid
+packs show an error in mascot settings and use the built-in look until repaired.
+
 ## Answer in Home or hand off to a project tab
 
 Home decides from each message's intent: references, questions and status

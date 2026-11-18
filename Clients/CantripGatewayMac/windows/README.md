@@ -7,6 +7,14 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
 
 ## What's in it
 
+- **Personal mascot (optional).** A private pack configured on the paired Mac appears by
+  default in Pip's existing surfaces. Customize Mascot can turn it off; choosing a built-in
+  look also turns it off, and outfit thumbnails remain the originals. Only that preference
+  is saved on this device: artwork is fetched over the paired transport, kept in memory,
+  and discarded when the pack disappears, personal mode is disabled, or Macs change.
+  Animation pauses offscreen/hidden and respects reduced motion. Pack errors appear in
+  Customize Mascot without blocking chat.
+
 - **The Mac app's window.** A floating sidebar with Pip (same moods and outfits), Chat,
   Tasks and Artifacts with their badges, and every project tab (status, a gear and count while
   it has background tasks running, age, drag to reorder, right-click actions), grouped under collapsible sections when the Mac has any
