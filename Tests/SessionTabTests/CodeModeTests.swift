@@ -99,6 +99,13 @@ extension SessionTabTests {
                      && declared.contains("by?: Record<string, number>") && declared.contains("id: number")
                      && declared.contains("text: string") && !declared.contains(" note: ") && !declared.contains(" note?: "),
                      "Declarations: \(declared)")
+        let report = (0..<30).map { #""section\#($0)":{"rows":[{"name":"x","count":1,"inner":{"deep":{"deeper":"y"}}}]}"# }
+        let bigTool = CodeModeTool(server: "notes", name: "notes_report", description: "", inputSchema: [:])
+        shapes.observe(bigTool.key, text: "{" + report.joined(separator: ",") + "}")
+        let bigType = CodeModeAPI.outputType(bigTool, shapes: shapes)
+        precondition(shapes.shape(for: bigTool.key)!.typescript.count > CodeModeAPI.outputTypeCharacters
+                     && bigType.count <= CodeModeAPI.outputTypeCharacters && bigType.contains("section0: { rows: object[] }"),
+                     "A report-sized result type shows its outer levels only: \(bigType)")
 
         // Recipes: a saved chain, offered only when its tools are.
         let recipe = CodeModeRecipe(name: "note_digest", description: "Search, then read each", params: "{ query: string }",

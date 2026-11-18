@@ -174,7 +174,10 @@ indirect enum CodeModeShape: Equatable {
         }
     }
 
-    var typescript: String {
+    var typescript: String { typescript(depth: .max) }
+
+    /// TypeScript with objects nested more than `depth` levels deep written as `object`.
+    func typescript(depth: Int) -> String {
         switch self {
         case .string: return "string"
         case .number: return "number"
@@ -182,13 +185,14 @@ indirect enum CodeModeShape: Equatable {
         case .null: return "null"
         case .unknown: return "unknown"
         case .array(let element):
-            let inner = element.typescript
+            let inner = element.typescript(depth: depth)
             return element.isCompound ? "Array<\(inner)>" : "\(inner)[]"
-        case .record(let value): return "Record<string, \(value.typescript)>"
-        case .union(let members): return members.map(\.typescript).joined(separator: " | ")
+        case .record(let value): return depth <= 0 ? "object" : "Record<string, \(value.typescript(depth: depth - 1))>"
+        case .union(let members): return members.map { $0.typescript(depth: depth) }.joined(separator: " | ")
         case .object(let keys, let optional):
             guard !keys.isEmpty else { return "{}" }
-            return "{ " + keys.keys.sorted().map { "\($0)\(optional.contains($0) ? "?" : ""): \(keys[$0]!.typescript)" }
+            guard depth > 0 else { return "object" }
+            return "{ " + keys.keys.sorted().map { "\($0)\(optional.contains($0) ? "?" : ""): \(keys[$0]!.typescript(depth: depth - 1))" }
                 .joined(separator: "; ") + " }"
         }
     }
@@ -357,9 +361,20 @@ enum CodeModeAPI {
     }
 
     /// The result type: the declared output schema, else the shape seen so far, else unknown.
+    /// Longest result type shown in full: a tool that returns a whole report would otherwise push every
+    /// other tool out of the description.
+    static let outputTypeCharacters = 1_500
+
     static func outputType(_ tool: CodeModeTool, shapes: CodeModeShapes) -> String {
         if let schema = tool.outputSchema { return typescript(schema) }
-        return shapes.shape(for: tool.key)?.typescript ?? "unknown"
+        guard let shape = shapes.shape(for: tool.key) else { return "unknown" }
+        let full = shape.typescript
+        guard full.count > outputTypeCharacters else { return full }
+        for depth in [4, 3, 2] {
+            let outer = shape.typescript(depth: depth)
+            if outer.count <= outputTypeCharacters { return outer }
+        }
+        return shape.typescript(depth: 1)
     }
 
     /// Declarations for the given tools and recipes, grouped by server.
