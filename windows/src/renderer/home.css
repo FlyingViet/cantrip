@@ -674,12 +674,242 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* Views (docs/views.md): rows in Tasks and a view's page */
-.view-row-top {
+/* Views (docs/views.md): Tasks' collapsible Views and Tasks sections, the thumbnail grid, and a view's page */
+.home-section-heading {
+  margin: 14px 0 8px;
+  font-size: 13px;
+}
+
+.home-section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  margin-left: -6px;
+  padding: 2px 10px 2px 6px;
+  color: #c8c8cc;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.home-section-toggle:hover {
+  color: #f2f2f3;
+  background: #2a2a2d;
+}
+
+.home-section-chevron {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  transition: transform 0.15s;
+}
+
+.home-section-chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.home-section-toggle[aria-expanded="true"] .home-section-chevron {
+  transform: rotate(90deg);
+}
+
+.home-section-count {
+  color: #8e8e93;
+  font-weight: 500;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-section-chevron {
+    transition: none;
+  }
+}
+
+.views-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.view-thumb {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 196px;
+  padding: 10px;
+  overflow: hidden;
+  background: #212123;
+  border: 1px solid #343437;
+  border-radius: 12px;
+}
+
+.views-grid.narrow .view-thumb {
+  height: 176px;
+}
+
+.view-thumb:hover {
+  background: #29292c;
+  border-color: #46464a;
+}
+
+/* The whole card is this one button, laid over the drawn thumbnail. */
+.view-thumb-open {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+  cursor: pointer;
+}
+
+.view-thumb-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  pointer-events: none;
+}
+
+.view-thumb-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 2px;
+}
+
+.view-thumb-icon,
+.view-thumb-badge {
+  display: inline-flex;
+  flex: none;
+}
+
+.view-thumb-icon {
+  width: 17px;
+  height: 17px;
+  color: #b69cff;
+}
+
+.view-thumb-badge {
+  width: 13px;
+  height: 13px;
+  color: #a1a1a6;
+}
+
+.view-thumb-icon svg,
+.view-thumb-badge svg {
+  width: 100%;
+  height: 100%;
+}
+
+.view-thumb-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.view-thumb-sub,
+.view-thumb-note {
+  padding: 0 2px;
+  overflow: hidden;
+  color: #a1a1a6;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.view-thumb-sub {
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.view-thumb-note {
+  margin-top: 5px;
+  font-size: 11px;
+}
+
+.view-thumb-note.warning {
+  color: #ffd27a;
+}
+
+.view-thumb-preview {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin-top: 8px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #21304a 0%, #1c1d20 100%);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.view-thumb-scale {
+  width: 166.667%;
+  transform: scale(0.6);
+  transform-origin: 0 0;
+}
+
+.view-thumb-scale .card-panel {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+  align-content: flex-start;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.view-thumb-scale .card-panel > * {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.view-thumb-scale .card-panel > .card-stat {
+  flex: 1 1 40%;
+}
+
+.view-thumb-scale .card-block + .card-block {
+  border-top: 0;
+}
+
+.view-thumb-scale .card-table-scroll {
+  overflow: hidden;
+}
+
+/* Until its view arrives: two faint bars. */
+.view-thumb-preview.placeholder::before,
+.view-thumb-preview.placeholder::after {
+  position: absolute;
+  left: 12px;
+  height: 9px;
+  content: "";
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+}
+
+.view-thumb-preview.placeholder::before {
+  top: 14px;
+  width: 38%;
+}
+
+.view-thumb-preview.placeholder::after {
+  top: 32px;
+  width: 62%;
 }
 
 .home-cards.view-card {

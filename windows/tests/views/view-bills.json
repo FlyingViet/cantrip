@@ -1,0 +1,104 @@
+{
+  "card": {
+    "accessibilityLabel": "Bills",
+    "blocks": [
+      {
+        "subtitle": "Due soon and by category",
+        "symbol": "creditcard",
+        "title": "Bills",
+        "type": "header"
+      },
+      {
+        "accessibilityLabel": "Due soon, 6",
+        "label": "Due soon",
+        "symbol": "calendar",
+        "type": "stat",
+        "value": "6"
+      },
+      {
+        "accessibilityLabel": "Active, 13",
+        "label": "Active",
+        "symbol": "checkmark.circle",
+        "type": "stat",
+        "value": "13"
+      },
+      {
+        "accessibilityLabel": "By category",
+        "items": [
+          {
+            "accessibilityLabel": "Software, 6",
+            "high": 6,
+            "highText": "6",
+            "label": "Software",
+            "low": 0
+          },
+          {
+            "accessibilityLabel": "Subscription, 5",
+            "high": 5,
+            "highText": "5",
+            "label": "Subscription",
+            "low": 0
+          },
+          {
+            "accessibilityLabel": "Utility, 3",
+            "high": 3,
+            "highText": "3",
+            "label": "Utility",
+            "low": 0
+          },
+          {
+            "accessibilityLabel": "Insurance, 2",
+            "high": 2,
+            "highText": "2",
+            "label": "Insurance",
+            "low": 0
+          },
+          {
+            "accessibilityLabel": "Membership, 2",
+            "high": 2,
+            "highText": "2",
+            "label": "Membership",
+            "low": 0
+          },
+          {
+            "accessibilityLabel": "Other, 1",
+            "high": 1,
+            "highText": "1",
+            "label": "Other",
+            "low": 0
+          }
+        ],
+        "kind": "bar",
+        "max": 6,
+        "min": 0,
+        "title": "By category",
+        "type": "chart"
+      }
+    ],
+    "fallbackText": "Bills \u2014 Due soon and by category\nDue soon 6\nActive 13\nBy category\nSoftware 6\nSubscription 5\nUtility 3\nInsurance 2\nMembership 2\nOther 1",
+    "id": "view-A7D5AD39-64CA-48A6-BA74-F5C3558BA1BC",
+    "source": {
+      "kind": "view",
+      "name": "Bills",
+      "updatedAt": "2026-11-18T06:09:04Z"
+    },
+    "type": "view",
+    "version": 1
+  },
+  "refreshAfter": 30,
+  "view": {
+    "createdAt": "2026-11-18T06:08:41Z",
+    "icon": "creditcard",
+    "id": "A7D5AD39-64CA-48A6-BA74-F5C3558BA1BC",
+    "name": "Bills",
+    "pinned": false,
+    "private": false,
+    "problems": [],
+    "refreshing": false,
+    "sources": [
+      "records"
+    ],
+    "subtitle": "Due soon and by category",
+    "updatedAt": "2026-11-18T06:08:41Z"
+  }
+}

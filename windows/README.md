@@ -24,7 +24,7 @@ capture, updates, and platform limitations.
 - A read-only **Cantrip Home** window, paired with your Mac through a `cantrip pair` link:
   Home's conversation, Background runs with their cards and full log (plus each tab's running
   background tasks and the Mac's long jobs, builds and other long work, with their steps), and Tasks with their latest runs,
-  workspaces and record cards, and Home's **Views** (pinned first; a view's page has **Refresh**, and of its buttons
+  workspaces and record cards, and Home's **Views** (a grid of thumbnails, pinned first, above collapsible Tasks; a view's page has **Refresh**, and of its buttons
   only refresh and links, each confirmed first; pin, delete and the other buttons stay in Cantrip Gateway)
 - Hash-approved plugins with sandboxed dashboards, bounded data sources, MCP
   injection, and live reload

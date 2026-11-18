@@ -196,5 +196,5 @@ draw them as bars. A chart or table may carry a `title` (13 pt semibold, above i
 | Cantrip Agent (iPhone, iPad, Duo) and Cantrip Gateway for Mac (and the Mac's Home window) | Tasks → Views, pinned first; the view's screen has Refresh, Pin and Delete | `CantripCards.swift` |
 | Browser remote | Tasks panel → Views: a grid of thumbnails (a view's first stats and chart, drawn small) that open its screen; the Views and Tasks headings collapse, remembered per browser | `appendCards` in `RemoteControlServer.swift` |
 | Cantrip Gateway for Windows | Tasks → Views | `Cards.tsx` |
-| Cantrip for Windows | Home window → Views (read-only window: Refresh and links) | `windows/src/renderer/cards.ts` |
+| Cantrip for Windows | Home window → Tasks → Views, the same thumbnail grid and collapsible sections (read-only window: Refresh and links) | `windows/src/renderer/cards.ts` |
 | Mac launcher | (views live in Home) | `CardViews.swift` draws the new blocks in any card |

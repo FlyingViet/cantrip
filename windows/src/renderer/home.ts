@@ -5,7 +5,20 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import "./home.css";
-import { cardElement, type ButtonModel } from "./cards";
+import { cardElement, symbolIcon, type ButtonModel } from "./cards";
+import {
+  gridColumns,
+  previewBlocks,
+  sectionCollapsed,
+  sectionCount,
+  sectionLabel,
+  setSectionCollapsed,
+  thumbLabel,
+  thumbNote,
+  thumbsToFetch,
+  type HomeSection,
+  type ThumbEntry,
+} from "./viewsGrid";
 import {
   appleDate,
   buildDetail,
@@ -116,6 +129,12 @@ const state: {
 
 let renderedSignature = "";
 let viewTimer: ReturnType<typeof setTimeout> | undefined;
+/** Each listed view's card as last fetched, for its thumbnail (a view's own page fetches fill it too). */
+const thumbs = new Map<string, ThumbEntry>();
+const thumbsLoading = new Set<string>();
+/** The views grid's last measured width, so a re-render starts with the right columns. */
+let gridWidth = 0;
+let gridObserver: ResizeObserver | undefined;
 /** The view and detail last drawn, so a refresh of the same one keeps its scroll position. */
 let renderedPlace = "";
 let refreshTicket = 0;
@@ -525,7 +544,38 @@ function confirmDialog(request: { title: string; message?: string; confirm: stri
 
 function showView(shown: ShownView): void {
   state.openView = { id: shown.view.id, shown, dueAt: Date.now() + shown.refreshMs };
+  rememberThumb(shown);
+}
+
+/** Caches a fetched view for its thumbnail; its summary replaces the listed one, so the two agree until it changes again. */
+function rememberThumb(shown: ShownView): void {
+  thumbs.set(shown.view.id, { shown, fetchedAt: Date.now(), failed: false });
   if (state.views) state.views = state.views.map((view) => (view.id === shown.view.id ? shown.view : view));
+}
+
+function thumbsShowing(): boolean {
+  return state.view === "tasks" && !state.detail && Boolean(state.status?.paired && state.tasks?.supportsViews && state.views?.length)
+    && !sectionCollapsed(localStorage, "views");
+}
+
+/** While the grid shows: fetch each listed view's card when it's due, at most 2 at a time. Never a refresh. */
+function loadThumbs(): void {
+  if (!thumbsShowing()) return;
+  for (const viewID of thumbsToFetch(state.views ?? [], thumbs, thumbsLoading, Date.now())) void loadThumb(viewID);
+}
+
+async function loadThumb(viewID: string): Promise<void> {
+  thumbsLoading.add(viewID);
+  try {
+    const result = await api.read({ kind: "view", viewID });
+    const shown = result.ok ? parseView(result.data) : null;
+    if (shown) rememberThumb(shown);
+    else thumbs.set(viewID, { shown: thumbs.get(viewID)?.shown ?? null, fetchedAt: Date.now(), failed: true });
+  } finally {
+    thumbsLoading.delete(viewID);
+    render();
+    loadThumbs();
+  }
 }
 
 /** Fetches the open view again when its `refreshAfter` comes due (the window's own poll is every 15 s). */
@@ -575,18 +625,96 @@ async function runViewAction(viewID: string, button: ButtonModel): Promise<void>
   render(true);
 }
 
-function viewItem(view: HomeViewSummary): HTMLElement {
-  const item = el("li", "home-item");
-  const open = button("", `view:${view.id}`, () => navigate("tasks", { kind: "view", viewID: view.id }), "record-button view-button");
-  const top = el("span", "view-row-top");
-  top.append(el("span", "item-title", view.name));
-  if (view.pinned) top.append(el("span", "home-badge tone-accent", "Pinned"));
-  if (view.private) top.append(el("span", "home-badge tone-neutral", "Private"));
-  open.append(top);
-  const subtitle = viewSubtitle(view);
-  if (subtitle) open.append(el("span", "item-meta", subtitle));
-  open.setAttribute("aria-label", [view.name, view.pinned ? "pinned" : "", view.private ? "private" : "", subtitle].filter(Boolean).join(", "));
-  item.append(open);
+/** A collapsible section's heading: one disclosure button with a chevron, the title and, collapsed, the count. */
+function sectionHeading(section: HomeSection, title: string, count: number, noun: string, body: HTMLElement): HTMLElement[] {
+  const collapsed = sectionCollapsed(localStorage, section);
+  const head = el("h3", "home-section-heading");
+  const toggle = button("", `section:${section}`, () => {
+    setSectionCollapsed(localStorage, section, !sectionCollapsed(localStorage, section));
+    render(true);
+    content.querySelector<HTMLElement>(`[data-key="section:${section}"]`)?.focus();
+    loadThumbs();
+  }, "home-section-toggle");
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+  toggle.setAttribute("aria-controls", `home-${section}-body`);
+  toggle.setAttribute("aria-label", sectionLabel(title, count, noun));
+  const chevron = el("span", "home-section-chevron");
+  chevron.setAttribute("aria-hidden", "true");
+  chevron.innerHTML = "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>";
+  toggle.append(chevron, el("span", "home-section-title", title));
+  const countText = sectionCount(count, collapsed);
+  if (countText) toggle.append(el("span", "home-section-count", countText));
+  head.append(toggle);
+  body.id = `home-${section}-body`;
+  body.hidden = collapsed;
+  return [head, body];
+}
+
+function applyGrid(grid: HTMLElement, width: number): void {
+  if (!(width > 0)) return;
+  grid.style.gridTemplateColumns = `repeat(${gridColumns(width)}, minmax(0, 1fr))`;
+  grid.classList.toggle("narrow", width < 600);
+}
+
+/** The views as thumbnails, with the column count measured from the grid's own width. */
+function viewsGrid(views: HomeViewSummary[]): HTMLElement {
+  const grid = el("ul", "views-grid");
+  grid.setAttribute("aria-label", "Views");
+  if (sectionCollapsed(localStorage, "views")) return grid;
+  for (const view of views) grid.append(viewThumb(view));
+  applyGrid(grid, gridWidth || content.clientWidth - 40);
+  gridObserver ??= new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const width = entry.contentBoxSize?.[0]?.inlineSize ?? entry.contentRect.width;
+      if (width > 0) {
+        gridWidth = width;
+        applyGrid(entry.target as HTMLElement, width);
+      }
+    }
+  });
+  gridObserver.disconnect();
+  gridObserver.observe(grid);
+  return grid;
+}
+
+/**
+ * A view's thumbnail: its symbol, name, pin and lock, second line and a preview drawn by the card renderer at 60%
+ * (inert, hidden from assistive tech). The whole card is one button, named like the old row.
+ */
+function viewThumb(view: HomeViewSummary): HTMLElement {
+  const item = el("li");
+  const card = el("div", "view-thumb");
+  const body = el("div", "view-thumb-body");
+  body.setAttribute("aria-hidden", "true");
+  const top = el("div", "view-thumb-top");
+  const symbol = symbolIcon(view.icon, "view-thumb-icon") ?? symbolIcon("square.grid.2x2", "view-thumb-icon");
+  if (symbol) top.append(symbol);
+  top.append(el("span", "view-thumb-name", view.name));
+  const pin = view.pinned ? symbolIcon("pin.fill", "view-thumb-badge") : null;
+  const lock = view.private ? symbolIcon("lock.fill", "view-thumb-badge") : null;
+  if (pin) top.append(pin);
+  if (lock) top.append(lock);
+  const preview = el("div", "view-thumb-preview");
+  preview.inert = true;
+  const shown = thumbs.get(view.id)?.shown;
+  if (shown) {
+    const blocks = previewBlocks(shown.card);
+    const drawn = blocks.length ? cardElement({ version: shown.card.version, id: shown.card.id, type: shown.card.type, blocks }, openExternal) : null;
+    if (drawn) {
+      const scale = el("div", "view-thumb-scale");
+      scale.append(drawn);
+      preview.append(scale);
+    }
+  } else {
+    preview.classList.add("placeholder");
+  }
+  body.append(top, el("div", "view-thumb-sub", viewSubtitle(view) || "View"), preview);
+  const thumbNoteText = thumbNote(view);
+  if (thumbNoteText) body.append(el("div", thumbNoteText.warning ? "view-thumb-note warning" : "view-thumb-note", thumbNoteText.text));
+  const open = button("", `view:${view.id}`, () => navigate("tasks", { kind: "view", viewID: view.id }), "view-thumb-open");
+  open.setAttribute("aria-label", thumbLabel(view));
+  card.append(body, open);
+  item.append(card);
   return item;
 }
 
@@ -636,27 +764,41 @@ function renderTasks(): HTMLElement[] {
   const nodes: HTMLElement[] = [heading("Tasks")];
   if (snapshot.error) nodes.push(note(snapshot.error, "view-note warning"));
   const views = snapshot.supportsViews ? state.views ?? [] : [];
-  if (views.length) {
-    nodes.push(heading("Views", "h3"));
-    const list = el("ul", "home-list compact");
-    list.setAttribute("aria-label", "Views");
-    for (const view of views) list.append(viewItem(view));
-    nodes.push(list, heading("Tasks", "h3"));
-  }
   const list = el("ol", "home-list");
   list.setAttribute("aria-label", "Tasks");
-  for (const task of snapshot.tasks) list.append(taskItem(task));
-  nodes.push(list.childElementCount ? list : note("No tasks yet. Ask Cantrip Home to set one up."));
+  const empty = "No tasks yet. Ask Cantrip Home to set one up.";
+  if (!views.length) {
+    for (const task of snapshot.tasks) list.append(taskItem(task));
+    nodes.push(list.childElementCount ? list : note(empty));
+    return nodes;
+  }
+  nodes.push(...sectionHeading("views", "Views", views.length, "view", viewsGrid(views)));
+  const tasksBody = el("div", "home-section-body");
+  if (!sectionCollapsed(localStorage, "tasks")) {
+    for (const task of snapshot.tasks) list.append(taskItem(task));
+    tasksBody.append(list.childElementCount ? list : note(empty));
+  }
+  nodes.push(...sectionHeading("tasks", "Tasks", snapshot.tasks.length, "task", tasksBody));
   return nodes;
 }
 
 // MARK: - Shell
 
+/** The tasks list's thumbnails as drawn: each one's preview blocks (not when they were fetched) and the sections' state. */
+function thumbSignature(): unknown {
+  if (state.view !== "tasks" || state.detail || !state.views?.length) return null;
+  const previews = state.views.map((view) => {
+    const shown = thumbs.get(view.id)?.shown;
+    return shown ? previewBlocks(shown.card) : null;
+  });
+  return [sectionCollapsed(localStorage, "views"), sectionCollapsed(localStorage, "tasks"), previews];
+}
+
 function signature(): string {
   const data =
     state.view === "home" ? state.home
       : state.view === "background" ? (state.detail?.kind === "log" ? state.log : state.background)
-        : [state.tasks, state.record, state.views, state.openView?.shown, state.viewRefreshing];
+        : [state.tasks, state.record, state.views, state.openView?.shown, state.viewRefreshing, thumbSignature()];
   return JSON.stringify([state.view, state.detail, state.loading && !data, data]);
 }
 
@@ -774,6 +916,7 @@ async function refresh(): Promise<void> {
       state.loading = false;
       render();
       scheduleViewRefresh();
+      loadThumbs();
     }
   }
 }
@@ -807,6 +950,7 @@ unpairButton.addEventListener("click", async () => {
   state.views = null;
   state.viewsRevision = undefined;
   state.openView = null;
+  thumbs.clear();
   renderedSignature = "";
   render(true);
   pairLink.focus();
