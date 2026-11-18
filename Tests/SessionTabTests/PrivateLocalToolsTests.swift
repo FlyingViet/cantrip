@@ -393,6 +393,7 @@ extension SessionTabTests {
                      && history.map { $0["role"] as? String ?? "" } == ["assistant", "user"],
                      "The orphaned tool result goes with its call: \(history.map { $0["role"] ?? "" })")
 
+        try await testRelayClientResumesOnce()
         print("Private Local tools: read-only filter, relay catalog, on-demand tools, refusals, budget, step limit and settings passed")
     }
 }

@@ -60,25 +60,36 @@ final class MCPRelayClient: @unchecked Sendable {
         self.hello = hello
     }
 
+    /// Every way out resumes the caller once: connected, failed, closed, timed out or cancelled.
     func open(timeout: TimeInterval = 15) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let once = OnceFlag()
-            connection.stateUpdateHandler = { [weak self] state in
-                switch state {
-                case .ready:
-                    if once.take() { continuation.resume() }
-                case .failed(let error), .waiting(let error):
-                    if once.take() { continuation.resume(throwing: Failure(message: "Cantrip's MCP relay isn't answering (\(error.localizedDescription)).")) }
-                    self?.close()
-                case .cancelled:
-                    if once.take() { continuation.resume(throwing: Failure(message: "The MCP connection closed.")) }
-                default: break
+        let connection = connection
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let once = OnceFlag()
+                connection.stateUpdateHandler = { [weak self] state in
+                    switch state {
+                    case .ready:
+                        if once.take() { continuation.resume() }
+                    case .failed(let error), .waiting(let error):
+                        if once.take() { continuation.resume(throwing: Failure(message: "Cantrip's MCP relay isn't answering (\(error.localizedDescription)).")) }
+                        self?.close()
+                    case .cancelled:
+                        if once.take() { continuation.resume(throwing: Failure(message: "The MCP connection closed.")) }
+                    default: break
+                    }
+                }
+                // Cancelled before it started: the handler below already ran and found nothing to stop.
+                if Task.isCancelled {
+                    if once.take() { continuation.resume(throwing: CancellationError()) }
+                    return
+                }
+                connection.start(queue: .global(qos: .userInitiated))
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    if once.take() { continuation.resume(throwing: Failure(message: "Cantrip's MCP relay didn't answer in time.")) }
                 }
             }
-            connection.start(queue: .global(qos: .userInitiated))
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                if once.take() { continuation.resume(throwing: Failure(message: "Cantrip's MCP relay didn't answer in time.")) }
-            }
+        } onCancel: {
+            connection.cancel()
         }
         receive()
         write(try JSONSerialization.data(withJSONObject: hello))
@@ -128,6 +139,8 @@ final class MCPRelayClient: @unchecked Sendable {
                 guard registered else {
                     return continuation.resume(throwing: Failure(message: "The MCP connection closed."))
                 }
+                // Cancelled before it was registered: `onCancel` already ran and found nothing to finish.
+                if Task.isCancelled { return finish(id, .failure(CancellationError())) }
                 write(message)
                 DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak self] in
                     self?.finish(id, .failure(Failure(message: "The tool server didn't answer within \(Int(timeout)) seconds.")))
