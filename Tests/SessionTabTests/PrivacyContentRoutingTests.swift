@@ -98,6 +98,27 @@ extension SessionTabTests {
                                  gateRoute: nil, gate: gate, endpoint: endpoint)
         precondition(next.need == .init(sources: [.mail, .passwords], basis: ["history"]) && next.preRoute == .local, "\(next)")
 
+        // Live runs name shell and file tools for display ("Shell", "Read"); in a run that needs a
+        // private source their output is judged, like bash and view.
+        let shown = UUID()
+        _ = routing.begin(run: shown, taskID: UUID(), taskTitle: nil, prompt: "Read my email", gateRoute: nil, gate: gate, endpoint: endpoint)
+        routing.observe(run: shown, activityID: "d1", tool: "Shell", input: "python3 digest.py", output: "INVOICE 0042 due")
+        routing.observe(run: shown, activityID: "d2", tool: "Read", input: "/tmp/notes.md", output: "THREAD notes")
+        let shownRecord = await routing.finish(run: shown)
+        precondition(shownRecord?.labels == ["redact": 1, "extract": 1] && shownRecord?.publicResults == 0,
+                     "\(String(describing: shownRecord))")
+        // A run planned hybrid whose results were all public read nothing private, so its route is
+        // cloud; a run that showed no results keeps its plan.
+        let unused = UUID()
+        _ = routing.begin(run: unused, taskID: UUID(), taskTitle: nil, prompt: "Read my email", gateRoute: nil, gate: gate, endpoint: endpoint)
+        routing.observe(run: unused, activityID: "e1", tool: "web_fetch", input: "https://example.com", output: "public page")
+        let unusedRecord = await routing.finish(run: unused)
+        precondition(unusedRecord?.preRoute == "hybrid" && unusedRecord?.route == "cloud", "\(String(describing: unusedRecord))")
+        let silent = UUID()
+        _ = routing.begin(run: silent, taskID: UUID(), taskTitle: nil, prompt: "Read my email", gateRoute: nil, gate: gate, endpoint: endpoint)
+        let silentRecord = await routing.finish(run: silent)
+        precondition(silentRecord?.route == "hybrid", "\(String(describing: silentRecord))")
+
         // Past the per-run cap, results are counted as unchecked; a run that needs nothing private
         // sends shell output as is, unjudged.
         gate.contentRouting.maxResultsPerRun = 1

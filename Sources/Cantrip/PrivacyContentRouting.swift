@@ -320,6 +320,11 @@ final class PrivacyContentRouting: @unchecked Sendable {
     static let contentlessTools: Set<String> = ["edit", "create", "write", "tool_search_tool", "stop_bash", "ask_user",
                                                 "task", "read_agent", "list_agents", "write_agent", "sql"]
 
+    /// Shell and file tools, by raw name and by the display name a run's `ToolActivity` carries
+    /// (bash and run_shell show as "Shell", view as "Read", grep_search as "Search").
+    static let shellOrFileTools: Set<String> = ["bash", "shell", "write_bash", "read_bash", "view", "read",
+                                                "grep", "glob", "search"]
+
     /// Layer 2: one finished tool call of a task run. Private results (by tool, command or path)
     /// are judged on the local model in the background; the others are counted as public.
     func observe(run sessionID: UUID, activityID: String, tool: String, input: String?, output: String?) {
@@ -335,8 +340,7 @@ final class PrivacyContentRouting: @unchecked Sendable {
         }
         // Only private sources and, in a run that needs one, shell output and files (which may
         // print private data the patterns don't name) go to the judge.
-        let shellOrFile = ["bash", "view", "read_bash", "grep", "glob"].contains(bare)
-        guard !sources.isEmpty || (shellOrFile && run.plan.preRoute != .cloud) else {
+        guard !sources.isEmpty || (Self.shellOrFileTools.contains(bare) && run.plan.preRoute != .cloud) else {
             run.publicResults += 1
             run.publicChars += text.count
             lock.unlock(); return
@@ -406,7 +410,10 @@ final class PrivacyContentRouting: @unchecked Sendable {
         let privateRaw = PrivacyResultLabel.allCases.map(chars).reduce(0, +)
         let cloud = run.publicChars + chars(.pass) + chars(.redact)
             + Int((Double(chars(.extract)) * run.settings.factRatio).rounded())
-        let route = labels.isEmpty ? run.plan.preRoute : PrivacyContentSources.route(labels)
+        // No judged result: a run whose results were all seen and none private read nothing private;
+        // one that showed nothing, or whose judgments are missing, keeps its plan.
+        let route = !labels.isEmpty ? PrivacyContentSources.route(labels)
+            : unchecked == 0 && run.publicResults > 0 ? .cloud : run.plan.preRoute
         let record = PrivacyContentRecord(
             at: Date(), task: run.taskID.uuidString, taskTitle: run.taskTitle, gateRoute: run.gateRoute,
             preRoute: run.plan.preRoute.rawValue, sources: run.plan.need.sources.sorted().map(\.rawValue),
