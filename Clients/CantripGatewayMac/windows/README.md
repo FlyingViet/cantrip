@@ -94,6 +94,14 @@ so everything you send runs on the Mac, the same as the iPhone and Mac apps.
   **Cancel**) and then run on the Mac: a link opens in the browser (web pages only), a record opens in its workspace
   (Back returns to the view), a task's run says it started, Refresh redraws the view, and a question goes to Home's
   chat. Buttons only appear on a view's screen, never under a chat reply. Macs without views show none.
+- **Upcoming.** Everything set to run later ([Upcoming](../../../docs/cantrip-home.md#upcoming)) sits between Views
+  and the tasks in Tasks under its own collapsible heading with its count (**Upcoming · 12**, remembered on this PC):
+  **Next up** (the first 6, then **Show all**), **Waiting**, **Repeating** and **Paused**, each row with its title,
+  when it runs in this PC's time ("Today 10:35 PM", "Tomorrow 3:00 AM", a weekday within a week, else the date) or
+  its schedule, who set it up, and its detail. Its small button is the Mac's **Cancel**, **Stop** or **Pause**, which
+  asks first with the Mac's question (**Keep** backs out), or **Resume**, which acts at once; the Mac's answer
+  replaces the list and its message shows briefly. The list is fetched with its revision with each Home poll while
+  Tasks shows; Macs without it show no section.
 - **Sheets.** Background runs (answer a waiting run in place; every tab's running background
   tasks under **In tabs**, with Stop; the Mac's long jobs (builds taking turns and other long work, each with a bar of its steps) under **Jobs**; **Full Log**
   opens Cantrip Home's background log, every run's report with its cards, read-only with no

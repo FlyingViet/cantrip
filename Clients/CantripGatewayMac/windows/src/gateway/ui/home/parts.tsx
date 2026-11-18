@@ -145,7 +145,8 @@ export function contextMenuAt(event: MouseEvent, entries: MenuEntry[], label: st
 
 /**
  * A collapsible section's heading: one disclosure button (chevron down when open, right when collapsed, the title,
- * and "· 6" while collapsed) inside an h3, named "Views, 6 views" and controlling the section's body.
+ * and "· 6" while collapsed, or always with `alwaysCount`) inside an h3, named "Views, 6 views" and controlling the
+ * section's body.
  */
 export function SectionHeading(props: {
   id: string;
@@ -157,6 +158,7 @@ export function SectionHeading(props: {
   controls: string;
   onToggle: () => void;
   class?: string;
+  alwaysCount?: boolean;
 }): JSX.Element {
   const { title, count, collapsed } = props;
   return (
@@ -166,7 +168,7 @@ export function SectionHeading(props: {
         onClick={props.onToggle}>
         <Icon name={collapsed ? "chevron.right" : "chevron.down"} size={12} class="hm-section-chevron" />
         <span class="hm-section-title">{title}</span>
-        {collapsed ? <span class="hm-section-count">· {count}</span> : null}
+        {collapsed || props.alwaysCount ? <span class="hm-section-count">· {count}</span> : null}
       </button>
     </h3>
   );

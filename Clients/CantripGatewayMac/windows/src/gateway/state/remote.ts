@@ -1,11 +1,11 @@
 // The paired Mac's state, polled like the Mac app's CantripRemoteModel (CantripRemote.swift):
 // the tab list every 1.5 s while busy / 5 s idle / 15 s behind other windows, the shown session's
-// transcript only when its historyRevision changes, and Home's tasks and artifacts with revisions.
+// transcript only when its historyRevision changes, and Home's tasks, artifacts and Upcoming with revisions.
 import { batch, computed, signal } from "@preact/signals";
 import { api, APIError, onWritesChanged, pathComponent } from "../api/client";
 import type {
   ChildTabAction, DeleteMessageRequest, ForkQueuedResponse, HomeArtifactsResponse, HomeArtifactsSnapshot, HomeBackgroundSnapshot, HomeInputGroup, HomeTasksResponse,
-  HomeViewSummary,
+  HomeUpcomingItem, HomeViewSummary,
   HomeTasksSnapshot, InputAnswerRequest, MoveTabResponse, PagedRemoteSessionDetail, RemoteMessage,
   RemoteSessionSummary, SendMessageRequest, SessionResponse, SessionsListResponse, SessionUpdateResponse,
   SubagentCancelResponse, TabSection, TabSectionsResponse,
@@ -17,6 +17,7 @@ import { movedSections } from "./sections";
 import { plainMentions, plainMentionsDeep, plainSession } from "./tabMentions";
 import { dropDeletedMessages, resetThreads } from "./threads";
 import { messageLocation } from "./location";
+import { parseUpcoming, upcomingPath } from "./upcoming";
 import { parseViews, supportsViews, viewsPath } from "./views";
 import { privateMascotLoader } from "./privateMascot";
 
@@ -52,6 +53,9 @@ export const homeArtifacts = signal<HomeArtifactsSnapshot | null>(null);
 /** Home's views, pinned first (docs/views.md); null until loaded or while the Mac doesn't serve them (`supportsViews`). */
 export const homeViews = signal<HomeViewSummary[] | null>(null);
 export const homeViewsError = signal<string | null>(null);
+/** Home's Upcoming list (docs/cantrip-home.md "Upcoming"), in the Mac's order; null until loaded or while the Mac doesn't serve it. */
+export const homeUpcoming = signal<HomeUpcomingItem[] | null>(null);
+export const homeUpcomingError = signal<string | null>(null);
 export const homeArtifactsError = signal<string | null>(null);
 export const homeBackground = signal<HomeBackgroundSnapshot | null>(null);
 export const homeBackgroundError = signal<string | null>(null);
@@ -384,9 +388,17 @@ export function select(id: string | null): void {
 let tasksRevision: string | null = null;
 let artifactsRevision: string | null = null;
 let viewsRevision: string | null = null;
+let upcomingRevision: string | null = null;
+/** Upcoming polls only while Tasks shows. */
+let upcomingWanted = false;
+/** A Mac without Upcoming (404) is asked again only after this. */
+let upcomingRetryAt = 0;
+const UPCOMING_RETRY_MS = 5 * 60_000;
+/** Bumped by every list an action answers, so a poll that started before it can't put the old list back. */
+let upcomingGeneration = 0;
 
 export async function refreshHomeData(): Promise<void> {
-  await Promise.all([refreshTasks().then(refreshViews), refreshArtifacts()]);
+  await Promise.all([refreshTasks().then(refreshViews), refreshArtifacts(), upcomingWanted ? refreshUpcoming() : null]);
   const home = details.value.get(homeID.value ?? "") ?? homeSummary.value;
   if ((home?.backgroundInputCount ?? 0) > 0 || homeBackground.value?.runs.some(needsInput)) await refreshBackground();
 }
@@ -421,6 +433,46 @@ export async function refreshViews(): Promise<void> {
   } catch (error) {
     homeViewsError.value = `Couldn't load views: ${(error as Error).message}`;
   }
+}
+
+/** Tasks showing (or not): Upcoming polls with the rest of Home's data only while it does. */
+export function setUpcomingWanted(value: boolean): void {
+  upcomingWanted = value;
+}
+
+/** The Upcoming list, with its revision; a Mac that answers 404 hasn't got it, so the section stays hidden. */
+export async function refreshUpcoming(): Promise<void> {
+  if (Date.now() < upcomingRetryAt) return;
+  const generation = upcomingGeneration;
+  try {
+    const parsed = parseUpcoming(await api<unknown>(upcomingPath(homeUpcoming.value ? upcomingRevision : null)));
+    if (generation !== upcomingGeneration) return;
+    homeUpcomingError.value = null;
+    upcomingRevision = parsed.revision;
+    if (!parsed.unchanged) homeUpcoming.value = parsed.items;
+  } catch (error) {
+    if (generation !== upcomingGeneration) return;
+    if (error instanceof APIError && (error.status === 404 || error.status === 405)) {
+      upcomingRetryAt = Date.now() + UPCOMING_RETRY_MS;
+      upcomingRevision = null;
+      batch(() => {
+        homeUpcoming.value = null;
+        homeUpcomingError.value = null;
+      });
+      return;
+    }
+    homeUpcomingError.value = `Couldn't load Upcoming: ${(error as Error).message}`;
+  }
+}
+
+/** The list a Cancel or Resume answered with. */
+export function applyUpcoming(items: HomeUpcomingItem[], revision: string | null): void {
+  upcomingGeneration += 1;
+  upcomingRevision = revision;
+  batch(() => {
+    homeUpcoming.value = items;
+    homeUpcomingError.value = null;
+  });
 }
 
 export async function refreshArtifacts(): Promise<void> {
@@ -720,6 +772,8 @@ export function reset(): void {
     homeArtifacts.value = null;
     homeViews.value = null;
     homeViewsError.value = null;
+    homeUpcoming.value = null;
+    homeUpcomingError.value = null;
     homeBackground.value = null;
     listed.value = false;
   });
@@ -728,5 +782,8 @@ export function reset(): void {
   tasksRevision = null;
   artifactsRevision = null;
   viewsRevision = null;
+  upcomingRevision = null;
+  upcomingRetryAt = 0;
+  upcomingGeneration += 1;
   reportedSettings = "";
 }

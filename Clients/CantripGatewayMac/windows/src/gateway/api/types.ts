@@ -1819,6 +1819,38 @@ export interface HomeTaskRecordUpdateRequest {
   values: Record<string, string>;
 }
 
+// MARK: - Cantrip Home: upcoming (docs/cantrip-home.md "Upcoming")
+
+/** One thing set to run later (`HomeUpcoming.Item.json`). */
+export interface HomeUpcomingItem {
+  /** Opaque ("step:…", "task:…", "mac:…"): sent back as-is to cancel or resume. */
+  id: string;
+  kind: "task" | "step" | "wait" | "job" | "macJob" | string;
+  title: string;
+  detail?: string;
+  /** Unix seconds (since 1970, not Apple's epoch). */
+  nextRunAt?: number;
+  /** "Once", "Daily at 3:00 AM", "Every 15 minutes", "Waiting, until Fri Nov 20, 9:50 AM", "Running for 8 h". */
+  schedule: string;
+  /** Who set it up: a tab's title, "Cantrip Home", "This Mac". */
+  owner: string;
+  ownerTabID?: string;
+  state: "scheduled" | "waiting" | "paused" | string;
+  group: "next" | "waiting" | "repeating" | "paused" | string;
+  /** "Cancel", "Stop" or "Pause"; absent when it can't be cancelled from here. */
+  cancelLabel?: string;
+  /** The question to ask first, naming what will stop. */
+  confirm?: string;
+  canResume: boolean;
+}
+
+/** GET /api/v1/home/upcoming (changed), and POST …/cancel or …/resume with the `message` saying what happened. */
+export interface HomeUpcomingSnapshot {
+  items: HomeUpcomingItem[];
+  revision: string;
+  message?: string;
+}
+
 // MARK: - Cantrip Home: artifacts
 
 /** `CantripHomeArtifact`. */

@@ -1,6 +1,7 @@
-// Home's Tasks (CantripHomeTasksView): Views first (when the Mac serves them, a thumbnail grid), then every task with
-// its schedule, latest run and pause switch; a workspace task opens its records, any other task its Edit sheet. Drag,
-// Alt+Up/Down or the row menu reorders. With views listed, the Views and Tasks headings collapse their sections.
+// Home's Tasks (CantripHomeTasksView): Views first (when the Mac serves them, a thumbnail grid), then Upcoming (when the
+// Mac serves it), then every task with its schedule, latest run and pause switch; a workspace task opens its records, any
+// other task its Edit sheet. Drag, Alt+Up/Down or the row menu reorders. With views or Upcoming listed, the Views,
+// Upcoming and Tasks headings collapse their sections.
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { HomeTask } from "../../api/types";
@@ -16,13 +17,16 @@ import { NeedsInputGlyph, PausedGlyph, ScheduledGlyph, SymbolIcon, WarningGlyph 
 import { RecordEditorSheet, TaskEditSheet } from "./TaskSheets";
 import { RecordDetailView, WorkspaceView } from "./TaskWorkspace";
 import * as tasksNav from "./tasksNav";
+import { UpcomingSection } from "./UpcomingView";
 import { listedViews, ViewScreen, ViewsSection } from "./ViewsView";
 
 export function TasksView(): JSX.Element {
   useEffect(() => {
+    remote.setUpcomingWanted(true);
     void remote.refreshHomeData();
     // Leaving Tasks dismisses its sheets, as the Mac's do when their view goes away.
     return () => {
+      remote.setUpcomingWanted(false);
       tasksNav.editingTask.value = null;
       tasksNav.recordEditor.value = null;
     };
@@ -80,6 +84,8 @@ function TaskList(): JSX.Element {
   const canReorder = snapshot?.supportsReordering === true && !remote.isMutating.value && tasks.length > 1;
   const [drag, setDrag] = useState<{ id: string; over: string | null; after: boolean } | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  // With views or Upcoming listed, Tasks is a section of its own that collapses; with neither, the list shows as it always has.
+  const sectioned = listedViews().length > 0 || remote.homeUpcoming.value !== null;
 
   if (!tasks.length) {
     if (loading) return <div class="hm-unavailable" role="status"><Spinner size="large" label="Loading tasks" /></div>;
@@ -88,11 +94,12 @@ function TaskList(): JSX.Element {
         description="Ask Cantrip Home to create a tracker or monitor something on a schedule."
         action={<button type="button" class="btn primary large" onClick={() => nav.openChat("Create a task for ")}>Create in Chat</button>} />
     );
-    if (!listedViews().length) return empty;
+    if (!sectioned) return empty;
     const collapsed = tasksNav.sectionCollapsed("tasks");
     return (
       <ScrollArea scrollKey="list" saved={tasksNav.savedScroll} onSave={tasksNav.saveScroll} onRendered={tasksNav.restoreFocus}>
         <ViewsSection />
+        <UpcomingSection />
         <TasksHeading count={0} collapsed={collapsed} />
         <div id="hm-tasks-body" class="hm-section-body" hidden={collapsed}>{collapsed ? null : empty}</div>
       </ScrollArea>
@@ -133,13 +140,12 @@ function TaskList(): JSX.Element {
     rows[index + offset]?.focus();
   };
 
-  // With views listed, Tasks is a section of its own that collapses; with none, the list shows as it always has.
-  const sectioned = listedViews().length > 0;
   const collapsed = sectioned && tasksNav.sectionCollapsed("tasks");
   return (
     <ScrollArea scrollKey="list" saved={tasksNav.savedScroll} onSave={tasksNav.saveScroll} onRendered={tasksNav.restoreFocus}>
       <ErrorLine text={error} class="hm-error-banner" />
       <ViewsSection />
+      <UpcomingSection />
       {sectioned ? <TasksHeading count={tasks.length} collapsed={collapsed} /> : null}
       <ul ref={listRef} id="hm-tasks-body" class="hm-task-list hm-section-body" aria-label="Tasks" hidden={collapsed} onKeyDown={onKeyDown}>
         {collapsed ? null : tasks.map((task) => (
@@ -159,7 +165,7 @@ function TaskList(): JSX.Element {
   );
 }
 
-/** "Tasks" under the views: collapses the task list, remembered on this PC. */
+/** "Tasks" under the views and Upcoming: collapses the task list, remembered on this PC. */
 export function TasksHeading(props: { count: number; collapsed: boolean }): JSX.Element {
   return (
     <SectionHeading id="hm-tasks-title" class="hm-tasks-heading" title="Tasks" count={props.count} noun={["task", "tasks"]}

@@ -73,11 +73,12 @@ export function saveScroll(key: string, top: number): void {
 
 // MARK: Collapsible sections (the views grid spec): remembered on this PC
 
-export type TasksSection = "views" | "tasks";
+export type TasksSection = "views" | "upcoming" | "tasks";
 
 /** localStorage keys: "1" collapsed, absent or "0" expanded. */
 export const SECTION_COLLAPSED_KEYS: Readonly<Record<TasksSection, string>> = {
   views: "cantrip.home.views.collapsed",
+  upcoming: "cantrip.home.upcoming.collapsed",
   tasks: "cantrip.home.tasks.collapsed",
 };
 
