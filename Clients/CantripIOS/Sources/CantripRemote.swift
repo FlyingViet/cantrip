@@ -1183,6 +1183,8 @@ private struct CantripHomeTasksResponse: Decodable {
     let unchanged: Bool?
     /// Each workspace's cards built from its records, by task ID; older Macs omit it.
     var workspaceCards: [String: [CantripCard]]? = nil
+    /// The Mac serves Home's views (`/api/v1/home/views`); older Macs omit it.
+    var supportsViews: Bool? = nil
 
     /// The tasks with their workspace cards attached.
     var tasksWithCards: [CantripHomeTask]? {
@@ -1200,8 +1202,32 @@ private struct CantripHomeRecordCardsResponse: Decodable {
 }
 
 typealias CantripHomeTasksSnapshot = (
-    tasks: [CantripHomeTask], revision: String, error: String?, supportsReordering: Bool
+    tasks: [CantripHomeTask], revision: String, error: String?, supportsReordering: Bool, supportsViews: Bool
 )
+
+private struct CantripHomeViewsResponse: Decodable {
+    /// Absent when the host answers `unchanged` for the revision the client already has.
+    let views: [CantripLossy<CantripHomeViewSummary>]?
+    let revision: String
+    let unchanged: Bool?
+    let supportsViewActions: Bool?
+}
+
+/// `POST …/views/<id>/pin` answers the view's summary (bare, or under `view`).
+private struct CantripHomeViewPinResponse: Decodable {
+    let view: CantripHomeViewSummary
+
+    private enum Keys: String, CodingKey { case view }
+
+    init(from decoder: Decoder) throws {
+        if let container = try? decoder.container(keyedBy: Keys.self),
+           let view = try? container.decode(CantripHomeViewSummary.self, forKey: .view) {
+            self.view = view
+        } else {
+            view = try CantripHomeViewSummary(from: decoder)
+        }
+    }
+}
 
 private struct CantripHomeArtifactsResponse: Decodable {
     let artifacts: [CantripHomeArtifact]?
@@ -1662,7 +1688,8 @@ private final class CantripLANRequest: @unchecked Sendable {
         if case .hostPort = endpoint { isDirect = true } else { isDirect = false }
         timeout = method == "GET"
             ? (CantripRemoteAPI.isContentRead(method: method, path: path) ? 20 : isDirect ? 3 : 2)
-            : (payload.count > 256 * 1024 || CantripRemoteAPI.isUploadRoute(path) ? 60 : 12)
+            : (payload.count > 256 * 1024 || CantripRemoteAPI.isUploadRoute(path) ? 60
+                : CantripRemoteAPI.isSlowWrite(method: method, path: path) ? 35 : 12)
         let header = """
         \(method) \(path) HTTP/1.1\r
         Host: cantrip.local\r
@@ -1888,6 +1915,13 @@ struct CantripRemoteAPI {
               let encoded = raw.addingPercentEncoding(withAllowedCharacters: allowed),
               !encoded.isEmpty else { throw CantripRemoteError.invalidResponse }
         return encoded
+    }
+
+    /// A view's refresh (and its buttons, Refresh among them) waits up to 20 s for its tools on the Mac.
+    static func isSlowWrite(method: String, path: String) -> Bool {
+        let parts = (URLComponents(string: path)?.percentEncodedPath ?? "").split(separator: "/")
+        return method == "POST" && parts.count >= 6 && parts.prefix(4) == ["api", "v1", "home", "views"]
+            && (parts[5] == "refresh" || parts[5] == "actions")
     }
 
     private static let readSession: URLSession = {
@@ -2197,7 +2231,7 @@ struct CantripRemoteAPI {
             return nil
         }
         guard let tasks = response.tasksWithCards else { throw CantripRemoteError.invalidResponse }
-        return (tasks, response.revision, response.error, response.supportsReordering == true)
+        return (tasks, response.revision, response.error, response.supportsReordering == true, response.supportsViews == true)
     }
 
     /// A record's weather and map cards, and how many seconds until they're worth asking for again.
@@ -2206,6 +2240,56 @@ struct CantripRemoteAPI {
             path: "/api/v1/home/tasks/\(taskID.uuidString)/records/\(recordID.uuidString)/cards"
         )
         return (response.cards ?? [], max(30, response.refreshAfter ?? 300))
+    }
+
+    /// Home's views, pinned first (docs/views.md); nil when they still match `revision`.
+    func homeViews(ifChangedFrom revision: String?) async throws -> CantripHomeViewsSnapshot? {
+        let response: CantripHomeViewsResponse = try await request(
+            path: Self.path("/api/v1/home/views", revision: revision)
+        )
+        if response.unchanged == true {
+            guard let revision, response.revision == revision else { throw CantripRemoteError.invalidResponse }
+            return nil
+        }
+        guard let views = response.views else { throw CantripRemoteError.invalidResponse }
+        return CantripHomeViewsSnapshot(views: views.compactMap(\.value), revision: response.revision,
+                                        supportsActions: response.supportsViewActions == true)
+    }
+
+    /// A view resolved now: its summary and card. The Mac never sends bindings, only values.
+    func homeView(id: String) async throws -> CantripHomeViewDetail {
+        try await request(path: try Self.homeViewPath(id))
+    }
+
+    /// Reads the view's tool sources again (the Mac waits up to 20 s), then answers like `homeView`.
+    func refreshHomeView(id: String) async throws -> CantripHomeViewDetail {
+        try await request(path: try Self.homeViewPath(id, "refresh"), method: "POST")
+    }
+
+    func pinHomeView(id: String, pinned: Bool) async throws -> CantripHomeViewSummary {
+        let response: CantripHomeViewPinResponse = try await request(
+            path: try Self.homeViewPath(id, "pin"), method: "POST",
+            body: JSONSerialization.data(withJSONObject: ["pinned": pinned])
+        )
+        return response.view
+    }
+
+    func deleteHomeView(id: String) async throws {
+        struct Response: Decodable { let deleted: Bool }
+        let response: Response = try await request(path: try Self.homeViewPath(id), method: "DELETE")
+        guard response.deleted else { throw CantripRemoteError.invalidResponse }
+    }
+
+    /// Runs a view's button the person has confirmed; the Mac refuses one sent without `confirmed`.
+    func runHomeViewAction(viewID: String, actionID: String) async throws -> CantripHomeViewActionResult {
+        try await request(
+            path: try Self.homeViewPath(viewID, "actions", actionID), method: "POST",
+            body: JSONSerialization.data(withJSONObject: ["confirmed": true])
+        )
+    }
+
+    static func homeViewPath(_ id: String, _ rest: String...) throws -> String {
+        try (["/api/v1/home/views", pathComponent(id)] + rest.map(pathComponent)).joined(separator: "/")
     }
 
     static func path(_ path: String, revision: String?) -> String {
@@ -2224,7 +2308,7 @@ struct CantripRemoteAPI {
             ])
         )
         guard let tasks = response.tasksWithCards else { throw CantripRemoteError.invalidResponse }
-        return (tasks, response.revision, response.error, response.supportsReordering == true)
+        return (tasks, response.revision, response.error, response.supportsReordering == true, response.supportsViews == true)
     }
 
     func homeBackground() async throws -> CantripHomeBackgroundSnapshot {
@@ -3125,10 +3209,11 @@ struct CantripRemoteAPI {
         let url = try endpoint(path: path, baseURL: baseURL)
         let isImageUpload = (body?.count ?? 0) > 256 * 1024 || (method != "GET" && Self.isUploadRoute(path))
         let isContentRead = Self.isContentRead(method: method, path: path)
+        let isSlowWrite = Self.isSlowWrite(method: method, path: path)
         var request = URLRequest(
             url: url,
             cachePolicy: .reloadIgnoringLocalCacheData,
-            timeoutInterval: method == "GET" ? (isContentRead ? 20 : 3) : (isImageUpload ? 60 : 12)
+            timeoutInterval: method == "GET" ? (isContentRead ? 20 : 3) : (isImageUpload ? 60 : (isSlowWrite ? 35 : 12))
         )
         request.httpMethod = method
         request.httpBody = body
@@ -3146,7 +3231,7 @@ struct CantripRemoteAPI {
         let response: URLResponse
         do {
             let session = urlSession ?? (method == "GET" && !isContentRead
-                ? Self.readSession : (isImageUpload ? Self.imageSession : Self.session))
+                ? Self.readSession : (isImageUpload || isSlowWrite ? Self.imageSession : Self.session))
             (data, response) = try await session.data(for: request)
         } catch is CancellationError {
             throw CancellationError()
@@ -3283,6 +3368,11 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var homeDataError: String?
     @Published private(set) var isLoadingHomeData = false
     @Published private(set) var homeTasksSupportReordering = false
+    /// Home's views (Tasks → Views), pinned first; empty unless the tasks snapshot says `supportsViews`.
+    @Published private(set) var homeViews: [CantripHomeViewSummary] = []
+    @Published private(set) var homeViewsSupported = false
+    /// Why the views list couldn't be read (the last list stays shown).
+    @Published private(set) var homeViewsError: String?
     @Published private(set) var homeBackground: CantripHomeBackgroundSnapshot?
     /// The hidden run (by session ID) the Background sheet should reveal, e.g. from a push.
     @Published var homeBackgroundFocus: String?
@@ -3428,6 +3518,8 @@ final class CantripRemoteModel: ObservableObject {
     /// only while the shown list is still that one, so any other change refetches in full.
     private var homeTasksFetched: (revision: String, tasks: [CantripHomeTask])?
     private var homeArtifactsFetched: (revision: String, artifacts: [CantripHomeArtifact])?
+    private var homeViewsFetched: (revision: String, views: [CantripHomeViewSummary])?
+    private var homeViewsRefreshInFlight = false
     private var pollingTask: Task<Void, Never>?
     private var detailRefreshTask: Task<Void, Never>?
     private var detailRefreshKey: String?
@@ -3870,6 +3962,10 @@ final class CantripRemoteModel: ObservableObject {
             homeArtifactsSupportDownloads = false
             homeTasksFetched = nil
             homeArtifactsFetched = nil
+            homeViews = []
+            homeViewsSupported = false
+            homeViewsError = nil
+            homeViewsFetched = nil
             homeBuilds = nil
             homeBuildsError = nil
             homeBackground = nil
@@ -3937,6 +4033,10 @@ final class CantripRemoteModel: ObservableObject {
             homeArtifactsSupportDownloads = false
             homeTasksFetched = nil
             homeArtifactsFetched = nil
+            homeViews = []
+            homeViewsSupported = false
+            homeViewsError = nil
+            homeViewsFetched = nil
             homeBuilds = nil
             homeBuildsError = nil
             homeBackground = nil
@@ -4216,6 +4316,14 @@ final class CantripRemoteModel: ObservableObject {
                 if homeTasksSupportReordering != snapshot.supportsReordering {
                     homeTasksSupportReordering = snapshot.supportsReordering
                 }
+                if homeViewsSupported != snapshot.supportsViews {
+                    homeViewsSupported = snapshot.supportsViews
+                    if !snapshot.supportsViews {
+                        homeViews = []
+                        homeViewsFetched = nil
+                        homeViewsError = nil
+                    }
+                }
                 if homeDataError != snapshot.error { homeDataError = snapshot.error }
             } else if homeDataError != nil {
                 // Unchanged means the Mac saved its tasks fine; clear a stale fetch error.
@@ -4228,6 +4336,7 @@ final class CantripRemoteModel: ObservableObject {
                 }
                 homeArtifactsFetched = (snapshot.revision, snapshot.artifacts)
             }
+            if homeViewsSupported { await refreshHomeViews() }
             if (selectedSession?.backgroundInputCount ?? 0) > 0
                 || homeBackground?.runs.contains(where: \.needsInput) == true {
                 await refreshHomeBackground()
@@ -4239,6 +4348,93 @@ final class CantripRemoteModel: ObservableObject {
             let message = error.localizedDescription
             if homeDataError != message { homeDataError = message }
         }
+    }
+
+    /// Home's views list, sent with its revision while the shown list is still the one fetched.
+    func refreshHomeViews() async {
+        guard isHomeSelected, isConfigured, homeViewsSupported, !homeViewsRefreshInFlight else { return }
+        homeViewsRefreshInFlight = true
+        defer { homeViewsRefreshInFlight = false }
+        let revision = homeViewsFetched.flatMap { $0.views == homeViews ? $0.revision : nil }
+        do {
+            let snapshot = try await performHistoryRead { try await $0.homeViews(ifChangedFrom: revision) }
+            guard isHomeSelected else { return }
+            if homeViewsError != nil { homeViewsError = nil }
+            guard let snapshot else { return }
+            let ordered = snapshot.views.filter(\.pinned) + snapshot.views.filter { !$0.pinned }
+            if homeViews != ordered { homeViews = ordered }
+            homeViewsFetched = (snapshot.revision, ordered)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard isHomeSelected else { return }
+            let message = error.localizedDescription
+            if homeViewsError != message { homeViewsError = message }
+        }
+    }
+
+    /// A view resolved now (its screen fetches it again every `refreshAfter` seconds).
+    func homeView(id: String) async throws -> CantripHomeViewDetail {
+        let detail = try await performHistoryRead { try await $0.homeView(id: id) }
+        replaceHomeViewSummary(detail.view)
+        return detail
+    }
+
+    /// Refresh: the Mac reads the view's tool sources again.
+    func refreshHomeView(id: String) async throws -> CantripHomeViewDetail {
+        let detail = try await performHomeViewWrite(id: id) { try await $0.refreshHomeView(id: id) }
+        replaceHomeViewSummary(detail.view)
+        return detail
+    }
+
+    func setHomeViewPinned(id: String, pinned: Bool) async throws -> CantripHomeViewSummary {
+        let summary = try await performHomeViewWrite(id: id) { try await $0.pinHomeView(id: id, pinned: pinned) }
+        replaceHomeViewSummary(summary)
+        // Pinned views list first; the Mac's list has the order.
+        await refreshHomeViews()
+        return summary
+    }
+
+    func deleteHomeView(id: String) async throws {
+        try await performHomeViewWrite(id: id) { try await $0.deleteHomeView(id: id) }
+        homeViews.removeAll { $0.id == id }
+    }
+
+    /// Posts a button the person confirmed on the view's screen.
+    func runHomeViewAction(viewID: String, actionID: String) async throws -> CantripHomeViewActionResult {
+        let result = try await performHomeViewWrite(id: viewID) {
+            try await $0.runHomeViewAction(viewID: viewID, actionID: actionID)
+        }
+        if let summary = result.view { replaceHomeViewSummary(summary) }
+        return result
+    }
+
+    private func replaceHomeViewSummary(_ summary: CantripHomeViewSummary) {
+        guard let index = homeViews.firstIndex(where: { $0.id == summary.id }), homeViews[index] != summary else { return }
+        homeViews[index] = summary
+    }
+
+    /// A change to a view, sent once: the views list first confirms the route, that the Mac serves
+    /// views and that this one is still there; the change then goes on that route only. It doesn't
+    /// hold the chat's request gate, so a refresh that waits on the Mac's tools never blocks a send.
+    private func performHomeViewWrite<T>(id: String, _ operation: @escaping (CantripRemoteAPI) async throws -> T) async throws -> T {
+        guard let token else { throw missingTokenError }
+        let generation = configurationGeneration
+        updateRoutes()
+        let writer = router.independentReader()
+        let session = urlSession
+        let result = try await writer.performMutation(prepare: { transport in
+            guard let listed = try await CantripRemoteAPI(transport: transport, token: token, urlSession: session)
+                .homeViews(ifChangedFrom: nil) else { throw CantripRemoteError.invalidResponse }
+            guard listed.views.contains(where: { $0.id == id }) else {
+                throw CantripRemoteError.rejected("This view is no longer on the Mac.")
+            }
+        }, operation: { transport, _ in
+            try await operation(CantripRemoteAPI(transport: transport, token: token, urlSession: session))
+        })
+        try Task.checkCancellation()
+        guard generation == configurationGeneration else { throw CancellationError() }
+        return result
     }
 
     func refreshHomeBuilds() async {

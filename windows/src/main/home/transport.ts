@@ -16,10 +16,12 @@ export const PSK_CIPHERS = "ECDHE-PSK-CHACHA20-POLY1305";
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
 
 export interface HostRequest {
-  method: "GET";
+  /** GET for reads; POST only for a view's Refresh and its confirmed buttons. */
+  method: "GET" | "POST";
   /** Path and query, starting with "/". */
   path: string;
   headers: Record<string, string>;
+  body?: Buffer;
 }
 
 export interface HostResponse {
@@ -120,7 +122,10 @@ export function sendOverPSK(
     const outgoing = http.request({
       method: request.method,
       path: request.path,
-      headers: { ...request.headers, host: `${target.host}:${target.port}`, connection: "close", "accept-encoding": "gzip" },
+      headers: {
+        ...request.headers, host: `${target.host}:${target.port}`, connection: "close", "accept-encoding": "gzip",
+        ...(request.method === "POST" ? { "content-length": String(request.body?.length ?? 0) } : {}),
+      },
       createConnection: () => socket,
     });
     outgoing.on("error", (error: NodeJS.ErrnoException) => {
@@ -150,7 +155,7 @@ export function sendOverPSK(
         resolve({ status: incoming.statusCode ?? 502, headers: responseHeaders(incoming.headers), body });
       });
     });
-    outgoing.end();
+    outgoing.end(request.body);
   });
 }
 
@@ -176,6 +181,7 @@ export async function sendOverHTTPS(
       response = await fetchImpl(new URL(request.path.replace(/^\//, ""), origin).toString(), {
         method: request.method,
         headers: request.headers,
+        body: request.body ? new Uint8Array(request.body) : undefined,
         signal: controller.signal,
         redirect: "manual",
       });

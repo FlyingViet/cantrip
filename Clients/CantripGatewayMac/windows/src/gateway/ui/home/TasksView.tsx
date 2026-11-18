@@ -1,5 +1,6 @@
-// Home's Tasks (CantripHomeTasksView): every task with its schedule, latest run and pause switch; a workspace
-// task opens its records, any other task its Edit sheet. Drag, Alt+Up/Down or the row menu reorders.
+// Home's Tasks (CantripHomeTasksView): Views first (when the Mac serves them), then every task with its schedule,
+// latest run and pause switch; a workspace task opens its records, any other task its Edit sheet. Drag, Alt+Up/Down
+// or the row menu reorders.
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { HomeTask } from "../../api/types";
@@ -15,6 +16,7 @@ import { NeedsInputGlyph, PausedGlyph, ScheduledGlyph, SymbolIcon, WarningGlyph 
 import { RecordEditorSheet, TaskEditSheet } from "./TaskSheets";
 import { RecordDetailView, WorkspaceView } from "./TaskWorkspace";
 import * as tasksNav from "./tasksNav";
+import { listedViews, ViewScreen, ViewsSection } from "./ViewsView";
 
 export function TasksView(): JSX.Element {
   useEffect(() => {
@@ -48,7 +50,9 @@ function TasksRoute(): JSX.Element {
     <div class="hm-root" onKeyDown={onKeyDown}>
       {current.kind === "list" ? <TaskList />
         : current.kind === "workspace" ? <WorkspaceView key={current.taskID} taskID={current.taskID} />
-          : <RecordDetailView key={`${current.taskID}:${current.recordID}`} taskID={current.taskID} recordID={current.recordID} />}
+          : current.kind === "view" ? <ViewScreen key={current.viewID} viewID={current.viewID} />
+            : <RecordDetailView key={`${current.taskID}:${current.recordID}`} taskID={current.taskID} recordID={current.recordID}
+              backLabel={current.fromView ? remote.homeViews.value?.find((view) => view.id === current.fromView)?.name ?? "View" : undefined} />}
     </div>
   );
 }
@@ -79,10 +83,17 @@ function TaskList(): JSX.Element {
 
   if (!tasks.length) {
     if (loading) return <div class="hm-unavailable" role="status"><Spinner size="large" label="Loading tasks" /></div>;
-    return (
+    const empty = (
       <Unavailable icon={<Icon name="checklist" size={56} />} title="No tasks yet" error={error}
         description="Ask Cantrip Home to create a tracker or monitor something on a schedule."
         action={<button type="button" class="btn primary large" onClick={() => nav.openChat("Create a task for ")}>Create in Chat</button>} />
+    );
+    if (!listedViews().length) return empty;
+    return (
+      <ScrollArea scrollKey="list" saved={tasksNav.savedScroll} onSave={tasksNav.saveScroll} onRendered={tasksNav.restoreFocus}>
+        <ViewsSection />
+        {empty}
+      </ScrollArea>
     );
   }
 
@@ -123,6 +134,8 @@ function TaskList(): JSX.Element {
   return (
     <ScrollArea scrollKey="list" saved={tasksNav.savedScroll} onSave={tasksNav.saveScroll} onRendered={tasksNav.restoreFocus}>
       <ErrorLine text={error} class="hm-error-banner" />
+      <ViewsSection />
+      {listedViews().length ? <h3 class="hm-views-heading hm-tasks-heading" id="hm-tasks-title">Tasks</h3> : null}
       <ul ref={listRef} class="hm-task-list" aria-label="Tasks" onKeyDown={onKeyDown}>
         {tasks.map((task) => (
           <TaskRow key={task.id} task={task} waitingSession={waiting.get(task.id.toUpperCase())} draggable={canReorder}

@@ -157,7 +157,8 @@ struct MacHomeWindow: View {
             CantripHomeTasksView(
                 remote: remote,
                 openChat: { navigation.openChat(prefill: $0) },
-                openRun: { navigation.openRun($0, remote: remote) }
+                openRun: { navigation.openRun($0, remote: remote) },
+                showChat: { navigation.showHome(.chat) }
             )
         case .artifacts:
             CantripHomeArtifactsView(remote: remote, openChat: { navigation.openChat(prefill: $0) })

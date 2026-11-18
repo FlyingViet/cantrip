@@ -5,6 +5,7 @@ import { batch, computed, signal } from "@preact/signals";
 import { api, APIError, onWritesChanged, pathComponent } from "../api/client";
 import type {
   ChildTabAction, DeleteMessageRequest, ForkQueuedResponse, HomeArtifactsResponse, HomeArtifactsSnapshot, HomeBackgroundSnapshot, HomeInputGroup, HomeTasksResponse,
+  HomeViewSummary,
   HomeTasksSnapshot, InputAnswerRequest, MoveTabResponse, PagedRemoteSessionDetail, RemoteMessage,
   RemoteSessionSummary, SendMessageRequest, SessionResponse, SessionsListResponse, SessionUpdateResponse,
   SubagentCancelResponse, TabSection, TabSectionsResponse,
@@ -16,6 +17,7 @@ import { movedSections } from "./sections";
 import { plainMentions, plainMentionsDeep, plainSession } from "./tabMentions";
 import { dropDeletedMessages, resetThreads } from "./threads";
 import { messageLocation } from "./location";
+import { parseViews, supportsViews, viewsPath } from "./views";
 
 export type Detail = PagedRemoteSessionDetail;
 
@@ -46,6 +48,9 @@ export const stoppingID = signal<string | null>(null);
 export const homeTasks = signal<HomeTasksSnapshot | null>(null);
 export const homeTasksError = signal<string | null>(null);
 export const homeArtifacts = signal<HomeArtifactsSnapshot | null>(null);
+/** Home's views, pinned first (docs/views.md); null until loaded or while the Mac doesn't serve them (`supportsViews`). */
+export const homeViews = signal<HomeViewSummary[] | null>(null);
+export const homeViewsError = signal<string | null>(null);
 export const homeArtifactsError = signal<string | null>(null);
 export const homeBackground = signal<HomeBackgroundSnapshot | null>(null);
 export const homeBackgroundError = signal<string | null>(null);
@@ -373,9 +378,10 @@ export function select(id: string | null): void {
 
 let tasksRevision: string | null = null;
 let artifactsRevision: string | null = null;
+let viewsRevision: string | null = null;
 
 export async function refreshHomeData(): Promise<void> {
-  await Promise.all([refreshTasks(), refreshArtifacts()]);
+  await Promise.all([refreshTasks().then(refreshViews), refreshArtifacts()]);
   const home = details.value.get(homeID.value ?? "") ?? homeSummary.value;
   if ((home?.backgroundInputCount ?? 0) > 0 || homeBackground.value?.runs.some(needsInput)) await refreshBackground();
 }
@@ -391,6 +397,24 @@ export async function refreshTasks(): Promise<void> {
     }
   } catch (error) {
     homeTasksError.value = `Couldn't load tasks: ${(error as Error).message}`;
+  }
+}
+
+/** The views list, with its revision; only while the tasks snapshot says the Mac serves views. */
+export async function refreshViews(): Promise<void> {
+  if (!supportsViews(homeTasks.value)) {
+    homeViews.value = null;
+    homeViewsError.value = null;
+    viewsRevision = null;
+    return;
+  }
+  try {
+    const parsed = parseViews(await api<unknown>(viewsPath(homeViews.value ? viewsRevision : null)));
+    homeViewsError.value = null;
+    viewsRevision = parsed.revision;
+    if (!parsed.unchanged) homeViews.value = parsed.views;
+  } catch (error) {
+    homeViewsError.value = `Couldn't load views: ${(error as Error).message}`;
   }
 }
 
@@ -688,6 +712,8 @@ export function reset(): void {
     selectedID.value = null;
     homeTasks.value = null;
     homeArtifacts.value = null;
+    homeViews.value = null;
+    homeViewsError.value = null;
     homeBackground.value = null;
     listed.value = false;
   });
@@ -695,5 +721,6 @@ export function reset(): void {
   resetThreads();
   tasksRevision = null;
   artifactsRevision = null;
+  viewsRevision = null;
   reportedSettings = "";
 }

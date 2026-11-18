@@ -35,6 +35,14 @@ enum CantripUITestFixtures {
         ProcessInfo.processInfo.arguments.contains("-CantripUITestRemoteURL")
     }
 
+    /// `-CantripUITestViewFixture /path/view.json` opens a view's screen drawn from that file (what
+    /// `GET /api/v1/home/views/<id>` answers) over a Tasks list with its row, so screenshots need no
+    /// paired Mac. `-CantripUITestViewFixtureList YES` stays on the list; `-CantripUITestViewTab 1`
+    /// picks that tab in the card's tabs. Its buttons, Refresh, Pin and Delete send nothing.
+    static var viewFixturePath: String? {
+        UserDefaults.standard.string(forKey: "CantripUITestViewFixture")
+    }
+
     /// Face ID can't be satisfied from a UI test on the simulator; only fixture-host runs skip it.
     static let authorizeSensitiveAction: (String) async throws -> Void = { reason in
         if pairsWithFixtureHost { return }
@@ -163,6 +171,56 @@ enum CantripUITestFixtures {
                     "fingerprint": CantripRemoteModel.notificationFingerprintForUITest(token), "kind": "input", "home": "run",
                 ],
             ])
+        }
+    }
+}
+
+/// `-CantripUITestViewFixture`: a saved view answer on the view's own screen, with no Mac.
+struct CantripViewFixtureScreen: View {
+    let remote: CantripRemoteModel
+    private let detail: CantripHomeViewDetail?
+    private let failure: String?
+    @State private var stack: [String]
+
+    init(path: String, remote: CantripRemoteModel) {
+        self.remote = remote
+        do {
+            let detail = try JSONDecoder().decode(CantripHomeViewDetail.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+            self.detail = detail
+            failure = nil
+            _stack = State(initialValue: UserDefaults.standard.bool(forKey: "CantripUITestViewFixtureList") ? [] : [detail.view.id])
+        } catch {
+            detail = nil
+            failure = "\(path): \(error)"
+            _stack = State(initialValue: [])
+        }
+    }
+
+    var body: some View {
+        if let detail {
+            NavigationStack(path: $stack) {
+                List {
+                    Section("Views") {
+                        NavigationLink(value: detail.view.id) { CantripHomeViewRow(view: detail.view) }
+                    }
+                }
+                .listStyle(.plain)
+                .navigationTitle("Tasks")
+                .navigationDestination(for: String.self) { _ in
+                    CantripHomeViewScreen(remote: remote, summary: detail.view, showChat: {}, fixture: detail)
+                }
+            }
+            .onAppear { selectTab(in: detail.card) }
+        } else {
+            ContentUnavailableView("No view fixture", systemImage: "rectangle.3.group", description: Text(failure ?? ""))
+        }
+    }
+
+    private func selectTab(in card: CantripCard) {
+        let tab = UserDefaults.standard.integer(forKey: "CantripUITestViewTab")
+        guard tab > 0 else { return }
+        for (index, block) in card.blocks.enumerated() where block.type == "tabs" {
+            CantripCardTabSelections.shared.select(tab, for: "\(card.id):\(index)")
         }
     }
 }

@@ -197,6 +197,16 @@ The tasks snapshot carries each workspace's list cards in `workspaceCards`
 (by task ID). Home edits only the cards by sending `id` and the complete
 `cards` (`[]` removes them); a `task-edits/` file can carry `"cards":[…]` too.
 
+### Views
+
+Ask Home for a screen to keep, such as a dashboard across your trackers, a homelab status board
+or a comparison table, and it saves a **view** under **Tasks → Views** on every client, pinned
+first. Home writes only its layout as a hidden `cantrip-view` block; every value comes from a
+binding Cantrip reads itself (records, a read-only tool, a task run's tool result, or rows checked
+against a tool result in the same reply), and refreshing never involves a model. Buttons on a view
+(open a link, run a task now, refresh, open a record, ask Home a question) run only after you
+confirm them. See [Views](views.md) for the format, refresh rules, privacy and the API.
+
 ## Tabs' background tasks
 
 Background agents a tab starts (watchers such as `watch-testflight`, parallel

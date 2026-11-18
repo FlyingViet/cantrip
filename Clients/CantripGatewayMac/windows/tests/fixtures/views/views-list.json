@@ -1,0 +1,42 @@
+{
+  "revision" : "840BD0F5-6366-4FF6-AD6F-CFCFB8D5A73E",
+  "supportsViewActions" : true,
+  "views" : [
+    {
+      "createdAt" : "2026-11-18T03:32:50Z",
+      "icon" : "server.rack",
+      "id" : "5966EDC3-9A59-47EA-AFAB-314F477B38BC",
+      "name" : "Homelab",
+      "pinned" : true,
+      "private" : true,
+      "problems" : [
+
+      ],
+      "refreshedAt" : "2026-11-18T03:32:50Z",
+      "refreshing" : false,
+      "sources" : [
+        "tool"
+      ],
+      "subtitle" : "Service health",
+      "updatedAt" : "2026-11-18T03:32:50Z"
+    },
+    {
+      "createdAt" : "2026-11-18T03:32:50Z",
+      "icon" : "rectangle.3.group",
+      "id" : "C6E99EA8-8A0A-4E94-B83C-732E76A12CF6",
+      "name" : "This week",
+      "pinned" : true,
+      "private" : false,
+      "problems" : [
+
+      ],
+      "refreshing" : false,
+      "sources" : [
+        "records",
+        "tasks"
+      ],
+      "subtitle" : "Across the trackers",
+      "updatedAt" : "2026-11-18T03:32:50Z"
+    }
+  ]
+}

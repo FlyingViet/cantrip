@@ -78,7 +78,52 @@ export interface Pin {
   symbol?: string;
 }
 
-/** `type`: header, stat, keyValue, strip, chart, list, map, image, badges, notice or progress (others are skipped). */
+/** table: a column's heading; `align` "leading" (default), "trailing" or "center". */
+export interface Column {
+  title: string;
+  align?: string;
+}
+
+/** table: one cell, its text tinted by `tone`. */
+export interface Cell {
+  text: string;
+  tone?: Tone | string;
+  symbol?: string;
+}
+
+/** table: one row, a cell per column; screen readers read `accessibilityLabel`. */
+export interface TableRow {
+  id?: string;
+  cells: Cell[];
+  accessibilityLabel?: string;
+}
+
+/** tabs: the next `count` blocks after the tabs block belong to this tab (each tab in turn). */
+export interface Tab {
+  title: string;
+  symbol?: string;
+  count: number;
+}
+
+/**
+ * actions (views only, docs/views.md): a button the client confirms, then posts to the view's action route.
+ * `kind`: "open", "runTask", "refresh", "openRecord" or "ask".
+ */
+export interface Button {
+  id: string;
+  kind: string;
+  label: string;
+  symbol?: string;
+  /** "prominent": a filled accent button. */
+  style?: string;
+  confirmTitle?: string;
+  confirmMessage?: string;
+}
+
+/**
+ * `type`: header, stat, keyValue, strip, chart, list, map, image, badges, notice, progress, section, table, tabs or
+ * actions (others are skipped).
+ */
 export interface Block {
   type: string;
   title?: string;
@@ -92,9 +137,16 @@ export interface Block {
   detail?: string;
   text?: string;
   tone?: Tone | string;
-  /** chart: "range" or "bar". */
+  /** chart: "range", "bar", "line" or "pie". */
   kind?: string;
   rows?: Row[];
+  /** table: its columns and rows. */
+  columns?: Column[];
+  tableRows?: TableRow[];
+  /** tabs: each tab owns the next `count` blocks. */
+  tabs?: Tab[];
+  /** actions: a view's buttons. */
+  buttons?: Button[];
   items?: Item[];
   badges?: Badge[];
   min?: number;
@@ -162,6 +214,7 @@ export function cardPlainText(card: Pick<CardDocument, "blocks">): string {
         lines.push((block.items ?? []).map((item) => present([item.label, item.value, item.note]).join(" ")).join(" · "));
         break;
       case "chart":
+        if (block.title) lines.push(block.title);
         lines.push(...(block.items ?? []).map((item) =>
           present([item.label, item.note, present([item.lowText, item.highText]).join("–")]).filter(Boolean).join(" ")));
         break;
@@ -177,6 +230,16 @@ export function cardPlainText(card: Pick<CardDocument, "blocks">): string {
       case "progress":
         lines.push(present([block.label, block.detail]).join(" · "));
         break;
+      case "section":
+        lines.push(present([block.title, block.subtitle]).join(" — ").toUpperCase());
+        break;
+      case "table": {
+        if (block.title) lines.push(block.title);
+        const columns = (block.columns ?? []).map((column) => column.title);
+        if (columns.length) lines.push(columns.join(" | "));
+        lines.push(...(block.tableRows ?? []).map((row) => (row.cells ?? []).map((cell) => cell.text).join(" | ")));
+        break;
+      }
     }
   }
   return lines.filter((line) => line.trim() !== "").join("\n");

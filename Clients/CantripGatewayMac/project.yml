@@ -169,6 +169,7 @@ targets:
       - path: ../CantripIOS/Tests/CantripRichCardTests.swift
       - path: ../CantripIOS/Tests/CantripWeatherCardTests.swift
       - path: ../CantripIOS/Tests/CantripCardTests.swift
+      - path: ../CantripIOS/Tests/CantripViewTests.swift
       - path: ../CantripIOS/Tests/CantripHomeCardTests.swift
       - path: ../CantripIOS/Tests/CantripDeleteMessageTests.swift
       - path: ../CantripIOS/Tests/CantripSkillsTests.swift

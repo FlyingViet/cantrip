@@ -20,6 +20,7 @@ only when you want the agent to make changes.
 | Control my Mac from Cantrip Agent or another Mac | [Remote control](remote-control.md) |
 | Run Cantrip with no windows on a cloud, remote-desktop or SSH-only Mac | [Headless host](headless.md) |
 | Run scheduled tasks, trackers, or hand off work from one conversation | [Cantrip Home](cantrip-home.md) |
+| Have Home build a dashboard or status board that stays current | [Views](views.md) |
 | Talk to my Meta Muse with @muse, or fill a tracker from Muse | [Muse](muse.md) |
 | Send a photo from my iPhone or iPad | [Cantrip Agent image attachments](remote-control.md#send-a-photo-or-screenshot-from-cantrip-agent) |
 | Decide what Cantrip can do, see, and remember | [Permissions, privacy, and memory](privacy-and-memory.md) |

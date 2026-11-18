@@ -8,6 +8,7 @@ struct CantripHomeBlock: Equatable {
         case task = "cantrip-task"
         case artifact = "cantrip-artifact"
         case muse = "cantrip-muse"
+        case view = "cantrip-view"
 
         var item: String {
             switch self {
@@ -16,6 +17,7 @@ struct CantripHomeBlock: Equatable {
             case .task: return "task"
             case .artifact: return "artifact"
             case .muse: return "Muse request"
+            case .view: return "view"
             }
         }
     }
@@ -205,6 +207,8 @@ enum CantripHomeProtocol {
             return .delegate
         case "cantrip-muse", "cantrip-muse-request":
             return .muse
+        case "cantrip-view", "cantrip-views", "cantrip-dashboard":
+            return .view
         default:
             return nil
         }
@@ -420,6 +424,8 @@ enum CantripHomeProtocol {
             return #"{"title":"display title","path":"absolute or artifact-directory-relative path","kind":"document|image|audio|video"}"#
         case .muse:
             return #"{"title":"short title (at most 80 characters)","text":"the exact message for the user's Muse (at most 4,000 characters)","chat":"optional Muse side chat title, or null"}"#
+        case .view:
+            return #"{"id":null or "view UUID","name":"short name","icon":"SF Symbol","pinned":false,"refresh":null or {"everyMinutes":30,"afterTasks":["task UUID"]},"data":{"source":{"records":"task UUID"} or {"tasks":["task UUID"]} or {"tool":{"server":"…","name":"…","arguments":{}},"path":"a.b"} or {"run":{"taskID":"…","tool":"…"}} or {"checked":{"tool":"…"},"rows":[{…}]}},"blocks":[{"type":"stat","label":"words only","value":{"from":"source","count":true}},{"type":"table","from":"source","columns":[{"title":"…","field":"…"}]},{"type":"chart","kind":"bar|line|pie","from":"source","groupBy":"field"}]} (values only through bindings; labels without numbers)"#
         case .delegate:
             return #"{"tabID":"tab UUID from the list" (or, only when the user asked for a new tab, "newTab":{"title":"tab name","section":"section name or null","folder":"existing absolute folder or null"}),"summary":"short label","goal":"what the tab should achieve","context":["facts, names, paths and IDs it needs"],"constraints":["limits"],"doneWhen":"what finished looks like","dependsOn":"other work in that tab it must wait for, or null","prompt":"optional extra instructions"}"#
         }

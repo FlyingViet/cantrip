@@ -4506,7 +4506,8 @@ final class ChatSession: ObservableObject {
         if text != messages[idx].text {
             messages[idx].text = text
         }
-        if let toolCard { messages[idx].cards = [toolCard] }
+        // A view Home saved in this reply keeps its preview first.
+        if let toolCard { messages[idx].cards = messages[idx].cards.filter { $0.type == "view" } + [toolCard] }
         // Every link, not just the first three: links the map card covers are dropped
         // before picking which ones get a preview, and weather sites under a weather card.
         let candidateLinks = CardComposer.uncovered(WeatherLinkFilter.uncovered(

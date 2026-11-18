@@ -164,13 +164,14 @@ function RecordRow(props: { task: HomeTask; workspace: HomeTaskWorkspace; record
   );
 }
 
-export function RecordDetailView(props: { taskID: string; recordID: string }): JSX.Element {
+/** `backLabel`: where Back goes when it isn't the record's task (a view that opened it). */
+export function RecordDetailView(props: { taskID: string; recordID: string; backLabel?: string }): JSX.Element {
   const task = findTask(props.taskID);
   const workspace = task?.workspace;
   const record = workspace?.records.find((item) => item.id === props.recordID);
   const title = workspace && record ? recordTitle(workspace, record) : "Record";
   const bar = (
-    <PaneBar backLabel={task?.title ?? "Task"} onBack={tasksNav.back} title={title}>
+    <PaneBar backLabel={props.backLabel ?? task?.title ?? "Task"} onBack={tasksNav.back} title={title}>
       <button type="button" class="btn" disabled={!record} aria-haspopup="dialog"
         onClick={() => { if (record) tasksNav.recordEditor.value = { taskID: props.taskID, record }; }}>Edit</button>
       <button type="button" class="icon-btn hm-destructive" aria-label="Delete record" title="Delete record"

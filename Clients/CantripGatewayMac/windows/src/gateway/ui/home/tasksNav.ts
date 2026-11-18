@@ -1,12 +1,14 @@
-// Tasks' in-pane navigation (the Mac pushes a workspace and its records in a NavigationStack), its sheets,
-// and where keyboard focus and scrolling return when going back.
+// Tasks' in-pane navigation (the Mac pushes a workspace and its records, or a view, in a NavigationStack), its
+// sheets, and where keyboard focus and scrolling return when going back.
 import { signal } from "@preact/signals";
 import type { HomeTask, HomeTaskRecord } from "../../api/types";
 
 export type TasksRoute =
   | { kind: "list" }
   | { kind: "workspace"; taskID: string }
-  | { kind: "record"; taskID: string; recordID: string };
+  /** `fromView`: opened by a view's button, so Back returns to that view. */
+  | { kind: "record"; taskID: string; recordID: string; fromView?: string }
+  | { kind: "view"; viewID: string };
 
 export const route = signal<TasksRoute>({ kind: "list" });
 /** The open workspace's search text (kept while a record is open, cleared when another workspace opens). */
@@ -26,14 +28,24 @@ export function openWorkspace(taskID: string): void {
   route.value = { kind: "workspace", taskID };
 }
 
-export function openRecord(taskID: string, recordID: string): void {
+export function openRecord(taskID: string, recordID: string, fromView?: string): void {
   scrolls.delete(`record:${taskID}:${recordID}`);
-  route.value = { kind: "record", taskID, recordID };
+  route.value = fromView ? { kind: "record", taskID, recordID, fromView } : { kind: "record", taskID, recordID };
+}
+
+export function openView(viewID: string): void {
+  scrolls.delete(`view:${viewID}`);
+  route.value = { kind: "view", viewID };
 }
 
 export function back(): void {
   const current = route.value;
-  if (current.kind === "record") {
+  if (current.kind === "record" && current.fromView) {
+    route.value = { kind: "view", viewID: current.fromView };
+  } else if (current.kind === "view") {
+    pendingFocus = `view:${current.viewID}`;
+    route.value = { kind: "list" };
+  } else if (current.kind === "record") {
     pendingFocus = `record:${current.recordID}`;
     route.value = { kind: "workspace", taskID: current.taskID };
   } else if (current.kind === "workspace") {

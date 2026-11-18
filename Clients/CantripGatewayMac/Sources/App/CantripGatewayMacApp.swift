@@ -26,7 +26,7 @@ struct CantripGatewayMacApp: App {
 
     var body: some Scene {
         Window("Cantrip Home", id: MacHomeNavigation.windowID) {
-            MacHomeWindow(env: env, remote: remote, voice: voice, navigation: navigation, directLocal: directLocal)
+            homeWindow
                 // Cantrip's look is dark on every client (the iOS app sets the same).
                 .preferredColorScheme(.dark)
                 .task { appDelegate.dockMenu.attach(remote: remote, navigation: navigation) }
@@ -48,6 +48,19 @@ struct CantripGatewayMacApp: App {
                 .task { appDelegate.dockMenu.attach(remote: remote, navigation: navigation) }
         }
         .windowResizability(.contentMinSize)
+    }
+
+    @ViewBuilder private var homeWindow: some View {
+        #if DEBUG
+        // Same launch argument as iOS: a saved view answer on the view's screen, without a Mac.
+        if let path = CantripUITestFixtures.viewFixturePath {
+            CantripViewFixtureScreen(path: path, remote: remote)
+        } else {
+            MacHomeWindow(env: env, remote: remote, voice: voice, navigation: navigation, directLocal: directLocal)
+        }
+        #else
+        MacHomeWindow(env: env, remote: remote, voice: voice, navigation: navigation, directLocal: directLocal)
+        #endif
     }
 }
 

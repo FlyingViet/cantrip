@@ -1289,7 +1289,8 @@ struct ChatView: View {
                     ) {
                         conversationContent
                     } tasks: {
-                        CantripHomeTasksView(remote: remote, openChat: openHomeChat, openRun: openHomeRun)
+                        CantripHomeTasksView(remote: remote, openChat: openHomeChat, openRun: openHomeRun,
+                                             showChat: { homeSection = .chat })
                     } artifacts: {
                         CantripHomeArtifactsView(remote: remote, openChat: openHomeChat)
                     } builds: {

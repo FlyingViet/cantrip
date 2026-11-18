@@ -1,5 +1,6 @@
-// The Cantrip Home window: Home, Background and Tasks read from the paired Mac (read-only). Its
-// IPC answers only the window's own top frame; the pairing token stays in this process.
+// The Cantrip Home window: Home, Background and Tasks (with Views) read from the paired Mac (read-only, but for
+// a view's Refresh and its confirmed refresh and link buttons). Its IPC answers only the window's own top frame;
+// the pairing token stays in this process.
 import path from "node:path";
 import { appendFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -100,6 +101,10 @@ export function registerHomeIPC(isLauncher: (event: IpcMainEvent) => boolean): v
   ipcMain.handle("home:read", (event, request: unknown) => {
     fromHomeWindow(event);
     return service!.read(request);
+  });
+  ipcMain.handle("home:view-write", (event, request: unknown) => {
+    fromHomeWindow(event);
+    return service!.viewWrite(request);
   });
   ipcMain.handle("home:open-external", async (event, value: unknown) => {
     fromHomeWindow(event);

@@ -1,0 +1,144 @@
+{
+  "card" : {
+    "accessibilityLabel" : "Homelab",
+    "blocks" : [
+      {
+        "subtitle" : "Service health",
+        "symbol" : "server.rack",
+        "title" : "Homelab",
+        "type" : "header"
+      },
+      {
+        "accessibilityLabel" : "Services up, 2",
+        "label" : "Services up",
+        "symbol" : "checkmark.seal",
+        "type" : "stat",
+        "value" : "2"
+      },
+      {
+        "symbol" : "square.stack.3d.up",
+        "title" : "Services",
+        "type" : "section"
+      },
+      {
+        "accessibilityLabel" : "Table",
+        "columns" : [
+          {
+            "align" : "leading",
+            "title" : "Service"
+          },
+          {
+            "align" : "leading",
+            "title" : "Status"
+          },
+          {
+            "align" : "leading",
+            "title" : "Version"
+          }
+        ],
+        "tableRows" : [
+          {
+            "accessibilityLabel" : "Grafana, Status Up, Version 11.2.0",
+            "cells" : [
+              {
+                "text" : "Grafana"
+              },
+              {
+                "text" : "Up",
+                "tone" : "positive"
+              },
+              {
+                "text" : "11.2.0"
+              }
+            ],
+            "id" : "row-0"
+          },
+          {
+            "accessibilityLabel" : "NAS, Status Up, Version —",
+            "cells" : [
+              {
+                "text" : "NAS"
+              },
+              {
+                "text" : "Up",
+                "tone" : "positive"
+              },
+              {
+                "text" : "—"
+              }
+            ],
+            "id" : "row-1"
+          },
+          {
+            "accessibilityLabel" : "Router, Status Down, Version 4.1.3",
+            "cells" : [
+              {
+                "text" : "Router"
+              },
+              {
+                "text" : "Down",
+                "tone" : "negative"
+              },
+              {
+                "text" : "4.1.3"
+              }
+            ],
+            "id" : "row-2"
+          }
+        ],
+        "type" : "table"
+      },
+      {
+        "rows" : [
+          {
+            "key" : "NAS documents",
+            "value" : "1,234"
+          }
+        ],
+        "type" : "keyValue"
+      },
+      {
+        "buttons" : [
+          {
+            "confirmMessage" : "Cantrip reads this view's sources again.",
+            "confirmTitle" : "Refresh Homelab?",
+            "id" : "a1",
+            "kind" : "refresh",
+            "label" : "Refresh",
+            "style" : "prominent",
+            "symbol" : "arrow.clockwise"
+          }
+        ],
+        "type" : "actions"
+      }
+    ],
+    "fallbackText" : "Homelab — Service health\nServices up 2\nSERVICES\nService | Status | Version\nGrafana | Up | 11.2.0\nNAS | Up | —\nRouter | Down | 4.1.3\nNAS documents: 1,234",
+    "id" : "view-5966EDC3-9A59-47EA-AFAB-314F477B38BC",
+    "source" : {
+      "kind" : "view",
+      "name" : "Homelab",
+      "updatedAt" : "2026-11-18T03:32:50Z"
+    },
+    "type" : "view",
+    "version" : 1
+  },
+  "refreshAfter" : 30,
+  "view" : {
+    "createdAt" : "2026-11-18T03:32:50Z",
+    "icon" : "server.rack",
+    "id" : "5966EDC3-9A59-47EA-AFAB-314F477B38BC",
+    "name" : "Homelab",
+    "pinned" : true,
+    "private" : true,
+    "problems" : [
+
+    ],
+    "refreshedAt" : "2026-11-18T03:32:50Z",
+    "refreshing" : false,
+    "sources" : [
+      "tool"
+    ],
+    "subtitle" : "Service health",
+    "updatedAt" : "2026-11-18T03:32:50Z"
+  }
+}

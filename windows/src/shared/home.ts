@@ -10,7 +10,18 @@ export type HomeRead =
   /** Home's background log: every run's full reply. The ID comes from the last Background read. */
   | { kind: "log" }
   | { kind: "tasks"; revision?: string }
-  | { kind: "recordCards"; taskID: string; recordID: string };
+  | { kind: "recordCards"; taskID: string; recordID: string }
+  /** Home's views (docs/views.md), only when the tasks snapshot has `supportsViews`. */
+  | { kind: "views"; revision?: string }
+  | { kind: "view"; viewID: string };
+
+/**
+ * The only writes the read-only window may ask for: a view's Refresh, and one of the view's own `refresh` or
+ * `open` buttons the user confirmed (the main process checks it's one the Mac sent for that view).
+ */
+export type HomeViewWrite =
+  | { kind: "refresh"; viewID: string }
+  | { kind: "action"; viewID: string; actionID: string };
 
 export type HomeReadResult =
   | { ok: true; data: unknown }
@@ -31,6 +42,7 @@ export interface CantripHomeApi {
   pair(link: string): Promise<HomePairResult>;
   unpair(): Promise<HomeStatus>;
   read(request: HomeRead): Promise<HomeReadResult>;
+  viewWrite(request: HomeViewWrite): Promise<HomeReadResult>;
   openExternal(url: string): Promise<boolean>;
 }
 
@@ -217,6 +229,8 @@ export interface HomeTasksSnapshot {
   error?: string;
   workspaceCards?: Record<string, CardDocument[]>;
   supportsRecordCards?: boolean;
+  /** The Mac serves Views; the window shows them only then. */
+  supportsViews?: boolean;
 }
 
 // MARK: - Helpers

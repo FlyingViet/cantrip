@@ -1,0 +1,364 @@
+{
+  "card" : {
+    "accessibilityLabel" : "This week",
+    "blocks" : [
+      {
+        "subtitle" : "Across the trackers",
+        "symbol" : "rectangle.3.group",
+        "title" : "This week",
+        "type" : "header"
+      },
+      {
+        "accessibilityLabel" : "Overview, Interviews, Bills",
+        "tabs" : [
+          {
+            "count" : 3,
+            "symbol" : "square.grid.2x2",
+            "title" : "Overview"
+          },
+          {
+            "count" : 2,
+            "symbol" : "person.2",
+            "title" : "Interviews"
+          },
+          {
+            "count" : 1,
+            "symbol" : "creditcard",
+            "title" : "Bills"
+          }
+        ],
+        "type" : "tabs"
+      },
+      {
+        "accessibilityLabel" : "Active interview loops, 6",
+        "label" : "Active interview loops",
+        "symbol" : "person.2",
+        "type" : "stat",
+        "value" : "6"
+      },
+      {
+        "rows" : [
+          {
+            "key" : "Follow-ups waiting on me",
+            "value" : "3"
+          },
+          {
+            "key" : "Bills due soon",
+            "value" : "6"
+          },
+          {
+            "key" : "Active subscriptions",
+            "value" : "13"
+          }
+        ],
+        "type" : "keyValue"
+      },
+      {
+        "accessibilityLabel" : "Trackers",
+        "columns" : [
+          {
+            "align" : "leading",
+            "title" : "Tracker"
+          },
+          {
+            "align" : "trailing",
+            "title" : "Records"
+          },
+          {
+            "align" : "leading",
+            "title" : "Last run"
+          }
+        ],
+        "tableRows" : [
+          {
+            "accessibilityLabel" : "Interview tracker, Records 22, Last run Succeeded",
+            "cells" : [
+              {
+                "text" : "Interview tracker"
+              },
+              {
+                "text" : "22"
+              },
+              {
+                "text" : "Succeeded",
+                "tone" : "positive"
+              }
+            ],
+            "id" : "row-0"
+          },
+          {
+            "accessibilityLabel" : "Follow-up tracker, Records 5, Last run Succeeded",
+            "cells" : [
+              {
+                "text" : "Follow-up tracker"
+              },
+              {
+                "text" : "5"
+              },
+              {
+                "text" : "Succeeded",
+                "tone" : "positive"
+              }
+            ],
+            "id" : "row-1"
+          },
+          {
+            "accessibilityLabel" : "Trip tracker, Records 2, Last run Succeeded",
+            "cells" : [
+              {
+                "text" : "Trip tracker"
+              },
+              {
+                "text" : "2"
+              },
+              {
+                "text" : "Succeeded",
+                "tone" : "positive"
+              }
+            ],
+            "id" : "row-2"
+          },
+          {
+            "accessibilityLabel" : "Bills tracker, Records 19, Last run Succeeded",
+            "cells" : [
+              {
+                "text" : "Bills tracker"
+              },
+              {
+                "text" : "19"
+              },
+              {
+                "text" : "Succeeded",
+                "tone" : "positive"
+              }
+            ],
+            "id" : "row-3"
+          }
+        ],
+        "title" : "Trackers",
+        "type" : "table"
+      },
+      {
+        "accessibilityLabel" : "By stage",
+        "items" : [
+          {
+            "accessibilityLabel" : "Applied, 9, 41 percent",
+            "high" : 9,
+            "highText" : "9",
+            "label" : "Applied",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Recruiter screen complete, 2, 9 percent",
+            "high" : 2,
+            "highText" : "2",
+            "label" : "Recruiter screen complete",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Interviewing, 3, 14 percent",
+            "high" : 3,
+            "highText" : "3",
+            "label" : "Interviewing",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Final round, 1, 5 percent",
+            "high" : 1,
+            "highText" : "1",
+            "label" : "Final round",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Offer, 1, 5 percent",
+            "high" : 1,
+            "highText" : "1",
+            "label" : "Offer",
+            "low" : 0,
+            "tone" : "positive"
+          },
+          {
+            "accessibilityLabel" : "Rejected, 6, 27 percent",
+            "high" : 6,
+            "highText" : "6",
+            "label" : "Rejected",
+            "low" : 0,
+            "tone" : "negative"
+          }
+        ],
+        "kind" : "pie",
+        "max" : 9,
+        "min" : 0,
+        "title" : "By stage",
+        "type" : "chart"
+      },
+      {
+        "accessibilityLabel" : "Applications per day",
+        "items" : [
+          {
+            "accessibilityLabel" : "Mon, Oct 5, 3",
+            "high" : 3,
+            "highText" : "3",
+            "label" : "Mon, Oct 5",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Thu, Oct 8, 3",
+            "high" : 3,
+            "highText" : "3",
+            "label" : "Thu, Oct 8",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Mon, Oct 12, 3",
+            "high" : 3,
+            "highText" : "3",
+            "label" : "Mon, Oct 12",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Thu, Oct 15, 3",
+            "high" : 3,
+            "highText" : "3",
+            "label" : "Thu, Oct 15",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Mon, Oct 19, 3",
+            "high" : 3,
+            "highText" : "3",
+            "label" : "Mon, Oct 19",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Thu, Oct 22, 3",
+            "high" : 3,
+            "highText" : "3",
+            "label" : "Thu, Oct 22",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Mon, Oct 26, 2",
+            "high" : 2,
+            "highText" : "2",
+            "label" : "Mon, Oct 26",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Thu, Oct 29, 2",
+            "high" : 2,
+            "highText" : "2",
+            "label" : "Thu, Oct 29",
+            "low" : 0
+          }
+        ],
+        "kind" : "line",
+        "max" : 3,
+        "min" : 0,
+        "title" : "Applications per day",
+        "type" : "chart"
+      },
+      {
+        "accessibilityLabel" : "By category",
+        "items" : [
+          {
+            "accessibilityLabel" : "Software, 6",
+            "high" : 6,
+            "highText" : "6",
+            "label" : "Software",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Subscription, 5",
+            "high" : 5,
+            "highText" : "5",
+            "label" : "Subscription",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Utility, 3",
+            "high" : 3,
+            "highText" : "3",
+            "label" : "Utility",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Insurance, 2",
+            "high" : 2,
+            "highText" : "2",
+            "label" : "Insurance",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Membership, 2",
+            "high" : 2,
+            "highText" : "2",
+            "label" : "Membership",
+            "low" : 0
+          },
+          {
+            "accessibilityLabel" : "Other, 1",
+            "high" : 1,
+            "highText" : "1",
+            "label" : "Other",
+            "low" : 0
+          }
+        ],
+        "kind" : "bar",
+        "max" : 6,
+        "min" : 0,
+        "title" : "By category",
+        "type" : "chart"
+      },
+      {
+        "buttons" : [
+          {
+            "confirmMessage" : "Cantrip starts the task's run in the background.",
+            "confirmTitle" : "Run Interview tracker now?",
+            "id" : "a1",
+            "kind" : "runTask",
+            "label" : "Run interview tracker",
+            "symbol" : "play.fill"
+          },
+          {
+            "confirmMessage" : "Summarize this week across my trackers: what changed and what needs me next.",
+            "confirmTitle" : "Ask Home?",
+            "id" : "a2",
+            "kind" : "ask",
+            "label" : "Summarize my week",
+            "symbol" : "sparkles"
+          }
+        ],
+        "type" : "actions"
+      }
+    ],
+    "fallbackText" : "This week — Across the trackers\nActive interview loops 6\nFollow-ups waiting on me: 3\nBills due soon: 6\nActive subscriptions: 13\nTrackers\nTracker | Records | Last run\nInterview tracker | 22 | Succeeded\nFollow-up tracker | 5 | Succeeded\nTrip tracker | 2 | Succeeded\nBills tracker | 19 | Succeeded\nBy stage\nApplied 9\nRecruiter screen complete 2\nInterviewing 3\nFinal round 1\nOffer 1\nRejected 6\nApplications per day\nMon, Oct 5 3\nThu, Oct 8 3\nMon, Oct 12 3\nThu, Oct 15 3\nMon, Oct 19 3\nThu, Oct 22 3\nMon, Oct 26 2\nThu, Oct 29 2\nBy category\nSoftware 6\nSubscription 5\nUtility 3\nInsurance 2\nMembership 2\nOther 1",
+    "id" : "view-C6E99EA8-8A0A-4E94-B83C-732E76A12CF6",
+    "source" : {
+      "kind" : "view",
+      "name" : "This week",
+      "updatedAt" : "2026-11-18T03:32:50Z"
+    },
+    "type" : "view",
+    "version" : 1
+  },
+  "refreshAfter" : 30,
+  "view" : {
+    "createdAt" : "2026-11-18T03:32:50Z",
+    "icon" : "rectangle.3.group",
+    "id" : "C6E99EA8-8A0A-4E94-B83C-732E76A12CF6",
+    "name" : "This week",
+    "pinned" : true,
+    "private" : false,
+    "problems" : [
+
+    ],
+    "refreshing" : false,
+    "sources" : [
+      "records",
+      "tasks"
+    ],
+    "subtitle" : "Across the trackers",
+    "updatedAt" : "2026-11-18T03:32:50Z"
+  }
+}

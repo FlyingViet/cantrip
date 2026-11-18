@@ -163,7 +163,7 @@ HTML views (`ui://` resources), which Cantrip already shows for Copilot.
 
 - `type` names the card for logs and tests; clients never branch on it.
 - `style`: `panel` (default) or `link` (a compact card; the whole card opens `action.url`).
-- `source.kind`: `resolver`, `tool`, `preview`, `records` or `build`. A panel card with `attribution` or
+- `source.kind`: `resolver`, `tool`, `preview`, `records`, `build` or `view`. A panel card with `attribution` or
   `updatedAt` ends with a footer: "Updated 3:39 PM" and the attribution, linked to `url`.
 - `fallbackText`: the card as plain text, for a client that can't draw it.
 - Actions open their `url` only when it's `https`, `http` or `tel`.
@@ -176,12 +176,16 @@ HTML views (`ui://` resources), which Cantrip already shows for Copilot.
 | `stat` | `value`, `label`, `symbol`, `detail`, `accessibilityLabel` | A big value (34 pt light) with its icon, label above and detail below |
 | `keyValue` | `rows: [{key, value, symbol}]` | Rows: muted key on the leading side, value on the trailing side |
 | `strip` | `items: [{label, symbol, value, note, accessibilityLabel}]` | A horizontally scrolling strip of 52 pt columns: label, icon, note (blue), value |
-| `chart` | `kind` (`range` or `bar`), `min`, `max`, `items: [{label, symbol, note, low, high, lowText, highText}]` | Rows with a bar from `low` to `high` on the `min`…`max` scale (blue to yellow), `lowText` and `highText` beside it |
+| `chart` | `kind` (`range`, `bar`, `line` or `pie`), `title`, `min`, `max`, `items: [{label, symbol, note, tone, low, high, lowText, highText, accessibilityLabel}]` | `range`/`bar`: rows with a bar from `low` to `high` on the `min`…`max` scale (blue to yellow), `lowText` and `highText` beside it. `line`: one accent line through the `high` values in order (dots at each point) on the `min`…`max` scale, the first, middle and last labels under it, every point an accessibility element. `pie`: a donut of the `high` values (an item's `tone`, else `#4C9DFF`, `#34C759`, `#FFCC00`, `#AF52DE`, `#5AC8FA`, `#FF9F0A`, `#FF6482`, `#8E8E93` in order) with a legend of label, `highText` and share. Line and pie items carry `low` too, so clients that only know bars draw them as bars. A `title` sits above the chart (13 pt semibold) |
 | `list` | `title`, `mapLinked`, `collapsed`, `subtitle`, `tone`, `items: [{id, title, subtitle, detail, symbol, glyph, badges, note, tone, trailing, pinID, actions}]` | Rows: title, subtitle, badges, detail, note (tinted by `tone`), `trailing` on the trailing side, action buttons. With `collapsed: true` (and a `title`), only the title shows, as a button with a chevron and the list's `subtitle` on the trailing side tinted by its `tone`; choosing it shows the rows (VoiceOver and screen readers hear it as expanded or collapsed) |
 | `map` | `latitude`, `longitude`, `latitudeDelta`, `longitudeDelta`, `pins: [{id, title, latitude, longitude, glyph, symbol}]`, `attribution` | An interactive map with labeled pins, zoom buttons and the attribution |
 | `image` | `imageID`, `aspectRatio` | A hero image from `GET /api/v1/link-previews/image?id=`; only images the Mac cached |
 | `badges` | `badges: [{text, tone, symbol}]` | A wrapping row of pills |
 | `notice` | `symbol`, `title`, `text`, `tone` | A status message, such as "Forecast unavailable" and why |
+| `section` | `title`, `subtitle`, `symbol` | A grouped-list heading that starts a group: 13 pt semibold title at 72% white with its icon, subtitle 12 pt at 60%, 18 pt above |
+| `tabs` | `tabs: [{title, symbol, count}]` | A segmented control; the next `count` blocks belong to each tab in turn (counts past the end stop there), and only the selected tab's blocks show, the first at first. Clients without it draw every block in order |
+| `table` | `title`, `columns: [{title, align}]`, `tableRows: [{id, cells: [{text, tone, symbol}], accessibilityLabel}]` | A header row (12 pt semibold, 60% white), then rows of 13 pt cells with hairlines between them; `align` is `leading`, `trailing` or `center`; a cell's text is tinted by its `tone`. Up to 6 columns and 50 rows; it scrolls sideways when it doesn't fit, and screen readers read each row's `accessibilityLabel` (the web and Windows draw a real table with column headers) |
+| `actions` | `buttons: [{id, kind, label, symbol, style, confirmTitle, confirmMessage}]` | Views only (see [Views](views.md)): a wrapping row of bordered buttons, `style` `prominent` filled with the accent. Choosing one asks first (`confirmTitle`, `confirmMessage`, the label to go ahead, Cancel), then posts the view's action. Never drawn under a reply, and dropped from tool and model cards |
 | `progress` | `status` (`running`, `succeeded`, `failed`, `stopped`, `ended`), `label`, `tone`, `startedAt`, `finishedAt` (ISO 8601), `expectedSeconds`, `fraction`, `detail` | The label (accent while running, else `tone`) with the elapsed time on the trailing side (`1:23`, `1:02:09`), a 5 pt bar, then `detail` and the time left. Running: the client counts from `startedAt` once a second; the bar fills to `fraction`, else to elapsed ÷ `expectedSeconds`, else (and past the estimate) a segment 35% of the bar's width sweeps one way, in from past the left end and out past the right, every 1.6 s with ease-in-out, timed from the clock (a still, dim bar under Reduce Motion); "About 1:20 left" from `expectedSeconds`, "Longer than usual" past it. Finished: the time from `startedAt` to `finishedAt` and a full bar; `ended` has neither |
 
 A `list` with `mapLinked: true` right after a `map` is that map's legend: its items' `pinID`s
@@ -191,6 +195,8 @@ otherwise it sits under it; choosing a row focuses its pin.
 Badge and note tones: `positive` green, `negative` red, `warning` amber, `accent` blue,
 `neutral` muted. Symbols are SF Symbol names; the web and Windows clients map the ones Cantrip
 uses to Lucide icons and otherwise draw `glyph` (an emoji) when there is one.
+
+Tool cards may use `table`, `section` and `tabs` too (their values are checked like any other).
 
 Every row and strip item has an `accessibilityLabel` (VoiceOver and screen readers read it
 instead of the separate fields), and the card's own label names it. Clients skip block types
@@ -208,6 +214,11 @@ record's weather and map cards from `GET /api/v1/home/tasks/<task>/records/<reco
 `source.kind` is `records` for a card built from a workspace's records. Clients
 draw them with the same block views; see [Cantrip Home](cantrip-home.md#background-runs).
 
+[Views](views.md) are whole screens Home makes on request (dashboards, status boards, comparison
+tables). Cantrip builds each one into a card document from its bindings (`source.kind` `view`, up
+to 48 blocks), and clients draw it with the same block views, plus the view's `actions` buttons on
+its own screen. The reply that saves a view shows its preview (no buttons, at most 12 blocks).
+
 ## Clients
 
 Each client has one view per block and nothing per card type:
@@ -218,6 +229,6 @@ Each client has one view per block and nothing per card type:
 | Browser Remote | `appendCards` in `RemoteControlServer.swift` | OpenStreetMap tiles through the Mac; Lucide icons |
 | Cantrip Agent (iPhone, Duo) and Cantrip Gateway for Mac | `CantripCards.swift` in the iOS app | Older Macs' `weatherCard`, `placeCard` and `linkPreviews` are drawn as the same blocks |
 | Cantrip Gateway for Windows | `windows/src/gateway/ui/transcript/Cards.tsx` in the Gateway repo | `tel:` actions show the number as text |
-| Cantrip for Windows | `windows/src/renderer/cards.ts` | Replies: weather only, built in its main process. Its read-only Cantrip Home window draws the paired Mac's cards (run results, the background log, workspaces, records), build cards' `progress` blocks included. `map` and `image` blocks are skipped |
+| Cantrip for Windows | `windows/src/renderer/cards.ts` | Replies: weather only, built in its main process. Its read-only Cantrip Home window draws the paired Mac's cards (run results, the background log, workspaces, records, views), build cards' `progress` blocks included; on a view it offers only Refresh and open-link buttons. `map` and `image` blocks are skipped |
 
 Actions open only `https`, `http` and `tel` URLs (public hosts only), on every client.

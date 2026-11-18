@@ -311,9 +311,14 @@ struct CantripHomeTasksView: View {
     let openChat: (String?) -> Void
     /// Opens Home's Background list on a waiting run (by its hidden session ID).
     var openRun: ((String) -> Void)? = nil
+    /// Switches Home to its Chat (a view's `ask` button sent its question there).
+    var showChat: (() -> Void)? = nil
     /// Task ID → the hidden session of its live run that waits on the user.
     @State private var waitingRuns: [UUID: String] = [:]
     @State private var tasks: [CantripHomeTask]
+    @State private var views: [CantripHomeViewSummary]
+    @State private var viewsSupported: Bool
+    @State private var viewsError: String?
     @State private var homeDataError: String?
     @State private var isLoadingHomeData: Bool
     @State private var homeAvailable: Bool
@@ -324,12 +329,16 @@ struct CantripHomeTasksView: View {
     @State private var isMutating: Bool
 
     init(remote: CantripRemoteModel, openChat: @escaping (String?) -> Void,
-         openRun: ((String) -> Void)? = nil) {
+         openRun: ((String) -> Void)? = nil, showChat: (() -> Void)? = nil) {
         self.remote = remote
         self.openChat = openChat
         self.openRun = openRun
+        self.showChat = showChat
         _waitingRuns = State(initialValue: Self.waitingRuns(remote.homeBackground))
         _tasks = State(initialValue: remote.homeTasks)
+        _views = State(initialValue: remote.homeViews)
+        _viewsSupported = State(initialValue: remote.homeViewsSupported)
+        _viewsError = State(initialValue: remote.homeViewsError)
         _supportsReordering = State(initialValue: remote.homeTasksSupportReordering)
         _isMutating = State(initialValue: remote.isMutating)
         _homeDataError = State(initialValue: remote.homeDataError)
@@ -337,6 +346,9 @@ struct CantripHomeTasksView: View {
         _homeAvailable = State(initialValue: remote.selectedSession?.isCantripHome == true)
         _detailError = State(initialValue: remote.detailError)
     }
+
+    /// Views show only when the Mac serves them (`supportsViews`) and has some.
+    private var shownViews: [CantripHomeViewSummary] { viewsSupported ? views : [] }
 
     var body: some View {
         Group {
@@ -349,7 +361,7 @@ struct CantripHomeTasksView: View {
                     description: Text(detailError
                         ?? "Enable Cantrip Home in the Mac app's settings.")
                 )
-            } else if tasks.isEmpty, !isLoadingHomeData {
+            } else if tasks.isEmpty, shownViews.isEmpty, !isLoadingHomeData {
                 ContentUnavailableView {
                     Label("No tasks yet", systemImage: "checklist")
                 } description: {
@@ -365,21 +377,18 @@ struct CantripHomeTasksView: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
-                    ForEach(tasks) { task in
-                        taskListRow(task)
-                            .accessibilityActions {
-                                if canReorderTasks,
-                                   let index = tasks.firstIndex(where: { $0.id == task.id }) {
-                                    if index > 0 {
-                                        Button("Move up") { moveTask(task.id, offset: -1) }
-                                    }
-                                    if index < tasks.count - 1 {
-                                        Button("Move down") { moveTask(task.id, offset: 1) }
-                                    }
-                                }
+                    if shownViews.isEmpty {
+                        taskRows
+                    } else {
+                        Section("Views") { viewRows }
+                        Section("Tasks") {
+                            if tasks.isEmpty, !isLoadingHomeData {
+                                Label("No tasks yet", systemImage: "checklist")
+                                    .foregroundStyle(.secondary)
                             }
+                            taskRows
+                        }
                     }
-                    .onMove(perform: canReorderTasks ? moveTasks : nil)
                 }
                 .listStyle(.plain)
             }
@@ -398,6 +407,9 @@ struct CantripHomeTasksView: View {
         .refreshable { await remote.refreshHomeData() }
         .task { await remote.refreshHomeData() }
         .onReceive(remote.$homeTasks.removeDuplicates()) { tasks = $0 }
+        .onReceive(remote.$homeViews.removeDuplicates()) { views = $0 }
+        .onReceive(remote.$homeViewsSupported.removeDuplicates()) { viewsSupported = $0 }
+        .onReceive(remote.$homeViewsError.removeDuplicates()) { viewsError = $0 }
         .onReceive(remote.$homeBackground.map(Self.waitingRuns).removeDuplicates()) { waitingRuns = $0 }
         .onReceive(remote.$homeTasksSupportReordering.removeDuplicates()) {
             supportsReordering = $0
@@ -443,6 +455,40 @@ struct CantripHomeTasksView: View {
             if let task = run.taskID, let session = run.sessionID { waiting[task] = session }
         }
         return waiting
+    }
+
+    /// Home's views, pinned first: each opens its own screen in this stack.
+    @ViewBuilder private var viewRows: some View {
+        if let viewsError {
+            Label(viewsError, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+        ForEach(shownViews) { view in
+            NavigationLink {
+                CantripHomeViewScreen(remote: remote, summary: view, showChat: showChat ?? { openChat(nil) })
+            } label: {
+                CantripHomeViewRow(view: view)
+            }
+        }
+    }
+
+    private var taskRows: some View {
+        ForEach(tasks) { task in
+            taskListRow(task)
+                .accessibilityActions {
+                    if canReorderTasks,
+                       let index = tasks.firstIndex(where: { $0.id == task.id }) {
+                        if index > 0 {
+                            Button("Move up") { moveTask(task.id, offset: -1) }
+                        }
+                        if index < tasks.count - 1 {
+                            Button("Move down") { moveTask(task.id, offset: 1) }
+                        }
+                    }
+                }
+        }
+        .onMove(perform: canReorderTasks ? moveTasks : nil)
     }
 
     private var canReorderTasks: Bool {
@@ -966,7 +1012,7 @@ struct CantripHomeTaskWorkspaceView: View {
     }
 }
 
-private struct CantripHomeTaskRecordDetailView: View {
+struct CantripHomeTaskRecordDetailView: View {
     @ObservedObject var remote: CantripRemoteModel
     let taskID: UUID
     let recordID: UUID
