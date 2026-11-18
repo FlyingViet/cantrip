@@ -410,7 +410,10 @@ final class PrivacyContentRouting: @unchecked Sendable {
         let privateRaw = PrivacyResultLabel.allCases.map(chars).reduce(0, +)
         let cloud = run.publicChars + chars(.pass) + chars(.redact)
             + Int((Double(chars(.extract)) * run.settings.factRatio).rounded())
-        let route = labels.isEmpty ? run.plan.preRoute : PrivacyContentSources.route(labels)
+        // No judged result: a run whose results were all seen and none private read nothing private;
+        // one that showed nothing, or whose judgments are missing, keeps its plan.
+        let route = !labels.isEmpty ? PrivacyContentSources.route(labels)
+            : unchecked == 0 && run.publicResults > 0 ? .cloud : run.plan.preRoute
         let record = PrivacyContentRecord(
             at: Date(), task: run.taskID.uuidString, taskTitle: run.taskTitle, gateRoute: run.gateRoute,
             preRoute: run.plan.preRoute.rawValue, sources: run.plan.need.sources.sorted().map(\.rawValue),

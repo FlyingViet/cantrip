@@ -107,6 +107,17 @@ extension SessionTabTests {
         let shownRecord = await routing.finish(run: shown)
         precondition(shownRecord?.labels == ["redact": 1, "extract": 1] && shownRecord?.publicResults == 0,
                      "\(String(describing: shownRecord))")
+        // A run planned hybrid whose results were all public read nothing private, so its route is
+        // cloud; a run that showed no results keeps its plan.
+        let unused = UUID()
+        _ = routing.begin(run: unused, taskID: UUID(), taskTitle: nil, prompt: "Read my email", gateRoute: nil, gate: gate, endpoint: endpoint)
+        routing.observe(run: unused, activityID: "e1", tool: "web_fetch", input: "https://example.com", output: "public page")
+        let unusedRecord = await routing.finish(run: unused)
+        precondition(unusedRecord?.preRoute == "hybrid" && unusedRecord?.route == "cloud", "\(String(describing: unusedRecord))")
+        let silent = UUID()
+        _ = routing.begin(run: silent, taskID: UUID(), taskTitle: nil, prompt: "Read my email", gateRoute: nil, gate: gate, endpoint: endpoint)
+        let silentRecord = await routing.finish(run: silent)
+        precondition(silentRecord?.route == "hybrid", "\(String(describing: silentRecord))")
 
         // Past the per-run cap, results are counted as unchecked; a run that needs nothing private
         // sends shell output as is, unjudged.

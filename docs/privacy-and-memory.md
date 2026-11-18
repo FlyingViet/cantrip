@@ -218,7 +218,9 @@ if its content decided, without changing how it runs:
    **extract** (turn it into a few short facts locally) or **keep local**.
    Bitwarden results are always keep local and never sent to the judge.
 3. When the run ends, one `homeTaskContent` line records the gate's route, the
-   content-aware route, results per label with their characters, and how many
+   content-aware route (from the judged results; a run whose results were all
+   public is cloud, and one with no results keeps the step-1 route), results per
+   label with their characters, and how many
    characters a cloud model would see (public and passed results whole, masked
    ones about the same, extracted ones as facts, `factRatio` of their size).
 
