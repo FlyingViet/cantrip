@@ -317,6 +317,8 @@ struct CantripHomeTasksView: View {
     @State private var waitingRuns: [UUID: String] = [:]
     @State private var tasks: [CantripHomeTask]
     @State private var views: [CantripHomeViewSummary]
+    /// The view the grid opened, by ID; Back clears it.
+    @State private var openedViewID: String?
     @State private var viewsSupported: Bool
     @State private var viewsError: String?
     @State private var upcoming: [CantripHomeUpcomingItem]
@@ -429,6 +431,15 @@ struct CantripHomeTasksView: View {
                 }
                 .listStyle(.plain)
                 .overlay(alignment: .bottom) { upcomingStatusCapsule }
+                // The views grid's one destination, outside the lazy list (see CantripHomeViewGridView).
+                .navigationDestination(item: $openedViewID) { id in
+                    if let view = views.first(where: { $0.id == id }) {
+                        CantripHomeViewScreen(remote: remote, summary: view, showChat: showChat ?? { openChat(nil) })
+                    } else {
+                        ContentUnavailableView("View deleted", systemImage: "rectangle.on.rectangle.slash",
+                                               description: Text("It's no longer saved on the Mac."))
+                    }
+                }
             }
         }
         .navigationTitle("Tasks")
@@ -522,7 +533,7 @@ struct CantripHomeTasksView: View {
                 .font(.caption)
                 .foregroundStyle(.orange)
         }
-        CantripHomeViewGridView(views: shownViews, remote: remote, showChat: showChat ?? { openChat(nil) })
+        CantripHomeViewGridView(views: shownViews, remote: remote) { openedViewID = $0 }
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 12, trailing: 16))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)

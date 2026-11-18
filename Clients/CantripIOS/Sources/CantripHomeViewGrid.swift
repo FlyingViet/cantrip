@@ -124,46 +124,72 @@ struct CantripHomeSectionHeader: View {
 }
 
 /// The views as thumbnails, as many columns as the width allows. Each opens its view's screen.
+///
+/// The grid is one row of the Tasks list, and a list row takes one navigation link and one context
+/// menu for everything in it: every thumbnail opened the same view, and every long press or right
+/// click showed the first one's menu. So each thumbnail is a plain button that names its view (the
+/// list's one destination pushes it), with its own ⋯ menu button for Pin, controls the row keeps apart.
 struct CantripHomeViewGridView: View {
     let views: [CantripHomeViewSummary]
     @ObservedObject var remote: CantripRemoteModel
-    /// Shows Home's Chat (a view's `ask` button puts its question there).
-    let showChat: () -> Void
+    /// Opens a view's screen by its ID.
+    let open: (String) -> Void
     @State private var width: CGFloat = 0
 
     var body: some View {
-        let columns = CantripHomeViewGrid.columns(width: width)
+        grid(columns: CantripHomeViewGrid.columns(width: width))
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            .accessibilityIdentifier("home.views.grid")
+            .task(id: views.map(\.id)) {
+                // Thumbnails follow the Mac while the grid shows; the remote only fetches what changed.
+                while !Task.isCancelled {
+                    await remote.refreshHomeViewThumbnails()
+                    try? await Task.sleep(for: .seconds(5))
+                }
+            }
+    }
+
+    private func togglePin(_ view: CantripHomeViewSummary) {
+        Task { _ = try? await remote.setHomeViewPinned(id: view.id, pinned: !view.pinned) }
+    }
+
+    private func grid(columns: Int) -> some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: CantripHomeViewGrid.spacing, alignment: .top),
                                  count: columns),
                   alignment: .leading, spacing: CantripHomeViewGrid.spacing) {
             ForEach(views) { view in
-                // A link (not a button and a destination): it pushes in the iPad's split detail too.
-                NavigationLink {
-                    CantripHomeViewScreen(remote: remote, summary: view, showChat: showChat)
+                Button {
+                    // Only a tap opens it: a swipe's lift over a card doesn't.
+                    guard CantripSwipeTaps.allowsTap() else { return }
+                    open(view.id)
                 } label: {
                     CantripHomeViewThumbnail(view: view, detail: remote.homeViewThumbnails[view.id], remote: remote,
                                              height: CantripHomeViewGrid.thumbnailHeight(for: width))
                 }
                 .buttonStyle(.plain)
-                // The card is the whole target; a list row's chevron beside each one would only take width.
-                .navigationLinkIndicatorVisibility(.hidden)
                 .viewThumbnailAccessibility(view)
-                .contextMenu {
-                    Button {
-                        Task { _ = try? await remote.setHomeViewPinned(id: view.id, pinned: !view.pinned) }
+                .accessibilityAction(named: view.pinned ? "Unpin" : "Pin") { togglePin(view) }
+                .overlay(alignment: .topTrailing) {
+                    Menu {
+                        Button {
+                            togglePin(view)
+                        } label: {
+                            Label(view.pinned ? "Unpin" : "Pin", systemImage: view.pinned ? "pin.slash" : "pin")
+                        }
                     } label: {
-                        Label(view.pinned ? "Unpin" : "Pin", systemImage: view.pinned ? "pin.slash" : "pin")
+                        Image(systemName: "ellipsis")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
                     }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .padding(2)
+                    .accessibilityLabel("More for \(view.name)")
+                    .accessibilityIdentifier("home.view.menu.\(view.id)")
                 }
-            }
-        }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-        .accessibilityIdentifier("home.views.grid")
-        .task(id: views.map(\.id)) {
-            // Thumbnails follow the Mac while the grid shows; the remote only fetches what changed.
-            while !Task.isCancelled {
-                await remote.refreshHomeViewThumbnails()
-                try? await Task.sleep(for: .seconds(5))
             }
         }
     }
@@ -203,6 +229,8 @@ struct CantripHomeViewThumbnail: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            // Room for the grid's ⋯ menu button over the corner.
+            .padding(.trailing, 24)
             if let line = view.detailLine {
                 Text(line)
                     .font(.caption)
@@ -266,10 +294,10 @@ struct CantripHomeViewThumbnail: View {
 }
 
 extension View {
-    /// A thumbnail's link as one button for VoiceOver: the view's name, pin, lock, subtitle and state.
+    /// A thumbnail as one button for VoiceOver: the view's name, pin, lock, subtitle and state.
     func viewThumbnailAccessibility(_ view: CantripHomeViewSummary) -> some View {
         accessibilityLabel(view.spokenLabel)
-            // A plain-style link in a Mac list reports no role of its own; it opens like a button.
+            // A plain-style button in a Mac list reports no role of its own; it opens like a button.
             .accessibilityAddTraits(.isButton)
             .accessibilityIdentifier("home.view.\(view.id)")
     }

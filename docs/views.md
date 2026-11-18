@@ -224,8 +224,12 @@ Every client that lists views draws them the same way on the Tasks screen:
   rows. Headers, sections, actions, notices, badges, progress, images and maps never show. A
   refreshing view or its first problem shows underneath.
 - **One control.** The whole thumbnail is one button labelled like the old row; the preview can't
-  be touched and is hidden from screen readers. Only a tap or click opens the view; Pin (and
-  Delete where the client has it) stay on the view's screen and in the context menu.
+  be touched and is hidden from screen readers. Only a tap or click opens the view, and it opens
+  that view (Back returns to the grid); Pin (and Delete where the client has it) stay on the view's
+  screen and in the context menu. On Apple clients the grid is one row of the Tasks list, which
+  would take a single link and a single context menu for every card, so each thumbnail is a plain
+  button that opens its own view and has its own ⋯ menu (Pin or Unpin) in the corner; VoiceOver
+  also offers Pin or Unpin as an action on the thumbnail.
 - **Fetching.** Thumbnails use `GET /home/views/<id>` and nothing else: at most two at a time, while
   the grid shows, again only when the summary's `updatedAt` or `refreshedAt` moves or the card's
   `refreshAfter` passes. Opening or refreshing a view updates its thumbnail. A view saved while the

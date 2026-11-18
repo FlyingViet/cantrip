@@ -59,6 +59,17 @@ final class CantripHomeViewsGridUITests: XCTestCase {
         header(app, "views").tap()
     }
 
+    /// The screen's Back: in the navigation bar, or in the Duo's vertical bar (not the sidebar's Tasks).
+    private func goBack(_ app: XCUIApplication) {
+        let candidates = [app.buttons["BackButton"], app.navigationBars.buttons.firstMatch,
+                          app.buttons.matching(NSPredicate(format: "label == 'Back'")).firstMatch]
+        _ = candidates[0].waitForExistence(timeout: 3)
+        guard let back = candidates.first(where: { $0.exists && $0.isHittable }) else {
+            return XCTFail("No Back button: \(app.buttons.allElementsBoundByIndex.prefix(20).map { "\($0.identifier)|\($0.label)" })")
+        }
+        back.tap()
+    }
+
     private func taskRow(_ app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Bills tracker'")).firstMatch
     }
@@ -112,6 +123,50 @@ final class CantripHomeViewsGridUITests: XCTestCase {
 
         thumbnail(app, named: "Homelab").tap()
         XCTAssertTrue(app.descendants(matching: .any)["home.viewScreen"].waitForExistence(timeout: 15), "a tap opens the view")
+    }
+
+    /// Each thumbnail opens its own view, and Back returns to the grid. (The grid is one list row;
+    /// with a link per thumbnail, every tap opened the same view.)
+    func testEachThumbnailOpensItsOwnViewAndBackReturns() throws {
+        let app = launch()
+        XCTAssertTrue(header(app, "views").waitForExistence(timeout: 30))
+        openBoth(app)
+        let names = (env["CANTRIP_UITEST_VIEW_NAMES"] ?? "This week,Homelab,Pipeline").split(separator: ",").map(String.init)
+        for name in names {
+            let card = thumbnail(app, named: name)
+            XCTAssertTrue(card.waitForExistence(timeout: 30), "\(name)'s thumbnail")
+            card.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["home.viewScreen"].waitForExistence(timeout: 15), "\(name) opens a view")
+            let title = app.navigationBars.staticTexts[name].firstMatch
+            XCTAssertTrue(title.waitForExistence(timeout: 10),
+                          "tapping \(name) opens \(name), not \(app.navigationBars.staticTexts.allElementsBoundByIndex.map(\.label))")
+            shot(app, "open-\(name.lowercased().replacingOccurrences(of: " ", with: "-"))")
+            goBack(app)
+            XCTAssertTrue(thumbnail(app, named: name).waitForExistence(timeout: 15), "Back returns to the grid")
+            XCTAssertFalse(app.descendants(matching: .any)["home.viewScreen"].exists, "the view closed")
+        }
+    }
+
+    /// Each thumbnail's ⋯ menu is its own: Unpin on a pinned view, Pin on one that isn't. (A long
+    /// press in the one list row showed the first view's menu for every card.)
+    func testEachThumbnailsMenuIsItsOwn() throws {
+        let app = launch()
+        XCTAssertTrue(header(app, "views").waitForExistence(timeout: 30))
+        openBoth(app)
+        for (name, item) in [("This week", "Unpin"), ("Pipeline", "Pin"), ("Homelab", "Unpin")] {
+            let menu = app.buttons.matching(NSPredicate(format: "label == %@", "More for \(name)")).firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 30), "\(name)'s menu button")
+            menu.tap()
+            let menuItem = app.buttons[item].firstMatch
+            XCTAssertTrue(menuItem.waitForExistence(timeout: 5), "\(name)'s menu offers \(item)")
+            XCTAssertFalse(app.descendants(matching: .any)["home.viewScreen"].exists, "the menu doesn't open the view")
+            shot(app, "menu-\(name.lowercased().replacingOccurrences(of: " ", with: "-"))")
+            // Close the menu without choosing anything: a tap on the dimmed screen just below it
+            // (placed from the item, so it lands right on the Duo's inner display too).
+            menuItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 4)).tap()
+            XCTAssertTrue(menuItem.waitForNonExistence(timeout: 10),
+                          "the menu closed: \(app.buttons.matching(NSPredicate(format: "label == %@", item)).allElementsBoundByIndex.map { "\($0.identifier) \($0.frame) hittable=\($0.isHittable)" })")
+        }
     }
 
     func testAViewSavedWhileTasksIsOpenAppearsWithoutAReload() throws {
