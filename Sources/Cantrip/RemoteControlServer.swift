@@ -3972,7 +3972,16 @@ private extension RemoteControlServer {
     .cd-line-chart{display:grid;grid-template-columns:auto 1fr;gap:4px 8px;padding:6px 16px 12px}.cd-line-chart svg{width:100%;height:auto;aspect-ratio:300/110;display:block;overflow:visible}.cd-scale{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:rgba(255,255,255,.6);text-align:right;font-variant-numeric:tabular-nums}.cd-axis{grid-column:2;display:flex;justify-content:space-between;gap:8px;font-size:11px;color:rgba(255,255,255,.6)}
     .cd-pie{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:8px 16px 14px}.cd-pie svg{width:118px;height:118px;flex:none;transform:rotate(0deg)}.cd-legend{display:grid;flex:1;min-width:190px;gap:5px;margin:0;padding:0;list-style:none;font-size:13px}.cd-legend li{display:grid;grid-template-columns:10px 1fr auto 40px;align-items:center;gap:8px}.cd-swatch{width:10px;height:10px;border-radius:3px}.cd-legend .pct{color:rgba(255,255,255,.62);text-align:right;font-variant-numeric:tabular-nums}
     .cd-actions{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px 14px}.cd-action{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:6px 14px;border:1px solid rgba(255,255,255,.3);border-radius:9px;background:transparent;color:#fff;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer}.cd-action.prominent{border-color:#4C9DFF;background:#4C9DFF;color:#061226}.cd-action .cd-icon{width:15px;height:15px}
-    .views-section{margin:0 0 14px}.views-heading{margin:4px 2px 8px;font-size:13px;font-weight:650;color:var(--secondary);text-transform:uppercase;letter-spacing:.02em}.view-card .task-title{display:flex;align-items:center;gap:6px}.view-badge{display:inline-flex;width:15px;height:15px;color:var(--secondary)}.view-badge svg{width:15px;height:15px}
+    #tasksPanel.views-wide{width:min(calc(100% - 24px),1440px)}.home-section{margin:0 0 14px}.home-section-heading{margin:2px 0 8px;font-size:13px}
+    .home-section-toggle{display:inline-flex;align-items:center;gap:6px;min-height:32px;margin-left:-6px;padding:4px 10px 4px 6px;border:0;border-radius:8px;background:transparent;color:var(--secondary);font:inherit;font-size:13px;font-weight:650;letter-spacing:.02em;text-transform:uppercase;cursor:pointer}.home-section-toggle:hover{background:var(--surface);color:var(--text)}.home-section-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+    .home-section-chevron{display:inline-flex;width:14px;height:14px;transition:transform .15s}.home-section-chevron svg{width:14px;height:14px}.home-section-toggle[aria-expanded=true] .home-section-chevron{transform:rotate(90deg)}.home-section-count{color:var(--tertiary);font-weight:500}@media(prefers-reduced-motion:reduce){.home-section-chevron{transition:none}}
+    .views-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0;padding:0;list-style:none}.view-thumb{position:relative;display:flex;flex-direction:column;box-sizing:border-box;height:196px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden}.views-grid.narrow .view-thumb{height:176px}.view-thumb:hover{background:var(--surface-2)}
+    .view-thumb-open{position:absolute;inset:0;z-index:1;width:100%;height:100%;margin:0;padding:0;border:0;border-radius:inherit;background:transparent;cursor:pointer}.view-thumb-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .view-thumb-body{display:flex;flex:1;flex-direction:column;min-height:0;pointer-events:none}.view-thumb-top{display:flex;align-items:center;gap:6px;min-width:0;padding:0 2px}.view-thumb-icon{width:17px;height:17px;color:var(--accent)}.view-thumb-name{flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:14px;font-weight:650}.view-thumb-badge{width:13px;height:13px;color:var(--secondary)}
+    .view-thumb-sub{margin-top:2px;padding:0 2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px;color:var(--secondary)}.view-thumb-note{margin-top:5px;padding:0 2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:11px;color:var(--secondary)}.view-thumb-note.warning{color:var(--orange)}
+    .view-thumb-preview{position:relative;flex:1;min-height:0;margin-top:8px;border-radius:8px;overflow:hidden;background:linear-gradient(180deg,#21304a 0%,#1c232d 100%);pointer-events:none}.view-thumb-scale{width:166.667%;transform:scale(.6);transform-origin:0 0}
+    .view-thumb-scale .cd-card{display:flex;flex-wrap:wrap;align-content:flex-start;margin:0;padding-top:10px;max-width:none;border:0;border-radius:0;background:transparent}.view-thumb-scale .cd-card>*{flex:1 1 100%;min-width:0}.view-thumb-scale .cd-card>.cd-statblock{flex:1 1 40%}.view-thumb-scale .cd-table-wrap{overflow:hidden}
+    .view-thumb-preview.placeholder::before,.view-thumb-preview.placeholder::after{content:"";position:absolute;left:12px;height:9px;border-radius:5px;background:rgba(255,255,255,.08)}.view-thumb-preview.placeholder::before{top:14px;width:38%}.view-thumb-preview.placeholder::after{top:32px;width:62%}
     .view-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}.view-note{margin:0 0 10px;font-size:13px}.view-card .cd-card{max-width:none}
     #viewConfirm{width:min(calc(100% - 32px),420px);padding:18px;border:1px solid var(--line);border-radius:14px;background:Canvas;color:var(--text)}#viewConfirm h2{margin:0 0 8px;font-size:17px}#viewConfirm p{margin:0 0 16px;font-size:14px;color:var(--secondary);overflow-wrap:anywhere}.confirm-buttons{display:flex;justify-content:flex-end;gap:8px}#viewConfirm::backdrop{background:rgba(0,0,0,.35)}
     .cd-lead.positive{color:#34d399}.cd-lead.negative{color:#f87171}.cd-lead.warning{color:#f5b841}.cd-lead.neutral{color:rgba(255,255,255,.75)}
@@ -6123,7 +6132,7 @@ private extension RemoteControlServer {
     addEventListener("resize",placeMentionPopover);window.visualViewport?.addEventListener("resize",placeMentionPopover);
     $("draft").onkeydown=event=>{if(mentionKeydown(event))return;if(slashKeydown(event))return;if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();$("send").click()}};
     $("stop").onclick=()=>action("cancel");$("resume").onclick=()=>action("resume");$("newSession").onclick=async()=>{const data=await api("/api/v1/sessions",{method:"POST"});selectTab(data.session.id);refresh()};
-    $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");artifactThumbs.clear();if($("artifactsPanel").open)$("artifactsPanel").close();historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();tabMentionLists.clear();renderMentionChips();selected=null;$("draft").value="";token="";tokenHandoff=null;connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null);window.cantripGateway?.unpair?.()};
+    $("forget").onclick=async()=>{if(desktopState)await endDesktop();clearUIReloadState();localStorage.removeItem("cantripToken");artifactThumbs.clear();viewThumbs.clear();if($("artifactsPanel").open)$("artifactsPanel").close();historyCache.clear();clearMacImages();expandedHistory.clear();tabDrafts.clear();tabMentionLists.clear();renderMentionChips();selected=null;$("draft").value="";token="";tokenHandoff=null;connection(false);pair(true);window.webkit?.messageHandlers?.cantripRemoteUnpair?.postMessage(null);window.cantripGateway?.unpair?.()};
     // Home Tasks: the task list, each workspace's records (grouped when its list declares a groupField) and record details.
     const appleEpochSeconds=978307200,workspaceGroupsKey="cantrip.workspaceGroups.",otherGroupID=String.fromCharCode(1)+"other";
     let tasksState=null;
@@ -6166,23 +6175,26 @@ private extension RemoteControlServer {
     // Polling re-renders in place: scroll, open records, collapsed sections and the focused row survive.
     function renderTasks(){const state=tasksState;if(!state)return;const panel=$("tasksPanel"),body=$("tasksBody");
       if(state.viewID){const summary=state.view?.view||state.views.find(item=>item.id===state.viewID),focused=document.activeElement?.closest?.("#tasksBody [data-focus-key]")?.dataset.focusKey,scroll=panel.scrollTop;
-        $("tasksBack").classList.remove("hidden");setText($("tasksTitle"),summary?.name||"View");$("tasksSearch").classList.add("hidden");body.replaceChildren(viewScreen(state));panel.scrollTop=scroll;
+        $("tasksBack").classList.remove("hidden");panel.classList.remove("views-wide");setText($("tasksTitle"),summary?.name||"View");$("tasksSearch").classList.add("hidden");body.replaceChildren(viewScreen(state));panel.scrollTop=scroll;
         if(focused)Array.from(body.querySelectorAll("[data-focus-key]")).find(node=>node.dataset.focusKey===focused)?.focus();return}
       let task=state.taskID?state.tasks.find(item=>item.id===state.taskID):null;if(state.taskID&&!task&&state.loaded&&!state.failed)state.taskID=null;
       const workspace=task?.workspace,focused=document.activeElement?.closest?.("#tasksBody [data-focus-key]")?.dataset.focusKey,scroll=panel.scrollTop;
       $("tasksBack").classList.toggle("hidden",!task);setText($("tasksTitle"),task?task.title:"Tasks");
       $("tasksSearch").classList.toggle("hidden",!workspace?.records?.length);if(workspace)$("tasksSearch").placeholder=`Search ${homeNoun(workspace,2)}`;
+      // The list with views widens the panel so the grid gets more columns (until views load, as it was last time).
+      const viewsKnown=state.loaded&&(!state.viewsSupported||state.viewsRevision!==null);if(viewsKnown&&!task)lastViewsWide=state.viewsSupported&&state.views.length>0;
+      panel.classList.toggle("views-wide",!task&&(viewsKnown?state.viewsSupported&&state.views.length>0:lastViewsWide));
       body.replaceChildren(task?(workspace?workspaceView(task):taskDetailView(task)):taskListView(state));panel.scrollTop=scroll;
-      if(focused)Array.from(body.querySelectorAll("[data-focus-key]")).find(node=>node.dataset.focusKey===focused)?.focus()}
+      if(focused)Array.from(body.querySelectorAll("[data-focus-key]")).find(node=>node.dataset.focusKey===focused)?.focus();
+      if(!task)loadViewThumbs()}
     function showTask(id){if(!tasksState)return;const previous=tasksState.taskID;tasksState.taskID=id;tasksState.openRecords.clear();$("tasksSearch").value="";setText($("tasksStatus"),"");renderTasks();$("tasksPanel").scrollTop=0;
       if(id)$("tasksTitle").focus();else Array.from($("tasksBody").querySelectorAll("[data-focus-key]")).find(node=>node.dataset.focusKey===`task:${previous}`)?.focus()}
     function taskListView(state){if(!state.loaded)return homeNode("p","muted tasks-empty","Loading tasks…");
-      const views=viewListSection(state);
-      if(!state.tasks.length){const empty=homeNode("p","muted tasks-empty",state.failed?"Tasks are unavailable right now.":"No tasks yet. Ask Cantrip Home to track or schedule something.");
-        if(!views)return empty;const box=homeNode("div");box.append(views,empty);return box}
-      const list=homeNode("ul","task-list");
-      if(views){const box=homeNode("div"),heading=homeNode("h3","views-heading","Tasks");box.append(views,heading,list);taskListItems(state,list);return box}
-      taskListItems(state,list);return list}
+      const views=viewListSection(state),emptyText=state.failed?"Tasks are unavailable right now.":"No tasks yet. Ask Cantrip Home to track or schedule something.";
+      if(!views){if(!state.tasks.length)return homeNode("p","muted tasks-empty",emptyText);const list=homeNode("ul","task-list");taskListItems(state,list);return list}
+      const box=homeNode("div"),collapsed=homeSectionCollapsed("tasks"),body=homeNode(state.tasks.length?"ul":"div",state.tasks.length?"task-list":"");
+      if(!collapsed){if(state.tasks.length)taskListItems(state,body);else body.append(homeNode("p","muted tasks-empty",emptyText))}
+      box.append(views,homeSection("tasks","Tasks",state.tasks.length,"task",body));return box}
     function taskListItems(state,list){
       for(const task of state.tasks){const item=homeNode("li"),card=homeNode("button","task-card");card.type="button";card.dataset.focusKey=`task:${task.id}`;
         const meta=[task.hasSchedule===false?"No schedule":task.enabled?task.schedule.summary:`Paused · ${task.schedule.summary}`];
@@ -6191,24 +6203,77 @@ private extension RemoteControlServer {
         card.append(homeNode("strong","task-title",task.title),homeNode("span","task-meta",meta.join(" · ")));
         if(task.runs?.[0]?.summary)card.append(homeNode("span","task-run",task.runs[0].summary));
         card.onclick=()=>showTask(task.id);item.append(card);list.append(item)}}
-    // Views (docs/views.md): Home's saved screens, pinned first. Cantrip sends each as a card built from its sources.
+    // Views (docs/views.md): Home's saved screens, pinned first, as a grid of thumbnails. Cantrip sends each as a card built from its sources.
+    // Each Views/Tasks heading collapses its section; this browser remembers it ("1" collapsed).
+    const homeSectionKeys={views:"cantrip.home.views.collapsed",tasks:"cantrip.home.tasks.collapsed"},viewThumbs=new Map(),viewThumbsLoading=new Set();
+    let viewsGridWidth=0,viewsGridObserver=null,lastViewsWide=false;
+    function homeSectionCollapsed(name){try{return localStorage.getItem(homeSectionKeys[name])==="1"}catch{return false}}
+    function setHomeSectionCollapsed(name,collapsed){try{localStorage.setItem(homeSectionKeys[name],collapsed?"1":"0")}catch{}}
+    function homeSection(name,title,count,noun,body){const collapsed=homeSectionCollapsed(name),section=homeNode("div",`home-section ${name}-section`),heading=homeNode("h3","home-section-heading"),toggle=homeNode("button","home-section-toggle"),chevron=homeNode("span","home-section-chevron");
+      toggle.type="button";toggle.dataset.focusKey=`section:${name}`;toggle.setAttribute("aria-expanded",String(!collapsed));toggle.setAttribute("aria-controls",`${name}SectionBody`);toggle.setAttribute("aria-label",`${title}, ${count} ${count===1?noun:noun+"s"}`);
+      chevron.setAttribute("aria-hidden","true");chevron.innerHTML="<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>";
+      toggle.append(chevron,homeNode("span","home-section-title",title));if(collapsed)toggle.append(homeNode("span","home-section-count",`· ${count}`));
+      toggle.onclick=()=>{setHomeSectionCollapsed(name,!homeSectionCollapsed(name));renderTasks();$("tasksBody").querySelector(`[data-focus-key="section:${name}"]`)?.focus()};
+      body.id=`${name}SectionBody`;body.hidden=collapsed;heading.append(toggle);section.append(heading,body);return section}
+    // One column count on every client: columns at least 160 wide under 600, else 240, 12 apart, 1 to 6 of them.
+    function viewsGridColumns(width){const gap=12,min=width<600?160:240;return Math.max(1,Math.min(6,Math.floor((width+gap)/(min+gap))))}
+    function applyViewsGrid(grid,width){if(!(width>0))return;grid.style.gridTemplateColumns=`repeat(${viewsGridColumns(width)},minmax(0,1fr))`;grid.classList.toggle("narrow",width<600)}
+    // A thumbnail's preview: up to 2 stats and the first chart, else the first table, list or key-value block (3 rows), outside
+    // the tabs after the first (the card is flat: a tabs block owns the next tabs[i].count blocks per tab in turn).
+    function viewPreviewBlocks(card){const blocks=Array.isArray(card?.blocks)?card.blocks:[],visible=[];
+      for(let i=0;i<blocks.length;i++){const block=blocks[i];if(!block||typeof block!=="object")continue;
+        if(block.type==="tabs"){const counts=(Array.isArray(block.tabs)?block.tabs:[]).map(tab=>Math.max(0,Math.floor(Number(tab?.count)||0)));
+          for(const child of blocks.slice(i+1,i+1+(counts[0]||0)))if(child&&typeof child==="object"&&child.type!=="tabs")visible.push(child);
+          i+=counts.reduce((sum,count)=>sum+count,0);continue}
+        visible.push(block)}
+      const stats=visible.filter(block=>block.type==="stat").slice(0,2),chart=visible.find(block=>block.type==="chart");
+      if(stats.length||chart)return visible.filter(block=>stats.includes(block)||block===chart);
+      const other=visible.find(block=>block.type==="table"||block.type==="list"||block.type==="keyValue");if(!other)return [];
+      const rows=other.type==="table"?"tableRows":other.type==="list"?"items":"rows";return [{...other,[rows]:(Array.isArray(other[rows])?other[rows]:[]).slice(0,3)}]}
+    // Fetch a thumbnail's view again only when it changed on the Mac or its refreshAfter passed (30 s after a failure).
+    function viewThumbDue(entry,summary,now){if(!entry)return true;if(entry.failed)return now-entry.fetchedAt>=30000;const seen=entry.data?.view;
+      if(!seen||((seen.updatedAt??null)!==(summary?.updatedAt??null)||(seen.refreshedAt??null)!==(summary?.refreshedAt??null)))return true;
+      const after=Number(entry.data?.refreshAfter);return now-entry.fetchedAt>=(after>0?after:30)*1000}
+    function rememberViewThumb(data){const id=data?.view?.id;if(!id||!data.card)return;viewThumbs.set(id,{data,fetchedAt:Date.now(),failed:false});
+      if(tasksState)tasksState.views=tasksState.views.map(item=>item.id===id?{...item,...data.view}:item)}
+    function viewThumbsShowing(state){return Boolean(state&&state===tasksState&&state.viewsSupported&&state.views.length&&!state.taskID&&!state.viewID&&$("tasksPanel").open&&!homeSectionCollapsed("views"))}
+    // While the grid shows: at most 2 requests at a time, never a refresh.
+    function loadViewThumbs(){const state=tasksState;if(!viewThumbsShowing(state))return;const now=Date.now();
+      for(const view of state.views){if(viewThumbsLoading.size>=2)break;if(!viewThumbsLoading.has(view.id)&&viewThumbDue(viewThumbs.get(view.id),view,now))loadViewThumb(view.id)}}
+    async function loadViewThumb(id){viewThumbsLoading.add(id);const requestToken=token;
+      try{const data=await api(`/api/v1/home/views/${encodeURIComponent(id)}`);if(requestToken===token)rememberViewThumb(data)}
+      catch{if(requestToken===token)viewThumbs.set(id,{data:viewThumbs.get(id)?.data||null,fetchedAt:Date.now(),failed:true})}
+      finally{viewThumbsLoading.delete(id);if(requestToken===token){updateViewThumb(id);loadViewThumbs()}}}
+    function viewSecondLine(view){if(view.subtitle)return view.subtitle;const updated=new Date(view.refreshedAt||view.updatedAt||"");return isNaN(updated)?"":`Updated ${updated.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}`}
+    function viewLabel(view){const problems=Array.isArray(view.problems)?view.problems.length:0;
+      return [view.name,view.pinned?"Pinned":null,view.private?"Private":null,viewSecondLine(view),view.refreshing?"Refreshing":null,problems?`${problems} ${problems===1?"problem":"problems"}`:null].filter(Boolean).join(", ")}
+    function viewThumb(view){const item=homeNode("li"),card=homeNode("div","view-thumb"),open=homeNode("button","view-thumb-open");card.dataset.viewId=view.id;
+      open.type="button";open.dataset.focusKey=`view:${view.id}`;open.onclick=()=>showView(view.id);card.append(homeNode("div"),open);fillViewThumb(card,view);item.append(card);return item}
+    // The thumbnail's text and preview (the card renderer at 60%, inert and hidden from assistive tech); the open button stays, keeping focus.
+    function fillViewThumb(card,view){const body=homeNode("div","view-thumb-body"),top=homeNode("div","view-thumb-top"),preview=homeNode("div","view-thumb-preview"),detail=viewThumbs.get(view.id)?.data?.card;
+      body.setAttribute("aria-hidden","true");preview.inert=true;
+      top.append(cardIcon(view.icon,null,"view-thumb-icon")||cardIcon("square.grid.2x2",null,"view-thumb-icon"),homeNode("span","view-thumb-name",view.name||"View"));
+      if(view.pinned)top.append(cardIcon("pin.fill",null,"view-thumb-badge"));if(view.private)top.append(cardIcon("lock.fill",null,"view-thumb-badge"));
+      if(detail&&Array.isArray(detail.blocks)){const blocks=viewPreviewBlocks(detail);if(blocks.length){const scale=homeNode("div","view-thumb-scale");appendCards(scale,[{version:detail.version,id:detail.id,type:detail.type,blocks}],`thumb:${view.id}`);preview.append(scale)}}
+      else preview.classList.add("placeholder");
+      body.append(top,homeNode("div","view-thumb-sub",viewSecondLine(view)||"View"),preview);
+      const problem=Array.isArray(view.problems)?view.problems[0]:null;if(view.refreshing)body.append(homeNode("div","view-thumb-note","Refreshing…"));else if(problem)body.append(homeNode("div","view-thumb-note warning",problem));
+      card.firstElementChild.replaceWith(body);card.querySelector(".view-thumb-open").setAttribute("aria-label",viewLabel(view))}
+    function updateViewThumb(id){const state=tasksState,view=state?.views.find(item=>item.id===id);if(!view||state.taskID||state.viewID)return;
+      const card=Array.from($("tasksBody").querySelectorAll(".view-thumb")).find(node=>node.dataset.viewId===id);if(card)fillViewThumb(card,view)}
     function viewListSection(state){const views=state.views||[];if(!state.viewsSupported||!views.length)return null;
-      const section=homeNode("section","views-section"),heading=homeNode("h3","views-heading","Views"),list=homeNode("ul","task-list");heading.id="viewsHeading";section.setAttribute("aria-labelledby","viewsHeading");
-      for(const view of views){const item=homeNode("li"),card=homeNode("button","task-card view-card"),title=homeNode("strong","task-title");card.type="button";card.dataset.focusKey=`view:${view.id}`;
-        const icon=cardIcon(view.pinned?"pin.fill":view.icon,null,"view-badge");if(icon)title.append(icon);title.append(document.createTextNode(view.name||"View"));
-        if(view.private){const lock=cardIcon("lock.fill",null,"view-badge");if(lock)title.append(lock)}
-        const updated=view.refreshedAt?new Date(view.refreshedAt):null,meta=[view.subtitle,updated&&!isNaN(updated)?`Updated ${updated.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}`:null].filter(Boolean);
-        card.append(title,homeNode("span","task-meta",meta.join(" · ")||"View"));
-        card.setAttribute("aria-label",[view.name,view.pinned?"Pinned":null,view.private?"Private":null,...meta].filter(Boolean).join(", "));
-        card.onclick=()=>showView(view.id);item.append(card);list.append(item)}
-      section.append(heading,list);return section}
+      const grid=homeNode("ul","views-grid");grid.setAttribute("aria-label","Views");
+      if(!homeSectionCollapsed("views")){for(const view of views)grid.append(viewThumb(view));applyViewsGrid(grid,viewsGridWidth||$("tasksBody").clientWidth-28);
+        viewsGridObserver??=new ResizeObserver(entries=>{for(const entry of entries){const width=entry.contentBoxSize?.[0]?.inlineSize??entry.contentRect.width;if(width>0){viewsGridWidth=width;applyViewsGrid(entry.target,width)}}});
+        viewsGridObserver.disconnect();viewsGridObserver.observe(grid)}
+      return homeSection("views","Views",views.length,"view",grid)}
     async function loadViews(){const state=tasksState;if(!state||state.viewsLoading)return;state.viewsLoading=true;
       try{const data=await api("/api/v1/home/views"+(state.viewsRevision?`?revision=${encodeURIComponent(state.viewsRevision)}`:""));if(state!==tasksState)return;
         if(!data.unchanged){state.viewsRevision=data.revision;state.views=Array.isArray(data.views)?data.views:[];if(!state.taskID)renderTasks()}
-        if(state.viewID&&Date.now()-state.viewFetchedAt>=(state.view?.refreshAfter||30)*1000)loadView()}
+        if(state.viewID&&Date.now()-state.viewFetchedAt>=(state.view?.refreshAfter||30)*1000)loadView();loadViewThumbs()}
       catch{}finally{state.viewsLoading=false}}
     async function loadView(){const state=tasksState,id=state?.viewID;if(!id)return;state.viewFetchedAt=Date.now();
-      try{const data=await api(`/api/v1/home/views/${encodeURIComponent(id)}`);if(state!==tasksState||state.viewID!==id)return;state.view=data;state.viewFailed=false;renderTasks()}
+      try{const data=await api(`/api/v1/home/views/${encodeURIComponent(id)}`);if(state!==tasksState||state.viewID!==id)return;state.view=data;state.viewFailed=false;rememberViewThumb(data);renderTasks()}
       catch(error){if(state===tasksState&&state.viewID===id){state.viewFailed=true;setText($("tasksError"),`Couldn't load the view: ${error.message}`);renderTasks()}}}
     function showView(id){const state=tasksState;if(!state)return;const previous=state.viewID;state.viewID=id;state.view=null;state.viewFailed=false;state.taskID=null;
       setText($("tasksStatus"),"");setText($("tasksError"),"");renderTasks();$("tasksPanel").scrollTop=0;
@@ -6225,7 +6290,7 @@ private extension RemoteControlServer {
       return box}
     async function refreshView(id,control){const state=tasksState;control?.setAttribute("aria-busy","true");setText($("tasksStatus"),"Refreshing…");
       try{const data=await api(`/api/v1/home/views/${encodeURIComponent(id)}/refresh`,{method:"POST",body:"{}"});if(state!==tasksState||state.viewID!==id)return;
-        state.view=data;state.viewFetchedAt=Date.now();renderTasks();setText($("tasksStatus"),"Refreshed.")}
+        state.view=data;state.viewFetchedAt=Date.now();rememberViewThumb(data);renderTasks();setText($("tasksStatus"),"Refreshed.")}
       catch(error){setText($("tasksError"),`Couldn't refresh the view: ${error.message}`)}finally{control?.removeAttribute("aria-busy")}}
     async function pinView(id,pinned){const state=tasksState;
       try{const data=await api(`/api/v1/home/views/${encodeURIComponent(id)}/pin`,{method:"POST",body:JSON.stringify({pinned})});if(state!==tasksState)return;
@@ -6242,7 +6307,7 @@ private extension RemoteControlServer {
       try{const data=await api(`/api/v1/home/views/${encodeURIComponent(viewID)}/actions/${encodeURIComponent(button.id)}`,{method:"POST",body:JSON.stringify({confirmed:true})});
         if(data.result==="open"){const url=cardURL(data.url);if(url&&!/^tel:/i.test(url))window.open(url,"_blank","noopener,noreferrer")}
         else if(data.result==="record"&&state===tasksState){state.viewID=null;state.view=null;showTask(data.taskID);if(data.recordID){state.openRecords.add(data.recordID);renderTasks()}}
-        else if(data.result==="refreshed"&&state===tasksState&&state.viewID===viewID){state.view=data;state.viewFetchedAt=Date.now();renderTasks()}
+        else if(data.result==="refreshed"&&state===tasksState&&state.viewID===viewID){state.view=data;state.viewFetchedAt=Date.now();rememberViewThumb(data);renderTasks()}
         else if(data.result==="sent"){$("tasksPanel").close();const home=sessionItems.find(item=>item.isCantripHome);if(home&&selected!==home.id){selectTab(home.id);renderedPayload="";renderProgress(home);refresh()}}
         setText($("tasksStatus"),data.message||(data.result==="refreshed"?"Refreshed.":""))}
       catch(error){setText($("tasksError"),`Couldn't ${button.label}: ${error.message}`)}}

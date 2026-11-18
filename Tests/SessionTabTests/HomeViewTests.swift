@@ -344,6 +344,9 @@ extension SessionTabTests {
         precondition(opened == 200 && link["result"] as? String == "open" && link["url"] as? String == "https://status.example.com/")
         let (pinned, summary) = try await request("/\(view.id)/pin", method: "POST", body: ["pinned": true])
         precondition(pinned == 200 && summary["pinned"] as? Bool == true)
+        let pageURL = URL(string: "http://localhost:\(port)/")!
+        let (page, _) = try await client.data(from: pageURL)
+        try await testRemoteViewsGrid(html: String(decoding: page, as: UTF8.self), baseURL: pageURL)
         let (deleted, _) = try await request("/\(view.id)", method: "DELETE")
         let (gone, _) = try await request("/\(view.id)")
         precondition(deleted == 200 && gone == 404)
