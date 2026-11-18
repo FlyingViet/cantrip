@@ -3,7 +3,7 @@ import Foundation
 /// `cantrip daemon|pair|config|status|doctor`: a terminal client of the running Cantrip host (the
 /// menu bar app or `--headless`), over the user-only CLI socket. Runs instead of the app.
 enum CantripCLI {
-    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "handoffs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "weather", "build-queue", "privacy", "muse", "help"]
+    static let commands: Set<String> = ["daemon", "pair", "config", "status", "doctor", "cleanup", "seed-worktree", "tab", "tabs", "handoffs", "sim", "mcp", "api", "skills", "instructions", "secret", "secrets", "env", "weather", "build-queue", "schedule", "privacy", "muse", "help"]
 
     struct Failure: Error { let message: String; var code: Int32 = 1 }
 

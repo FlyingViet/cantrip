@@ -15,6 +15,7 @@ Usage:
   cantrip secret list | sync | run NAME... -- cmd     (secrets broker)
   cantrip privacy report|test · muse feeds|log|requests · handoffs · sim acquire|release
           · api · weather [PLACE] · build-queue · seed-worktree PATH   (see `cantrip help`)
+  cantrip schedule add|wait|describe|list|cancel|resume   (Home's Upcoming: steps for later)
 
 If the app isn't running, the exact bundle next to this script's repo is
 launched (never LaunchServices' pick among stale copies), with a warning
@@ -267,6 +268,7 @@ COMMAND_ACTIONS = {
     "api": {"key", "help"},
     "handoffs": {"help"},
     "build-queue": {"run", "status", "list", "help"},
+    "schedule": {"add", "wait", "describe", "list", "cancel", "resume", "help"},
 }
 
 

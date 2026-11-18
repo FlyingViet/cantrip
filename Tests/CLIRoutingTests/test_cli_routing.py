@@ -33,18 +33,30 @@ class CLIRoutingTests(unittest.TestCase):
         for command in sorted(commands):
             self.assertTrue(self.routed(command), f"`cantrip {command}` must reach the app, not an agent")
 
+    def test_every_dispatched_command_is_listed(self):
+        """A command `CantripCLI.run` handles but `commands` leaves out never runs: the app binary
+        opens its window instead (how `schedule` shipped unreachable)."""
+        source = open(os.path.join(ROOT, "Sources", "Cantrip", "CantripCLI.swift")).read()
+        listed = set(re.findall(r'"([a-z-]+)"', re.search(r"static let commands: Set<String> = \[([^\]]+)\]", source).group(1)))
+        dispatch = source[source.index("static func run("):source.index("default: print(usage)")]
+        handled = {name for line in re.findall(r"^\s*case (\"[^:]+):", dispatch, re.M) for name in re.findall(r'"([a-z-]+)"', line)}
+        self.assertTrue(handled)
+        self.assertEqual(handled - listed, set(), "handled by CantripCLI.run but not in CantripCLI.commands")
+
     def test_documented_commands_reach_the_app(self):
         for args in [["privacy", "report"], ["privacy", "report", "--days", "14"], ["privacy", "test", "hello"],
                      ["muse", "feeds"], ["muse", "log", "5"], ["handoffs", "--days", "7"], ["handoffs"],
                      ["sim", "acquire", "--device", "iPhone"], ["sim", "release"], ["api", "key", "new"], ["api", "--json"],
                      ["weather", "Portland, OR"], ["build-queue", "run"], ["seed-worktree", "/tmp/x"],
-                     ["tab", "list"], ["mcp", "list"], ["status"], ["doctor"]]:
+                     ["tab", "list"], ["mcp", "list"], ["status"], ["doctor"],
+                     ["schedule", "list"], ["schedule", "add", "--at", "22:35", "--title", "Check", "--", "x"],
+                     ["schedule", "cancel", "step:1"], ["schedule"]]:
             self.assertTrue(self.routed(*args), args)
 
     def test_questions_stay_questions(self):
         for args in [["privacy", "settings", "for", "my", "tabs?"], ["muse", "about", "this"],
                      ["sim", "racing", "games?"], ["api", "design", "review"], ["handoffs", "from", "today?"],
-                     ["tab", "completion", "in", "zsh?"], ["why", "is", "the", "sky", "blue"], ["summarize", "privacy", "test"]]:
+                     ["tab", "completion", "in", "zsh?"], ["schedule", "a", "meeting", "for", "me"], ["why", "is", "the", "sky", "blue"], ["summarize", "privacy", "test"]]:
             self.assertFalse(self.routed(*args), args)
         self.assertFalse(self.routed())
 
