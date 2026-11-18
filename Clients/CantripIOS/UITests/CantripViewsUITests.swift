@@ -100,13 +100,18 @@ final class CantripViewsUITests: XCTestCase {
             press(tasks.allElementsBoundByIndex.first { $0.isHittable } ?? tasks.firstMatch)
             return
         }
-        XCTAssertTrue(app.expandDuoBar(timeout: 20, press: press), "The Duo bar's pill")
+        // Folded, Home's sections are on the bar; unfolded, in the sidebar.
         let toggle = app.buttons["duo.rail.sidebar"].firstMatch
-        if toggle.waitForExistence(timeout: 3), toggle.label == "Show Sidebar" {
-            press(toggle)
-            sleep(1)
+        if toggle.waitForExistence(timeout: 20) {
+            if toggle.label == "Show Sidebar" {
+                press(toggle)
+                sleep(1)
+            }
+            let row = app.buttons["duo.sidebar.section.tasks"].firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 5))
+            press(row)
+            return
         }
-        if !app.buttons["duo.bar.section.tasks"].firstMatch.exists { app.expandDuoBar(press: press) }
         let section = app.buttons["duo.bar.section.tasks"].firstMatch
         XCTAssertTrue(section.waitForExistence(timeout: 5))
         press(section)

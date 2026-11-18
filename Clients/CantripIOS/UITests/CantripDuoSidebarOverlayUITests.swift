@@ -30,9 +30,8 @@ final class CantripDuoSidebarOverlayUITests: XCTestCase {
             guard deny.waitForExistence(timeout: 4) else { break }
             deny.tap()
         }
-        app.expandDuoBar(timeout: 15)
         let toggle = app.buttons["duo.rail.sidebar"].firstMatch
-        guard toggle.waitForExistence(timeout: 5) else {
+        guard toggle.waitForExistence(timeout: 15) else {
             throw XCTSkip("Unfold the Duo: the rail's sidebar toggle shows only unfolded")
         }
         let window = app.windows.firstMatch
@@ -59,10 +58,9 @@ final class CantripDuoSidebarOverlayUITests: XCTestCase {
         // A tap beside the sidebar puts it away.
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5)).tap()
         XCTAssertTrue(waitForAbsence(sidebar), "Tapping outside closes it")
-        app.expandDuoBar()
         XCTAssertEqual(toggle.label, "Show Sidebar")
 
-        // So does picking a tab (the tap outside minimized the bar).
+        // So does picking a tab.
         toggle.tap()
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
         let rows = sidebar.descendants(matching: .any)
@@ -73,8 +71,7 @@ final class CantripDuoSidebarOverlayUITests: XCTestCase {
         XCTAssertTrue(waitForAbsence(sidebar), "Picking a tab closes it")
         save(app, "narrow-picked")
 
-        // The toggle closes it too (picking a tab minimized the bar).
-        app.expandDuoBar()
+        // The toggle closes it too.
         toggle.tap()
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
         toggle.tap()

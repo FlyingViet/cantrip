@@ -185,7 +185,7 @@ opens the drawer or goes back; links and cards open on a tap. Home shows its lat
 reloaded; with Reduce Motion, **‹ Home** switches without sliding. Handoff cards' **Open tab**, a tab's push
 notification and the Tabs widget open the tab the same way. On an iPhone Duo, folded or
 unfolded, a tab has no **‹ Home**: the right swipe from the left edge, or **Tabs** in the side bar
-when folded (the sidebar button when unfolded; tap the bar's pill first if it's minimized), brings out the tab list instead, so you
+when folded (the sidebar button when unfolded), brings out the tab list instead, so you
 can switch straight to another tab or pick Cantrip Home, pinned at the top. Tab ages and outcomes need
 Cantrip host e8e5c0b or later; older hosts show names and live status only.
 
@@ -1428,16 +1428,12 @@ The `HermesUITests` scheme runs real-touch UI checks against DEBUG-only fixture 
 
 The app supports portrait and both landscape orientations on iPhone, plus all
 orientations on iPad. On iPhone Duo, in every pose, the side controls are **one bar** along the
-screen's edge: **Tabs** (folded) or a **sidebar toggle** (unfolded), **Settings**, **View Mac** and
-the tab's menu, whose first item is **Model Settings**, then, in Home, its sections (Chat, Tasks,
-Artifacts, Builds) at the bottom, never in a bottom bar. The bar rests minimized as one small pill
-showing where you are (Home's current section, or an up chevron in a tab) with a badge for
-running tasks, working tabs or a tab that needs you; tap it to expand the whole bar. Choosing a
-section, Tabs, Settings or View Mac, tapping elsewhere (which also does what you tapped) or
-scrolling the chat minimizes it again. VoiceOver reads the pill as "Navigation" with the
-section and running count. When the bar is short (folded on its side, or beside a Live
-Activity), the sections stay and the other actions move into the system's **…** button. The
-sidebar toggle opens
+screen's edge, always open: **Tabs** (folded) or a **sidebar toggle** (unfolded), **Settings**,
+**View Mac** and the tab's menu, whose first item is **Model Settings**. Folded, Home's sections
+(Chat, Tasks, Artifacts, Builds) follow at the bottom of the bar; unfolded they are in the
+sidebar, so the bar holds only those actions. Never a bottom bar. When the folded bar is short (on
+its side, or beside a Live Activity), the sections stay and the other actions move into the
+system's **…** button. The sidebar toggle opens
 and closes Gateway Mac's left sidebar with Pip, Home's sections, the tabs (with **+**), the open
 chat's **Skills** and the connection; the chat header keeps the title and state on the left and
 Stop and delivery on the right. The sidebar stays open or closed as you left it through folding,

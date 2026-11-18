@@ -1,8 +1,9 @@
 import XCTest
 
-/// iPhone Duo unfolded (upright or on its side): the system's vertical bar is the app's rail, with a
-/// sidebar toggle, Model Settings and Settings. The toggle opens and closes the sidebar, typing never
-/// changes it, and Model Settings opens the existing sheet with the Mac's usage limit fallback.
+/// iPhone Duo unfolded (upright or on its side): the system's vertical bar (or the app's rail) is always
+/// open with only actions: the sidebar toggle, Settings, View Mac and the menu. Home's sections are in
+/// the sidebar. The toggle opens and closes the sidebar, typing never changes it, and Model Settings
+/// opens the existing sheet with the Mac's usage limit fallback.
 /// Run on an unfolded iPhone Duo simulator with `TEST_RUNNER_CANTRIP_UITEST_HOME_URL=http://127.0.0.1:<port>`
 /// (and `TEST_RUNNER_CANTRIP_UITEST_HOME_TOKEN` if the host's token isn't `duo-qa-token`). Set
 /// `TEST_RUNNER_CANTRIP_UITEST_SHOTS=<folder>` (with a watcher that answers its requests) for
@@ -38,11 +39,11 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
             window.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: frame.midX - origin.x, dy: frame.midY - origin.y)).tap()
         }
-        app.expandDuoBar(timeout: 15, press: press)
         let toggle = app.buttons["duo.rail.sidebar"].firstMatch
-        guard toggle.waitForExistence(timeout: 5) else {
+        guard toggle.waitForExistence(timeout: 15) else {
             throw XCTSkip("Unfold the Duo: the rail's sidebar toggle shows only unfolded")
         }
+        XCTAssertFalse(app.buttons["duo.bar.pill"].exists, "No pill: the rail is always open")
         XCTAssertFalse(app.buttons["duo.rail.modelSettings"].exists, "Model Settings is in the menu, not the rail")
         XCTAssertTrue(app.buttons["chat.settings"].firstMatch.exists, "The rail has Settings")
         XCTAssertFalse(app.buttons["home.tabs"].exists, "The toggle takes the tabs button's place")
@@ -51,14 +52,14 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         let sidebar = app.descendants(matching: .any)["duo.sidebar"]
         if !sidebar.exists { press(toggle) }
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "Show Sidebar opens it")
-        // Home's sections stay in the right-side rail (the sidebar lists Builds too, on the left); the
-        // toggle leaves the bar open.
-        let railBuilds = {
-            app.buttons.matching(NSPredicate(format: "label == 'Builds'")).allElementsBoundByIndex
-                .contains { $0.frame.midX > window.frame.width * 0.85 }
+        // Home's sections are in the sidebar only; the rail holds actions.
+        let railSections = {
+            app.buttons.matching(NSPredicate(format: "label IN %@", ["Chat", "Tasks", "Artifacts", "Builds"]))
+                .allElementsBoundByIndex.contains { $0.frame.midX > window.frame.width * 0.85 }
         }
-        XCTAssertTrue(app.buttons["Builds"].firstMatch.waitForExistence(timeout: 5) && railBuilds(),
-                      "Home's sections stay in the rail with the sidebar open")
+        XCTAssertTrue(app.buttons["duo.sidebar.section.builds"].firstMatch.waitForExistence(timeout: 5),
+                      "The sidebar lists Home's sections")
+        XCTAssertFalse(railSections(), "None of Home's sections are in the rail")
         XCTAssertFalse(app.descendants(matching: .any)["home.compactTabBar"].exists, "No bottom bar on the Duo")
         XCTAssertEqual(toggle.label, "Hide Sidebar")
         save(app, "sidebar-open")
@@ -66,7 +67,8 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         press(toggle)
         XCTAssertTrue(waitForAbsence(sidebar), "Hide Sidebar closes it")
         XCTAssertEqual(toggle.label, "Show Sidebar")
-        XCTAssertTrue(railBuilds(), "Home's sections stay in the rail with the sidebar closed")
+        XCTAssertFalse(railSections(), "Nor with the sidebar closed")
+        XCTAssertTrue(toggle.isHittable, "The rail stays open")
         save(app, "sidebar-closed")
 
         let field = app.textFields["chat.composer"].firstMatch
@@ -77,8 +79,6 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         sleep(1)
         XCTAssertFalse(sidebar.exists, "Typing must not reopen the sidebar")
         save(app, "sidebar-closed-typing")
-        // The tap into the message field minimized the bar.
-        app.expandDuoBar(press: press)
         press(toggle)
         XCTAssertTrue(sidebar.waitForExistence(timeout: 5), "The toggle works with the keyboard up")
         sleep(1)
@@ -134,34 +134,26 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
             window.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: frame.midX - origin.x, dy: frame.midY - origin.y)).tap()
         }
-        app.expandDuoBar(timeout: 15, press: press)
         let toggle = app.buttons["duo.rail.sidebar"].firstMatch
-        guard toggle.waitForExistence(timeout: 5) else {
+        guard toggle.waitForExistence(timeout: 15) else {
             throw XCTSkip("Unfold the Duo: the rail's sidebar toggle shows only unfolded")
         }
-        // Home's sections in the right-side rail (the sidebar lists them too, on the left).
-        func rail(_ label: String) throws -> XCUIElement {
-            try XCTUnwrap(app.buttons.matching(NSPredicate(format: "label == %@", label)).allElementsBoundByIndex
-                .first { $0.frame.midX > window.frame.width * 0.85 }, "\(label) is in the rail")
-        }
+        // Home's sections are in the sidebar.
         let sidebar = app.descendants(matching: .any)["duo.sidebar"]
+        func choose(_ section: String) {
+            if !sidebar.exists { press(toggle) }
+            let row = app.buttons["duo.sidebar.section.\(section)"].firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 5), "\(section) is in the sidebar")
+            press(row)
+        }
         let cards = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'home.builds.app.'"))
         for open in [true, false] {
-            // Each choice minimizes the bar; expand it again first.
-            app.expandDuoBar(press: press)
-            press(try rail("Chat"))
-            app.expandDuoBar(press: press)
-            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+            choose("chat")
+            choose("builds")
+            // Upright the sidebar overlays the chat and closes after a choice.
             if sidebar.exists != open {
                 press(toggle)
                 XCTAssertTrue(open ? sidebar.waitForExistence(timeout: 5) : waitForAbsence(sidebar))
-            }
-            app.expandDuoBar(timeout: 2, press: press)
-            press(try rail("Builds"))
-            // Upright the sidebar overlays the chat, and the first tap outside it only closes it.
-            if !cards.firstMatch.waitForExistence(timeout: 3), !sidebar.exists {
-                app.expandDuoBar(press: press)
-                press(try rail("Builds"))
             }
             XCTAssertTrue(cards.firstMatch.waitForExistence(timeout: 15), "The install page's apps load")
             sleep(1)

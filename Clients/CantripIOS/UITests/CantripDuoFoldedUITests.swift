@@ -1,9 +1,9 @@
 import XCTest
 
 /// iPhone Duo folded (the simulator's default pose): Cantrip Home keeps the iPhone layout while
-/// typing, and its navigation is one bar on the vertical bar's edge that starts minimized to a pill,
-/// expands on a tap (actions, then Home's sections at the bottom, none covering another) and
-/// minimizes again after a choice, a tap outside or a scroll.
+/// typing, and its navigation is one bar on the vertical bar's edge that is always open (actions,
+/// then Home's sections at the bottom, none covering another) and stays open after a choice, a tap
+/// outside or a scroll.
 /// Run on an iPhone Duo simulator with `TEST_RUNNER_CANTRIP_UITEST_HOME_URL=http://127.0.0.1:<port>`
 /// (any fixture host that serves Cantrip Home, e.g. `fake_home_host.py`; set
 /// `TEST_RUNNER_CANTRIP_UITEST_HOME_TOKEN` if its token isn't `duo-qa-token`).
@@ -11,26 +11,16 @@ import XCTest
 final class CantripDuoFoldedUITests: XCTestCase {
     private let sectionIDs = ["chat", "tasks", "artifacts", "builds"].map { "duo.bar.section.\($0)" }
 
-    func testFoldedHomeHasOneBarThatMinimizesAndExpands() throws {
+    func testFoldedHomeHasOneBarThatStaysOpen() throws {
         let app = try launchFoldedHome()
         let window = app.windows.firstMatch
         guard window.frame.width < window.frame.height else {
             throw XCTSkip("Fold the Duo and hold it upright (window \(window.frame.size))")
         }
 
-        let pill = app.duoBarPill
-        XCTAssertTrue(pill.waitForExistence(timeout: 15), "Home's bar starts minimized to a pill")
-        XCTAssertGreaterThan(pill.frame.midX, window.frame.width * 0.75, "The pill is on the right edge")
-        XCTAssertGreaterThan(pill.frame.midY, window.frame.height * 0.75, "It sits low, where Home's sections were")
-        XCTAssertEqual(pill.label, "Navigation")
-        XCTAssertTrue((pill.value as? String ?? "").hasPrefix("Chat"), "The pill names the section: \(String(describing: pill.value))")
-        XCTAssertFalse(app.buttons["home.tabs"].exists, "Minimized, the bar shows only the pill")
-        save("folded-minimized")
-
-        XCTAssertTrue(app.expandDuoBar())
         let tabs = app.buttons["home.tabs"].firstMatch
-        XCTAssertTrue(tabs.waitForExistence(timeout: 5), "Tapping the pill expands the bar")
-        XCTAssertFalse(pill.exists, "Expanded, the pill gives way to the items")
+        XCTAssertTrue(tabs.waitForExistence(timeout: 15), "Home's bar is open from the start")
+        XCTAssertFalse(app.buttons["duo.bar.pill"].exists, "No pill: the bar never minimizes")
         let actions = [tabs, app.buttons["chat.settings"].firstMatch]
         let sections = sectionIDs.map { app.buttons[$0].firstMatch }
         for item in actions + sections {
@@ -48,30 +38,22 @@ final class CantripDuoFoldedUITests: XCTestCase {
         XCTAssertLessThan(actions.map(\.frame.maxY).max()!, sections.map(\.frame.minY).min()!, "Sections below the actions")
         XCTAssertLessThan(sections[0].frame.midX - sections[3].frame.midX, 2, "One column")
         XCTAssertFalse(app.descendants(matching: .any)["duo.sidebar"].exists)
-        save("folded-expanded")
+        save("folded-home")
 
-        // Choosing a section minimizes the bar to that section.
+        // Choosing a section selects it; the bar stays open.
         sections[1].tap()
-        XCTAssertTrue(pill.waitForExistence(timeout: 5), "Choosing Tasks minimizes the bar")
-        XCTAssertTrue((pill.value as? String ?? "").hasPrefix("Tasks"), "The pill shows Tasks: \(String(describing: pill.value))")
-        save("folded-tasks-minimized")
+        XCTAssertTrue(sections[1].waitForSelection(), "Tasks is selected")
+        XCTAssertTrue(tabs.exists && sections[0].exists, "The bar stays open after a choice")
+        save("folded-tasks")
 
-        // A tap outside it minimizes it too.
-        XCTAssertTrue(app.expandDuoBar())
-        XCTAssertTrue(tabs.waitForExistence(timeout: 5))
-        // Below the fixture's few tasks: nothing to open there.
-        window.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.75)).tap()
-        XCTAssertTrue(pill.waitForExistence(timeout: 5), "A tap outside minimizes the bar")
-
-        // Back to Chat; a scroll minimizes it.
-        XCTAssertTrue(app.expandDuoBar())
+        // A tap outside and a scroll leave it open too (in Chat: nothing to open where it taps).
         sections[0].tap()
-        XCTAssertTrue(pill.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.expandDuoBar())
-        XCTAssertTrue(tabs.waitForExistence(timeout: 5))
+        XCTAssertTrue(sections[0].waitForSelection(), "Back to Chat")
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.4)).tap()
+        XCTAssertTrue(tabs.exists && sections[0].isHittable, "A tap outside leaves the bar open")
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.45))
             .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.7)))
-        XCTAssertTrue(pill.waitForExistence(timeout: 5), "A scroll minimizes the bar")
+        XCTAssertTrue(tabs.exists && sections[0].isHittable, "A scroll leaves the bar open")
 
         let field = app.textFields["chat.composer"].firstMatch
         let message = field.waitForExistence(timeout: 10) ? field : app.textViews["chat.composer"].firstMatch
@@ -81,30 +63,27 @@ final class CantripDuoFoldedUITests: XCTestCase {
         _ = app.keyboards.firstMatch.waitForExistence(timeout: 5)
         sleep(1)
         XCTAssertFalse(app.descendants(matching: .any)["duo.sidebar"].exists, "Typing on a folded Duo must not show the sidebar")
-        XCTAssertTrue(pill.exists, "The bar's pill stays")
+        XCTAssertTrue(sections[0].exists, "The bar stays")
     }
 
-    /// Folded and turned on its side the vertical bar is short: expanded, Home's sections stay in the
-    /// bar and the actions move into its overflow first.
+    /// Folded and turned on its side the vertical bar is short: Home's sections stay in the bar and
+    /// the actions move into its overflow first.
     func testFoldedLandscapeKeepsHomeSectionsInTheBar() throws {
         let app = try launchFoldedHome(landscape: true)
-        XCTAssertTrue(app.duoBarPill.waitForExistence(timeout: 15))
         let window = app.windows.firstMatch
         for _ in 0..<20 where window.frame.width < window.frame.height { usleep(250_000) }
         guard window.frame.width > window.frame.height else {
             throw XCTSkip("The app didn't turn to landscape (window \(window.frame.size))")
         }
         sleep(1)
-        save("folded-landscape-minimized")
-        XCTAssertTrue(app.expandDuoBar())
         for id in sectionIDs {
             let section = app.buttons[id].firstMatch
-            XCTAssertTrue(section.waitForExistence(timeout: 5) && section.isHittable, "\(id) stays in the bar")
+            XCTAssertTrue(section.waitForExistence(timeout: 15) && section.isHittable, "\(id) stays in the bar")
         }
-        save("folded-landscape-expanded")
+        save("folded-landscape")
         app.buttons[sectionIDs[2]].firstMatch.tap()
-        XCTAssertTrue(app.duoBarPill.waitForExistence(timeout: 5), "Choosing Artifacts minimizes the bar")
-        XCTAssertTrue((app.duoBarPill.value as? String ?? "").hasPrefix("Artifacts"))
+        XCTAssertTrue(app.buttons[sectionIDs[2]].firstMatch.waitForSelection(), "Artifacts is selected")
+        XCTAssertTrue(app.buttons[sectionIDs[0]].firstMatch.exists, "The bar stays open")
     }
 
     private func launchFoldedHome(landscape: Bool = false) throws -> XCUIApplication {

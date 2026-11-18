@@ -33,8 +33,7 @@ final class CantripDuoTabPickerUITests: XCTestCase {
         }
 
         let tabs = app.buttons["home.tabs"].firstMatch
-        XCTAssertTrue(app.expandDuoBar(timeout: 15), "A tab's bar starts minimized to a pill")
-        XCTAssertTrue(tabs.waitForExistence(timeout: 5), "Expanded, the bar has the Tabs button")
+        XCTAssertTrue(tabs.waitForExistence(timeout: 15), "A tab's bar is open, with the Tabs button")
         XCTAssertFalse(app.buttons["tab.home"].exists, "No ‹ Home on the Duo")
         XCTAssertGreaterThan(tabs.frame.midX, window.frame.width * 0.75, "It sits in the vertical bar")
 
@@ -43,11 +42,9 @@ final class CantripDuoTabPickerUITests: XCTestCase {
         XCTAssertTrue(drawer.waitForExistence(timeout: 5), "Tabs brings out the tab picker")
         sleep(1)
         save("picker-from-tabs")
-        // Tabs is a toggle: tapping it again (the bar minimized after the first tap) puts the picker away.
-        app.expandDuoBar()
+        // Tabs is a toggle: tapping it again puts the picker away.
         tabs.tap()
         XCTAssertTrue(waitForAbsence(drawer), "Tapping Tabs again closes the tab picker")
-        app.expandDuoBar()
         tabs.tap()
         XCTAssertTrue(drawer.waitForExistence(timeout: 5), "And opens it again")
         // Another tab (the fixture opens on its first one).
@@ -57,7 +54,8 @@ final class CantripDuoTabPickerUITests: XCTestCase {
         XCTAssertNotNil(other, "The picker lists other tabs")
         other?.tap()
         XCTAssertTrue(waitForAbsence(drawer), "Picking a tab closes the picker")
-        XCTAssertTrue(app.duoBarPill.waitForExistence(timeout: 5), "Still in a tab")
+        XCTAssertTrue(tabs.waitForExistence(timeout: 5), "Still in a tab, the bar open")
+        XCTAssertFalse(app.buttons["duo.bar.section.chat"].exists, "A tab's bar has no Home sections")
         save("switched-tab")
 
         // A swipe in from the left edge brings it out too.
@@ -72,7 +70,6 @@ final class CantripDuoTabPickerUITests: XCTestCase {
         XCTAssertTrue(home.waitForExistence(timeout: 5), "Home is in the picker")
         home.tap()
         XCTAssertTrue(waitForAbsence(drawer), "Choosing Home closes the picker")
-        XCTAssertTrue(app.expandDuoBar(), "Home's bar is minimized to a pill")
         XCTAssertTrue(app.buttons["duo.bar.section.builds"].firstMatch.waitForExistence(timeout: 10),
                       "Back on Home: its sections are in the bar")
     }

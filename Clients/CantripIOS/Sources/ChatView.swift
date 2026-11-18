@@ -1196,9 +1196,6 @@ struct ChatView: View {
     @State private var homeSnapshotsAllowedFrom = Date.distantFuture
     @State private var showCopilotUsage = false
     @State private var homeSection = CantripHomeSection.chat
-    /// The iPhone Duo's navigation bar, expanded from its pill; minimized again after a choice, a
-    /// tap or a scroll outside it.
-    @State private var duoBarExpanded = false
     @State private var renamingRemoteSession: CantripRemoteSession?
     @State private var showRenameLocalTab = false
     @State private var tabName = ""
@@ -1307,11 +1304,11 @@ struct ChatView: View {
             }
             .onChange(of: visibleTabID, initial: true) { _, id in remote.setVisibleTab(id) }
             // The Duo's one bar in the system's vertical bar, present in every Home section and tab. A
-            // fresh toolbar per item set (posture, Home or a tab, View Mac); minimizing keeps it.
+            // fresh toolbar per item set (posture, Home or a tab, View Mac).
             .background {
                 if displayTraits.placesActionsInVerticalBar {
                     Color.clear
-                        .modifier(CantripDuoVerticalBar(items: duoBarItems, isExpanded: $duoBarExpanded))
+                        .modifier(CantripDuoVerticalBar(items: duoBarItems))
                         .id(duoBarLayout)
                 }
             }
@@ -1462,14 +1459,6 @@ struct ChatView: View {
         } persistentRail: {
             duoAppRail
         }
-        .background {
-            CantripDuoBarDismissal(
-                isActive: duoBarExpanded && (displayTraits.placesActionsInVerticalBar || showsDuoAppRail),
-                appRailWidth: showsDuoAppRail ? CantripDuoAppRail.width : nil,
-                onDismiss: collapseDuoBar
-            )
-        }
-        .onChange(of: vm.activeLane) { _, _ in duoBarExpanded = false }
         // Inside a tab, the same swipe right (from anywhere) that opens the drawer in Home drags the tab
         // away to Home (on the iPhone Duo it opens the tab picker instead).
         .cantripTabBackSwipe(
@@ -2502,31 +2491,31 @@ struct ChatView: View {
     @ViewBuilder private var duoAppRail: some View {
         if showsDuoAppRail {
             // Beside a header in the status band the rail's edge starts below it: one bar across the top.
-            CantripDuoAppRail(dividerTop: headerInStatusBand ? windowTopInset : 0, items: duoBarItems,
-                              isExpanded: $duoBarExpanded)
+            CantripDuoAppRail(dividerTop: headerInStatusBand ? windowTopInset : 0, items: duoBarItems)
         }
     }
 
-    /// The iPhone Duo's one navigation bar, in the system's vertical bar or the app-drawn rail: the
-    /// sidebar toggle (unfolded) or Tabs (folded), Settings, View Mac, the menu, then Home's sections.
+    /// Home's sections on the Duo's bar: folded only (unfolded, the sidebar lists them).
+    private var showsDuoBarSections: Bool {
+        CantripDuoBarItems.showsSections(inHome: vm.activeLane == .home, unfolded: displayTraits.isUnfoldedDuo)
+    }
+
+    /// The iPhone Duo's one navigation bar, in the system's vertical bar or the app-drawn rail, always
+    /// open: the sidebar toggle (unfolded) or Tabs (folded), Settings, View Mac and the menu, then
+    /// (folded, in Home) Home's sections.
     private var duoBarItems: CantripDuoBarItems {
         let busy = vm.sending || importingImages || submittingRemote
         let leading: AnyView? = displayTraits.isUnfoldedDuo ? duoSidebarToggle
-            : vm.activeLane.usesCantripRemote ? AnyView(remoteTabsButton(collapsesBar: true)) : nil
+            : vm.activeLane.usesCantripRemote ? AnyView(remoteTabsButton()) : nil
         return CantripDuoBarItems(
             leading: leading,
-            settings: AnyView(ChatSettingsButton {
-                collapseDuoBar()
-                showSettings = true
-            }.disabled(busy)),
+            settings: AnyView(ChatSettingsButton { showSettings = true }.disabled(busy)),
             mac: viewMacButton,
             menu: AnyView(chatMenu),
-            sections: vm.activeLane == .home
+            sections: showsDuoBarSections
                 ? CantripDuoBarSections(selection: $homeSection,
                                         runningTasks: remote.homeTasks.filter { $0.state == "running" }.count)
-                : nil,
-            workingTabs: CantripHomeTabCounts.working(in: remote.sessions),
-            tabsNeedingInput: CantripHomeTabCounts.needingInput(in: remote.sessions) + homeBackgroundInputCount
+                : nil
         )
     }
 
@@ -2535,23 +2524,17 @@ struct ChatView: View {
             toolbar: ChatToolbarLayout(traits: displayTraits),
             hasLeading: displayTraits.isUnfoldedDuo ? duoSidebarToggle != nil : vm.activeLane.usesCantripRemote,
             hasMac: viewMacButton != nil,
-            hasSections: vm.activeLane == .home
+            hasSections: showsDuoBarSections
         )
     }
 
-    private func collapseDuoBar() {
-        guard duoBarExpanded else { return }
-        withAnimation(CantripDuoBar.animation(reduceMotion: reduceMotion)) { duoBarExpanded = false }
-    }
-
     /// Opens the tab drawer, which also holds background jobs (the Pip title is already the lane menu).
-    private func remoteTabsButton(collapsesBar: Bool = false) -> some View {
+    private func remoteTabsButton() -> some View {
         CantripHomeTabsButton(
             workingCount: CantripHomeTabCounts.working(in: remote.sessions),
             inputCount: CantripHomeTabCounts.needingInput(in: remote.sessions) + homeBackgroundInputCount,
             isEnabled: remoteTabsEnabled
         ) {
-            if collapsesBar { collapseDuoBar() }
             composerFocused = false
             // A toggle: the system's vertical bar stays above the open drawer.
             showRemoteTabs.toggle()
@@ -2562,7 +2545,6 @@ struct ChatView: View {
     private var viewMacButton: AnyView? {
         guard vm.activeLane.usesCantripRemote else { return nil }
         return AnyView(CantripViewMacButton {
-            collapseDuoBar()
             composerFocused = false
             #if os(iOS)
             CantripViewMacPresenter.present(remote: remote)
@@ -3253,14 +3235,13 @@ struct ChatMenuIcon: View {
 
 /// The unfolded iPhone Duo's rail when the system's bar runs along the top (upright): the same one
 /// navigation bar the system's vertical bar holds in the other poses, drawn by the app on the bar
-/// material beside the chat and low, within reach of the thumb. Minimized it is one pill.
+/// material beside the chat and low, within reach of the thumb. Always open; unfolded it holds only
+/// actions (Home's sections are in the sidebar).
 struct CantripDuoAppRail: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     static let width: CGFloat = 64
     /// Where the rail's leading edge line starts, from the top of the screen.
     var dividerTop: CGFloat = 0
     let items: CantripDuoBarItems
-    @Binding var isExpanded: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -3283,36 +3264,12 @@ struct CantripDuoAppRail: View {
         .accessibilityIdentifier("duo.rail")
     }
 
-    private var transition: AnyTransition {
-        reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.6, anchor: .bottom))
-    }
-
     private var bar: some View {
         VStack(spacing: 6) {
-            if isExpanded {
-                Group {
-                    items.leading
-                    items.settings
-                    items.mac
-                    items.menu
-                    if let sections = items.sections {
-                        ForEach(CantripHomeSection.allCases) { section in
-                            CantripDuoBarSectionButton(section: section, sections: sections, inAppRail: true) { chosen in
-                                withAnimation(CantripDuoBar.animation(reduceMotion: reduceMotion)) {
-                                    sections.selection.wrappedValue = chosen
-                                    isExpanded = false
-                                }
-                            }
-                        }
-                    }
-                }
-                .transition(transition)
-            } else {
-                CantripDuoBarPill(summary: items.summary, inAppRail: true) {
-                    withAnimation(CantripDuoBar.animation(reduceMotion: reduceMotion)) { isExpanded = true }
-                }
-                .transition(transition)
-            }
+            items.leading
+            items.settings
+            items.mac
+            items.menu
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 4)

@@ -169,9 +169,9 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
         .accessibilityIdentifier("home.tabView")
     }
 
-    /// On an iPhone Duo, in every pose and with the sidebar open or closed, Home's sections are at the
-    /// bottom of the right-side rail: the system's vertical bar, or the app's own rail when unfolded
-    /// upright. Other iPhones keep the bottom bar.
+    /// On an iPhone Duo Home's sections are never a bottom bar: folded they are at the bottom of the
+    /// right-side bar, unfolded in the sidebar (the bar holds only actions). Other iPhones keep the
+    /// bottom bar.
     private var sectionsInRail: Bool { displayTraits.hasVerticalBar || displayTraits.usesAppRail }
 
     private func tabContent<Content: View>(_ content: Content) -> some View {

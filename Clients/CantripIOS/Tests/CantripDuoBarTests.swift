@@ -3,48 +3,19 @@ import UIKit
 import XCTest
 @testable import Hermes
 
-/// The iPhone Duo's one navigation bar: what its minimized pill shows and says, and the app-drawn
-/// rail (unfolded upright) minimized and expanded.
+/// The iPhone Duo's one navigation bar: always open, Home's sections on it only while folded, and the
+/// app-drawn rail (unfolded upright).
 @MainActor
 final class CantripDuoBarTests: XCTestCase {
-    func testThePillShowsWhereYouAreAndWhatTheBarHides() {
-        let chat = CantripDuoBarSummary(section: .chat, runningTasks: 2, workingTabs: 3, tabsNeedingInput: 0)
-        XCTAssertEqual(chat.systemImage, CantripHomeSection.chat.systemImage, "Home: the current section")
-        XCTAssertEqual(chat.badgeCount, 2, "Home: its running tasks")
-        XCTAssertEqual(chat.accessibilityValue, "Chat, 2 tasks running")
-
-        let tasks = CantripDuoBarSummary(section: .tasks, runningTasks: 1, workingTabs: 0, tabsNeedingInput: 1)
-        XCTAssertEqual(tasks.accessibilityValue, "Tasks, 1 task running, 1 tab needs your input")
-
-        let tab = CantripDuoBarSummary(section: nil, runningTasks: 0, workingTabs: 3, tabsNeedingInput: 2)
-        XCTAssertEqual(tab.systemImage, "chevron.up", "In a tab: not the menu's ellipsis")
-        XCTAssertEqual(tab.badgeCount, 3, "In a tab: the working tabs")
-        XCTAssertEqual(tab.accessibilityValue, "2 tabs need your input, 3 tabs working")
-
-        let idle = CantripDuoBarSummary(section: nil, runningTasks: 0, workingTabs: 0, tabsNeedingInput: 0)
-        XCTAssertEqual(idle.badgeCount, 0)
-        XCTAssertEqual(idle.accessibilityValue, "")
-        XCTAssertEqual(CantripDuoBarSummary.accessibilityLabel, "Navigation")
+    func testHomesSectionsAreOnTheBarOnlyWhileFolded() {
+        XCTAssertTrue(CantripDuoBarItems.showsSections(inHome: true, unfolded: false), "Folded Home: no sidebar, so the bar")
+        XCTAssertFalse(CantripDuoBarItems.showsSections(inHome: true, unfolded: true), "Unfolded: the sidebar lists them")
+        XCTAssertFalse(CantripDuoBarItems.showsSections(inHome: false, unfolded: false), "A tab has no sections")
+        XCTAssertFalse(CantripDuoBarItems.showsSections(inHome: false, unfolded: true))
     }
 
-    func testTheSummaryFollowsTheChosenSection() {
-        var section = CantripHomeSection.chat
-        let items = CantripDuoBarItems(
-            settings: AnyView(EmptyView()), menu: AnyView(EmptyView()),
-            sections: CantripDuoBarSections(selection: Binding(get: { section }, set: { section = $0 }), runningTasks: 2),
-            workingTabs: 4, tabsNeedingInput: 0
-        )
-        XCTAssertEqual(items.summary.section, .chat)
-        section = .artifacts
-        XCTAssertEqual(items.summary.section, .artifacts)
-        XCTAssertEqual(items.summary.badgeCount, 2, "Home's badge is its running tasks, not the working tabs")
-        let tab = CantripDuoBarItems(settings: AnyView(EmptyView()), menu: AnyView(EmptyView()), workingTabs: 4)
-        XCTAssertNil(tab.summary.section)
-        XCTAssertEqual(tab.summary.badgeCount, 4)
-    }
-
-    /// The iPhone Duo open upright (669 x 951 pt, an 81 pt status band): the app-drawn rail minimized to
-    /// its pill and expanded, in Home and in a tab (dark, as the app always is), and at a large text size.
+    /// The iPhone Duo open upright (669 x 951 pt, an 81 pt status band): the app-drawn rail, always open
+    /// with only its actions, in Home and in a tab (dark, as the app always is), and at a large text size.
     /// Set TEST_RUNNER_HOME_TABS_ARTIFACT_DIR.
     func testUprightRailScreenshots() async throws {
         let directory = ProcessInfo.processInfo.environment["TEST_RUNNER_HOME_TABS_ARTIFACT_DIR"]
@@ -61,12 +32,10 @@ final class CantripDuoBarTests: XCTestCase {
                 leading: AnyView(CantripDuoSidebarToggle(isOpen: false, workingCount: 2) {}),
                 settings: AnyView(ChatSettingsButton {}),
                 mac: AnyView(CantripViewMacButton {}),
-                menu: AnyView(ChatMenuIcon(systemName: home ? "line.3.horizontal" : "ellipsis")),
-                sections: home ? CantripDuoBarSections(selection: .constant(.chat), runningTasks: 2) : nil,
-                workingTabs: 2
+                menu: AnyView(ChatMenuIcon(systemName: home ? "line.3.horizontal" : "ellipsis"))
             )
         }
-        func screen(home: Bool, expanded: Bool) -> some View {
+        func screen(home: Bool) -> some View {
             HStack(spacing: 0) {
                 VStack(alignment: .trailing, spacing: 12) {
                     Text("When does the second stage open?")
@@ -84,18 +53,16 @@ final class CantripDuoBarTests: XCTestCase {
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(.systemBackground))
-                CantripDuoAppRail(dividerTop: band, items: items(home: home), isExpanded: .constant(expanded))
+                CantripDuoAppRail(dividerTop: band, items: items(home: home))
             }
         }
-        let cases: [(String, Bool, Bool, UIUserInterfaceStyle, DynamicTypeSize)] = [
-            ("home-minimized-dark", true, false, .dark, .large),
-            ("home-expanded-dark", true, true, .dark, .large),
-            ("tab-minimized-dark", false, false, .dark, .large),
-            ("tab-expanded-dark", false, true, .dark, .large),
-            ("home-expanded-dark-ax3", true, true, .dark, .accessibility3),
+        let cases: [(String, Bool, UIUserInterfaceStyle, DynamicTypeSize)] = [
+            ("home-dark", true, .dark, .large),
+            ("tab-dark", false, .dark, .large),
+            ("home-dark-ax3", true, .dark, .accessibility3),
         ]
-        for (name, home, expanded, style, size) in cases {
-            let controller = UIHostingController(rootView: screen(home: home, expanded: expanded).dynamicTypeSize(size))
+        for (name, home, style, size) in cases {
+            let controller = UIHostingController(rootView: screen(home: home).dynamicTypeSize(size))
             controller.overrideUserInterfaceStyle = style
             let window = UIWindow(windowScene: scene)
             window.frame = CGRect(origin: .zero, size: CGSize(width: 669, height: 951))

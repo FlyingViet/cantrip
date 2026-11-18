@@ -69,19 +69,16 @@ spans the host and this app is one commit.
   with its own unsaved open state that starts closed; a tap outside, the toggle or a pick closes it.
   Folded, the Tabs button toggles the tab drawer (the vertical bar stays tappable above it). On a
   Duo, in every pose and with the sidebar open or closed, the side controls are one bar
-  (`CantripDuoBarItems`, Sources/CantripDuoBar.swift): Tabs (folded) or the sidebar toggle
-  (unfolded), Settings, View Mac and the menu, then in Home its sections at the bottom, never a
-  bottom bar. It minimizes to one pill (`CantripDuoBarPill`: the current section's icon, or an up
-  chevron in a tab, badged with running tasks, working tabs or "?") and a tap expands it. Choosing a
-  section, Tabs, Settings or View Mac, a tap or scroll outside the bar (`CantripDuoBarDismissal`,
-  which never takes the touch) or a lane change minimizes it; the sidebar toggle leaves it open.
-  Where the system has a vertical bar (folded, unfolded on its side) the bar is one `.bottomBar`
-  group with `.axisBehavior(.verticalPreferred)` (`CantripDuoVerticalBar`). The vertical bar has no
-  system minimize (iOS 27.1), so the pill is a swap of toolbar items that the system morphs: re-id
-  the host by `CantripDuoBarLayout` (posture, Home or tab, View Mac), never by the expanded state.
-  Sections are `.visibilityPriority(.high)` and actions `.low`, so a short bar (folded landscape, a
-  Live Activity) moves actions into the system's "…" first. Upright, the app draws the same bar at
-  the bottom of its rail (`CantripDuoAppRail`, within thumb reach, text capped at xxxLarge). Home's
+  (`CantripDuoBarItems`, Sources/CantripDuoBar.swift), always open (no pill or minimizing, since
+  2026-11-18): Tabs (folded) or the sidebar toggle (unfolded), Settings, View Mac and the menu. Folded,
+  in Home, its sections follow at the bottom; unfolded they are only in the sidebar
+  (`CantripDuoBarItems.showsSections`), never a bottom bar. Where the system has a vertical bar
+  (folded, unfolded on its side) the bar is one `.bottomBar` group with
+  `.axisBehavior(.verticalPreferred)` (`CantripDuoVerticalBar`); re-id the host by
+  `CantripDuoBarLayout` (posture, Home or tab, View Mac, sections). Sections are
+  `.visibilityPriority(.high)` and actions `.low`, so a short bar (folded landscape, a Live Activity)
+  moves actions into the system's "…" first. Upright, the app draws the actions at the bottom of its
+  rail (`CantripDuoAppRail`, within thumb reach, text capped at xxxLarge). Home's
   `TabView` tab bar is always hidden; other iPhones use `CantripHomeCompactTabBar`. A project tab on the Duo
   (folded or not) has no "‹ Home": the left-edge swipe and the Tabs button (folded; unfolded, the
   sidebar toggle) bring out the tab picker, with Home pinned first (`usesDuoTabPicker`). Other
