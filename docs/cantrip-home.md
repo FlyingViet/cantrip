@@ -235,6 +235,46 @@ against a tool result in the same reply), and refreshing never involves a model.
 (open a link, run a task now, refresh, open a record, ask Home a question) run only after you
 confirm them. See [Views](views.md) for the format, refresh rules, privacy and the API.
 
+### Upcoming
+
+**Tasks → Upcoming** lists everything set to run later, on every client: Home tasks' next runs,
+one-off steps a tab or Home scheduled, waits a tab left running (a laptop to wake, a deploy to
+finish), and this Mac's recurring background jobs (your LaunchAgents with a calendar or interval
+schedule; CI runners, Apple's and Homebrew's are left out). Each item says what it will do, when it
+runs next and who set it up, grouped as **Next up**, **Waiting**, **Repeating** and **Paused**.
+
+**Cancel** asks first and names what will stop. A one-off step is dropped, a wait is stopped, and a
+Home task or Mac job is paused instead, with **Resume** to undo it: pausing a Mac job unloads and
+disables it in launchd and never edits or removes its plist. Cantrip for Windows' read-only Home
+window shows the list without these buttons.
+
+Tabs and Home don't keep hidden timers. A step for later goes through Cantrip, which queues its
+message in the tab that set it up when it's due (it reaches Home if that tab was closed):
+
+```sh
+cantrip schedule add --at 22:35 --title "Compare tonight's runs with last night's" -- "Run the report and post it to Home."
+cantrip schedule add --at +2h --when-home-quiet --deadline 23:50 --title "…" -- "…"   # waits for Home's background runs
+cantrip schedule wait --title "Waits for the laptop to wake, then installs the update" --until +48h -- /bin/bash waiter.sh
+cantrip schedule wait --title "…" --pid 4321    # list a waiter that's already running
+cantrip schedule describe com.example.nightly-sync --title "Sync the photo library"   # plain words for a Mac job
+cantrip schedule list | cancel ID | resume ID
+```
+
+`--at` takes "22:35" (today, or tomorrow once past), "2026-11-20 08:00" or "+90m"/"+2h"/"+1d". A
+wait Cantrip starts runs in its own session with its output in `~/.cache/Cantrip/home/waits/`.
+Background jobs a tab's Copilot shell started without registering still show, by their script's
+name and the tab that started them, so nothing runs out of sight. Every tab's instructions say to
+use these commands rather than detached `sleep` scripts. Steps, waits and Mac job names are kept in
+`~/.cache/Cantrip/home/upcoming.json` (0600).
+
+`GET /api/v1/home/upcoming` answers `{items, revision}` (or `{"unchanged": true}` for
+`?revision=` with the current one). Each item has `id`, `kind` (`task`, `step`, `wait`, `job`,
+`macJob`), `title`, optional `detail`, optional `nextRunAt` (Unix seconds), `schedule` (text),
+`owner`, optional `ownerTabID`, `state` (`scheduled`, `waiting`, `paused`), `group` (`next`,
+`waiting`, `repeating`, `paused`; items come sorted), optional `cancelLabel` and `confirm` (the
+question to ask), and `canResume`. `POST /api/v1/home/upcoming/cancel` or `/resume` with `{"id"}`
+answers the new list with a `message` saying what happened.
+
 ## Tabs' background tasks
 
 Background agents a tab starts (watchers such as `watch-testflight`, parallel

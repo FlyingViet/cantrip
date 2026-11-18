@@ -28,6 +28,7 @@ enum CantripCLI {
             case "env": return EnvironmentCLI.main(Array(arguments.dropFirst()))
             case "weather": try weather(Array(arguments.dropFirst()))
             case "build-queue": return try buildQueue(Array(arguments.dropFirst()))
+            case "schedule": return try schedule(Array(arguments.dropFirst()))
             case "privacy": return try privacy(Array(arguments.dropFirst()))
             case "muse": return try muse(Array(arguments.dropFirst()))
             default: print(usage)
@@ -90,6 +91,17 @@ enum CantripCLI {
                                   for simulatorPoolIdleMinutes, delete members the pool no longer keeps once free,
                                   and old temporary copies; prints the space freed
       cantrip build-queue         Builds running and waiting for a slot (buildQueueEnabled, buildQueueSlots)
+      cantrip schedule add --at TIME --title "What it will do" [--when-home-quiet] [--deadline TIME]
+                                  [--tab ID] -- MESSAGE
+                                  At TIME ("22:35", "2026-11-20 08:00", "+2h") Cantrip queues MESSAGE in the tab
+                                  (default: the one running this). Listed in Home's Upcoming until then
+      cantrip schedule wait --title "What it waits for" [--detail TEXT] [--until TIME] (--pid PID | -- COMMAND…)
+                                  Start a background waiter through Cantrip (or list one already running), so it
+                                  shows in Upcoming and can be stopped there
+      cantrip schedule describe LABEL --title TEXT [--detail TEXT]
+                                  Plain words for one of this Mac's recurring LaunchAgents in Upcoming
+      cantrip schedule list [--json] | cancel ID | resume ID
+                                  Everything scheduled to run later; cancel (a recurring one pauses) or resume
       cantrip muse [status|feeds|requests|log]
                                   Muse: login state, feeds, Home's requests and what was sent or read
                                   (read-only; Home's requests are sent only from their card)
@@ -200,6 +212,119 @@ enum CantripCLI {
                 throw Failure(message: usage, code: 2)
             }
         }
+    }
+
+    /// `cantrip schedule …` (HomeUpcoming).
+    static func schedule(_ arguments: [String]) throws -> Int32 {
+        var options: [String: String] = [:]
+        var flags: Set<String> = []
+        var words: [String] = []
+        var rest: [String]?
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            if argument == "--" {
+                rest = Array(arguments[(index + 1)...])
+                break
+            }
+            if ["--when-home-quiet", "--json"].contains(argument) {
+                flags.insert(argument)
+            } else if argument.hasPrefix("--") {
+                index += 1
+                guard index < arguments.count else { throw Failure(message: "\(argument) needs a value.", code: 2) }
+                options[argument] = arguments[index]
+            } else {
+                words.append(argument)
+            }
+            index += 1
+        }
+        let environment = ProcessInfo.processInfo.environment
+        let tab = options["--tab"] ?? environment[TabInsight.tabIDVariable]
+        func time(_ option: String) throws -> Double? {
+            guard let text = options[option] else { return nil }
+            guard let date = UpcomingTime.parse(text) else {
+                throw Failure(message: "\(option) \"\(text)\": use 22:35, 2026-11-20 08:00 or +2h.", code: 2)
+            }
+            return date.timeIntervalSince1970
+        }
+        var payload: [String: Any] = ["command": "schedule"]
+        switch words.first {
+        case "add":
+            guard let at = try time("--at"), let title = options["--title"] else {
+                throw Failure(message: "Usage: cantrip schedule add --at TIME --title TEXT [--when-home-quiet] [--deadline TIME] -- MESSAGE", code: 2)
+            }
+            let message = (rest ?? Array(words.dropFirst())).joined(separator: " ")
+            guard !message.isEmpty else { throw Failure(message: "Give the message after --.", code: 2) }
+            guard let tab else { throw Failure(message: "Run this from a Cantrip tab or pass --tab ID.", code: 2) }
+            payload.merge(["action": "add", "at": at, "title": title, "message": message, "tab": tab,
+                           "whenHomeIsQuiet": flags.contains("--when-home-quiet")]) { $1 }
+            payload["deadline"] = try time("--deadline")
+        case "wait":
+            guard let title = options["--title"] else {
+                throw Failure(message: "Usage: cantrip schedule wait --title TEXT [--until TIME] (--pid PID | -- COMMAND…)", code: 2)
+            }
+            payload.merge(["action": "wait", "title": title]) { $1 }
+            payload["detail"] = options["--detail"]
+            payload["until"] = try time("--until")
+            payload["tab"] = tab
+            if let raw = options["--pid"] {
+                guard let pid = Int(raw) else { throw Failure(message: "--pid needs a process ID.", code: 2) }
+                payload["pid"] = pid
+            } else if let command = rest, !command.isEmpty {
+                payload["pid"] = Int(try startWaiter(command))
+                payload["ownGroup"] = true
+            } else {
+                throw Failure(message: "Give --pid PID, or the command to start after --.", code: 2)
+            }
+        case "describe":
+            guard words.count == 2, let title = options["--title"] else {
+                throw Failure(message: "Usage: cantrip schedule describe LABEL --title TEXT [--detail TEXT]", code: 2)
+            }
+            payload.merge(["action": "describe", "label": words[1], "title": title]) { $1 }
+            payload["detail"] = options["--detail"]
+        case "cancel", "resume":
+            guard words.count == 2 else { throw Failure(message: "Usage: cantrip schedule \(words[0]) ID (from `cantrip schedule list`)", code: 2) }
+            payload.merge(["action": words[0], "id": words[1]]) { $1 }
+        case nil, "list":
+            payload["action"] = "list"
+        default:
+            throw Failure(message: "Usage: cantrip schedule add | wait | describe | list | cancel | resume (see `cantrip help`).", code: 2)
+        }
+        let reply = try request(payload)
+        if flags.contains("--json"), let items = reply["items"] {
+            let data = try JSONSerialization.data(withJSONObject: items, options: [.prettyPrinted, .sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+        } else {
+            print(reply["text"] as? String ?? "")
+        }
+        return 0
+    }
+
+    /// Starts `command` in its own session, detached from this shell, with its output in
+    /// ~/.cache/Cantrip/home/waits/ (0600). Returns its process ID.
+    static func startWaiter(_ command: [String]) throws -> pid_t {
+        let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cache/Cantrip/home/waits")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let log = folder.appendingPathComponent("\(UUID().uuidString).log").path
+        guard FileManager.default.createFile(atPath: log, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw Failure(message: "Couldn't create the waiter's log.")
+        }
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, 1, log, O_WRONLY | O_APPEND, 0o600)
+        posix_spawn_file_actions_adddup2(&actions, 1, 2)
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
+        let argv: [UnsafeMutablePointer<CChar>?] = command.map { strdup($0) } + [nil]
+        defer { argv.forEach { free($0) } }
+        var pid: pid_t = 0
+        let status = posix_spawnp(&pid, command[0], &actions, &attributes, argv, environ)
+        guard status == 0 else { throw Failure(message: "Couldn't start \(command[0]): \(String(cString: strerror(status)))") }
+        return pid
     }
 
     static func tab(_ arguments: [String]) throws -> Int32 {

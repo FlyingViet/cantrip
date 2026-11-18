@@ -753,6 +753,7 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         if !readOnly {
             guidance += "\n\n" + Self.subagentGuidance
             guidance += "\n\n" + SimulatorPool.agentGuidance(command: TabInsight.command)
+            guidance += "\n\n" + HomeUpcoming.agentGuidance(command: TabInsight.command)
         }
         if let homeProtocol { guidance += "\n\n" + homeProtocol }
         // Rules for this folder kept in Cantrip; their CLAUDE.md mirrors (for Claude in a terminal) are skipped.

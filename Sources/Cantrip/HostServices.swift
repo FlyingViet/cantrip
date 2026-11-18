@@ -83,6 +83,7 @@ final class HostServices {
             MacNotices.remove([id.uuidString])
         }
         CantripHomeStore.shared.attach(manager: manager)
+        HomeUpcoming.shared.start(manager: manager)
         AppSettings.shared.$cantripHomeEnabled
             .removeDuplicates()
             .receive(on: DispatchQueue.main)

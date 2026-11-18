@@ -349,6 +349,7 @@ extension SessionTabTests {
         let pageURL = URL(string: "http://localhost:\(port)/")!
         let (page, _) = try await client.data(from: pageURL)
         try await testRemoteViewsGrid(html: String(decoding: page, as: UTF8.self), baseURL: pageURL)
+        try await testRemoteUpcoming(html: String(decoding: page, as: UTF8.self), baseURL: pageURL)
         let (deleted, _) = try await request("/\(view.id)", method: "DELETE")
         let (gone, _) = try await request("/\(view.id)")
         precondition(deleted == 200 && gone == 404)

@@ -852,8 +852,8 @@ ask for it automatically; the native local-network route asks for it with
 current Cantrip Agent, Cantrip Gateway Mac and Mac Remote builds. Older
 clients keep receiving uncompressed responses.
 
-`GET /api/v1/home/tasks` and `GET /api/v1/home/artifacts` accept
-`?revision=<revision>` from their last response. While nothing has changed
+`GET /api/v1/home/tasks`, `GET /api/v1/home/artifacts` and `GET /api/v1/home/upcoming`
+(see [Upcoming](cantrip-home.md#upcoming)) accept `?revision=<revision>` from their last response. While nothing has changed
 they reply `{"unchanged":true,"revision":"…"}` instead of the full list (about
 640 KB for a large tracker workspace), as tab reads already do. A storage
 error always returns the full list with its error.

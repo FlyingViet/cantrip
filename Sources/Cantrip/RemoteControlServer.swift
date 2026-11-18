@@ -2775,6 +2775,8 @@ final class RemoteControlServer {
             sendJSON(["data": data.base64EncodedString(), "mimeType": "image/png"], on: connection)
         case "views":
             handleHomeViews(request, json: json, parts: parts, manager: manager, on: connection)
+        case "upcoming":
+            handleHomeUpcoming(request, json: json, parts: parts, on: connection)
         case "background":
             if parts.count == 6, parts[5] == "stop" {
                 // POST /api/v1/home/background/<run id>/stop
@@ -2807,6 +2809,56 @@ final class RemoteControlServer {
             sendBackground(backgroundSnapshot())
         default:
             sendError(404, "not found", on: connection)
+        }
+    }
+
+    /// `/api/v1/home/upcoming`: GET lists everything scheduled to run later (`HomeUpcoming`), with
+    /// `?revision=` answering {"unchanged": true}; POST `cancel` or `resume` with {"id"} acts on one
+    /// item and answers the new list with a `message` saying what happened.
+    @MainActor
+    private func handleHomeUpcoming(_ request: HTTPRequest, json: [String: Any]?, parts: [Substring],
+                                    on connection: RemoteRequestConnection) {
+        let upcoming = HomeUpcoming.shared
+        func list(message: String? = nil) {
+            let items = upcoming.items().map(\.json)
+            let data = (try? JSONSerialization.data(withJSONObject: items, options: [.sortedKeys])) ?? Data()
+            let revision = String(format: "%08x", data.reduce(into: UInt32(2_166_136_261)) { $0 = ($0 ^ UInt32($1)) &* 16_777_619 })
+            if message == nil, request.query("revision") == revision {
+                sendJSON(["unchanged": true, "revision": revision], on: connection)
+                return
+            }
+            var body: [String: Any] = ["items": items, "revision": revision]
+            body["message"] = message
+            sendJSON(body, on: connection)
+        }
+        if parts.count == 4 {
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            list()
+            return
+        }
+        guard parts.count == 5, ["cancel", "resume"].contains(String(parts[4])) else {
+            sendError(404, "not found", on: connection)
+            return
+        }
+        guard request.method == "POST" else {
+            sendError(405, "method not allowed", on: connection)
+            return
+        }
+        guard request.body.count <= 2_048, let id = json?["id"] as? String, !id.isEmpty else {
+            sendError(400, "Give the item's id.", on: connection)
+            return
+        }
+        do {
+            let message = parts[4] == "cancel" ? try upcoming.cancel(id) : try upcoming.resume(id)
+            Log.write("remote-control: Upcoming \(parts[4]) \(id.split(separator: ":").first ?? "")")
+            list(message: message)
+        } catch let error as HomeUpcoming.Failure {
+            sendError(error.status, error.message, on: connection)
+        } catch {
+            sendError(409, error.localizedDescription, on: connection)
         }
     }
 
@@ -4010,6 +4062,11 @@ private extension RemoteControlServer {
     #tasksPanel.views-wide{width:min(calc(100% - 24px),1440px)}.home-section{margin:0 0 14px}.home-section-heading{margin:2px 0 8px;font-size:13px}
     .home-section-toggle{display:inline-flex;align-items:center;gap:6px;min-height:32px;margin-left:-6px;padding:4px 10px 4px 6px;border:0;border-radius:8px;background:transparent;color:var(--secondary);font:inherit;font-size:13px;font-weight:650;letter-spacing:.02em;text-transform:uppercase;cursor:pointer}.home-section-toggle:hover{background:var(--surface);color:var(--text)}.home-section-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
     .home-section-chevron{display:inline-flex;width:14px;height:14px;transition:transform .15s}.home-section-chevron svg{width:14px;height:14px}.home-section-toggle[aria-expanded=true] .home-section-chevron{transform:rotate(90deg)}.home-section-count{color:var(--tertiary);font-weight:500}@media(prefers-reduced-motion:reduce){.home-section-chevron{transition:none}}
+    .upcoming-section .home-section-count{color:var(--secondary)}.upcoming-group{margin:0 0 12px}.upcoming-group-title{margin:4px 2px 6px;font-size:12px;font-weight:650;color:var(--secondary)}.upcoming-list{display:grid;gap:6px;margin:0;padding:0;list-style:none}
+    .upcoming-row{display:flex;align-items:center;gap:10px;min-height:44px;box-sizing:border-box;padding:8px 10px 8px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface)}.upcoming-row:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .upcoming-text{display:grid;flex:1;gap:2px;min-width:0}.upcoming-title{font-size:14px;font-weight:600;overflow-wrap:anywhere}.upcoming-meta,.upcoming-detail{color:var(--secondary);font-size:12px;line-height:1.35;overflow-wrap:anywhere}
+    #tasksPanel .upcoming-action{flex:none;min-height:34px;padding:4px 12px;font-size:13px}#tasksPanel .upcoming-action[aria-busy=true]{opacity:.55;cursor:progress}#tasksPanel .upcoming-more{min-height:34px;margin-top:6px;padding:4px 12px;font-size:13px}
+    .upcoming-note{margin:0 0 10px;padding:7px 10px;border-radius:8px;background:var(--surface-2);font-size:13px;overflow-wrap:anywhere}.upcoming-empty{margin:0 0 6px;padding:4px 2px;font-size:14px}
     .views-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0;padding:0;list-style:none}.view-thumb{position:relative;display:flex;flex-direction:column;box-sizing:border-box;height:196px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden}.views-grid.narrow .view-thumb{height:176px}.view-thumb:hover{background:var(--surface-2)}
     .view-thumb-open{position:absolute;inset:0;z-index:1;width:100%;height:100%;margin:0;padding:0;border:0;border-radius:inherit;background:transparent;cursor:pointer}.view-thumb-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     .view-thumb-body{display:flex;flex:1;flex-direction:column;min-height:0;pointer-events:none}.view-thumb-top{display:flex;align-items:center;gap:6px;min-width:0;padding:0 2px}.view-thumb-icon{width:17px;height:17px;color:var(--accent)}.view-thumb-name{flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:14px;font-weight:650}.view-thumb-badge{width:13px;height:13px;color:var(--secondary)}
@@ -6203,10 +6260,12 @@ private extension RemoteControlServer {
     function badgeTone(value){const text=value.trim().toLowerCase();
       return text.includes("reject")||text.includes("declin")?"rejected":text.includes("offer")?"offer":text==="applied"||text==="application received"?"applied":""}
     function openTasks(){closeTasks();tasksState={token,taskID:null,tasks:[],workspaceCards:{},recordCards:new Map(),revision:null,loaded:false,failed:false,loading:false,openRecords:new Set(),
-        views:[],viewsRevision:null,viewsSupported:false,viewsLoading:false,viewID:null,view:null,viewFailed:false,viewFetchedAt:0,timer:setInterval(()=>{loadTasks();refreshOpenRecordCards()},10000)};
+        views:[],viewsRevision:null,viewsSupported:false,viewsLoading:false,viewID:null,view:null,viewFailed:false,viewFetchedAt:0,
+        upcoming:null,upcomingRevision:null,upcomingLoading:false,upcomingUnsupported:false,upcomingShowAll:false,upcomingBusy:null,upcomingNote:"",upcomingNoteTimer:null,upcomingGeneration:0,
+        timer:setInterval(()=>{loadTasks();refreshOpenRecordCards()},10000)};
       $("tasksSearch").value="";setText($("tasksError"),"");renderTasks();$("tasksPanel").showModal();loadTasks()}
-    function closeTasks(){if(tasksState)clearInterval(tasksState.timer);tasksState=null}
-    async function loadTasks(){const state=tasksState;if(!state||state.loading)return;state.loading=true;
+    function closeTasks(){if(tasksState){clearInterval(tasksState.timer);clearTimeout(tasksState.upcomingNoteTimer)}tasksState=null}
+    async function loadTasks(){const state=tasksState;if(!state||state.loading)return;state.loading=true;loadUpcoming();
       try{const data=await api("/api/v1/home/tasks"+(state.loaded&&state.revision?`?revision=${encodeURIComponent(state.revision)}`:""));if(state!==tasksState)return;state.failed=false;
         if(data.unchanged){setText($("tasksError"),"");if(state.viewsSupported)loadViews();return}
         setText($("tasksError"),data.error||"");if(data.supportsViews===true)state.viewsSupported=true;
@@ -6232,11 +6291,11 @@ private extension RemoteControlServer {
     function showTask(id){if(!tasksState)return;const previous=tasksState.taskID;tasksState.taskID=id;tasksState.openRecords.clear();$("tasksSearch").value="";setText($("tasksStatus"),"");renderTasks();$("tasksPanel").scrollTop=0;
       if(id)$("tasksTitle").focus();else Array.from($("tasksBody").querySelectorAll("[data-focus-key]")).find(node=>node.dataset.focusKey===`task:${previous}`)?.focus()}
     function taskListView(state){if(!state.loaded)return homeNode("p","muted tasks-empty","Loading tasks…");
-      const views=viewListSection(state),emptyText=state.failed?"Tasks are unavailable right now.":"No tasks yet. Ask Cantrip Home to track or schedule something.";
-      if(!views){if(!state.tasks.length)return homeNode("p","muted tasks-empty",emptyText);const list=homeNode("ul","task-list");taskListItems(state,list);return list}
+      const views=viewListSection(state),upcoming=upcomingSection(state),emptyText=state.failed?"Tasks are unavailable right now.":"No tasks yet. Ask Cantrip Home to track or schedule something.";
+      if(!views&&!upcoming){if(!state.tasks.length)return homeNode("p","muted tasks-empty",emptyText);const list=homeNode("ul","task-list");taskListItems(state,list);return list}
       const box=homeNode("div"),collapsed=homeSectionCollapsed("tasks"),body=homeNode(state.tasks.length?"ul":"div",state.tasks.length?"task-list":"");
       if(!collapsed){if(state.tasks.length)taskListItems(state,body);else body.append(homeNode("p","muted tasks-empty",emptyText))}
-      box.append(views,homeSection("tasks","Tasks",state.tasks.length,"task",body));return box}
+      box.append(...[views,upcoming].filter(Boolean),homeSection("tasks","Tasks",state.tasks.length,"task",body));return box}
     function taskListItems(state,list){
       for(const task of state.tasks){const item=homeNode("li"),card=homeNode("button","task-card");card.type="button";card.dataset.focusKey=`task:${task.id}`;
         const meta=[task.hasSchedule===false?"No schedule":task.enabled?task.schedule.summary:`Paused · ${task.schedule.summary}`];
@@ -6245,16 +6304,75 @@ private extension RemoteControlServer {
         card.append(homeNode("strong","task-title",task.title),homeNode("span","task-meta",meta.join(" · ")));
         if(task.runs?.[0]?.summary)card.append(homeNode("span","task-run",task.runs[0].summary));
         card.onclick=()=>showTask(task.id);item.append(card);list.append(item)}}
+    // Upcoming (docs/cantrip-home.md "Upcoming"): everything set to run later, in the Mac's order and groups. Cancel, Stop and Pause
+    // ask first with the Mac's own question; Resume acts at once. The section shows only when the Mac serves the list.
+    const upcomingGroups=[["next","Next up"],["waiting","Waiting"],["repeating","Repeating"],["paused","Paused"]],upcomingNextLimit=6;
+    function upcomingSections(items,showAll){const known=new Set(upcomingGroups.map(([id])=>id));
+      return upcomingGroups.map(([id,title])=>{const all=items.filter(item=>(known.has(item?.group)?item.group:"next")===id);
+        return {id,title,total:all.length,items:id==="next"&&!showAll?all.slice(0,upcomingNextLimit):all}}).filter(section=>section.total)}
+    function upcomingDay(date,timeZone){const parts=new Intl.DateTimeFormat("en-US",{timeZone,year:"numeric",month:"numeric",day:"numeric"}).formatToParts(date),part=type=>Number(parts.find(item=>item.type===type)?.value);
+      return Date.UTC(part("year"),part("month")-1,part("day"))/86400000}
+    // nextRunAt (Unix seconds) in the viewer's locale, relative to today: "Today 10:35 PM", "Tomorrow 3:00 AM", "Friday 9:50 AM", "Nov 28, 9:50 AM".
+    function upcomingWhen(seconds,now=new Date(),locale=undefined,timeZone=undefined){const date=new Date(Number(seconds)*1000);if(seconds===null||seconds===undefined||isNaN(date))return "";
+      const days=Math.round(upcomingDay(date,timeZone)-upcomingDay(now,timeZone)),time=date.toLocaleTimeString(locale,{timeZone,hour:"numeric",minute:"2-digit"});
+      if(days===0)return `Today ${time}`;if(days===1)return `Tomorrow ${time}`;if(days===-1)return `Yesterday ${time}`;
+      if(days>1&&days<7)return `${date.toLocaleDateString(locale,{timeZone,weekday:"long"})} ${time}`;
+      const year=value=>new Intl.DateTimeFormat("en-US",{timeZone,year:"numeric"}).format(value);
+      return `${date.toLocaleDateString(locale,{timeZone,month:"short",day:"numeric",...(year(date)===year(now)?{}:{year:"numeric"})})}, ${time}`}
+    // The row's second line: when (or the schedule when there's no time), then the schedule and who set it up, each once.
+    function upcomingMeta(item,now,locale,timeZone){const when=upcomingWhen(item.nextRunAt,now,locale,timeZone),parts=[when||item.schedule,when?item.schedule:null,item.owner];
+      return parts.filter((part,index)=>part&&parts.indexOf(part)===index).join(" · ")}
+    function upcomingAction(item){if(item.canResume===true)return {path:"resume",label:"Resume"};return item.cancelLabel?{path:"cancel",label:item.cancelLabel}:null}
+    function upcomingSection(state){const items=state.upcoming;if(!Array.isArray(items))return null;const body=homeNode("div","upcoming-body");
+      if(!homeSectionCollapsed("upcoming")){if(state.upcomingNote)body.append(homeNode("p","upcoming-note",state.upcomingNote));
+        if(!items.length)body.append(homeNode("p","muted upcoming-empty","Nothing scheduled"));
+        for(const section of upcomingSections(items,state.upcomingShowAll)){const group=homeNode("div","upcoming-group"),heading=homeNode("h4","upcoming-group-title",section.title),list=homeNode("ul","upcoming-list");
+          heading.id=`upcomingGroup-${section.id}`;list.setAttribute("aria-labelledby",heading.id);for(const item of section.items)list.append(upcomingRow(state,item));group.append(heading,list);
+          if(section.items.length<section.total){const more=homeNode("button","control upcoming-more",`Show all ${section.total}`);more.type="button";more.dataset.focusKey="upcoming-more";
+            more.setAttribute("aria-label",`Show all ${section.total} in ${section.title}`);
+            more.onclick=()=>{state.upcomingShowAll=true;renderTasks();$("tasksBody").querySelectorAll(`#upcomingGroup-${section.id} + .upcoming-list > li`)[section.items.length]?.focus()};group.append(more)}
+          body.append(group)}}
+      return homeSection("upcoming","Upcoming",items.length,"item",body,true)}
+    function upcomingRow(state,item){const row=homeNode("li","upcoming-row"),text=homeNode("div","upcoming-text"),action=upcomingAction(item);row.tabIndex=-1;row.dataset.focusKey=`upcoming-row:${item.id}`;
+      text.append(homeNode("strong","upcoming-title",item.title||"Untitled"),homeNode("span","upcoming-meta",upcomingMeta(item)));if(item.detail)text.append(homeNode("span","upcoming-detail",item.detail));row.append(text);
+      if(action){const button=homeNode("button","control upcoming-action",action.label);button.type="button";button.dataset.focusKey=`upcoming:${item.id}`;button.setAttribute("aria-label",`${action.label} ${item.title||"Untitled"}`);
+        if(state.upcomingBusy===item.id){button.setAttribute("aria-disabled","true");button.setAttribute("aria-busy","true")}
+        button.onclick=()=>{if(tasksState?.upcomingBusy)return;if(action.path==="resume")runUpcoming(item,action);else confirmUpcoming(item,action,button)};row.append(button)}
+      return row}
+    // A poll that started before a Cancel or Resume answered never puts the old list back (upcomingGeneration).
+    async function loadUpcoming(){const state=tasksState;if(!state||state.upcomingLoading||state.upcomingUnsupported)return;state.upcomingLoading=true;const generation=state.upcomingGeneration;
+      try{const data=await api("/api/v1/home/upcoming"+(state.upcomingRevision?`?revision=${encodeURIComponent(state.upcomingRevision)}`:""));if(state!==tasksState||data.unchanged||generation!==state.upcomingGeneration)return;
+        if(applyUpcoming(state,data)&&!state.taskID&&!state.viewID)renderTasks()}
+      catch(error){if(state===tasksState&&(error.status===404||error.status===405))state.upcomingUnsupported=true}
+      finally{state.upcomingLoading=false}}
+    function applyUpcoming(state,data){if(!Array.isArray(data?.items))return false;state.upcoming=data.items.filter(item=>item&&typeof item.id==="string");state.upcomingRevision=data.revision||null;return true}
+    // The same dialog as a view's buttons: the Mac's question, the item's own label, and Keep (focused first).
+    function confirmUpcoming(item,action,control){const dialog=$("viewConfirm"),message=$("viewConfirmMessage"),keep=$("viewConfirmCancel");
+      setText($("viewConfirmTitle"),item.confirm||`${action.label} “${item.title||"Untitled"}”?`);setText(message,"");message.hidden=true;$("viewConfirmGo").textContent=action.label;keep.textContent="Keep";dialog.returnValue="";
+      dialog.onclose=()=>{dialog.onclose=null;keep.textContent="Cancel";if(control.isConnected)control.focus();if(dialog.returnValue==="go")runUpcoming(item,action)};dialog.showModal();keep.focus()}
+    async function runUpcoming(item,action){const state=tasksState;if(!state||state.upcomingBusy)return;const order=(state.upcoming||[]).map(entry=>entry.id);
+      state.upcomingBusy=item.id;setText($("tasksError"),"");renderTasks();
+      try{const data=await api(`/api/v1/home/upcoming/${action.path}`,{method:"POST",body:JSON.stringify({id:item.id})});if(state!==tasksState)return;
+        state.upcomingGeneration++;applyUpcoming(state,data);showUpcomingNote(state,data.message||"")}
+      catch(error){if(state===tasksState)setText($("tasksError"),`Couldn't ${action.label.toLowerCase()} “${item.title||"Untitled"}”: ${error.message}`)}
+      finally{if(state===tasksState){state.upcomingBusy=null;if(!state.taskID&&!state.viewID){renderTasks();const body=$("tasksBody");
+        // Its button keeps focus when it's still drawn; else its row, else the next row still drawn (a cancelled step leaves,
+        // a resumed task may move past Show all), else the heading.
+        if(!body.contains(document.activeElement)){const rows=new Map(Array.from(body.querySelectorAll(".upcoming-row")).map(node=>[node.dataset.focusKey.slice(13),node]));
+          (rows.get(item.id)||rows.get(order.slice(order.indexOf(item.id)+1).find(id=>rows.has(id)))||body.querySelector('[data-focus-key="section:upcoming"]'))?.focus()}}}}}
+    // The Mac's message shows for a few seconds; the status region reads it out.
+    function showUpcomingNote(state,message){clearTimeout(state.upcomingNoteTimer);state.upcomingNote=message;setText($("tasksStatus"),message);
+      state.upcomingNoteTimer=message?setTimeout(()=>{if(state!==tasksState)return;state.upcomingNote="";if(!state.taskID&&!state.viewID)renderTasks()},6000):null}
     // Views (docs/views.md): Home's saved screens, pinned first, as a grid of thumbnails. Cantrip sends each as a card built from its sources.
-    // Each Views/Tasks heading collapses its section; this browser remembers it ("1" collapsed).
-    const homeSectionKeys={views:"cantrip.home.views.collapsed",tasks:"cantrip.home.tasks.collapsed"},viewThumbs=new Map(),viewThumbsLoading=new Set();
+    // Each Views/Upcoming/Tasks heading collapses its section; this browser remembers it ("1" collapsed).
+    const homeSectionKeys={views:"cantrip.home.views.collapsed",upcoming:"cantrip.home.upcoming.collapsed",tasks:"cantrip.home.tasks.collapsed"},viewThumbs=new Map(),viewThumbsLoading=new Set();
     let viewsGridWidth=0,viewsGridObserver=null,lastViewsWide=false;
     function homeSectionCollapsed(name){try{return localStorage.getItem(homeSectionKeys[name])==="1"}catch{return false}}
     function setHomeSectionCollapsed(name,collapsed){try{localStorage.setItem(homeSectionKeys[name],collapsed?"1":"0")}catch{}}
-    function homeSection(name,title,count,noun,body){const collapsed=homeSectionCollapsed(name),section=homeNode("div",`home-section ${name}-section`),heading=homeNode("h3","home-section-heading"),toggle=homeNode("button","home-section-toggle"),chevron=homeNode("span","home-section-chevron");
+    function homeSection(name,title,count,noun,body,alwaysCount=false){const collapsed=homeSectionCollapsed(name),section=homeNode("div",`home-section ${name}-section`),heading=homeNode("h3","home-section-heading"),toggle=homeNode("button","home-section-toggle"),chevron=homeNode("span","home-section-chevron");
       toggle.type="button";toggle.dataset.focusKey=`section:${name}`;toggle.setAttribute("aria-expanded",String(!collapsed));toggle.setAttribute("aria-controls",`${name}SectionBody`);toggle.setAttribute("aria-label",`${title}, ${count} ${count===1?noun:noun+"s"}`);
       chevron.setAttribute("aria-hidden","true");chevron.innerHTML="<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>";
-      toggle.append(chevron,homeNode("span","home-section-title",title));if(collapsed)toggle.append(homeNode("span","home-section-count",`· ${count}`));
+      toggle.append(chevron,homeNode("span","home-section-title",title));if(collapsed||alwaysCount)toggle.append(homeNode("span","home-section-count",`· ${count}`));
       toggle.onclick=()=>{setHomeSectionCollapsed(name,!homeSectionCollapsed(name));renderTasks();$("tasksBody").querySelector(`[data-focus-key="section:${name}"]`)?.focus()};
       body.id=`${name}SectionBody`;body.hidden=collapsed;heading.append(toggle);section.append(heading,body);return section}
     // One column count on every client: columns at least 160 wide under 600, else 240, 12 apart, 1 to 6 of them.

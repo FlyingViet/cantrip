@@ -125,7 +125,10 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
     func developerInstructions(workdir: String) -> String {
         var parts = [RemoteGeneratedImages.agentGuidance(sessionFilesFolder: false), ReplyVisibility.guidance,
                      CardComposer.richCardGuidance(command: TabInsight.command)]
-        if !readOnly { parts.append(SimulatorPool.agentGuidance(command: TabInsight.command)) }
+        if !readOnly {
+            parts.append(SimulatorPool.agentGuidance(command: TabInsight.command))
+            parts.append(HomeUpcoming.agentGuidance(command: TabInsight.command))
+        }
         if let homeProtocol { parts.append(homeProtocol) }
         if let rules = FolderInstructions().guidance(for: workdir) { parts.append(rules) }
         return parts.joined(separator: "\n\n")
