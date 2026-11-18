@@ -119,6 +119,11 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         while size() > budget, replayed > 0 {
             history.removeFirst()
             replayed -= 1
+            // A replayed tool result can't outlive the call before it.
+            while replayed > 0, history.first?["role"] as? String == "tool" {
+                history.removeFirst()
+                replayed -= 1
+            }
         }
         return size() <= budget
     }

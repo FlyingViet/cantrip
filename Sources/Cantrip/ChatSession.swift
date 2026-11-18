@@ -14,6 +14,8 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     /// UTF-8 length of `text` when each tool call started: text before the last one is progress
     /// notes, text after it the answer (`workSplit`). Saved with the transcript.
     var toolMarks: [Int] = []
+    /// Private Local only: this reply's tool calls, replayed with later questions. Saved with the transcript.
+    var toolCalls: [ConversationToolCall] = []
     /// A tool call started since the last text: the next text starts a new paragraph.
     var breaksBeforeText = false
     /// Streamed reasoning (thinking deltas) — shown collapsed in the UI.
@@ -68,7 +70,7 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case id, role, text, author, runID, apps, promptUsage, delegations, handoffResult, freshStart, childResult
         case threadID, continuesRunID, linkPreviews, placeCard, weatherCard, cards, builds, privacy, muse, museRequest
-        case toolMarks
+        case toolMarks, toolCalls
     }
 }
 
@@ -203,6 +205,7 @@ extension ChatMessage {
         muse = try? container.decodeIfPresent(MuseExchange.self, forKey: .muse)
         museRequest = try? container.decodeIfPresent(MuseRequestCard.self, forKey: .museRequest)
         toolMarks = (try? container.decodeIfPresent([Int].self, forKey: .toolMarks)) ?? []
+        toolCalls = (try? container.decodeIfPresent([ConversationToolCall].self, forKey: .toolCalls)) ?? []
         // A saved build still running was cut off (Cantrip restarted): nothing will finish it.
         builds = ((try? container.decodeIfPresent([BuildRun].self, forKey: .builds)) ?? []).map { build in
             var build = build
@@ -250,6 +253,7 @@ extension ChatMessage {
         try container.encodeIfPresent(muse, forKey: .muse)
         try container.encodeIfPresent(museRequest, forKey: .museRequest)
         if !toolMarks.isEmpty { try container.encode(toolMarks, forKey: .toolMarks) }
+        if !toolCalls.isEmpty { try container.encode(toolCalls, forKey: .toolCalls) }
     }
 }
 
@@ -3595,7 +3599,7 @@ final class ChatSession: ObservableObject {
                 // user turn: individual seat answers (author set) stay out
                 // of history — the chair's Verdict IS the turn's answer.
                 if let author = message.author, !author.hasPrefix("Verdict") { continue }
-                turns.append(ConversationTurn(user: user, assistant: message.text))
+                turns.append(ConversationTurn(user: user, assistant: message.text, toolCalls: message.toolCalls))
                 pendingUser = nil
             case .error:
                 pendingUser = nil
@@ -5397,6 +5401,11 @@ final class ChatSession: ObservableObject {
             if messages[messageIndex].role == .assistant {
                 messages[messageIndex].toolMarks.append(messages[messageIndex].text.utf8.count)
                 messages[messageIndex].breaksBeforeText = true
+                if isLocalPrivate {
+                    let input = activity.input ?? ""
+                    messages[messageIndex].toolCalls.append(ConversationToolCall(
+                        name: activity.toolName, arguments: input.count <= 2_000 ? input : "{}"))
+                }
             }
         }
         attachApp(from: activity, toMessageAt: messageIndex)

@@ -127,10 +127,13 @@ extension SessionTabTests {
         func offered() -> [String] { session.openAITools().compactMap { ($0["function"] as? [String: Any])?["name"] as? String } }
         precondition(offered() == ["mcp__notes__notes_search", "mcp__notes__notes_read", "mcp__notes__notes_count",
                                    PrivateLocalToolSession.searchName], "Offered: \(offered())")
-        precondition(session.instructions.contains("Servers attached now: notes (3 tools).")
-                     && session.instructions.contains("load on demand with search_tools (by name or topic):\n- tracker: get_issue, get_issue_1")
-                     && session.instructions.contains("can't send, create, change, delete"),
-                     "The model is told which servers are attached and which tools load on demand")
+        // 2026-11-18 02:00 UTC is still the 17th in Los Angeles.
+        let instructions = session.instructions(now: Date(timeIntervalSince1970: 1_794_967_200), zone: TimeZone(identifier: "America/Los_Angeles")!)
+        precondition(instructions.contains("Servers attached now: notes (3 tools).")
+                     && instructions.contains("load on demand with search_tools (by name or topic):\n- tracker: get_issue, get_issue_1")
+                     && instructions.contains("can't send, create, change, delete")
+                     && instructions.hasSuffix("Today is Tuesday, November 17, 2026 (time zone America/Los_Angeles)."),
+                     "The model is told which servers are attached, which tools load on demand, and the local date: \(instructions)")
         let before = await session.call("mcp__tracker__get_issue", arguments: ["id": "DEMO-1"])
         precondition(before.allowed && before.success && before.output.contains("DEMO-1"),
                      "An on-demand tool can be called by its name")
@@ -313,8 +316,40 @@ extension SessionTabTests {
                      "The tool step shows in the transcript: \(answer.activities)")
         precondition(!sentHistory.contains("I do not have access to your notes"), "Turns above the divider aren't sent")
         let savedTranscript = try JSONDecoder().decode([ChatMessage].self, from: Data(contentsOf: SessionManager.chatsDir.appendingPathComponent("\(chat.id.uuidString).json")))
-        precondition(savedTranscript.last?.toolMarks.count == 1 && savedTranscript.last?.text == answer.text,
-                     "The saved reply keeps where its tool step was (activities are live-only in every tab)")
+        precondition(savedTranscript.last?.toolMarks.count == 1 && savedTranscript.last?.text == answer.text
+                     && savedTranscript.last?.toolCalls.map(\.name) == ["mcp__notes__notes_search"]
+                     && savedTranscript.last?.toolCalls.first?.arguments.contains("Example Co") == true,
+                     "The saved reply keeps where its tool step was and what it called (activities are live-only in every tab)")
+
+        // A follow-up replays the earlier call with its answer, so the model looks things up again.
+        var followUp: [[String: Any]] = []
+        fixture.chatResponder = { request in
+            followUp = ((try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["messages"] as? [[String: Any]]) ?? []
+            return sse([#"{"content":"Still 2 notes."}"#], finish: "stop")
+        }
+        chat.submitRemote("Any new notes about Example Co?")
+        try await waitForJournalTest(timeout: 30) { !chat.isStreaming && chat.messages.last?.text == "Still 2 notes." }
+        let replayedCalls = followUp.compactMap { $0["tool_calls"] as? [[String: Any]] }.flatMap { $0 }
+            .compactMap { $0["function"] as? [String: Any] }
+        precondition(followUp.suffix(5).map { $0["role"] as? String ?? "" } == ["user", "assistant", "tool", "assistant", "user"]
+                     && replayedCalls.map { $0["name"] as? String } == ["mcp__notes__notes_search"]
+                     && (replayedCalls.first?["arguments"] as? String) == #"{"query":"Example Co"}"#
+                     && followUp.suffix(3).first?["content"] as? String == PrivateLocalClient.earlierResult
+                     && followUp.suffix(2).first?["content"] as? String == answer.text,
+                     "The earlier answer is replayed after its tool call: \(followUp.map { $0["role"] ?? "" })")
+
+        // Trimming the oldest turns never leaves a tool result without its call.
+        let answerText = "Two notes.", prompt = "And now?"
+        var history = PrivateLocalClient.replayed([
+            ConversationContextMessage(role: "user", content: String(repeating: "Example Co notes? ", count: 200)),
+            ConversationContextMessage(role: "assistant", content: answerText,
+                                       toolCalls: [ConversationToolCall(name: "mcp__notes__notes_search", arguments: "{}")]),
+        ]) + [["role": "user", "content": prompt]]
+        var replayedCount = history.count - 1
+        let fitsWithOrphan = [PrivateLocalClient.earlierResult, answerText, prompt].reduce(0) { $0 + HomeLocalProfile.estimate($1) + 4 }
+        precondition(OpenAICompatibleBackend.fit(&history, budget: fitsWithOrphan, replayed: &replayedCount)
+                     && history.map { $0["role"] as? String ?? "" } == ["assistant", "user"],
+                     "The orphaned tool result goes with its call: \(history.map { $0["role"] ?? "" })")
 
         print("Private Local tools: read-only filter, relay catalog, on-demand tools, refusals, budget, step limit and settings passed")
     }

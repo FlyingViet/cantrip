@@ -400,14 +400,15 @@ final class PrivateLocalToolSession: @unchecked Sendable {
     }
 
     /// What the model is told about its tools (added to the system prompt).
-    var instructions: String {
+    func instructions(now: Date = Date(), zone: TimeZone = .current) -> String {
         // Short on purpose: tool names that differ from the attached functions, or notes about earlier
         // no-tools replies, made the model skip tools more often (Studio Qwen, 2026-11-17).
         var text = """
         Tools: you can look things up with read-only tools (attached to this request as functions). They only \
         read: you can't send, create, change, delete, buy or run anything. If asked to, say that Private Local \
         can only read and suggest asking in another Cantrip tab. Use a tool when the answer depends on the \
-        user's data or a service; quote what you found briefly, without inventing details.
+        user's data or a service; quote what you found briefly, without inventing details. Data changes: look \
+        it up again for each new question, even if this conversation already answered something similar.
         """
         let always = servers.filter { direct.contains($0.name) && !$0.tools.isEmpty }
         if !always.isEmpty {
@@ -418,7 +419,13 @@ final class PrivateLocalToolSession: @unchecked Sendable {
             text += "\n\nMore read-only tools load on demand with \(Self.searchName) (by name or topic):\n"
                 + groups.map { "- \($0.name): " + $0.tools.map(\.name).joined(separator: ", ") }.joined(separator: "\n")
         }
-        return text
+        // The date only, so the prompt (and the server's cache of it) changes once a day. Without
+        // it the model guessed dates for "today" (2026-11-17: a July date).
+        let day = DateFormatter()
+        day.locale = Locale(identifier: "en_US_POSIX")
+        day.timeZone = zone
+        day.dateFormat = "EEEE, MMMM d, yyyy"
+        return text + "\n\nToday is \(day.string(from: now)) (time zone \(zone.identifier))."
     }
 
     func search(_ query: String) -> String {

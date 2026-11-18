@@ -1,14 +1,22 @@
 import Foundation
 import NaturalLanguage
 
+/// A tool call an earlier Private Local reply made (its result isn't kept).
+struct ConversationToolCall: Equatable, Codable {
+    let name: String
+    let arguments: String
+}
+
 struct ConversationTurn: Equatable {
     let user: String
     let assistant: String
+    var toolCalls: [ConversationToolCall] = []
 }
 
 struct ConversationContextMessage: Equatable {
     let role: String
     let content: String
+    var toolCalls: [ConversationToolCall] = []
 }
 
 struct ConversationContextSelection: Equatable {
@@ -238,7 +246,7 @@ enum ConversationContextBuilder {
                 : turn.assistant
             return [
                 ConversationContextMessage(role: "user", content: user),
-                ConversationContextMessage(role: "assistant", content: assistant),
+                ConversationContextMessage(role: "assistant", content: assistant, toolCalls: turn.toolCalls),
             ]
         }
     }

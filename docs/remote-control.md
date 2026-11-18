@@ -143,7 +143,11 @@ allowed tools and the tools left out.
   it skip its new tools.
 - While tools are on, the original default system prompt ("You have no tools")
   is replaced by one that describes them; a custom prompt is kept and the tool
-  rules are added after it.
+  rules are added after it. The rules include today's date and time zone (date
+  only, so the server's prompt cache lasts the day).
+- Each reply's tool calls (names and arguments, not results) are saved with it,
+  and later requests replay them before that answer. Shown as plain text, earlier
+  answers were repeated instead of looked up again.
 
 Both native apps need updated builds and the host must reopen to activate it.
 The paired API advertises `isLocalPrivate`/`supportsPrivateLocalSettings`, with

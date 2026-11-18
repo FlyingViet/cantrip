@@ -142,15 +142,35 @@ final class PrivateLocalClient: NSObject, URLSessionTaskDelegate {
         onEvent(.done)
     }
 
+    static let earlierResult = "(earlier output not kept)"
+
+    /// Earlier turns for a reply that may use tools. A reply that used tools is replayed with its
+    /// calls (results left out): shown as plain text, its answers were repeated instead of looked
+    /// up again (Studio Qwen, 2026-11-17).
+    static func replayed(_ messages: [ConversationContextMessage]) -> [[String: Any]] {
+        messages.enumerated().flatMap { index, message -> [[String: Any]] in
+            guard message.role == "assistant", !message.toolCalls.isEmpty else {
+                return [["role": message.role, "content": message.content]]
+            }
+            let calls: [[String: Any]] = message.toolCalls.enumerated().map { offset, call in
+                let parsed = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any] ?? [:]
+                let arguments = String(decoding: (try? JSONSerialization.data(withJSONObject: parsed, options: .sortedKeys)) ?? Data("{}".utf8), as: UTF8.self)
+                return ["id": "earlier_\(index)_\(offset)", "type": "function", "function": ["name": call.name, "arguments": arguments]]
+            }
+            return [["role": "assistant", "content": NSNull(), "tool_calls": calls]]
+                + calls.map { ["role": "tool", "tool_call_id": $0["id"] as? String ?? "", "content": earlierResult] }
+                + [["role": "assistant", "content": message.content]]
+        }
+    }
+
     /// Replies that may use read-only tools: each step streams; requested tools run (refused when
     /// not offered) and show as tool steps; older tool output is left out first to fit the window.
     private func chatWithTools(_ configuration: PrivateLocalConfiguration, request input: BackendRequest,
                                tools: PrivateLocalToolSession, onEvent: @escaping (BackendEvent) -> Void) async throws {
         let base = configuration.systemPrompt == PrivateLocalConfiguration().systemPrompt
             ? "You are a helpful private assistant." : configuration.systemPrompt
-        let system = (base.isEmpty ? "" : base + "\n\n") + tools.instructions
-        var history: [[String: Any]] = (input.replay ?? ConversationContextBuilder.chatMessages(for: input.userMessage, turns: input.previousTurns))
-            .map { ["role": $0.role, "content": $0.content] }
+        let system = (base.isEmpty ? "" : base + "\n\n") + tools.instructions()
+        var history = Self.replayed(input.replay ?? ConversationContextBuilder.chatMessages(for: input.userMessage, turns: input.previousTurns))
         var replayed = history.count
         history.append(["role": "user", "content": input.prompt])
         var steps = 0
