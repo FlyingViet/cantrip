@@ -319,6 +319,12 @@ struct CantripHomeTasksView: View {
     @State private var views: [CantripHomeViewSummary]
     @State private var viewsSupported: Bool
     @State private var viewsError: String?
+    @State private var upcoming: [CantripHomeUpcomingItem]
+    @State private var upcomingSupported: Bool
+    @State private var upcomingError: String?
+    @State private var upcomingChangingID: String?
+    /// What the last Upcoming change did (or why it failed), shown for a moment over the list.
+    @State private var upcomingStatus: (text: String, failed: Bool)?
     @State private var homeDataError: String?
     @State private var isLoadingHomeData: Bool
     @State private var homeAvailable: Bool
@@ -339,6 +345,10 @@ struct CantripHomeTasksView: View {
         _views = State(initialValue: remote.homeViews)
         _viewsSupported = State(initialValue: remote.homeViewsSupported)
         _viewsError = State(initialValue: remote.homeViewsError)
+        _upcoming = State(initialValue: remote.homeUpcoming)
+        _upcomingSupported = State(initialValue: remote.homeUpcomingSupported)
+        _upcomingError = State(initialValue: remote.homeUpcomingError)
+        _upcomingChangingID = State(initialValue: remote.homeUpcomingChangingID)
         _supportsReordering = State(initialValue: remote.homeTasksSupportReordering)
         _isMutating = State(initialValue: remote.isMutating)
         _homeDataError = State(initialValue: remote.homeDataError)
@@ -349,6 +359,7 @@ struct CantripHomeTasksView: View {
 
     /// Folded sections, remembered on this device.
     @AppStorage(CantripHomeListSection.views.defaultsKey) private var viewsCollapsed = false
+    @AppStorage(CantripHomeListSection.upcoming.defaultsKey) private var upcomingCollapsed = false
     @AppStorage(CantripHomeListSection.tasks.defaultsKey) private var tasksCollapsed = false
 
     /// Views show only when the Mac serves them (`supportsViews`) and has some.
@@ -365,7 +376,7 @@ struct CantripHomeTasksView: View {
                     description: Text(detailError
                         ?? "Enable Cantrip Home in the Mac app's settings.")
                 )
-            } else if tasks.isEmpty, shownViews.isEmpty, !isLoadingHomeData {
+            } else if tasks.isEmpty, shownViews.isEmpty, upcoming.isEmpty, !isLoadingHomeData {
                 ContentUnavailableView {
                     Label("No tasks yet", systemImage: "checklist")
                 } description: {
@@ -381,13 +392,27 @@ struct CantripHomeTasksView: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
-                    if shownViews.isEmpty {
+                    if shownViews.isEmpty, !upcomingSupported {
                         taskRows
                     } else {
-                        Section {
-                            if !viewsCollapsed { viewGrid }
-                        } header: {
-                            CantripHomeSectionHeader(section: .views, count: shownViews.count, collapsed: $viewsCollapsed)
+                        if !shownViews.isEmpty {
+                            Section {
+                                if !viewsCollapsed { viewGrid }
+                            } header: {
+                                CantripHomeSectionHeader(section: .views, count: shownViews.count, collapsed: $viewsCollapsed)
+                            }
+                        }
+                        if upcomingSupported {
+                            Section {
+                                if !upcomingCollapsed {
+                                    CantripHomeUpcomingRows(items: upcoming, error: upcomingError,
+                                                            changingID: upcomingChangingID, remote: remote) { text, failed in
+                                        withAnimation { upcomingStatus = (text, failed) }
+                                    }
+                                }
+                            } header: {
+                                CantripHomeSectionHeader(section: .upcoming, count: upcoming.count, collapsed: $upcomingCollapsed)
+                            }
                         }
                         Section {
                             if !tasksCollapsed {
@@ -403,6 +428,7 @@ struct CantripHomeTasksView: View {
                     }
                 }
                 .listStyle(.plain)
+                .overlay(alignment: .bottom) { upcomingStatusCapsule }
             }
         }
         .navigationTitle("Tasks")
@@ -422,6 +448,12 @@ struct CantripHomeTasksView: View {
         .onReceive(remote.$homeViews.removeDuplicates()) { views = $0 }
         .onReceive(remote.$homeViewsSupported.removeDuplicates()) { viewsSupported = $0 }
         .onReceive(remote.$homeViewsError.removeDuplicates()) { viewsError = $0 }
+        .onReceive(remote.$homeUpcoming.removeDuplicates()) { upcoming = $0 }
+        .onReceive(remote.$homeUpcomingSupported.removeDuplicates()) { upcomingSupported = $0 }
+        .onReceive(remote.$homeUpcomingError.removeDuplicates()) { upcomingError = $0 }
+        .onReceive(remote.$homeUpcomingChangingID.removeDuplicates()) { upcomingChangingID = $0 }
+        .onAppear { remote.setHomeUpcomingShown(true) }
+        .onDisappear { remote.setHomeUpcomingShown(false) }
         .onReceive(remote.$homeBackground.map(Self.waitingRuns).removeDuplicates()) { waitingRuns = $0 }
         .onReceive(remote.$homeTasksSupportReordering.removeDuplicates()) {
             supportsReordering = $0
@@ -467,6 +499,20 @@ struct CantripHomeTasksView: View {
             if let task = run.taskID, let session = run.sessionID { waiting[task] = session }
         }
         return waiting
+    }
+
+    @ViewBuilder private var upcomingStatusCapsule: some View {
+        if let upcomingStatus {
+            CantripHomeStatusCapsule(text: upcomingStatus.text, failed: upcomingStatus.failed, floating: true)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+                .accessibilityIdentifier("home.upcoming.status")
+                .task(id: upcomingStatus.text) {
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled else { return }
+                    withAnimation { self.upcomingStatus = nil }
+                }
+        }
     }
 
     /// Home's views, pinned first, as thumbnails across the width: each opens its own screen in this stack.

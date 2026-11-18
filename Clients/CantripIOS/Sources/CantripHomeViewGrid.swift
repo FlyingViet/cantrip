@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Tasks → Views as a grid of thumbnails, and the Views and Tasks sections that fold away
+// Tasks → Views as a grid of thumbnails, and the Views, Upcoming and Tasks sections that fold away
 // (docs/views.md, "Clients"). Every client lays the grid out with the same column rule and picks
 // the same preview blocks.
 
@@ -45,15 +45,32 @@ enum CantripHomeViewGrid {
 
 /// Which Tasks-screen sections are folded, remembered on this device.
 enum CantripHomeListSection: String, CaseIterable {
-    case views, tasks
+    case views, upcoming, tasks
 
-    var defaultsKey: String { self == .views ? "home.tasks.viewsCollapsed" : "home.tasks.tasksCollapsed" }
-    var title: String { self == .views ? "Views" : "Tasks" }
+    var defaultsKey: String { "home.tasks.\(rawValue)Collapsed" }
+
+    var title: String {
+        switch self {
+        case .views: "Views"
+        case .upcoming: "Upcoming"
+        case .tasks: "Tasks"
+        }
+    }
+
+    /// What the section holds, for VoiceOver's hint.
+    private var contents: String { self == .upcoming ? "upcoming items" : title.lowercased() }
 
     func noun(_ count: Int) -> String {
-        let word = self == .views ? "view" : "task"
+        let word = switch self {
+        case .views: "view"
+        case .upcoming: "item"
+        case .tasks: "task"
+        }
         return "\(count) \(word)\(count == 1 ? "" : "s")"
     }
+
+    /// Upcoming always says how many it holds; Views and Tasks only while folded.
+    var alwaysCounts: Bool { self == .upcoming }
 
     func isCollapsed(in defaults: UserDefaults = .standard) -> Bool { defaults.bool(forKey: defaultsKey) }
 
@@ -61,10 +78,12 @@ enum CantripHomeListSection: String, CaseIterable {
         if collapsed { defaults.set(true, forKey: defaultsKey) } else { defaults.removeObject(forKey: defaultsKey) }
     }
 
-    /// "Views · 6" when folded; just the title when open.
-    func headerText(count: Int, collapsed: Bool) -> String { collapsed ? "\(title) · \(count)" : title }
+    /// "Views · 6" when folded; just the title when open ("Upcoming · 12" either way).
+    func headerText(count: Int, collapsed: Bool) -> String { collapsed || alwaysCounts ? "\(title) · \(count)" : title }
 
     func spokenLabel(count: Int) -> String { "\(title), \(noun(count))" }
+
+    func hint(collapsed: Bool) -> String { collapsed ? "Shows the \(contents)" : "Hides the \(contents)" }
 }
 
 /// A section's header: one button that folds the section, saying how many it holds while folded.
@@ -85,7 +104,7 @@ struct CantripHomeSectionHeader: View {
                 Text(section.title)
                     .font(.headline)
                     .foregroundStyle(.primary)
-                if collapsed {
+                if collapsed || section.alwaysCounts {
                     Text("· \(count)")
                         .font(.headline)
                         .foregroundStyle(.secondary)
@@ -98,7 +117,7 @@ struct CantripHomeSectionHeader: View {
         .buttonStyle(.plain)
         .accessibilityLabel(section.spokenLabel(count: count))
         .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
-        .accessibilityHint(collapsed ? "Shows the \(section.title.lowercased())" : "Hides the \(section.title.lowercased())")
+        .accessibilityHint(section.hint(collapsed: collapsed))
         .accessibilityAddTraits(.isHeader)
         .accessibilityIdentifier("home.tasks.section.\(section.rawValue)")
     }

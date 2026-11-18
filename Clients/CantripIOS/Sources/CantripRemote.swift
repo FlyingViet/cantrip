@@ -2300,6 +2300,33 @@ struct CantripRemoteAPI {
         try (["/api/v1/home/views", pathComponent(id)] + rest.map(pathComponent)).joined(separator: "/")
     }
 
+    /// Everything set to run later (Tasks → Upcoming), sorted by the Mac; nil when it still matches `revision`.
+    func homeUpcoming(ifChangedFrom revision: String?) async throws -> CantripHomeUpcomingSnapshot? {
+        let response: CantripHomeUpcomingResponse = try await request(
+            path: Self.path("/api/v1/home/upcoming", revision: revision)
+        )
+        if response.unchanged == true {
+            guard let revision, response.revision == revision else { throw CantripRemoteError.invalidResponse }
+            return nil
+        }
+        return try Self.upcomingSnapshot(response)
+    }
+
+    /// Cancels (a recurring item pauses) or resumes one item; the Mac answers the new list and what it did.
+    func changeHomeUpcoming(_ action: CantripHomeUpcoming.Action, id: String) async throws -> CantripHomeUpcomingSnapshot {
+        let response: CantripHomeUpcomingResponse = try await request(
+            path: "/api/v1/home/upcoming/\(action.rawValue)", method: "POST",
+            body: JSONSerialization.data(withJSONObject: ["id": id])
+        )
+        return try Self.upcomingSnapshot(response)
+    }
+
+    private static func upcomingSnapshot(_ response: CantripHomeUpcomingResponse) throws -> CantripHomeUpcomingSnapshot {
+        guard let items = response.items else { throw CantripRemoteError.invalidResponse }
+        return CantripHomeUpcomingSnapshot(items: items.compactMap(\.value), revision: response.revision ?? "",
+                                           message: response.message)
+    }
+
     static func path(_ path: String, revision: String?) -> String {
         guard let revision else { return path }
         var components = URLComponents()
@@ -3384,6 +3411,14 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var homeViewsError: String?
     /// Each listed view's resolved card for its thumbnail, by view ID (a view's screen keeps it current too).
     @Published private(set) var homeViewThumbnails: [String: CantripHomeViewDetail] = [:]
+    /// Tasks → Upcoming: everything set to run later, in the Mac's groups and order.
+    @Published private(set) var homeUpcoming: [CantripHomeUpcomingItem] = []
+    /// The Mac lists Upcoming; older Macs answer 404 and the section stays hidden.
+    @Published private(set) var homeUpcomingSupported = false
+    /// Why Upcoming couldn't be read or an item couldn't be changed (the last list stays shown).
+    @Published private(set) var homeUpcomingError: String?
+    /// The item a cancel or resume is being sent for.
+    @Published private(set) var homeUpcomingChangingID: String?
     @Published private(set) var homeBackground: CantripHomeBackgroundSnapshot?
     /// The hidden run (by session ID) the Background sheet should reveal, e.g. from a push.
     @Published var homeBackgroundFocus: String?
@@ -3533,6 +3568,12 @@ final class CantripRemoteModel: ObservableObject {
     private var homeViewsRefreshInFlight = false
     private var homeViewThumbnailsFetchedAt: [String: Date] = [:]
     private var homeViewThumbnailsInFlight = false
+    private var homeUpcomingFetched: (revision: String, items: [CantripHomeUpcomingItem])?
+    private var homeUpcomingRefreshInFlight = false
+    /// Bumped by each cancel or resume: a read sent before one finished is older than its answer.
+    private var homeUpcomingChanges = 0
+    /// Tasks screens showing now: the poll reads Upcoming only while one is.
+    private var homeUpcomingViewers = 0
     private var pollingTask: Task<Void, Never>?
     private var detailRefreshTask: Task<Void, Never>?
     private var detailRefreshKey: String?
@@ -3982,6 +4023,7 @@ final class CantripRemoteModel: ObservableObject {
             homeViewsFetched = nil
             homeViewThumbnails = [:]
             homeViewThumbnailsFetchedAt = [:]
+            resetHomeUpcoming()
             homeBuilds = nil
             homeBuildsError = nil
             homeBackground = nil
@@ -4056,6 +4098,7 @@ final class CantripRemoteModel: ObservableObject {
             homeViewsFetched = nil
             homeViewThumbnails = [:]
             homeViewThumbnailsFetchedAt = [:]
+            resetHomeUpcoming()
             homeBuilds = nil
             homeBuildsError = nil
             homeBackground = nil
@@ -4356,6 +4399,7 @@ final class CantripRemoteModel: ObservableObject {
                 homeArtifactsFetched = (snapshot.revision, snapshot.artifacts)
             }
             if homeViewsSupported { await refreshHomeViews() }
+            if homeUpcomingViewers > 0 { await refreshHomeUpcoming() }
             if (selectedSession?.backgroundInputCount ?? 0) > 0
                 || homeBackground?.runs.contains(where: \.needsInput) == true {
                 await refreshHomeBackground()
@@ -4390,6 +4434,87 @@ final class CantripRemoteModel: ObservableObject {
             let message = error.localizedDescription
             if homeViewsError != message { homeViewsError = message }
         }
+    }
+
+    /// A Tasks screen appeared or went away. The first one reads Upcoming at once; the poll keeps it
+    /// current (with `refreshHomeData`) while any shows.
+    func setHomeUpcomingShown(_ shown: Bool) {
+        homeUpcomingViewers = Swift.max(0, homeUpcomingViewers + (shown ? 1 : -1))
+        if shown, homeUpcomingViewers == 1 { Task { await refreshHomeUpcoming() } }
+    }
+
+    /// Upcoming, sent with its revision while the shown list is still the one fetched. An older Mac
+    /// answers 404: the section stays hidden.
+    func refreshHomeUpcoming() async {
+        guard isHomeSelected, isConfigured, !homeUpcomingRefreshInFlight, homeUpcomingChangingID == nil else { return }
+        homeUpcomingRefreshInFlight = true
+        defer { homeUpcomingRefreshInFlight = false }
+        let revision = homeUpcomingFetched.flatMap { $0.items == homeUpcoming ? $0.revision : nil }
+        let changes = homeUpcomingChanges
+        do {
+            let snapshot = try await performHistoryRead { try await $0.homeUpcoming(ifChangedFrom: revision) }
+            guard isHomeSelected, changes == homeUpcomingChanges else { return }
+            if let snapshot { keepHomeUpcoming(snapshot) }
+            if !homeUpcomingSupported { homeUpcomingSupported = true }
+            if homeUpcomingError != nil { homeUpcomingError = nil }
+        } catch is CancellationError {
+            return
+        } catch CantripRemoteError.http(404, _) {
+            guard isHomeSelected else { return }
+            resetHomeUpcoming()
+        } catch {
+            guard isHomeSelected, homeUpcomingSupported else { return }
+            let message = CantripHomeUpcoming.errorMessage(error)
+            if homeUpcomingError != message { homeUpcomingError = message }
+        }
+    }
+
+    /// Cancels an item the person confirmed (a recurring one is paused). Returns what the Mac did,
+    /// or nil when it failed (`homeUpcomingError` says why).
+    func cancelHomeUpcoming(id: String) async -> String? {
+        await changeHomeUpcoming(.cancel, id: id)
+    }
+
+    /// Resumes a paused Home task or Mac job. Returns what the Mac did, or nil when it failed.
+    func resumeHomeUpcoming(id: String) async -> String? {
+        await changeHomeUpcoming(.resume, id: id)
+    }
+
+    /// Sent once on the preferred route; the list in the Mac's answer replaces this one.
+    private func changeHomeUpcoming(_ action: CantripHomeUpcoming.Action, id: String) async -> String? {
+        guard homeUpcomingChangingID == nil else { return nil }
+        homeUpcomingChangingID = id
+        defer { homeUpcomingChangingID = nil }
+        let isTask = homeUpcoming.first { $0.id == id }?.kind == "task"
+        do {
+            let snapshot = try await performAuthenticated(allowFallback: false) {
+                try await $0.changeHomeUpcoming(action, id: id)
+            }
+            homeUpcomingChanges += 1
+            keepHomeUpcoming(snapshot)
+            homeUpcomingError = nil
+            // A Home task's own row shows it paused or running again.
+            if isTask { await refreshHomeData() }
+            return snapshot.message ?? (action == .cancel ? "Cancelled." : "Resumed.")
+        } catch is CancellationError {
+            return nil
+        } catch {
+            homeUpcomingError = CantripHomeUpcoming.errorMessage(error)
+            return nil
+        }
+    }
+
+    private func keepHomeUpcoming(_ snapshot: CantripHomeUpcomingSnapshot) {
+        if homeUpcoming != snapshot.items { homeUpcoming = snapshot.items }
+        homeUpcomingFetched = snapshot.revision.isEmpty ? nil : (snapshot.revision, snapshot.items)
+        if !homeUpcomingSupported { homeUpcomingSupported = true }
+    }
+
+    private func resetHomeUpcoming() {
+        if !homeUpcoming.isEmpty { homeUpcoming = [] }
+        if homeUpcomingSupported { homeUpcomingSupported = false }
+        if homeUpcomingError != nil { homeUpcomingError = nil }
+        homeUpcomingFetched = nil
     }
 
     /// A view resolved now (its screen fetches it again every `refreshAfter` seconds).

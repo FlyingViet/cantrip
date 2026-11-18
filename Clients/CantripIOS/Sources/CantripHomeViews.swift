@@ -473,14 +473,36 @@ private struct CantripHomeViewStatus: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         if let status {
-            Label(status, systemImage: "checkmark.circle.fill")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.green)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.green.opacity(0.14), in: Capsule())
-                .transition(.opacity)
+            CantripHomeStatusCapsule(text: status)
                 .accessibilityIdentifier("home.view.status")
         }
+    }
+}
+
+/// What a change just did, shown for a moment: a green check (an orange warning when it failed)
+/// beside the Mac's words. `floating` backs it for drawing over a list.
+struct CantripHomeStatusCapsule: View {
+    let text: String
+    var failed = false
+    var floating = false
+
+    var body: some View {
+        let tint: Color = failed ? .orange : .green
+        Label {
+            Text(text).foregroundStyle(.primary)
+        } icon: {
+            Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill").foregroundStyle(tint)
+        }
+        .font(.footnote.weight(.semibold))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(tint.opacity(0.14), in: Capsule())
+        .background {
+            if floating {
+                Capsule().fill(.regularMaterial).shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .transition(.opacity)
     }
 }

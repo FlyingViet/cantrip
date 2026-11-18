@@ -132,6 +132,7 @@ the host on the local network. A newer `v` asks the user to update the app. See
 | `/api/v1/home`, `/api/v1/home/tasks`, `/api/v1/home/artifacts`, `/api/v1/home/builds` | Cantrip Home; tasks and artifacts take `?revision=` and reply `{"unchanged":true}` while nothing changed |
 | `GET /api/v1/home/artifacts/{id}/file`, `GET /api/v1/home/artifacts/{id}/folder` | Save / Share (`supportsDownloads` on the artifact list): the registered artifact's original bytes, or an uncompressed zip of every registered artifact in its top-level folder, streamed as an attachment with `Content-Length` and the file name in `Content-Disposition` (`filename*` UTF-8). Never gzipped; `404` for an unknown artifact or, for `folder`, one at the top level. Clients write the body straight to disk on both routes |
 | `GET /api/v1/home/views[?revision=]`, `GET`/`DELETE /api/v1/home/views/{id}`, `POST …/{id}/refresh`, `POST …/{id}/pin`, `POST …/{id}/actions/{action}` | Views (`supportsViews` in the tasks snapshot; `docs/views.md`): the list (or `{"unchanged":true}`), a view's summary and resolved card with `refreshAfter`, a refresh (waits up to 20 s, so the app allows 35 s), pin state, delete, and a confirmed button (`{"confirmed":true}`). Each change is sent once, on the route where the views list just confirmed the view still exists |
+| `GET /api/v1/home/upcoming[?revision=]`, `POST /api/v1/home/upcoming/cancel`, `POST /api/v1/home/upcoming/resume` | Tasks → Upcoming (`docs/cantrip-home.md` "Upcoming"): everything set to run later as `{items, revision}` (or `{"unchanged":true}`), read with the Tasks poll only while a Tasks screen shows; each item's `nextRunAt` is Unix seconds. Cancel and resume post `{"id"}` once and answer the new list with a `message`. Older hosts `404` and the section stays hidden |
 | `/api/v1/notifications`, `/api/v1/live-status` | Push registration, widget and Live Activity |
 | `/api/v1/memory`, `/api/v1/copilot/usage`, `/api/v1/mac-access`, `/api/v1/desktop/*` | Memory browser, usage limits (Copilot at the top level, Claude Code under `claude`, plus `activeBackend`), View Mac |
 | `GET/POST /api/v1/model-tiers` | **Settings › Models › Model tiers** (Mac-wide): `{tiers, backends: [{id, label, models: [{id, label, efforts, price}], cells: [{tier, label, choices: [{model, effort, label, offered, price}], isDefault, model, effort, note}]}], revision}`. A cell's page reorders, removes and adds models and sets each one's effort; each change POSTs `{revision, backend, tier, choices: [{model, effort}]}`, and **Use Cantrip's Defaults** `{revision, backend, tier, reset: true}`. `supportsModelTiers` on session lists; older hosts `404` and the section says to update the Mac |
@@ -778,6 +779,19 @@ shows its message for a moment and an **Ask Home** button switches to Chat. Chat
 a view's buttons. Views need a Mac whose tasks snapshot says `supportsViews`. DEBUG builds draw a
 saved `GET /api/v1/home/views/<id>` answer with `-CantripUITestViewFixture /path/view.json`, and
 `HermesUITests/CantripViewsUITests` drives the screens against a Home host that serves views.
+**Upcoming** sits between Views and Tasks and lists everything the Mac will run later: Home tasks'
+next runs, steps a tab or Home scheduled, waits, background jobs and the Mac's recurring jobs. The
+header counts them ("Upcoming · 12") and folds like the others (remembered on the device). Items
+come in the Mac's order under **Next up** (the first six, then **Show all**), **Waiting**,
+**Repeating** and **Paused**. Each row shows what it will do, then when ("Today 10:35 PM",
+"Tomorrow 3:00 AM", a weekday within the week, else the date, in the device's time zone; or its
+schedule, such as "Every 15 minutes"), its schedule and who set it up, plus a detail line when there
+is one. **Cancel**, **Stop** or **Pause** asks first with the Mac's question (**Keep** leaves it);
+**Resume** acts at once. What the Mac did shows for a moment above the tab bar and VoiceOver
+announces it. VoiceOver reads each row as one element with Cancel or Resume as its actions, and at
+the accessibility text sizes the button moves under the text. The list is read only while a Tasks
+screen shows. `HermesUITests/CantripHomeUpcomingUITests` runs it against a Home host that lists
+Upcoming.
 Documents and media created as Home deliverables are collected automatically in
 Artifacts. Images and videos show thumbnails (videos with a play badge and
 duration); documents and audio keep type icons. Thumbnails load lazily, at most

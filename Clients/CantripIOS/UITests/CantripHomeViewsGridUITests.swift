@@ -49,10 +49,11 @@ final class CantripHomeViewsGridUITests: XCTestCase {
     }
 
     /// Earlier runs on this simulator may have left a section folded. Folding the views brings the
-    /// Tasks header on screen on a phone; both end open.
+    /// Tasks header on screen on a phone (Upcoming, on a Mac that lists it, is folded out of the way); both end open.
     private func openBoth(_ app: XCUIApplication) {
         if header(app, "views").value as? String == "Collapsed" { header(app, "views").tap() }
         header(app, "views").tap()
+        if header(app, "upcoming").exists, header(app, "upcoming").value as? String == "Expanded" { header(app, "upcoming").tap() }
         let tasks = header(app, "tasks")
         if tasks.waitForExistence(timeout: 5), tasks.value as? String == "Collapsed" { tasks.tap() }
         header(app, "views").tap()
