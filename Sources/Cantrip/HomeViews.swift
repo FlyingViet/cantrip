@@ -1670,12 +1670,32 @@ final class HomeViews {
         refreshing.insert(id)
         revision = UUID()
         let call = callTool
-        var results: [String: Result<String, Error>] = [:]
-        await withTaskGroup(of: SourceOutcome.self) { group in
-            for (name, tool) in calls {
-                group.addTask { SourceOutcome(name: name, result: await Self.outcome(of: call, tool)) }
+        // Sources asking for the same tool with the same arguments share one call.
+        var unique: [(tool: HomeViewSource.ToolCall, names: [String])] = []
+        for (name, tool) in calls.sorted(by: { $0.0 < $1.0 }) {
+            if let index = unique.firstIndex(where: { $0.tool == tool }) {
+                unique[index].names.append(name)
+            } else {
+                unique.append((tool, [name]))
             }
-            for await outcome in group { results[outcome.name] = outcome.result }
+        }
+        var outcomes: [Int: Result<String, Error>] = [:]
+        await withTaskGroup(of: CallOutcome.self) { group in
+            var next = 0
+            func start() {
+                let index = next, tool = unique[index].tool
+                next += 1
+                group.addTask { CallOutcome(index: index, result: await Self.outcome(of: call, tool)) }
+            }
+            while next < min(Self.parallelToolCalls, unique.count) { start() }
+            for await outcome in group {
+                outcomes[outcome.index] = outcome.result
+                if next < unique.count { start() }
+            }
+        }
+        var results: [String: Result<String, Error>] = [:]
+        for (index, entry) in unique.enumerated() {
+            for name in entry.names { results[name] = outcomes[index] }
         }
         refreshing.remove(id)
         guard var current = find(id) else { return }
@@ -1698,8 +1718,11 @@ final class HomeViews {
         onChange?()
     }
 
-    struct SourceOutcome: Sendable {
-        let name: String
+    /// Tool calls one refresh runs at once; the rest wait their turn.
+    static let parallelToolCalls = 3
+
+    struct CallOutcome: Sendable {
+        let index: Int
         let result: Result<String, Error>
     }
 

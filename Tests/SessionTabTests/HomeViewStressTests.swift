@@ -132,6 +132,51 @@ extension SessionTabTests {
         print("Views: \(rounds) refreshes of 4 parallel tool sources (slow, stuck, cold catalog) through the relay passed in \(Int(Date().timeIntervalSince(started))) s")
     }
 
+    /// One refresh calls a tool once per distinct set of arguments and at most
+    /// `HomeViews.parallelToolCalls` at a time; sources sharing a call all get its output.
+    @MainActor
+    static func testHomeViewRefreshLimits() async throws {
+        let views = HomeViews.shared
+        actor Calls {
+            var running = 0, peak = 0, areas: [String] = []
+            func begin(_ area: String) { running += 1; peak = max(peak, running); areas.append(area) }
+            func end() { running -= 1 }
+            func reset() { (running, peak, areas) = (0, 0, []) }
+        }
+        let calls = Calls()
+        views.callTool = { call in
+            let area = (call.arguments?.any as? [String: Any])?["area"] as? String ?? ""
+            await calls.begin(area)
+            try? await Task.sleep(for: .milliseconds(100))
+            await calls.end()
+            return #"{"area":"\#(area)","ok":true}"#
+        }
+        /// A view with a tool source per area (a view has at most 4).
+        func refreshed(_ areas: [String]) async throws -> [String: HomeView.Fetched] {
+            let names = ["a", "b", "c", "d"].prefix(areas.count)
+            let data = zip(names, areas).map { name, area in
+                #""\#(name)":{"tool":{"server":"homelab","name":"homelab_status","arguments":{"area":"\#(area)"}}}"#
+            }.joined(separator: ",")
+            let rows = names.map { #"{"key":"\#($0)","value":{"from":"\#($0)","path":"area"}}"# }.joined(separator: ",")
+            let json = #"{"name":"Areas","icon":"square.grid.2x2","data":{\#(data)},"blocks":[{"type":"keyValue","rows":[\#(rows)]}]}"#
+            let view = try requireHome(try views.apply(viewProposal(json), activities: []).view)
+            defer { try? views.delete(view.id) }
+            await calls.reset()
+            await views.refresh(view.id)
+            return try requireHome(views.find(view.id)).fetched
+        }
+        let four = try await refreshed(["one", "two", "three", "four"])
+        let (areas, peak) = (await calls.areas, await calls.peak)
+        precondition(areas.sorted() == ["four", "one", "three", "two"] && peak == HomeViews.parallelToolCalls,
+                     "4 calls, at most \(HomeViews.parallelToolCalls) at once: \(areas) peak \(peak)")
+        precondition(four.count == 4 && four.values.allSatisfy { $0.output != nil && $0.error == nil }, "every source answered")
+        let shared = try await refreshed(["one", "one", "two", "three"])
+        let sharedAreas = await calls.areas
+        precondition(sharedAreas.sorted() == ["one", "three", "two"], "one call per distinct arguments: \(sharedAreas)")
+        precondition(shared.count == 4 && shared["a"]?.output != nil && shared["a"]?.output == shared["b"]?.output,
+                     "sources sharing a call both get its output")
+    }
+
     /// Swift 6.4 with -O miscompiles a task body (`Task {}`, `addTask {}`) that returns a tuple built
     /// around `try await` from both `do` and `catch`: the tuple comes back wrong, and a task group
     /// ends before its children, which crash the process when they finish. No task body may have it.

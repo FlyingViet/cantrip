@@ -27,6 +27,7 @@ extension SessionTabTests {
         try await testHomeViewCards(tasks: tasks)
         try await testHomeViewRunCapture(tasks: tasks)
         try await testHomeViewActions(tasks: tasks)
+        try await testHomeViewRefreshLimits()
         print("Views: schema, typed values and numbers, checked rows, cards, run capture and confirmed actions passed")
     }
 

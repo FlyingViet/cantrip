@@ -191,8 +191,10 @@ draw them as bars. A chart or table may carry a `title` (13 pt semibold, above i
 
 ### Refreshing several tool sources
 
-A refresh calls a view's tool sources in parallel, each through its own relay connection (connect
-within 15 s, answer within 30 s). Swift 6.4 built optimized miscompiles a task body (`Task {}`,
+A refresh calls a view's tool sources in parallel, at most 3 at once, each through its own relay
+connection (connect within 15 s, answer within 30 s). Sources asking for the same tool with the same
+arguments share one call. The catalog of read-only tools they're checked against is listed once even
+when several refreshes start together. Swift 6.4 built optimized miscompiles a task body (`Task {}`,
 `addTask {}`) that returns a tuple built around `try await` from both `do` and `catch`: a task group
 then ends before its children, which crash the process when they finish. Refresh keeps each call's
 `do`/`catch` in a function of its own, and the views tests fail if any task body has that shape.
