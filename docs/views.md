@@ -189,6 +189,16 @@ draw them as bars. A chart or table may carry a `title` (13 pt semibold, above i
 - `run` sources take what a task's run already read; that run goes through the Privacy Gate as
   usual. `ask` buttons send only the question Home wrote, never the view's values.
 
+### Refreshing several tool sources
+
+A refresh calls a view's tool sources in parallel, each through its own relay connection (connect
+within 15 s, answer within 30 s). Swift 6.4 built optimized miscompiles a task body (`Task {}`,
+`addTask {}`) that returns a tuple built around `try await` from both `do` and `catch`: a task group
+then ends before its children, which crash the process when they finish. Refresh keeps each call's
+`do`/`catch` in a function of its own, and the views tests fail if any task body has that shape.
+`make test-views-stress` builds the tests optimized and refreshes a view with 4 parallel tool
+sources (slow, stuck, cold catalog) 50 times through the real relay.
+
 ## Clients
 
 | Client | Views | Blocks |

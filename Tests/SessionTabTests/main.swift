@@ -216,6 +216,11 @@ struct SessionTabTests {
             try await testPrivateLocalLive()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "views-stress" {
+            let rounds = Int(ProcessInfo.processInfo.environment["CANTRIP_VIEWS_STRESS_ROUNDS"] ?? "") ?? 50
+            try await testHomeViewParallelToolSources(rounds: rounds)
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "views" {
             try await testHomeViews()
             return

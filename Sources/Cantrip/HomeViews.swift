@@ -1671,13 +1671,11 @@ final class HomeViews {
         revision = UUID()
         let call = callTool
         var results: [String: Result<String, Error>] = [:]
-        await withTaskGroup(of: (String, Result<String, Error>).self) { group in
+        await withTaskGroup(of: SourceOutcome.self) { group in
             for (name, tool) in calls {
-                group.addTask {
-                    do { return (name, .success(try await call(tool))) } catch { return (name, .failure(error)) }
-                }
+                group.addTask { SourceOutcome(name: name, result: await Self.outcome(of: call, tool)) }
             }
-            for await (name, result) in group { results[name] = result }
+            for await outcome in group { results[outcome.name] = outcome.result }
         }
         refreshing.remove(id)
         guard var current = find(id) else { return }
@@ -1698,6 +1696,20 @@ final class HomeViews {
         }
         do { try replace(current) } catch { Log.write("views: couldn't save refreshed data: \(error.localizedDescription)") }
         onChange?()
+    }
+
+    struct SourceOutcome: Sendable {
+        let name: String
+        let result: Result<String, Error>
+    }
+
+    /// A tool source's output or failure. This stays out of the child task's closure: Swift 6.4 with
+    /// -O miscompiles a task body that returns a tuple built around `try await` from both `do` and
+    /// `catch`. The group then ends before its children, which later crash the process when they
+    /// finish (`TaskGroup::offer`). The views tests check that no task body has that shape.
+    nonisolated static func outcome(of call: @Sendable (HomeViewSource.ToolCall) async throws -> String,
+                                    _ tool: HomeViewSource.ToolCall) async -> Result<String, Error> {
+        do { return .success(try await call(tool)) } catch { return .failure(error) }
     }
 
     /// A Home task's run finished: `run` sources take the tool output it read, and views refreshed
@@ -1790,6 +1802,9 @@ final class HomeViews {
 
     // MARK: Tools
 
+    /// How long a tool source may take to connect and to answer. Tests shorten them.
+    nonisolated(unsafe) static var toolTimeouts: (open: TimeInterval, call: TimeInterval) = (15, 30)
+
     nonisolated static func relayCall(_ call: HomeViewSource.ToolCall) async throws -> String {
         let catalog = await PrivateLocalTools.shared.catalog()
         guard let server = catalog.first(where: { $0.name == call.server }) else {
@@ -1802,9 +1817,10 @@ final class HomeViews {
         }
         let client = MCPRelayClient(server: call.server, tab: ChatSession.cantripHomeID, backend: "Cantrip views")
         defer { client.close() }
-        try await client.open()
+        let timeouts = toolTimeouts
+        try await client.open(timeout: timeouts.open)
         let arguments = call.arguments?.any as? [String: Any] ?? [:]
-        let result = try await client.callTool(call.name, arguments: arguments, timeout: 30)
+        let result = try await client.callTool(call.name, arguments: arguments, timeout: timeouts.call)
         if result.isError { throw Failure(message: "The tool reported an error: \(result.text.prefix(200))") }
         return result.text
     }

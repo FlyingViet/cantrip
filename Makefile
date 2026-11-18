@@ -61,6 +61,13 @@ test-session-tabs:
 	trap 'rm -f "$$BIN"' EXIT; \
 	swiftc -parse-as-library $(filter-out Sources/Cantrip/main.swift,$(wildcard Sources/Cantrip/*.swift Sources/Cantrip/Backends/*.swift)) Tests/SessionTabTests/*.swift -o "$$BIN" && "$$BIN"
 
+# A view refreshing 4 tool sources at once through the real relay, 50 times, built optimized like
+# the app: the Swift 6.4 task-body miscompile it guards against (docs/views.md) only shows with -O.
+test-views-stress:
+	@BIN="/tmp/cantrip-views-stress-$$$$"; \
+	trap 'rm -f "$$BIN"' EXIT; \
+	swiftc -O -wmo -parse-as-library $(filter-out Sources/Cantrip/main.swift,$(wildcard Sources/Cantrip/*.swift Sources/Cantrip/Backends/*.swift)) Tests/SessionTabTests/*.swift -o "$$BIN" && CANTRIP_TAB_TEST_ONLY=views-stress "$$BIN"
+
 # The settings manifest alone (it's also part of test-session-tabs).
 test-settings-manifest:
 	@BIN="/tmp/cantrip-settings-manifest-tests-$$$$"; \

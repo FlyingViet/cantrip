@@ -252,6 +252,8 @@ final class PrivateLocalTools: @unchecked Sendable {
     var registry: () -> [MCPServer] = { MCPRegistry.load()?.servers ?? [] }
     var socketPath: () -> String = { MCPRelay.socketPath }
     var cacheLifetime: TimeInterval = 10 * 60
+    /// How long a server may take to connect and to list its tools.
+    var listTimeout: TimeInterval = 15
 
     private let lock = NSLock()
     private var cached: (at: Date, key: String, servers: [Server])?
@@ -303,7 +305,7 @@ final class PrivateLocalTools: @unchecked Sendable {
            Date().timeIntervalSince(cached.at) < cacheLifetime {
             return cached.servers
         }
-        let path = socketPath()
+        let path = socketPath(), timeout = listTimeout
         let listed = await withTaskGroup(of: (Int, Server).self) { group in
             for (index, server) in servers.enumerated() {
                 group.addTask {
@@ -317,8 +319,8 @@ final class PrivateLocalTools: @unchecked Sendable {
                                                 backend: "Private Local", path: path)
                     defer { client.close() }
                     do {
-                        try await client.open()
-                        let (allowed, excluded) = Self.split(server: server.name, tools: try await client.listTools())
+                        try await client.open(timeout: timeout)
+                        let (allowed, excluded) = Self.split(server: server.name, tools: try await client.listTools(timeout: timeout))
                         entry.tools = allowed
                         entry.excluded = excluded
                     } catch {

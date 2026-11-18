@@ -20,6 +20,7 @@ extension SessionTabTests {
         views.privateServers = { ["personal"] }
 
         try testHomeViewProtocol()
+        try testNoTaskBodyReturnsTuplesFromDoCatch()
         try testHomeViewSchema(tasks: tasks)
         try testHomeViewTypedNumbers(tasks: tasks)
         try testHomeViewCheckedRows(tasks: tasks)
