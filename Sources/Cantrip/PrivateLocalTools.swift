@@ -226,6 +226,7 @@ final class PrivateLocalTools: @unchecked Sendable {
         let name: String
         let description: String
         let schema: [String: Any]
+        var outputSchema: [String: Any]? = nil
         var functionName: String { "mcp__\(server)__\(name)" }
         var tokens: Int { HomeLocalProfile.estimate(String(decoding: (try? JSONSerialization.data(withJSONObject: openAI)) ?? Data(), as: UTF8.self)) }
         var openAI: [String: Any] {
@@ -283,7 +284,8 @@ final class PrivateLocalTools: @unchecked Sendable {
             let name = tool["name"] as? String ?? ""
             if isReadOnly(tool, serverDeclaresReadOnly: declares) {
                 allowed.append(Tool(server: server, name: name, description: tool["description"] as? String ?? "",
-                                    schema: tool["inputSchema"] as? [String: Any] ?? ["type": "object", "properties": [String: Any]()]))
+                                    schema: tool["inputSchema"] as? [String: Any] ?? ["type": "object", "properties": [String: Any]()],
+                                    outputSchema: tool["outputSchema"] as? [String: Any]))
             } else if !name.isEmpty {
                 excluded.append(name)
             }
@@ -373,10 +375,26 @@ final class PrivateLocalToolSession: @unchecked Sendable {
     private(set) var calls: [String: Int] = [:]
     private(set) var refused: [String: Int] = [:]
 
-    init(servers: [PrivateLocalTools.Server], direct: Set<String>, socketPath: String) {
+    /// Code mode for this reply (`CodeMode.isEnabled` when the session opened); tests set it.
+    var codeMode: Bool
+    var recipes: [CodeModeRecipe] = CodeModeRecipes.all()
+    var shapes: CodeModeShapes = .shared
+    /// Programs run and the calls they made, for the run's counts.
+    private(set) var programs = 0
+    private(set) var programCalls = 0
+
+    init(servers: [PrivateLocalTools.Server], direct: Set<String>, socketPath: String, codeMode: Bool = CodeMode.isEnabled) {
         self.servers = servers
         self.direct = direct
         self.socketPath = socketPath
+        self.codeMode = codeMode
+    }
+
+    private var codeModeTools: [CodeModeTool] { servers.flatMap(\.tools).map(CodeModeTool.init) }
+    private var codeModeLimits: CodeMode.Limits {
+        var limits = CodeMode.Limits()
+        limits.outputCharacters = PrivateLocalTools.resultCharacters
+        return limits
     }
 
     var isEmpty: Bool { servers.allSatisfy { $0.tools.isEmpty } }
@@ -395,6 +413,20 @@ final class PrivateLocalToolSession: @unchecked Sendable {
                     "query": ["type": "string", "description": "Tool names or a topic"],
                 ], "required": ["query"]],
             ] as [String: Any]])
+        }
+        if codeMode, !isEmpty {
+            let tools2 = codeModeTools, recipes = recipes.filter { $0.available(with: tools2) }
+            let description = CodeModeAPI.runDescription(tools2, recipes: recipes, shapes: shapes, limits: codeModeLimits,
+                                                         inlineLimit: 9_000)
+            tools.append(["type": "function", "function": [
+                "name": CodeMode.runTool, "description": description, "parameters": CodeModeAPI.runInputSchema,
+            ] as [String: Any]])
+            if description.contains(CodeMode.apiTool) {
+                tools.append(["type": "function", "function": [
+                    "name": CodeMode.apiTool, "description": "TypeScript declarations of the tools and recipes run_tool_script's programs can use, for the servers named.",
+                    "parameters": CodeModeAPI.apiInputSchema,
+                ] as [String: Any]])
+            }
         }
         return tools
     }
@@ -454,6 +486,9 @@ final class PrivateLocalToolSession: @unchecked Sendable {
         if functionName == Self.searchName {
             return (search(arguments["query"] as? String ?? ""), true, true)
         }
+        if codeMode, functionName == CodeMode.runTool || functionName == CodeMode.apiTool {
+            return await codeModeCall(functionName, arguments: arguments)
+        }
         let tool = lock.withLock { () -> PrivateLocalTools.Tool? in
             if let loaded = loaded[functionName] { return loaded }
             return servers.filter { direct.contains($0.name) }.flatMap(\.tools).first { $0.functionName == functionName }
@@ -473,6 +508,33 @@ final class PrivateLocalToolSession: @unchecked Sendable {
             lock.withLock { clients[tool.server]?.close(); clients[tool.server] = nil }
             return ("The \(tool.server) tool server failed: \(error.localizedDescription)", false, true)
         }
+    }
+
+    /// A program's calls are this session's own calls: the same read-only tools and refusals.
+    private func codeModeCall(_ name: String, arguments: [String: Any]) async -> (output: String, success: Bool, allowed: Bool) {
+        let tools = codeModeTools, recipes = recipes.filter { $0.available(with: tools) }
+        if name == CodeMode.apiTool {
+            let wanted = Set((arguments["servers"] as? [String] ?? []).map { $0.lowercased() })
+            let chosen = wanted.isEmpty ? tools : tools.filter { wanted.contains($0.server.lowercased()) }
+            return (CodeModeAPI.declarations(chosen, recipes: recipes, shapes: shapes), true, true)
+        }
+        guard let script = arguments["script"] as? String, !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ("run_tool_script needs a `script`: the body of an async function that returns the result.", false, true)
+        }
+        let runner = CodeModeRunner(tools: tools, recipes: recipes, limits: codeModeLimits, shapes: shapes) { [weak self] tool, arguments in
+            guard let self else { return .refused("Stopped.") }
+            let result = await self.call(PrivateLocalTools.Tool(server: tool.server, name: tool.name, description: "", schema: [:]).functionName,
+                                         arguments: arguments)
+            return result.allowed ? .output(result.output, isError: !result.success) : .refused(result.output)
+        }
+        let result = await runner.run(script, arguments: arguments["args"] as? [String: Any] ?? [:])
+        lock.withLock {
+            programs += 1
+            programCalls += result.toolCalls
+        }
+        Log.write("code mode: Private Local ran a program: \(result.toolCalls) calls, \(result.refused) refused, "
+                  + String(format: "%.1f s", result.seconds) + (result.error == nil ? "" : ", ended with an error"))
+        return (result.reply, result.error == nil, true)
     }
 
     private func connection(_ server: String) async throws -> MCPRelayClient {

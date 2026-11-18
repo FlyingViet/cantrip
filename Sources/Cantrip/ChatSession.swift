@@ -575,6 +575,8 @@ final class ChatSession: ObservableObject {
     private var activeBackend: Backend {
         privacyRoutedBackend ?? backend(for: runningBackendKind ?? effectiveBackendKind)
     }
+    /// The backend running this tab's turn: a code-mode program's calls get its checks.
+    var codeModeBackend: AnyObject { activeBackend as AnyObject }
     /// The local backend the Privacy Gate routed this run to (enforce mode), if it did.
     private var privacyRoutedBackend: Backend?
     private var privacyAddedExclusions = PrivacyAddedExclusions()

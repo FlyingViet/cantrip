@@ -727,6 +727,14 @@ final class AppSettings: ObservableObject {
     @Published var skillsAutoLink: Bool {
         didSet { d.set(skillsAutoLink, forKey: "skillsAutoLink") }
     }
+    /// Code mode (`CodeMode`): backends get `cantrip_code` to chain read-only tool calls in one
+    /// program. Off by default.
+    @Published var codeModeEnabled: Bool {
+        didSet {
+            d.set(codeModeEnabled, forKey: CodeMode.settingKey)
+            if oldValue != codeModeEnabled { CodeMode.settingChanged(codeModeEnabled) }
+        }
+    }
     /// A build disk (a NAS, say) exported to every agent as `CANTRIP_BUILD_ROOT`: build scripts
     /// put large output there and build locally whenever it isn't mounted. Empty: build locally.
     @Published var buildRoot: String {
@@ -880,7 +888,7 @@ final class AppSettings: ObservableObject {
             "allowActions": allowActions, "shareLocation": shareLocation,
             "shareCalendar": shareCalendar, "attachScreen": attachScreen,
             "voiceMode": voiceMode, "memoryEnabled": memoryEnabled,
-            "memoryPath": memoryPath, "memorySearchIndex": memorySearchIndex, "skillsAutoLink": skillsAutoLink,
+            "memoryPath": memoryPath, "memorySearchIndex": memorySearchIndex, "skillsAutoLink": skillsAutoLink, "codeModeEnabled": codeModeEnabled,
             "buildRoot": buildRoot, "fileRAGEnabled": fileRAGEnabled,
             "panelOpacity": panelOpacity,
             "remoteControlEnabled": remoteControlEnabled,
@@ -1028,6 +1036,7 @@ final class AppSettings: ObservableObject {
         str("memoryPath") { self.memoryPath = $0 }
         bool("memorySearchIndex") { self.memorySearchIndex = $0 }
         bool("skillsAutoLink") { self.skillsAutoLink = $0 }
+        bool("codeModeEnabled") { self.codeModeEnabled = $0 }
         str("buildRoot") { self.buildRoot = $0 }
         bool("fileRAGEnabled") { self.fileRAGEnabled = $0 }
         bool("remoteControlEnabled") { self.remoteControlEnabled = $0 }
@@ -1327,6 +1336,7 @@ final class AppSettings: ObservableObject {
         memoryPath = d.string(forKey: "memoryPath") ?? "\(NSHomeDirectory())/Cantrip Memory"
         memorySearchIndex = d.bool(forKey: "memorySearchIndex")
         skillsAutoLink = d.bool(forKey: "skillsAutoLink")
+        codeModeEnabled = d.bool(forKey: CodeMode.settingKey)
         buildRoot = d.string(forKey: "buildRoot") ?? ""
     }
 }

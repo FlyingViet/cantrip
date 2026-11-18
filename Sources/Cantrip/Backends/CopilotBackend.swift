@@ -1084,3 +1084,11 @@ protocol SubagentCancelling: AnyObject {
 
 extension CopilotBackend: SubagentCancelling {}
 extension ClaudeCodeBackend: SubagentCancelling {}
+
+extension CopilotBackend: CodeModePolicySource {
+    var codeModePolicy: CodeModePolicy {
+        CodeModePolicy(guardrail: guardrail, approval: configuration?.autoApprove == true ? .automatic : .ask,
+                       label: guardrailLabel, workdir: configuration?.workdir ?? "",
+                       privacy: PrivacyRunRestrictions.restriction(for: self))
+    }
+}

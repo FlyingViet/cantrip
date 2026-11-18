@@ -54,7 +54,11 @@ enum MCPBackendConfig {
 
     /// The servers a backend gets, minus `excluded` (a tab's switches or a scheduled task's limits).
     static func included(_ snapshot: MCPRegistry.Snapshot, backend: BackendKind, excluded: Set<String> = []) -> [MCPServer] {
-        snapshot.servers.filter { $0.isEnabled(for: backend.rawValue) && !excluded.contains($0.name) }
+        var servers = snapshot.servers.filter { $0.isEnabled(for: backend.rawValue) && !excluded.contains($0.name) }
+        if CodeMode.isEnabled, !excluded.contains(CodeMode.serverName), !servers.contains(where: { $0.name == CodeMode.serverName }) {
+            servers.append(CodeMode.virtualServer)
+        }
+        return servers
     }
 
     /// A stdio command entry: the relay for relayed servers, the server itself otherwise.
@@ -70,10 +74,16 @@ enum MCPBackendConfig {
 
     // MARK: - Claude Code (--mcp-config)
 
-    static func claude(_ snapshot: MCPRegistry.Snapshot, excluded: Set<String> = [], relay: String = relayScript) -> [String: Any] {
+    static func claude(_ snapshot: MCPRegistry.Snapshot, excluded: Set<String> = [], tab: UUID? = nil,
+                       relay: String = relayScript) -> [String: Any] {
         var servers: [String: Any] = [:]
         for server in included(snapshot, backend: .claudeCode, excluded: excluded) {
             var entry = command(server, backend: .claudeCode, relay: relay)
+            // The config is this tab's own: code mode learns the tab from it, not only from the environment.
+            if server.name == CodeMode.serverName, let tab, var args = entry["args"] as? [String] {
+                args += ["--tab", tab.uuidString]
+                entry["args"] = args
+            }
             entry["type"] = "stdio"
             servers[exportName(server.name)] = entry
         }
@@ -82,7 +92,7 @@ enum MCPBackendConfig {
 
     /// Writes this run's Claude config (one file per tab, so tabs' switches don't collide).
     static func claudeConfigPath(tab: UUID?, excluded: Set<String>, snapshot: MCPRegistry.Snapshot) -> String? {
-        let config = claude(snapshot, excluded: excluded)
+        let config = claude(snapshot, excluded: excluded, tab: tab)
         guard let servers = config["mcpServers"] as? [String: Any], !servers.isEmpty,
               let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) else { return nil }
         let file = CantripPaths.cache("mcp/claude-\(tab?.uuidString ?? "shared").json")

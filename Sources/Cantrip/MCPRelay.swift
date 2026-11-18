@@ -29,6 +29,8 @@ final class MCPRelay: @unchecked Sendable {
         var transport: MCPOAuth.Transport = MCPOAuth.defaultTransport
         /// A server needs signing in again (or the keychain is locked).
         var onSignInProblem: (String, String) -> Void = { _, _ in }
+        /// A server the host answers itself (code mode's `cantrip_code`), or nil for a real one.
+        var builtIn: (Hello, @escaping (Data) -> Void) -> Upstream? = { _, _ in nil }
     }
 
     let environment: Environment
@@ -193,6 +195,10 @@ final class MCPRelay: @unchecked Sendable {
             if server.hasToolLimit, let tools = server.tools { allowedTools = Set(tools) }
             let deliver: (Data) -> Void = { [weak self] message in self?.fromUpstream(message) }
             let failed: (String) -> Void = { [weak self] reason in self?.upstreamEnded(reason) }
+            if let builtIn = relay.environment.builtIn(hello, deliver) {
+                upstream = builtIn
+                return
+            }
             do {
                 if server.isRemote {
                     upstream = try HTTPUpstream(server: server, environment: relay.environment, deliver: deliver)

@@ -752,3 +752,10 @@ final class CodexBackend: Backend, CantripHomeGuardedBackend {
 }
 
 extension CodexBackend: CantripHomeProtocolCarrier {}
+
+extension CodexBackend: CodeModePolicySource {
+    var codeModePolicy: CodeModePolicy {
+        CodeModePolicy(guardrail: guardrail, approval: .chosen(for: .codex, settings: settings), label: guardrailLabel,
+                       workdir: lock.withLock { workdir }, privacy: PrivacyRunRestrictions.restriction(for: self))
+    }
+}

@@ -144,6 +144,10 @@ struct SessionTabTests {
             try await testReplyWorkSplit()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "code-mode" {
+            try await testCodeMode()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "private-local-tools" {
             try await testPrivateLocalTools()
             return
@@ -376,6 +380,7 @@ struct SessionTabTests {
         try await testPrivacyContentRouting()
         try await testCantripHomeShadow()
         try await testPrivateLocalTools()
+        try await testCodeMode()
         try await testMuse()
         try testBuildQueue()
         try await testThreadTags()

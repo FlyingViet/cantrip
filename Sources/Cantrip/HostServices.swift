@@ -114,6 +114,7 @@ final class HostServices {
             }
         }
         self.remoteControlServer = remoteControlServer
+        CodeModeHost.manager = manager
         MCPHost.shared.start(remote: remoteControlServer, postsMacNotifications: postsMacNotifications)
         BackendStatusMonitor.shared.remote = remoteControlServer
         StorageUpkeepStatus.shared.remote = remoteControlServer

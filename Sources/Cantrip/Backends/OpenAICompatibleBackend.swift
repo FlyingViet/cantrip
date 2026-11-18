@@ -441,3 +441,10 @@ final class OpenAICompatibleBackend: NSObject, Backend, URLSessionDataDelegate, 
         return (trimmed.isEmpty ? "(no output, exit \(result.status))" : trimmed, result.status == 0)
     }
 }
+
+extension OpenAICompatibleBackend: CodeModePolicySource {
+    var codeModePolicy: CodeModePolicy {
+        CodeModePolicy(guardrail: guardrail, approval: .ask, label: guardrailLabel, workdir: currentWorkdir,
+                       privacy: PrivacyRunRestrictions.restriction(for: self))
+    }
+}

@@ -1832,3 +1832,10 @@ enum AntigravitySubagentTranscript {
         return cleaned
     }
 }
+
+extension AntigravityBackend: CodeModePolicySource {
+    var codeModePolicy: CodeModePolicy {
+        CodeModePolicy(guardrail: guardrail, approval: .chosen(for: .antigravity, settings: settings), label: guardrailLabel,
+                       workdir: stateLock.withLock { activeWorkdir }, privacy: PrivacyRunRestrictions.restriction(for: self))
+    }
+}

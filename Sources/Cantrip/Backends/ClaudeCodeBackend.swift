@@ -1163,3 +1163,10 @@ final class ClaudeCodeBackend: Backend, CantripHomeGuardedBackend {
         }
     }
 }
+
+extension ClaudeCodeBackend: CodeModePolicySource {
+    var codeModePolicy: CodeModePolicy {
+        CodeModePolicy(guardrail: guardrail, approval: homeApproval, label: guardrailLabel, workdir: processWorkdir,
+                       privacy: PrivacyRunRestrictions.restriction(for: self))
+    }
+}

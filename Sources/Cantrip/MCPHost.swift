@@ -20,12 +20,18 @@ final class MCPHost {
         let hub = MCPServerHub.shared
         hub.onNeedsAttention = { [weak self] name, phase in self?.alert(name, phase) }
         let environment = MCPRelay.Environment(
-            server: { name in MCPRegistry.load()?.servers.first { $0.name == name } },
+            server: { name in
+                if name == CodeMode.serverName { return CodeMode.isEnabled ? CodeMode.virtualServer : nil }
+                return MCPRegistry.load()?.servers.first { $0.name == name }
+            },
             refusal: { hello, server in
                 DispatchQueue.main.sync { MainActor.assumeIsolated { MCPHost.refusal(hello, server) } }
             },
             onSignInProblem: { name, message in
                 DispatchQueue.main.async { MainActor.assumeIsolated { MCPServerHub.shared.reportProblem(name, message) } }
+            },
+            builtIn: { hello, deliver in
+                hello.server == CodeMode.serverName ? CodeModeUpstream(hello: hello, deliver: deliver) : nil
             })
         let relay = MCPRelay(environment: environment)
         relay.start()
@@ -57,7 +63,9 @@ final class MCPHost {
         if MCPBackendConfig.tabDisabled(UUID(uuidString: tab)).contains(server.name) {
             return "\(server.name) is switched off for this tab."
         }
-        if taskRunTabs.contains(tab.uppercased()), !CantripHomeTaskTools.allowedServers.contains(server.name) {
+        // Code mode is open to scheduled tasks: each call a program makes is checked here as the task.
+        if taskRunTabs.contains(tab.uppercased()), server.name != CodeMode.serverName,
+           !CantripHomeTaskTools.allowedServers.contains(server.name) {
             return "Scheduled tasks don't get \(server.name) (\(CantripHomeTaskTools.serversKey))."
         }
         return nil

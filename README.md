@@ -94,6 +94,10 @@ and [macOS version support](docs/updating-and-troubleshooting.md#macos-26-and-27
   client changes the Mac's settings on the same pages.
   [Remote control](docs/remote-control.md), [Mac settings](docs/remote-control.md#mac-settings);
   on a cloud or SSH-only Mac, run it headless. [Headless host](docs/headless.md)
+- **Code mode:** an optional `cantrip_code` tool for every backend and Private
+  Local: the agent writes one short program that chains read-only tool calls,
+  Cantrip runs it in a sandbox on the Mac with each call's usual checks, and only
+  the result goes back to the model. [Code mode](docs/code-mode.md)
 - **Cantrip Home:** one permanent conversation that answers questions, hands
   project changes to the right tab or opens a new one, and runs scheduled
   (interval, weekday or monthly) tasks, trackers and incident investigations,

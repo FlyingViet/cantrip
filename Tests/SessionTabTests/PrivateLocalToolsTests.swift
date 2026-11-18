@@ -146,6 +146,24 @@ extension SessionTabTests {
                          && refused.output.contains("nothing was sent, created, changed or deleted"), name)
         }
         precondition(session.refused.values.reduce(0, +) == 4 && session.calls["mcp__tracker__get_issue"] == 1)
+
+        // Code mode: one program chains the session's own read-only tools; a write tool isn't in it.
+        precondition(!offered().contains(CodeMode.runTool), "Code mode is off by default")
+        session.codeMode = true
+        session.shapes = CodeModeShapes(file: folder.appendingPathComponent("shapes.json"))
+        precondition(offered().contains(CodeMode.runTool), "Code mode offers run_tool_script")
+        let program = await session.call(CodeMode.runTool, arguments: ["script": """
+            const [found, issue] = await Promise.all([notes.notes_search({ query: "Example Co" }), tracker.get_issue({ id: "DEMO-1" })]);
+            let write = "not tried";
+            try { await new Promise((ok, no) => __call("tracker", "create_issue", "{}", ok, no)); write = "ran"; } catch (e) { write = "refused"; }
+            return { found, issue, write, hasCreate: typeof tracker.create_issue };
+            """])
+        precondition(program.success && program.output.contains("Found 2 notes about Example Co") && program.output.contains("DEMO-1")
+                     && program.output.contains(#""write":"refused""#) && program.output.contains(#""hasCreate":"undefined""#)
+                     && program.output.contains("(2 tool calls, 1 refused"),
+                     "A program's calls are the session's own read-only calls: \(program.output)")
+        precondition(session.programs == 1 && session.programCalls == 2 && session.calls["mcp__notes__notes_search"] == 1)
+        session.codeMode = false
         let onlyNotes = await tools.session(PrivateLocalToolSettings(enabled: true, servers: ["notes"]))
         precondition(onlyNotes.servers.map(\.name) == ["notes"]
                      && !onlyNotes.openAITools().contains { ($0["function"] as? [String: Any])?["name"] as? String == PrivateLocalToolSession.searchName },

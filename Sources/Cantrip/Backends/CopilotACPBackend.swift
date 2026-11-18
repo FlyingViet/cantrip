@@ -657,3 +657,10 @@ final class CopilotACPBackend: Backend, CantripHomeGuardedBackend {
         (error?["message"] as? String) ?? "unknown error"
     }
 }
+
+extension CopilotACPBackend: CodeModePolicySource {
+    var codeModePolicy: CodeModePolicy {
+        CodeModePolicy(guardrail: guardrail, approval: .ask, label: guardrailLabel, workdir: settings.claudeWorkdir,
+                       privacy: PrivacyRunRestrictions.restriction(for: self))
+    }
+}

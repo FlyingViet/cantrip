@@ -152,6 +152,9 @@ allowed tools and the tools left out.
 - Each reply's tool calls (names and arguments, not results) are saved with it,
   and later requests replay them before that answer. Shown as plain text, earlier
   answers were repeated instead of looked up again.
+- With [code mode](code-mode.md) on, a reply also gets `run_tool_script`: one
+  program chains these same read-only tools (with the same refusals), and only its
+  result counts against the context window.
 
 Both native apps need updated builds and the host must reopen to activate it.
 The paired API advertises `isLocalPrivate`/`supportsPrivateLocalSettings`, with
