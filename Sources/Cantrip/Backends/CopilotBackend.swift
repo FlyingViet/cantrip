@@ -313,6 +313,13 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
                 "userMessage": request.userMessage
             ]
             let newRuntime = process == nil
+            if newRuntime, let target = resumeTarget, target.config == config,
+               let size = CopilotSessionHistory.tooLargeToResume(target.sessionID) {
+                // A resumed runtime would hold about 6.5 times the history in memory (CopilotSessionHistory).
+                Log.write("copilot: starting a new session instead of resuming \(target.sessionID.prefix(8)), "
+                          + "whose history is \(size >> 20) MB; the conversation's recap carries it over")
+                resumeTarget = nil
+            }
             let continuesSession = newRuntime ? resumeTarget?.config == config : agentSessionID != nil
             if continuesSession, let carried = promptWithMissedTurns(request) {
                 // Used only if the session really continues; a new one gets initialPrompt instead.

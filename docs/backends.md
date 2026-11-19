@@ -332,6 +332,14 @@ again every 5 minutes. MCP servers alone don't keep a tab running. Even with
 **Never**, a runtime idle for 2 hours is restarted before its next message,
 because the Copilot CLI can crash after long idle periods.
 
+A resumed runtime holds about 6.5 times its session's saved history (the CLI's
+`events.jsonl`, which keeps everything since the session began, compactions
+and viewed images included). Once that history passes 64 MB, the tab's next
+runtime starts a new Copilot session seeded with Cantrip's recap of the
+conversation instead, which keeps a long tab near 0.5 GB rather than 1–2 GB.
+The tab and its history in Cantrip stay as they are; Copilot's own notes and
+to-do list for the old session don't carry over.
+
 ## Give each project the same toolchain on every backend
 
 An environment profile pins a project's Xcode, Node, extra PATH folders and
