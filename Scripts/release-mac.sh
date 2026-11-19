@@ -55,6 +55,9 @@ fi
 say "Signing ($SIGN_IDENTITY, hardened runtime)"
 codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" \
     "$APP/Contents/PlugIns/CantripHomeWindow.bundle"
+# Mach-O helpers in Resources/bin aren't nested bundles, so the app's signature only seals them.
+codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" \
+    "$APP/Contents/Resources/bin/cantrip-mcp-relay"
 codesign --force --options runtime --timestamp --entitlements Resources/Cantrip.entitlements \
     --sign "$SIGN_IDENTITY" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"

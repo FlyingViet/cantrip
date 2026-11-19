@@ -235,8 +235,10 @@ cantrip mcp connect mobbin     # sign in to a remote server
   `~/.gemini/config/mcp_config.json`. Change servers in Settings, not in those
   files.
 - A server that needs a sign-in, a credential or a tool limit reaches the
-  backend through `Scripts/cantrip-mcp`, a small relay to the running
-  Cantrip. Cantrip adds the credential, keeps only the allowed tools, and
+  backend through a small relay to the running Cantrip: the app's native
+  `cantrip-mcp-relay` (built from `Scripts/cantrip-mcp-relay.c`, about 1 MB
+  per copy; each session runs one per relayed server), or `Scripts/cantrip-mcp`
+  when the app has none. Cantrip adds the credential, keeps only the allowed tools, and
   answers with a clear error when the server is off for that tab or backend,
   signed out, or the keychain is locked. Plain local servers keep their own
   command.

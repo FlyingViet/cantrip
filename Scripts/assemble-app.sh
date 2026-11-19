@@ -1,8 +1,8 @@
 #!/bin/bash
 # Assembles an unsigned Cantrip.app at the given path from `make build` and `make home-window`
 # output: the binary, Info.plist stamped with the build identity and date, the icon, the helper
-# scripts (CantripInstall.bundledScripts), the background engine's login agent and the Home
-# window plug-in when it was built.
+# scripts (CantripInstall.bundledScripts), the native MCP relay, the background engine's login
+# agent and the Home window plug-in when it was built.
 # `make app` signs it with the development identity; Scripts/release-mac.sh with Developer ID.
 #
 #   BUILD_DIR=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path) \
@@ -32,6 +32,10 @@ plutil -replace CantripBuildDate -string "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$DE
 
 if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$DEST/Contents/Resources/"; fi
 for script in "${SCRIPTS[@]}"; do cp -p "Scripts/$script" "$DEST/Contents/Resources/bin/"; done
+# The native MCP relay (Scripts/cantrip-mcp-relay.c): backends run one per relayed server in every
+# session, so it replaces the cantrip-mcp script there (about 1 MB a copy instead of 8).
+clang -O2 -Wall -Werror -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
+    -o "$DEST/Contents/Resources/bin/cantrip-mcp-relay" Scripts/cantrip-mcp-relay.c
 # The background engine's login agent (BackgroundEngine.swift), named after the bundle identifier.
 BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw "$DEST/Contents/Info.plist")
 EXECUTABLE=$(plutil -extract CFBundleExecutable raw "$DEST/Contents/Info.plist")

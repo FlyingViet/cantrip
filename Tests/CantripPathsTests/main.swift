@@ -127,6 +127,15 @@ do {
     expect((try? String(contentsOf: link, encoding: .utf8)) == "other", "the other program stays")
     expect(Set(CantripInstall.bundledScripts) == ["cantrip", "cantrip-mcp", "mcp-on-demand", "messages-send", "mail-refresh"],
            "the bundled scripts match Scripts/assemble-app.sh")
+
+    // The native MCP relay is used only from an app that has it.
+    let helperBin = releaseApp.appendingPathComponent("Contents/Resources/bin")
+    try? fileManager.createDirectory(at: helperBin, withIntermediateDirectories: true)
+    expect(CantripInstall.bundledHelper("cantrip-mcp-relay", app: releaseApp) == nil, "no relay built: nil, so the script is used")
+    let relay = helperBin.appendingPathComponent("cantrip-mcp-relay")
+    fileManager.createFile(atPath: relay.path, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+    expect(CantripInstall.bundledHelper("cantrip-mcp-relay", app: releaseApp) == relay.path, "the app's relay")
+    expect(CantripInstall.bundledHelper("cantrip-mcp-relay", app: helperBin) == nil, "outside an app: nil")
 }
 
 if failures == 0 {

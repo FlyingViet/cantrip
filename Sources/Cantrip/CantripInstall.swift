@@ -40,6 +40,14 @@ enum CantripInstall {
         return home.appendingPathComponent("Coding/Cantrip/Scripts").appendingPathComponent(name).path
     }
 
+    /// A compiled helper in the app's `Contents/Resources/bin` (Scripts/assemble-app.sh); nil outside
+    /// an app (tests, `swift run`) or when the build didn't make it.
+    static func bundledHelper(_ name: String, app: URL = Bundle.main.bundleURL) -> String? {
+        guard app.pathExtension == "app" else { return nil }
+        let path = app.appendingPathComponent("Contents/Resources/bin").appendingPathComponent(name).path
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+    }
+
     /// `script` with the home folder written as `~`, for text that agents read.
     static func displayScript(_ name: String) -> String {
         tilde(script(name), home: FileManager.default.homeDirectoryForCurrentUser)

@@ -1,11 +1,15 @@
 import Foundation
 
 /// Cantrip's MCP server list in each backend's own config format. Relayed servers become a
-/// `cantrip-mcp NAME` command; plain local servers keep their own command. No entry carries a
+/// `cantrip-mcp-relay NAME` (or `cantrip-mcp NAME`) command; plain local servers keep their own command. No entry carries a
 /// secret: the relay adds those in the host.
 enum MCPBackendConfig {
-    /// `cantrip-mcp`: the checkout's in a source install, otherwise the app's own copy.
-    static var relayScript: String { CantripInstall.script("cantrip-mcp") }
+    /// The relay a relayed server's entry runs. Every session starts one per relayed server, so the
+    /// app's native `cantrip-mcp-relay` (about 1 MB a copy) goes first; else the `cantrip-mcp` script
+    /// (about 8 MB): the checkout's in a source install, otherwise the app's own copy.
+    static var relayScript: String {
+        CantripInstall.bundledHelper("cantrip-mcp-relay") ?? CantripInstall.script("cantrip-mcp")
+    }
 
     /// Tool namespaces OpenAI keeps for its own tools. Copilot and Codex name an MCP tool
     /// `<server>-<tool>`, and a GPT model refuses the whole request when a server is called one of
