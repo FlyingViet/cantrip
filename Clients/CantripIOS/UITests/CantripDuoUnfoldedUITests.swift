@@ -85,14 +85,19 @@ final class CantripDuoUnfoldedUITests: XCTestCase {
         XCTAssertTrue(sidebar.exists, "The sidebar stays open while typing")
         save(app, "sidebar-open-typing")
 
+        // Upright the sidebar slides over the chat, and a tap outside it (the rail too) only closes it.
+        if window.frame.width < window.frame.height, sidebar.exists {
+            press(toggle)
+            XCTAssertTrue(waitForAbsence(sidebar), "The toggle closes the sidebar over the chat")
+        }
         // The rail is the sidebar toggle, Settings and the menu; Model Settings is the menu's first item.
         // By label: the menu's identifier is masked in the rail.
         let menu = app.buttons.matching(NSPredicate(format: "label IN %@", ["Chat menu", "Tab menu"])).firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 5), "The rail has the menu")
-        menu.tap()
+        press(menu)
         let modelSettings = app.buttons["Model Settings"].firstMatch
         XCTAssertTrue(modelSettings.waitForExistence(timeout: 5), "The menu has Model Settings")
-        modelSettings.tap()
+        press(modelSettings)
         XCTAssertTrue(app.navigationBars["Model Settings"].waitForExistence(timeout: 10),
                       "Model Settings opens the existing sheet")
         save(app, "model-settings")
