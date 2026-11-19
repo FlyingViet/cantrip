@@ -31,7 +31,16 @@ final class CantripViewsUITests: XCTestCase {
         }
 
         openTasks()
-        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'home.view.'"))
+        // Views keeps the collapsed state it was left in: open it.
+        let viewsHeader = app.descendants(matching: .any)["home.tasks.section.views"].firstMatch
+        XCTAssertTrue(viewsHeader.waitForExistence(timeout: 20), "Tasks has its Views section")
+        if viewsHeader.value as? String == "Collapsed" {
+            press(viewsHeader)
+            sleep(1)
+        }
+        // The thumbnails, not their ⋯ menu buttons (`home.view.menu.<id>`).
+        let rows = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH 'home.view.' AND NOT (identifier BEGINSWITH 'home.view.menu.')"))
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 20), "Tasks lists the Mac's views")
         sleep(1)
         save("views-list")
