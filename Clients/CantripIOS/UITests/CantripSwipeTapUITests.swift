@@ -112,20 +112,24 @@ final class CantripSwipeTapUITests: XCTestCase {
         sleep(1)
     }
 
-    /// Scrolls the conversation until `element` sits well inside the screen, dragging from a strip
-    /// of the screen's right edge so the drag itself starts on no card.
+    /// Scrolls the conversation until `element` sits well inside the screen, dragging in the chat's
+    /// right margin so the drag itself starts on no card.
     @discardableResult
     private func reveal(_ element: XCUIElement, _ name: String) -> Bool {
         let window = app.windows.firstMatch
-        for attempt in 0..<12 {
-            if element.exists, element.isHittable {
+        var last: CGRect?
+        for attempt in 0..<24 {
+            if element.exists {
                 let frame = element.frame, screen = window.frame
                 // Swipes and taps land on its middle row; tall cards needn't fit whole on the Duo's cover screen.
-                if frame.midY > screen.minY + 120, frame.midY < screen.maxY - 140 { return true }
-                let up = frame.midY > screen.midY
-                drag(window, up: up)
+                if element.isHittable, frame.midY > screen.minY + 120, frame.midY < screen.maxY - 140 { return true }
+                // At the top or bottom of the conversation it can't move further: on screen is enough.
+                if element.isHittable, frame == last, frame.midY > screen.minY, frame.midY < screen.maxY { return true }
+                last = frame
+                // Toward it: a long conversation can hold it many screens away.
+                drag(window, up: frame.midY > screen.midY)
             } else {
-                drag(window, up: attempt >= 6)
+                drag(window, up: attempt >= 12)
             }
             XCTAssertFalse(openedSomething(timeout: 0.5), "Scrolling must not open anything (\(name))")
         }
@@ -134,10 +138,26 @@ final class CantripSwipeTapUITests: XCTestCase {
     }
 
     private func drag(_ window: XCUIElement, up: Bool) {
-        let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.6 : 0.35))
-        let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.4 : 0.55))
+        let origin = window.coordinate(withNormalizedOffset: .zero), x = scrollStripX(window)
+        let start = origin.withOffset(CGVector(dx: x, dy: window.frame.height * (up ? 0.6 : 0.35)))
+        let end = origin.withOffset(CGVector(dx: x, dy: window.frame.height * (up ? 0.4 : 0.55)))
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: 600, thenHoldForDuration: 0.2)
         sleep(1)
+    }
+
+    private var stripX: CGFloat?
+
+    /// Where scrolling drags run: just past the composer's right end, the chat's margin beside the
+    /// messages and cards (which end at the same inset), so a drag scrolls the conversation instead of
+    /// panning a map card, and stays clear of the Duo's vertical bar.
+    private func scrollStripX(_ window: XCUIElement) -> CGFloat {
+        if let stripX { return stripX }
+        let composer = app.descendants(matching: .any).matching(identifier: "chat.composer").allElementsBoundByIndex
+            .map(\.frame).filter { !$0.isEmpty }
+        guard let right = composer.map(\.maxX).max() else { return window.frame.width / 2 }
+        let x = min(right + 12, window.frame.maxX - 4) - window.frame.minX
+        stripX = x
+        return x
     }
 
     /// A quick 100 pt swipe right, enough to open the drawer, starting just inside the element.
