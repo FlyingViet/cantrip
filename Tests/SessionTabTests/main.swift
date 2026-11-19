@@ -227,6 +227,7 @@ struct SessionTabTests {
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "mcp" {
             try testCopilotMemoryLimits()
+            try testCantripHomeTaskServers()
             try await testMCPSharing()
             print("MCP sharing tests passed")
             return
@@ -359,6 +360,7 @@ struct SessionTabTests {
         try await testStopPausesTheQueue()
         try await testMCPSharing()
         try testCopilotMemoryLimits()
+        try testCantripHomeTaskServers()
         try testFolderRulesReachEveryBackend()
         try await testSkillsAPI()
         await testMCPSettingsFitThePane()

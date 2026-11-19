@@ -255,10 +255,12 @@ enum CantripHomeTaskTools {
         backend.toolDeferThreshold = taskRun ? deferThreshold : nil
     }
 
-    /// Exact server names a scheduled-task run's Copilot session should not start.
+    /// Exact server names a scheduled-task run's Copilot session should not start. With code mode on
+    /// its `cantrip_code` server stays, since a task's instructions may reach Mail, Messages and homelab
+    /// through it (the bills monitor's do).
     static func disabledServers(configured: [String] = configuredServers(),
-                                allowed: [String] = allowedServers) -> [String] {
-        configured.filter { !allowed.contains($0) }.sorted()
+                                allowed: [String] = allowedServers, codeMode: Bool = CodeMode.isEnabled) -> [String] {
+        configured.filter { !allowed.contains($0) && !(codeMode && $0 == CodeMode.serverName) }.sorted()
     }
 }
 

@@ -173,6 +173,17 @@ extension SessionTabTests {
         func reset() {}
     }
 
+    /// The MCP servers a scheduled-task run starts: the ones tasks use, plus code mode's when it's on.
+    static func testCantripHomeTaskServers() throws {
+        let configured = ["bitwarden", "cantrip_code", "homelab", "personal", "rea"]
+        let allowed = ["homelab", "github-mcp-server", "personal"]
+        precondition(CantripHomeTaskTools.disabledServers(configured: configured, allowed: allowed, codeMode: true)
+                        == ["bitwarden", "rea"], "With code mode on, a task run keeps cantrip_code")
+        precondition(CantripHomeTaskTools.disabledServers(configured: configured, allowed: allowed, codeMode: false)
+                        == ["bitwarden", "cantrip_code", "rea"], "With code mode off, cantrip_code is off too")
+        print("Home task server tests passed")
+    }
+
     /// Attended Home on Copilot: the static protocol goes to the system instructions once, and
     /// each message carries only that turn's data; other backends keep the full block.
     @MainActor
