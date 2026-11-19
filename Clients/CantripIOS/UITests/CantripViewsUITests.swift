@@ -100,7 +100,7 @@ final class CantripViewsUITests: XCTestCase {
             press(tasks.allElementsBoundByIndex.first { $0.isHittable } ?? tasks.firstMatch)
             return
         }
-        // Folded, Home's sections are on the bar; unfolded, in the sidebar.
+        // Folded, Home's sections are in the tab drawer; unfolded, in the sidebar.
         let toggle = app.buttons["duo.rail.sidebar"].firstMatch
         if toggle.waitForExistence(timeout: 20) {
             if toggle.label == "Show Sidebar" {
@@ -112,9 +112,12 @@ final class CantripViewsUITests: XCTestCase {
             press(row)
             return
         }
-        let section = app.buttons["duo.bar.section.tasks"].firstMatch
-        XCTAssertTrue(section.waitForExistence(timeout: 5))
-        press(section)
+        let tabs = app.buttons["home.tabs"].firstMatch
+        XCTAssertTrue(tabs.waitForExistence(timeout: 5))
+        press(tabs)
+        let row = app.buttons["drawer.section.tasks"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        press(row)
     }
 
     /// A tap at the element's place in the window (taps by element land off on the Duo's inner display).

@@ -1,8 +1,8 @@
 import XCTest
 
 /// iPhone Duo folded (the simulator's default pose), in a project tab: there is no "‹ Home". The Tabs
-/// button in the navigation bar (expanded from its pill) and a swipe in from the left edge both bring
-/// out the tab picker, which switches tabs or goes back to Home.
+/// button in the navigation bar and a swipe in from the left edge both bring out the tab picker, which
+/// switches tabs or goes back to one of Home's sections.
 /// Run on an iPhone Duo simulator with `TEST_RUNNER_CANTRIP_UITEST_HOME_URL=http://127.0.0.1:<port>`
 /// (and `TEST_RUNNER_CANTRIP_UITEST_HOME_TOKEN` if the host's token isn't `duo-qa-token`) against a
 /// fixture host with at least two tabs. `TEST_RUNNER_CANTRIP_UITEST_SHOTS=<folder>` saves screenshots.
@@ -65,13 +65,17 @@ final class CantripDuoTabPickerUITests: XCTestCase {
         sleep(1)
         save("picker-from-swipe")
 
-        // Home is pinned first in the picker.
-        let home = app.descendants(matching: .any)["drawer.home"].firstMatch
-        XCTAssertTrue(home.waitForExistence(timeout: 5), "Home is in the picker")
-        home.tap()
-        XCTAssertTrue(waitForAbsence(drawer), "Choosing Home closes the picker")
-        XCTAssertTrue(app.buttons["duo.bar.section.builds"].firstMatch.waitForExistence(timeout: 10),
-                      "Back on Home: its sections are in the bar")
+        // Home is pinned first in the picker, with a row per section: one goes straight to Home's Builds.
+        XCTAssertTrue(app.descendants(matching: .any)["drawer.homeHeader"].firstMatch.waitForExistence(timeout: 5),
+                      "Home is in the picker")
+        let builds = app.buttons["drawer.section.builds"].firstMatch
+        XCTAssertTrue(builds.waitForExistence(timeout: 5), "Home's sections are in the picker")
+        XCTAssertFalse(builds.isSelected, "In a tab, no Home section is on screen")
+        builds.tap()
+        XCTAssertTrue(waitForAbsence(drawer), "Choosing Builds closes the picker")
+        tabs.tap()
+        XCTAssertTrue(app.buttons["drawer.section.builds"].firstMatch.waitForSelection(), "Back on Home, on Builds")
+        save("picker-home-builds")
     }
 
     /// The folded Duo's outer display, saved to `CANTRIP_UITEST_SHOTS` when set.

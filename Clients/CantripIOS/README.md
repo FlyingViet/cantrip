@@ -187,7 +187,7 @@ reloaded; with Reduce Motion, **‹ Home** switches without sliding. Handoff car
 notification and the Tabs widget open the tab the same way. On an iPhone Duo, folded or
 unfolded, a tab has no **‹ Home**: the right swipe from the left edge, or **Tabs** in the side bar
 when folded (the sidebar button when unfolded), brings out the tab list instead, so you
-can switch straight to another tab or pick Cantrip Home, pinned at the top. Tab ages and outcomes need
+can switch straight to another tab or to one of Cantrip Home's sections, pinned at the top. Tab ages and outcomes need
 Cantrip host e8e5c0b or later; older hosts show names and live status only.
 
 The composer mic is **push-to-talk dictation**: recording starts on touch-down,
@@ -1443,10 +1443,10 @@ The `HermesUITests` scheme runs real-touch UI checks against DEBUG-only fixture 
 The app supports portrait and both landscape orientations on iPhone, plus all
 orientations on iPad. On iPhone Duo, in every pose, the side controls are **one bar** along the
 screen's edge, always open: **Tabs** (folded) or a **sidebar toggle** (unfolded), **Settings**,
-**View Mac** and the tab's menu, whose first item is **Model Settings**. Folded, Home's sections
-(Chat, Tasks, Artifacts, Builds) follow at the bottom of the bar; unfolded they are in the
-sidebar, so the bar holds only those actions. Never a bottom bar. When the folded bar is short (on
-its side, or beside a Live Activity), the sections stay and the other actions move into the
+**View Mac** and the tab's menu, whose first item is **Model Settings**, and nothing else. Home's
+sections (Chat, Tasks, Artifacts, Builds) are rows under Cantrip Home in the tab drawer that **Tabs**
+opens when folded, and in the sidebar when unfolded. Never a bottom bar. When the folded bar is short
+(on its side, or beside a Live Activity), **Tabs** stays and the other actions move into the
 system's **…** button. The sidebar toggle opens
 and closes Gateway Mac's left sidebar with Pip, Home's sections, the tabs (with **+**), the open
 chat's **Skills** and the connection; the chat header keeps the title and state on the left and

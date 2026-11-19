@@ -169,7 +169,8 @@ final class CantripSwipeTapUITests: XCTestCase {
             let tabs = app.buttons["Tabs"].firstMatch
             if !handoffButton.exists, tabs.exists {
                 tabs.tap()
-                let homeRow = app.descendants(matching: .any)["drawer.home"].firstMatch
+                // Folded, the drawer lists Home's sections (Chat is Home's chat).
+                let homeRow = app.buttons["drawer.section.chat"].firstMatch
                 if homeRow.waitForExistence(timeout: 3) { homeRow.tap() }
             }
         } else if backPill.exists {

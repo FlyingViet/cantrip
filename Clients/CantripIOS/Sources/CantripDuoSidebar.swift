@@ -550,15 +550,7 @@ struct CantripDuoSidebar: View {
         model.isHomeSelected ? model.selectedSession : model.homeSummary
     }
 
-    private func badge(for section: CantripHomeSection) -> Int? {
-        let count: Int
-        switch section {
-        case .chat: count = home?.isCantripHome == true ? home?.pendingInputCount ?? 0 : 0
-        case .tasks: count = model.homeTasks.filter { $0.state == "running" }.count
-        default: count = 0
-        }
-        return count > 0 ? count : nil
-    }
+    private func badge(for section: CantripHomeSection) -> Int? { model.homeSectionBadge(section) }
 
     private var mood: CantripMascotMood {
         .resolve(

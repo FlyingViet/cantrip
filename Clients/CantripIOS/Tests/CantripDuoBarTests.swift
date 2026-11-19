@@ -3,15 +3,20 @@ import UIKit
 import XCTest
 @testable import Hermes
 
-/// The iPhone Duo's one navigation bar: always open, Home's sections on it only while folded, and the
-/// app-drawn rail (unfolded upright).
+/// The iPhone Duo's one navigation bar: always open with only actions (Home's sections are in the
+/// tab drawer folded and the sidebar unfolded), and the app-drawn rail (unfolded upright).
 @MainActor
 final class CantripDuoBarTests: XCTestCase {
-    func testHomesSectionsAreOnTheBarOnlyWhileFolded() {
-        XCTAssertTrue(CantripDuoBarItems.showsSections(inHome: true, unfolded: false), "Folded Home: no sidebar, so the bar")
-        XCTAssertFalse(CantripDuoBarItems.showsSections(inHome: true, unfolded: true), "Unfolded: the sidebar lists them")
-        XCTAssertFalse(CantripDuoBarItems.showsSections(inHome: false, unfolded: false), "A tab has no sections")
-        XCTAssertFalse(CantripDuoBarItems.showsSections(inHome: false, unfolded: true))
+    func testHomesSectionsAreInTheDrawerOnlyWhileFolded() {
+        let upright = ChatDisplayTraits(hasVerticalBar: true, isFolded: true)
+        let sideways = ChatDisplayTraits(hasVerticalBar: true, isLandscape: true, isFolded: true)
+        XCTAssertTrue(CantripHomeDrawerSections.isListed(in: upright), "Folded: the bar holds only actions, so the drawer")
+        XCTAssertTrue(CantripHomeDrawerSections.isListed(in: sideways), "Folded on its side, too")
+        XCTAssertFalse(CantripHomeDrawerSections.isListed(in: ChatDisplayTraits(hasVerticalBar: true, isHingeOpen: true)),
+                       "Unfolded on its side: the sidebar lists them")
+        XCTAssertFalse(CantripHomeDrawerSections.isListed(in: ChatDisplayTraits(isHingeOpen: true)),
+                       "Unfolded upright (the app-drawn rail): the sidebar lists them")
+        XCTAssertFalse(CantripHomeDrawerSections.isListed(in: ChatDisplayTraits()), "Other iPhones keep Home's bottom bar")
     }
 
     /// The iPhone Duo open upright (669 x 951 pt, an 81 pt status band): the app-drawn rail, always open

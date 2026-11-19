@@ -293,6 +293,34 @@ struct CantripTabHeaderTitle: View {
 }
 
 /// Cantrip Home's left drawer: Home pinned first, then background jobs, then every project tab.
+/// Home's sections in the tab drawer on the folded iPhone Duo. Its bar holds only actions and it has no
+/// sidebar, so the drawer lists Chat, Tasks, Artifacts and Builds, as the unfolded Duo's sidebar does.
+struct CantripHomeDrawerSections {
+    /// The section on screen; nil while a project tab is open.
+    var selected: CantripHomeSection?
+    let onSelect: (CantripHomeSection) -> Void
+
+    /// The Duo's bar shows (an iPhone Duo) without its sidebar: folded.
+    static func isListed(in traits: ChatDisplayTraits) -> Bool {
+        traits.placesActionsInVerticalBar && !traits.isUnfoldedDuo
+    }
+}
+
+extension CantripRemoteModel {
+    /// The count beside a Home section in the drawer and the sidebar: Chat's questions waiting for an
+    /// answer, Tasks' running runs; nil when there is none.
+    func homeSectionBadge(_ section: CantripHomeSection) -> Int? {
+        let home = currentHomeSummary
+        let count: Int
+        switch section {
+        case .chat: count = home?.isCantripHome == true ? home?.pendingInputCount ?? 0 : 0
+        case .tasks: count = homeTasks.filter { $0.state == "running" }.count
+        default: count = 0
+        }
+        return count > 0 ? count : nil
+    }
+}
+
 struct CantripHomeTabDrawer: View {
     @ObservedObject var model: CantripRemoteModel
     var isModal = true
@@ -307,7 +335,11 @@ struct CantripHomeTabDrawer: View {
     let onClose: (String) -> Void
     /// Settings, from the drawer's footer; nil hides the button.
     var onOpenSettings: (() -> Void)? = nil
+    /// Home's sections as rows under Home (folded iPhone Duo); nil keeps the one Home row.
+    var homeSections: CantripHomeDrawerSections? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The icon column of Home's section rows, widening with the text so icons never cover titles.
+    @ScaledMetric(relativeTo: .body) private var sectionIconWidth: CGFloat = 24
     @State private var query = ""
     @FocusState private var searchFocused: Bool
     @AccessibilityFocusState private var titleFocused: Bool
@@ -444,6 +476,75 @@ struct CantripHomeTabDrawer: View {
         .accessibilityIdentifier("drawer.home")
     }
 
+    /// Home pinned first, with a row per section; a row opens Home on that section.
+    private func homeSectionsCard(_ sections: CantripHomeDrawerSections) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 10) {
+                if !dynamicTypeSize.isAccessibilitySize {
+                    CantripMascotView(mood: model.isConnected ? .idle : .sleeping, outfit: outfit, size: 36, frameTime: 1)
+                }
+                Image(systemName: "house.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.purple)
+                Text("Cantrip Home")
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                Image(systemName: "pin.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(45))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+            .padding(.bottom, 4)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Cantrip Home")
+            .accessibilityValue("Pinned")
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("drawer.homeHeader")
+            ForEach(CantripHomeSection.allCases) { section in
+                homeSectionRow(section, sections)
+            }
+        }
+        .padding(10)
+        .background(Color.purple.opacity(sections.selected != nil ? 0.22 : 0.1), in: RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal)
+    }
+
+    private func homeSectionRow(_ section: CantripHomeSection, _ sections: CantripHomeDrawerSections) -> some View {
+        let selected = sections.selected == section
+        let badge = model.homeSectionBadge(section)
+        return Button {
+            searchFocused = false
+            if isModal { onDismiss() }
+            sections.onSelect(section)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: section.systemImage)
+                    .foregroundStyle(.tint)
+                    .frame(width: sectionIconWidth)
+                Text(section.title)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let badge {
+                    Text("\(badge)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(minHeight: 44)
+            .background(selected ? Color.accentColor.opacity(0.2) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(section.title)
+        .accessibilityValue(badge.map { section == .tasks ? "\($0) running" : "\($0) waiting" } ?? "")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("drawer.section.\(section.rawValue)")
+    }
+
     private var backgroundRow: some View {
         Button {
             searchFocused = false
@@ -527,7 +628,7 @@ struct CantripHomeTabDrawer: View {
             } : nil,
             header: {
                 AnyView(VStack(alignment: .leading, spacing: 10) {
-                    homeRow
+                    if let homeSections { homeSectionsCard(homeSections) } else { homeRow }
                     if showsBackgroundJobs { backgroundRow }
                     // With sections, Tabs and each section get their own headers in the list.
                     if model.tabSections.isEmpty || filteredSessions.isEmpty { tabsHeader }

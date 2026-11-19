@@ -70,18 +70,19 @@ spans the host and this app is one commit.
   Folded, the Tabs button toggles the tab drawer (the vertical bar stays tappable above it). On a
   Duo, in every pose and with the sidebar open or closed, the side controls are one bar
   (`CantripDuoBarItems`, Sources/CantripDuoBar.swift), always open (no pill or minimizing, since
-  2026-11-18): Tabs (folded) or the sidebar toggle (unfolded), Settings, View Mac and the menu. Folded,
-  in Home, its sections follow at the bottom; unfolded they are only in the sidebar
-  (`CantripDuoBarItems.showsSections`), never a bottom bar. Where the system has a vertical bar
+  2026-11-18), holding only actions: Tabs (folded) or the sidebar toggle (unfolded), Settings, View Mac
+  and the menu. Home's sections are rows in the tab drawer folded (`CantripHomeDrawerSections`, under
+  Cantrip Home; a row closes the drawer and opens Home on that section, from a tab too) and in the
+  sidebar unfolded, never on the bar or a bottom bar. Where the system has a vertical bar
   (folded, unfolded on its side) the bar is one `.bottomBar` group with
   `.axisBehavior(.verticalPreferred)` (`CantripDuoVerticalBar`); re-id the host by
-  `CantripDuoBarLayout` (posture, Home or tab, View Mac, sections). Sections are
-  `.visibilityPriority(.high)` and actions `.low`, so a short bar (folded landscape, a Live Activity)
-  moves actions into the system's "…" first. Upright, the app draws the actions at the bottom of its
+  `CantripDuoBarLayout` (posture, Home or tab, View Mac). Settings, View Mac and the menu are
+  `.visibilityPriority(.low)`, so a short bar (folded landscape, a Live Activity) moves them into the
+  system's "…" before Tabs. Upright, the app draws the actions at the bottom of its
   rail (`CantripDuoAppRail`, within thumb reach, text capped at xxxLarge). Home's
   `TabView` tab bar is always hidden; other iPhones use `CantripHomeCompactTabBar`. A project tab on the Duo
   (folded or not) has no "‹ Home": the left-edge swipe and the Tabs button (folded; unfolded, the
-  sidebar toggle) bring out the tab picker, with Home pinned first (`usesDuoTabPicker`). Other
+  sidebar toggle) bring out the tab picker, with Home and its sections pinned first (`usesDuoTabPicker`). Other
   iPhones keep "‹ Home" and the swipe back to Home. Do not infer Duo from dimensions or device
   names. `AGENTGATEWAY_DUO_SDK` is selected by SDK in `project.yml`, not by the
   Swift compiler version; keep both SDK and iOS availability guards.

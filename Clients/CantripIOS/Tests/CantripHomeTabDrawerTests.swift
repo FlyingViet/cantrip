@@ -417,6 +417,18 @@ final class CantripHomeTabDrawerTests: XCTestCase {
                                   style: style, width: width, height: 140)
             }
         }
+        // The folded iPhone Duo's drawer (466 pt outer display): Home's sections as rows, Tasks on screen.
+        let foldedDrawer = CantripHomeTabDrawer(
+            model: model, backgroundActiveCount: 3, backgroundInputCount: 0,
+            onDismiss: {}, onSelectHome: {}, onOpenBackground: {}, onSelect: { _ in },
+            onCreate: {}, onRename: { _ in }, onClose: { _ in },
+            homeSections: CantripHomeDrawerSections(selected: .tasks) { _ in }
+        )
+        .background(.regularMaterial)
+        try await capture(foldedDrawer.frame(width: CantripDrawerGesture.panelWidth(available: 466)),
+                          "home-tabs-drawer-duo-folded-dark", style: .dark, width: 466, height: 678)
+        try await capture(foldedDrawer, "home-tabs-drawer-duo-folded-ax", style: .dark, width: 466, height: 678,
+                          size: .accessibility3)
         try await capture(drawer, "home-tabs-drawer-ax", style: .dark, width: 393, size: .accessibility3)
         try await capture(sidebar, "home-tabs-duo-sidebar-ax", style: .dark, width: CantripDuoSidebar.width,
                           size: .accessibility3)

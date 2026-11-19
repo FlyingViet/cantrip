@@ -1274,7 +1274,8 @@ struct ChatView: View {
                     dismiss()
                     composerFocused = false
                     showSettings = true
-                }
+                },
+                homeSections: drawerHomeSections
             )
         } content: {
             Group {
@@ -2495,14 +2496,19 @@ struct ChatView: View {
         }
     }
 
-    /// Home's sections on the Duo's bar: folded only (unfolded, the sidebar lists them).
-    private var showsDuoBarSections: Bool {
-        CantripDuoBarItems.showsSections(inHome: vm.activeLane == .home, unfolded: displayTraits.isUnfoldedDuo)
+    /// Home's sections in the tab drawer on the folded Duo, whose bar holds only actions (unfolded, the
+    /// sidebar lists them; other iPhones have Home's bottom bar).
+    private var drawerHomeSections: CantripHomeDrawerSections? {
+        guard CantripHomeDrawerSections.isListed(in: displayTraits) else { return nil }
+        return CantripHomeDrawerSections(selected: vm.activeLane == .home ? homeSection : nil) { section in
+            homeSection = section
+            if vm.activeLane != .home { returnHome() }
+        }
     }
 
     /// The iPhone Duo's one navigation bar, in the system's vertical bar or the app-drawn rail, always
-    /// open: the sidebar toggle (unfolded) or Tabs (folded), Settings, View Mac and the menu, then
-    /// (folded, in Home) Home's sections.
+    /// open with only actions: the sidebar toggle (unfolded) or Tabs (folded), Settings, View Mac and the
+    /// menu.
     private var duoBarItems: CantripDuoBarItems {
         let busy = vm.sending || importingImages || submittingRemote
         let leading: AnyView? = displayTraits.isUnfoldedDuo ? duoSidebarToggle
@@ -2511,11 +2517,7 @@ struct ChatView: View {
             leading: leading,
             settings: AnyView(ChatSettingsButton { showSettings = true }.disabled(busy)),
             mac: viewMacButton,
-            menu: AnyView(chatMenu),
-            sections: showsDuoBarSections
-                ? CantripDuoBarSections(selection: $homeSection,
-                                        runningTasks: remote.homeTasks.filter { $0.state == "running" }.count)
-                : nil
+            menu: AnyView(chatMenu)
         )
     }
 
@@ -2523,8 +2525,7 @@ struct ChatView: View {
         CantripDuoBarLayout(
             toolbar: ChatToolbarLayout(traits: displayTraits),
             hasLeading: displayTraits.isUnfoldedDuo ? duoSidebarToggle != nil : vm.activeLane.usesCantripRemote,
-            hasMac: viewMacButton != nil,
-            hasSections: showsDuoBarSections
+            hasMac: viewMacButton != nil
         )
     }
 
