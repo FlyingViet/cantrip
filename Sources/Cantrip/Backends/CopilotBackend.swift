@@ -149,6 +149,9 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         var folderRules: String?
         /// The workdir's environment profile (a change restarts the runtime, which resumes).
         var environmentFingerprint: String?
+        /// The share of the context window at which the session starts compacting in the background
+        /// (the CLI's default is 0.80); set for Home chat (`homeCompactionThreshold`).
+        var compactionThreshold: Double?
 
         /// What a saved session must still match to resume after Cantrip restarts: the settings
         /// whose change starts a new session. The rest reach a resumed session as its options.
@@ -171,6 +174,7 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             }
             if let excludedTools, !excludedTools.isEmpty { object["excludedTools"] = excludedTools }
             if let toolDeferThreshold { object["toolDeferThreshold"] = toolDeferThreshold }
+            if let compactionThreshold { object["compactionThreshold"] = compactionThreshold }
             object["blockedCommands"] = BackendCommandPolicy.blockedNames(family: .copilot)
             return object
         }
@@ -238,6 +242,11 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
         availabilityLock.withLock { injectionAvailable && sessionHasSubagents }
     }
 
+    /// Home chat compacts once its context passes 40% of the window (about 380K of 952K tokens)
+    /// instead of the CLI's 80%. Every model call in a Home turn sends the whole context, which had
+    /// reached 705K tokens, and the runtime's memory grows with it (40% chosen 2026-11-19).
+    static let homeCompactionThreshold = 0.4
+
     /// The runtime configuration the next turn uses in `workdir`.
     func configuration(workdir: String) -> Configuration {
         Configuration(
@@ -258,7 +267,8 @@ final class CopilotBackend: Backend, CantripHomeGuardedBackend {
             toolDeferThreshold: toolDeferThreshold,
             homeProtocol: homeProtocol,
             folderRules: FolderInstructions().guidance(for: workdir, readsClaudeMdHere: true),
-            environmentFingerprint: EnvironmentProfiles.resolved(for: workdir)?.fingerprint
+            environmentFingerprint: EnvironmentProfiles.resolved(for: workdir)?.fingerprint,
+            compactionThreshold: tabID == ChatSession.cantripHomeID ? Self.homeCompactionThreshold : nil
         )
     }
 

@@ -378,7 +378,11 @@ Tool definitions fell from 9,357 tokens to about 3,600.
 
 On Copilot, Home's static protocol (rules, block formats, handoff and background
 guidance) lives in the session's system instructions. It's sent once per
-session and survives compaction. Each message carries only that turn's data:
+session and survives compaction. Home's session compacts (summarizes older turns)
+once its context passes 40% of the window, about 380,000 tokens of a 952,000-token
+long context, instead of the CLI's 80%: every model call in a Home turn sends the
+whole context, and Home's runtime memory grows with it. Each message carries only
+that turn's data:
 
 - the time zone and model IDs
 - a one-line index of every task

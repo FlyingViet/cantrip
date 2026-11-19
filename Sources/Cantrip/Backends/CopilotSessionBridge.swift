@@ -289,6 +289,9 @@ enum CopilotSessionBridge {
         disabledMcpServers: config.disabledMcpServers?.length ? config.disabledMcpServers : undefined,
         toolSearch: Number.isInteger(config.toolDeferThreshold)
           ? { enabled: true, deferThreshold: config.toolDeferThreshold } : undefined,
+        // Home chat compacts sooner than the CLI's 80% (CopilotBackend.homeCompactionThreshold).
+        infiniteSessions: Number.isFinite(config.compactionThreshold)
+          ? { enabled: true, backgroundCompactionThreshold: config.compactionThreshold } : undefined,
         systemMessage: config.systemGuidance ? { mode: 'append', content: config.systemGuidance } : undefined,
         includeSubAgentStreamingEvents: false,
         enableFileHooks: config.allowTools && !config.readOnly,
