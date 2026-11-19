@@ -233,7 +233,9 @@ cantrip mcp connect mobbin     # sign in to a remote server
   Copilot's `mcp-config.json`, a per-tab `--mcp-config` file for Claude Code,
   `-c mcp_servers…` overrides for Codex and Antigravity's
   `~/.gemini/config/mcp_config.json`. Change servers in Settings, not in those
-  files.
+  files. When Cantrip starts it also rewrites Copilot's and Antigravity's
+  files if they hold another build's entries, so an update that changes how
+  servers start reaches the next session without a settings change.
 - A server that needs a sign-in, a credential or a tool limit reaches the
   backend through a small relay to the running Cantrip: the app's native
   `cantrip-mcp-relay` (built from `Scripts/cantrip-mcp-relay.c`, about 1 MB

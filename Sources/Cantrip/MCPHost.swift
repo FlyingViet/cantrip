@@ -36,6 +36,14 @@ final class MCPHost {
         let relay = MCPRelay(environment: environment)
         relay.start()
         self.relay = relay
+        if let snapshot = MCPRegistry.load() {
+            do {
+                let written = try MCPMigration.syncIfStale(snapshot)
+                if !written.isEmpty { Log.write("mcp: backend configs were from an older build; rewrote \(written.joined(separator: ", "))") }
+            } catch {
+                Log.write("mcp: couldn't update backend configs: \(error.localizedDescription)")
+            }
+        }
         Task { await hub.refreshStates() }
         // Refresh sign-ins before they lapse, so they survive days without use.
         timer = Timer.scheduledTimer(withTimeInterval: 10 * 60, repeats: true) { _ in
@@ -282,6 +290,18 @@ enum MCPMigration {
         var written: [String] = []
         try sync(snapshot, into: &written)
         return written
+    }
+
+    /// `sync` when Copilot's entries aren't what this build writes: `sync` otherwise runs only when
+    /// the list or code mode changes, so a build that changes how entries start (the native relay,
+    /// Python servers behind `mcp-on-demand`) left sessions on the old commands until then.
+    @discardableResult
+    static func syncIfStale(_ snapshot: MCPRegistry.Snapshot) throws -> [String] {
+        guard snapshot.importedAt != nil else { return [] }
+        let current = object(at: copilotConfig)?["mcpServers"] as? NSDictionary
+        let wanted = MCPBackendConfig.copilot(snapshot)["mcpServers"] as? NSDictionary
+        guard current != wanted else { return [] }
+        return try sync(snapshot)
     }
 
     /// `sync`, adding each file to `written` as it's written (so a failure partway still says what changed).

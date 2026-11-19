@@ -745,6 +745,22 @@ extension SessionTabTests {
         precondition(asked.isEmpty && MCPRegistry.load()?.servers.first { $0.name == "errors" }?.oauth == false,
                      "Servers already in the list aren't asked again and keep their sign-in setting")
 
+        // At launch: configs this build would write stay as they are; ones an older build wrote are rewritten.
+        guard let synced = MCPRegistry.load() else { preconditionFailure("The list is saved") }
+        let unchanged = try MCPMigration.syncIfStale(synced)
+        precondition(unchanged.isEmpty, "An up-to-date config isn't rewritten: \(unchanged)")
+        var stale = try JSONSerialization.jsonObject(with: Data(contentsOf: MCPMigration.copilotConfig)) as? [String: Any] ?? [:]
+        var staleEntries = stale["mcpServers"] as? [String: Any] ?? [:]
+        staleEntries["flows"] = ["type": "local", "command": "/old/build/cantrip-mcp", "args": ["flows", "--backend", "Copilot"], "tools": ["*"]]
+        stale["mcpServers"] = staleEntries
+        stale["keep"] = true
+        try JSONSerialization.data(withJSONObject: stale).write(to: MCPMigration.copilotConfig)
+        let rewrote = try MCPMigration.syncIfStale(synced)
+        let fresh = try JSONSerialization.jsonObject(with: Data(contentsOf: MCPMigration.copilotConfig)) as? [String: Any] ?? [:]
+        precondition(rewrote.contains("~/.copilot/mcp-config.json") && fresh["keep"] as? Bool == true
+                     && (fresh["mcpServers"] as? NSDictionary) == (MCPBackendConfig.copilot(synced)["mcpServers"] as? NSDictionary),
+                     "A config from an older build gets this build's entries and keeps Copilot's other settings: \(rewrote)")
+
         // The way a refused sign-in points to: an API key as the server's Authorization header, then migrate.
         var config = try JSONSerialization.jsonObject(with: Data(contentsOf: MCPMigration.copilotConfig)) as? [String: Any] ?? [:]
         var entries = config["mcpServers"] as? [String: Any] ?? [:]
