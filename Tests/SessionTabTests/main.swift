@@ -225,6 +225,11 @@ struct SessionTabTests {
             try await testHomeViews()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "mcp" {
+            try await testMCPSharing()
+            print("MCP sharing tests passed")
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "settings" {
             try testSettingsIdentity()
             try testCLIPathRepair()

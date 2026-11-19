@@ -346,8 +346,33 @@ extension SessionTabTests {
 
         let copilot = MCPBackendConfig.copilot(snapshot, relay: relay)["mcpServers"] as? [String: [String: Any]] ?? [:]
         precondition(copilot["errors"] == nil, "A server switched off for a backend isn't in its config")
+        let launcherExists = FileManager.default.isExecutableFile(atPath: MCPBackendConfig.onDemandScript)
         precondition(copilot["notes"]?["type"] as? String == "local" && copilot["notes"]?["command"] as? String == "/usr/bin/python3"
-                     && copilot["notes"]?["tools"] as? [String] == ["*"], "Plain local servers keep their command")
+                     && copilot["notes"]?["args"] as? [String]
+                        == (launcherExists ? [MCPBackendConfig.onDemandScript, "--", "/usr/bin/python3", "notes.py"] : ["notes.py"])
+                     && copilot["notes"]?["tools"] as? [String] == ["*"], "Plain local servers keep their command: \(copilot["notes"] ?? [:])")
+        // A plain local server on Python starts on first use, through mcp-on-demand on its own Python.
+        let launcher = FileManager.default.temporaryDirectory.appendingPathComponent("mcp-on-demand-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: launcher.path, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+        defer { try? FileManager.default.removeItem(at: launcher) }
+        let python = MCPServer(name: "lab", command: "/opt/homebrew/bin/python3.13", args: ["server.py"], env: ["LAB": "1"], cwd: "/tmp")
+        let lazy = MCPBackendConfig.command(python, backend: .copilot, relay: relay, onDemand: launcher.path)
+        precondition(lazy["command"] as? String == "/opt/homebrew/bin/python3.13"
+                     && lazy["args"] as? [String] == [launcher.path, "--", "/opt/homebrew/bin/python3.13", "server.py"]
+                     && lazy["env"] as? [String: String] == ["LAB": "1"] && lazy["cwd"] as? String == "/tmp",
+                     "A Python server goes behind mcp-on-demand on the same Python, keeping its env and folder: \(lazy)")
+        // Servers on other runtimes, and ones already behind mcp-on-demand, keep their command.
+        let node = MCPServer(name: "maps", command: "/opt/homebrew/bin/node", args: ["maps.mjs"])
+        precondition(MCPBackendConfig.command(node, backend: .copilot, relay: relay, onDemand: launcher.path)["args"] as? [String]
+                     == ["maps.mjs"], "A Node server keeps its command")
+        let wrapped = MCPServer(name: "big", command: "/opt/homebrew/bin/python3", args: ["/x/mcp-on-demand", "--", "node", "big.mjs"])
+        precondition(MCPBackendConfig.command(wrapped, backend: .claudeCode, relay: relay, onDemand: launcher.path)["args"] as? [String]
+                     == wrapped.args, "A server already behind mcp-on-demand isn't wrapped twice")
+        precondition(MCPBackendConfig.lazyStart(python, onDemand: "/nonexistent/mcp-on-demand") == nil,
+                     "Without the launcher the server keeps its command")
+        precondition(MCPBackendConfig.command(MCPServer(name: "vault", command: "/usr/bin/python3", secretEnv: ["S"]),
+                                              backend: .copilot, relay: relay, onDemand: launcher.path)["command"] as? String == relay,
+                     "A relayed Python server still goes through the relay")
         precondition(copilot["vault"]?["command"] as? String == relay, "A tool-limited server goes through the relay")
 
         let codex = MCPBackendConfig.codexArgs(snapshot, relay: relay)

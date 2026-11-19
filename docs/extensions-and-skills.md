@@ -241,7 +241,9 @@ cantrip mcp connect mobbin     # sign in to a remote server
   when the app has none. Cantrip adds the credential, keeps only the allowed tools, and
   answers with a clear error when the server is off for that tab or backend,
   signed out, or the keychain is locked. Plain local servers keep their own
-  command.
+  command; one that runs on Python goes behind `Scripts/mcp-on-demand` on that
+  same Python, so it starts only when a session first calls one of its tools
+  (backends start every listed server in every session).
 - **Connect** opens the server's sign-in page in the agent Chrome (the Mac's
   default browser if it isn't running). When the page asks to grant access,
   Settings > MCP Servers, the browser Remote, Cantrip Agent and Cantrip

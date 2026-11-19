@@ -65,15 +65,33 @@ enum MCPBackendConfig {
         return servers
     }
 
-    /// A stdio command entry: the relay for relayed servers, the server itself otherwise.
-    static func command(_ server: MCPServer, backend: BackendKind, relay: String = relayScript) -> [String: Any] {
+    /// A stdio command entry: the relay for relayed servers, the server itself otherwise (behind
+    /// `mcp-on-demand` when it runs on Python: `lazyStart`).
+    static func command(_ server: MCPServer, backend: BackendKind, relay: String = relayScript,
+                        onDemand: String = onDemandScript) -> [String: Any] {
         if server.isRelayed {
             return ["command": relay, "args": [server.name, "--backend", backend.rawValue]]
         }
-        var entry: [String: Any] = ["command": server.command ?? "", "args": server.args]
+        let started = lazyStart(server, onDemand: onDemand) ?? (server.command ?? "", server.args)
+        var entry: [String: Any] = ["command": started.command, "args": started.args]
         if !server.env.isEmpty { entry["env"] = server.env }
         if let cwd = server.cwd { entry["cwd"] = cwd }
         return entry
+    }
+
+    static var onDemandScript: String { CantripInstall.script("mcp-on-demand") }
+
+    /// Backends start every listed server in every session (each tab, Home turn and task run), so a
+    /// plain local server costs its memory once per session even when nothing calls it (homelab:
+    /// 56 MB). One that runs on Python goes behind `mcp-on-demand`, on that same Python, which
+    /// answers the handshake and tool list from a cache and starts the server at its first tool
+    /// call. Servers on other runtimes, and ones already behind it, keep their command.
+    static func lazyStart(_ server: MCPServer, onDemand: String = onDemandScript) -> (command: String, args: [String])? {
+        guard let command = server.command, !command.isEmpty,
+              (command as NSString).lastPathComponent.hasPrefix("python"),
+              !server.args.contains(where: { ($0 as NSString).lastPathComponent == "mcp-on-demand" }),
+              FileManager.default.isExecutableFile(atPath: onDemand) else { return nil }
+        return (command, [onDemand, "--", command] + server.args)
     }
 
     // MARK: - Claude Code (--mcp-config)
