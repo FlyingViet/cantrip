@@ -1444,8 +1444,9 @@ The app supports portrait and both landscape orientations on iPhone, plus all
 orientations on iPad. On iPhone Duo, in every pose, the side controls are **one bar** along the
 screen's edge, always open: **Tabs** (folded) or a **sidebar toggle** (unfolded), **Settings**,
 **View Mac** and the tab's menu, whose first item is **Model Settings**, and nothing else. Home's
-sections (Chat, Tasks, Artifacts, Builds) are rows under Cantrip Home in the tab drawer that **Tabs**
-opens when folded, and in the sidebar when unfolded. Never a bottom bar. When the folded bar is short
+sections (Chat, Tasks, Artifacts, Builds) are rows under Cantrip Home in the tab drawer in every pose
+(**Tabs** opens it when folded; unfolded, a swipe right while the sidebar is closed), and
+in the sidebar when unfolded. Never a bottom bar. When the folded bar is short
 (on its side, or beside a Live Activity), **Tabs** stays and the other actions move into the
 system's **…** button. The sidebar toggle opens
 and closes Gateway Mac's left sidebar with Pip, Home's sections, the tabs (with **+**), the open

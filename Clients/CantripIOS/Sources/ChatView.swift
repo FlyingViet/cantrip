@@ -2496,8 +2496,8 @@ struct ChatView: View {
         }
     }
 
-    /// Home's sections in the tab drawer on the folded Duo, whose bar holds only actions (unfolded, the
-    /// sidebar lists them; other iPhones have Home's bottom bar).
+    /// Home's sections in the tab drawer on the iPhone Duo, whose bar holds only actions (unfolded, the
+    /// sidebar lists them as well; other iPhones have Home's bottom bar).
     private var drawerHomeSections: CantripHomeDrawerSections? {
         guard CantripHomeDrawerSections.isListed(in: displayTraits) else { return nil }
         return CantripHomeDrawerSections(selected: vm.activeLane == .home ? homeSection : nil) { section in

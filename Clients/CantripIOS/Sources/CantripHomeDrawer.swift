@@ -300,9 +300,10 @@ struct CantripHomeDrawerSections {
     var selected: CantripHomeSection?
     let onSelect: (CantripHomeSection) -> Void
 
-    /// The Duo's bar shows (an iPhone Duo) without its sidebar: folded.
+    /// Every iPhone Duo pose, where Home has no bottom bar and the Duo's bar holds only actions. Unfolded,
+    /// the drawer opens only while the sidebar is closed (a swipe, upright), so it lists them too.
     static func isListed(in traits: ChatDisplayTraits) -> Bool {
-        traits.placesActionsInVerticalBar && !traits.isUnfoldedDuo
+        traits.hasVerticalBar || traits.usesAppRail
     }
 }
 

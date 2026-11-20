@@ -71,9 +71,10 @@ spans the host and this app is one commit.
   Duo, in every pose and with the sidebar open or closed, the side controls are one bar
   (`CantripDuoBarItems`, Sources/CantripDuoBar.swift), always open (no pill or minimizing, since
   2026-11-18), holding only actions: Tabs (folded) or the sidebar toggle (unfolded), Settings, View Mac
-  and the menu. Home's sections are rows in the tab drawer folded (`CantripHomeDrawerSections`, under
-  Cantrip Home; a row closes the drawer and opens Home on that section, from a tab too) and in the
-  sidebar unfolded, never on the bar or a bottom bar. Where the system has a vertical bar
+  and the menu. Home's sections are rows in the tab drawer in every pose (`CantripHomeDrawerSections`,
+  under Cantrip Home; a row closes the drawer and opens Home on that section, from a tab too; unfolded,
+  the drawer opens from a swipe while the sidebar is closed) and in the sidebar unfolded, never on the
+  bar or a bottom bar. Where the system has a vertical bar
   (folded, unfolded on its side) the bar is one `.bottomBar` group with
   `.axisBehavior(.verticalPreferred)` (`CantripDuoVerticalBar`); re-id the host by
   `CantripDuoBarLayout` (posture, Home or tab, View Mac). Settings, View Mac and the menu are
