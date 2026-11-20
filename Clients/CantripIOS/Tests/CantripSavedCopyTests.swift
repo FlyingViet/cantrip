@@ -7,7 +7,7 @@ private final class SavedCopyRequestProtocol: URLProtocol {
     struct Answer {
         var status: Int
         var body: Data
-        var etag: String?
+        var etag: String? = nil
     }
 
     @MainActor static var handler: ((URLRequest) async throws -> Answer)?
@@ -222,6 +222,41 @@ final class CantripSavedCopyTests: XCTestCase {
                                      urlSession: client)
         _ = try await plain.sessionListing()
         XCTAssertNil(sent.last!)
+    }
+
+    /// Home's lists are asked for while its chat is still loading, and the personal mascot (about
+    /// 1.3 MB on a real Mac) only once Home's reads have answered, so it doesn't share a slow link with them.
+    func testHomeListsLoadAlongsideItsChatAndTheMascotWaits() async throws {
+        let mascotRevision = String(repeating: "ab", count: 32)
+        let listed = Data(#"{"sessions":[],"home":\#(session(homeID, title: "Cantrip Home", home: true, reply: nil)),"privateMascotRevision":"\#(mascotRevision)"}"#.utf8)
+        var order: [String] = []
+        var held: [CheckedContinuation<Void, Never>] = []
+        var releaseHome = false
+        SavedCopyRequestProtocol.handler = { [unowned self] request in
+            let path = self.path(request)
+            order.append("start " + path)
+            if path == "/api/v1/home", !releaseHome { await withCheckedContinuation { held.append($0) } }
+            defer { order.append("end " + path) }
+            if path == "/api/v1/mascot" { return .init(status: 404, body: Data(#"{"error":"none"}"#.utf8)) }
+            let data = path == "/api/v1/sessions" ? listed : try XCTUnwrap(self.body(for: path), path)
+            return .init(status: 200, body: data)
+        }
+        defer { SavedCopyRequestProtocol.handler = nil }
+        let (model, _) = try await makeModel(CantripSavedCopy(directory: nil))
+        let load = try XCTUnwrap(model.showHome())
+        let loading = Task { await model.loadHome(load) }
+        try await until { !held.isEmpty && order.contains("end /api/v1/home/tasks") }
+        XCTAssertTrue(order.contains("end /api/v1/home/tasks"), "Tasks answered while Home's chat still loads: \(order)")
+        model.setAppActive(true)
+        try await until { order.contains("end /api/v1/sessions") }
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertFalse(order.contains("start /api/v1/mascot"), "the mascot waits for Home's chat: \(order)")
+        releaseHome = true
+        held.forEach { $0.resume() }
+        await loading.value
+        try await until { order.contains("start /api/v1/mascot") }
+        let mascot = try XCTUnwrap(order.firstIndex(of: "start /api/v1/mascot"), "\(order)")
+        XCTAssertLessThan(try XCTUnwrap(order.lastIndex(of: "end /api/v1/home")), mascot)
     }
 
     /// Unpairing forgets the copy on the device; another pairing never reads it.

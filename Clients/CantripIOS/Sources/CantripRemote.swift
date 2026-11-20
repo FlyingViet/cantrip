@@ -3507,6 +3507,8 @@ final class CantripRemoteModel: ObservableObject {
     /// never listed, instead of falling back to the first tab, until it is gone or replaced.
     private var unlistedSessionID: String?
     private var homeDataRefreshInFlight = false
+    /// Home's chat reads in flight (`loadHome`).
+    private var homeLoadsInFlight = 0
     private var homeBuildsRefreshInFlight = false
     private var homeTaskOrderRevision = 0
     @Published private(set) var errorMessage: String?
@@ -4383,6 +4385,16 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
+    /// Waits (up to 15 s) while Home's chat or lists, or the open tab's history, are still loading.
+    private func screenReadsSettled() async throws {
+        for _ in 0..<150 {
+            let busy = homeLoadsInFlight > 0 || homeDataRefreshInFlight || homeViewsRefreshInFlight
+                || homeUpcomingRefreshInFlight || detailRefreshTask != nil || selectingSessionID != nil
+            if !busy { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
     private var savedCopyUse: (store: CantripSavedCopy, pairing: String)? {
         savedCopyPairing.map { (savedCopy, $0) }
     }
@@ -4485,19 +4497,25 @@ final class CantripRemoteModel: ObservableObject {
     /// Fetches Home after `showHome`; a later switch makes it a no-op.
     func loadHome(_ load: CantripSelectionLoad) async {
         let selection = load.selection, revision = load.revision
+        homeLoadsInFlight += 1
+        defer { homeLoadsInFlight -= 1 }
+        // Home's lists load alongside its chat instead of one round trip after it.
+        async let lists: Void = refreshHomeData()
         do {
             let detail = try await performHistoryRead { api in
                 try await api.homeSession()
             }
             guard isHomeSelected, selection == selectionRevision,
-                  revision == mutationRevision else { return }
+                  revision == mutationRevision else { await lists; return }
             selectedSessionID = detail.id
             apply(detail)
-            await refreshHomeData()
+            await lists
             errorMessage = nil
         } catch is CancellationError {
+            await lists
             return
         } catch {
+            await lists
             guard isHomeSelected, selection == selectionRevision else { return }
             detailError = "Cantrip Home is unavailable. \(error.localizedDescription)"
             errorMessage = error.localizedDescription
@@ -4536,6 +4554,13 @@ final class CantripRemoteModel: ObservableObject {
         let orderRevision = homeTaskOrderRevision
         let tasksRevision = homeTasksFetched.flatMap { $0.tasks == homeTasks ? $0.revision : nil }
         let artifactsRevision = homeArtifactsFetched.flatMap { $0.artifacts == homeArtifacts ? $0.revision : nil }
+        // Views and Upcoming, when this Mac is known to serve them, load alongside the lists.
+        let views = homeViewsSupported ? Task { await self.refreshHomeViews() } : nil
+        let upcoming = homeUpcomingViewers > 0 ? Task { await self.refreshHomeUpcoming() } : nil
+        defer {
+            if let views, Task.isCancelled { views.cancel() }
+            if let upcoming, Task.isCancelled { upcoming.cancel() }
+        }
         do {
             async let tasks = performHistoryRead { try await $0.homeTasks(ifChangedFrom: tasksRevision) }
             async let artifacts = performHistoryRead { try await $0.homeArtifacts(ifChangedFrom: artifactsRevision) }
@@ -4573,8 +4598,8 @@ final class CantripRemoteModel: ObservableObject {
                 }
                 homeArtifactsFetched = (snapshot.revision, snapshot.artifacts)
             }
-            if homeViewsSupported { await refreshHomeViews() }
-            if homeUpcomingViewers > 0 { await refreshHomeUpcoming() }
+            if let views { await views.value } else if homeViewsSupported { await refreshHomeViews() }
+            if let upcoming { await upcoming.value } else if homeUpcomingViewers > 0 { await refreshHomeUpcoming() }
             if (selectedSession?.backgroundInputCount ?? 0) > 0
                 || homeBackground?.runs.contains(where: \.needsInput) == true {
                 await refreshHomeBackground()
@@ -6269,6 +6294,9 @@ final class CantripRemoteModel: ObservableObject {
             if settingsRevision != listing.settingsRevision { settingsRevision = listing.settingsRevision }
             privateMascot.update(revision: listing.privateMascotRevision, hostError: listing.privateMascotError) { [weak self] revision in
                 guard let self else { throw CancellationError() }
+                // About 1.3 MB: on a slow link it would share the connection with what the screen
+                // is waiting for, so it starts once those reads are done.
+                try await self.screenReadsSettled()
                 return try await self.performAuthenticated(allowFallback: true) { api in
                     try await api.privateMascot(revision: revision)
                 }
