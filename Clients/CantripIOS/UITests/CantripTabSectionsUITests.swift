@@ -24,7 +24,7 @@ final class CantripTabSectionsUITests: XCTestCase {
         let personal = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Personal,'")).firstMatch
         XCTAssertTrue(personal.waitForExistence(timeout: 15), "Sections show as headers")
         // The row itself, not its "Reorder Resume" handle.
-        let resume = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'cantrip-tab-' AND label == 'Resume'")).firstMatch
+        let resume = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'drawer.tab.' AND label == 'Resume'")).firstMatch
         XCTAssertTrue(resume.exists)
         attach(app, "1-sections")
 
@@ -139,7 +139,7 @@ final class CantripTabSectionsUITests: XCTestCase {
         let tabsButton = app.buttons.matching(NSPredicate(format: "label == 'Tabs'")).firstMatch
         XCTAssertTrue(tabsButton.waitForExistence(timeout: 30))
         tabsButton.tap()
-        let list = app.descendants(matching: .any)["cantrip-tab-list"]
+        let list = app.descendants(matching: .any)["drawer.list"]
         XCTAssertTrue(list.waitForExistence(timeout: 15))
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder '")).firstMatch.exists,
                        "Tab rows show no ≡ reorder handles")
@@ -147,7 +147,7 @@ final class CantripTabSectionsUITests: XCTestCase {
 
         // A still hold opens the tab's menu.
         func row(_ title: String) -> XCUIElement {
-            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'cantrip-tab-' AND label == %@", title)).firstMatch
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'drawer.tab.' AND label == %@", title)).firstMatch
         }
         let first = row(group[0].title), second = row(group[1].title)
         for _ in 0..<10 where !(second.exists && second.isHittable) { list.swipeUp() }
@@ -173,12 +173,12 @@ final class CantripTabSectionsUITests: XCTestCase {
 
         // Touch and hold a section header, then drag it onto the first section's header.
         let lastSection = sections[sections.count - 1], firstSection = sections[0]
-        let lastHeader = app.buttons["cantrip-tab-section-\(lastSection.id)"]
-        let firstHeader = app.buttons["cantrip-tab-section-\(firstSection.id)"]
+        let lastHeader = app.buttons.matching(identifier: "drawer.section.\(lastSection.id)").firstMatch
+        let firstHeader = app.buttons.matching(identifier: "drawer.section.\(firstSection.id)").firstMatch
         for _ in 0..<10 where !(firstHeader.exists && firstHeader.isHittable) { list.swipeDown() }
         // Collapse the bulky sections in between so both headers fit on screen.
         for section in sections.dropFirst().dropLast() {
-            let header = app.buttons["cantrip-tab-section-\(section.id)"]
+            let header = app.buttons.matching(identifier: "drawer.section.\(section.id)").firstMatch
             if header.exists, header.isHittable, (header.value as? String) == "Expanded" { header.tap() }
         }
         for _ in 0..<10 where !(lastHeader.exists && lastHeader.isHittable) { list.swipeUp() }
@@ -212,7 +212,7 @@ final class CantripTabSectionsUITests: XCTestCase {
         XCTAssertTrue(tabsButton.waitForExistence(timeout: 30))
         tabsButton.tap()
         // The list loads rows as they scroll in; New Section is the last one.
-        let list = app.descendants(matching: .any)["cantrip-tab-list"]
+        let list = app.descendants(matching: .any)["drawer.list"]
         XCTAssertTrue(list.waitForExistence(timeout: 15))
         let newSection = app.buttons["cantrip-tab-new-section"]
         for _ in 0..<10 where !(newSection.exists && newSection.isHittable) { list.swipeUp() }
@@ -233,7 +233,7 @@ final class CantripTabSectionsUITests: XCTestCase {
         attach(app, "new-3-empty-section")
 
         // Move a tab into it from the tab's menu (the unfiled tabs are at the top).
-        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'cantrip-tab-' AND label == %@", unfiled.title)).firstMatch
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'drawer.tab.' AND label == %@", unfiled.title)).firstMatch
         for _ in 0..<10 where !(row.exists && row.isHittable) { list.swipeDown() }
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         row.press(forDuration: 1.2)

@@ -1249,34 +1249,7 @@ struct ChatView: View {
             sidebarOverlays: $duoSidebarOverlays,
             dismissPersistentSidebar: { withAnimation(.snappy) { isDuoSidebarOpen = false } }
         ) { isModal, dismiss in
-            CantripHomeTabDrawer(
-                model: remote,
-                isModal: isModal,
-                backgroundActiveCount: homeBackgroundCount,
-                backgroundInputCount: homeBackgroundInputCount,
-                onDismiss: dismiss,
-                onSelectHome: {
-                    dismiss()
-                    if vm.activeLane == .cantrip { returnHome() }
-                },
-                onOpenBackground: {
-                    dismiss()
-                    composerFocused = false
-                    showHomeBackground = true
-                },
-                // The drawer has already asked to close, but it is still on screen: keep the picture of
-                // Home taken as it opened.
-                onSelect: { openTab($0, picturesHome: false) },
-                onCreate: createRemoteSession,
-                onRename: { renamingRemoteSession = $0 },
-                onClose: closeRemoteSession,
-                onOpenSettings: {
-                    dismiss()
-                    composerFocused = false
-                    showSettings = true
-                },
-                homeSections: drawerHomeSections
-            )
+            leftMenu(.drawer, isModal: isModal, dismiss: dismiss)
         } content: {
             Group {
                 if vm.activeLane == .home {
@@ -2496,16 +2469,6 @@ struct ChatView: View {
         }
     }
 
-    /// Home's sections in the tab drawer on the iPhone Duo, whose bar holds only actions (unfolded, the
-    /// sidebar lists them as well; other iPhones have Home's bottom bar).
-    private var drawerHomeSections: CantripHomeDrawerSections? {
-        guard CantripHomeDrawerSections.isListed(in: displayTraits) else { return nil }
-        return CantripHomeDrawerSections(selected: vm.activeLane == .home ? homeSection : nil) { section in
-            homeSection = section
-            if vm.activeLane != .home { returnHome() }
-        }
-    }
-
     /// The iPhone Duo's one navigation bar, in the system's vertical bar or the app-drawn rail, always
     /// open with only actions: the sidebar toggle (unfolded) or Tabs (folded), Settings, View Mac and the
     /// menu.
@@ -2571,7 +2534,17 @@ struct ChatView: View {
     }
 
     private var duoSidebar: some View {
-        CantripDuoSidebar(
+        leftMenu(.beside, isModal: duoSidebarOverlays, dismiss: closeOverlaySidebar)
+    }
+
+    /// The app's one left menu: beside (or over) the chat on the unfolded iPhone Duo, else the tab
+    /// drawer's panel or iPad's sidebar column. Picking a section or tab puts it away when it covers
+    /// the chat; the drawer also steps aside for anything else it opens.
+    private func leftMenu(_ placement: CantripLeftMenuPlacement, isModal: Bool,
+                          dismiss: @escaping () -> Void) -> some View {
+        let afterPick: () -> Void = placement == .beside || isModal ? dismiss : {}
+        let beforeOpening: () -> Void = placement == .drawer && isModal ? dismiss : {}
+        return CantripDuoSidebar(
             model: remote,
             slashCommands: slashCommands,
             isHomeShown: vm.activeLane == .home,
@@ -2584,26 +2557,46 @@ struct ChatView: View {
             isListening: voice.isListening,
             isSpeaking: voice.isSpeaking,
             onSelectSection: { section in
-                closeOverlaySidebar()
+                afterPick()
                 homeSection = section
                 if vm.activeLane != .home { returnHome() }
             },
             onSelectTab: { id in
-                closeOverlaySidebar()
+                afterPick()
+                // The drawer is still on screen: keep the picture of Home taken as it opened.
                 openTab(id, picturesHome: false)
             },
-            onCreateTab: createRemoteSession,
-            onRename: { renamingRemoteSession = $0 },
+            onCreateTab: {
+                beforeOpening()
+                createRemoteSession()
+            },
+            onRename: { session in
+                beforeOpening()
+                renamingRemoteSession = session
+            },
             onClose: closeRemoteSession,
             onOpenBackground: {
+                beforeOpening()
                 composerFocused = false
                 showHomeBackground = true
             },
             onCustomizeMascot: {
+                beforeOpening()
                 composerFocused = false
                 showMascotCustomization = true
             },
-            onChoose: { chooseBackendCommand($0, via: .activate) }
+            onChoose: { match in
+                beforeOpening()
+                chooseBackendCommand(match, via: .activate)
+            },
+            placement: placement,
+            isModal: isModal,
+            // On an iPhone Duo its bar holds Settings; elsewhere the menu's footer is the way there.
+            onOpenSettings: displayTraits.hasDuoBar ? nil : {
+                beforeOpening()
+                composerFocused = false
+                showSettings = true
+            }
         )
         .disabled(vm.sending || importingImages || submittingRemote)
     }

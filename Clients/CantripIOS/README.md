@@ -168,12 +168,15 @@ reference is Cantrip's
 Cantrip Home is the front door: there is no separate Remote lane. Your Mac's project tabs
 live in Home's **tab drawer**: tap the top-left **Tabs** button (its badge counts working
 tabs, or shows **?** while a tab or background job waits for you) or swipe right from the
-left edge. The drawer has **+** for a new tab, **Search tabs**, a pinned **Cantrip Home**
-row, a **Background jobs** row (scheduled and automated runs, every tab's background tasks, and your Mac's long jobs: builds taking turns and other long work, each with a bar of its steps and the one it's on),
-then every tab with a spinner while it works (its live status in orange), "2 in background" while it has background tasks running, its latest outcome when idle, and how long ago
-it last ran. Touch and hold a tab, then drag, to reorder it (no handles; not while searching);
-a still hold opens Rename, Lock, Move, Model Settings, Start Fresh, Tools for This Tab and Close. A connection line
-sits at the bottom.
+left edge. The drawer is the app's one left menu, the same on iPhone, iPad, and every iPhone Duo
+pose: Pip with **Cantrip Home** at the top (tap Pip to customize it; the magnifying glass beside it
+searches tabs), Home's **Chat**, **Tasks**, **Artifacts** and **Builds**, a **Background jobs** row (scheduled and automated runs, every tab's background tasks, and your Mac's long jobs: builds taking turns and other long work, each with a bar of its steps and the one it's on),
+then every tab under its section's header (each with **+** for a new tab there and **…**), one line
+each with a spinner while it works, "2 in background" while it has background tasks running, and
+how long ago it last ran, then the open chat's **Skills**. Touch and hold a tab, then drag, to
+reorder it (no handles; not while searching); a still hold opens Rename, Lock, Move, Model
+Settings, Start Fresh, Tools for This Tab and Close. A connection line sits at the bottom, with the
+**Settings** gear on iPhone and iPad (an iPhone Duo's bar has its own).
 
 A tab opens full screen with **‹ Home** on the left, its name and **Working / Idle** state in
 the center, and a **⋯** menu on the right: **All Tabs**, the tab's actions, delivery mode,
@@ -225,13 +228,12 @@ Tap the **stacked-tabs icon at the top left** or swipe right from the **left edg
 to open the Cantrip **Tabs** drawer; **Settings** is the gear in its footer, beside the
 connection line. The **hamburger menu is at the top right**. On an iPhone Duo these controls
 share one side bar instead (see [Adaptive layouts and iPhone Duo](#adaptive-layouts-and-iphone-duo)):
-tap its pill to show **Tabs**, the **Settings gear**, **View Mac** and the **white hamburger menu**,
-with Home's Chat, Tasks, Artifacts and Builds below them.
+**Tabs** (or the sidebar toggle), the **Settings gear**, **View Mac** and the **white hamburger
+menu**; Home's Chat, Tasks, Artifacts and Builds are in the left menu.
 The hamburger stays white when paused, with a small orange pause badge. Select a
-tab to return to chat; swipe left on the drawer header or backdrop, tap outside,
-or use **Close tabs** to dismiss
-without changing tabs. The drawer shows the selected tab, activity, locks, and
-queued counts, with a **New Tab** button at the bottom. Opening it dismisses the
+tab to return to chat; swipe left anywhere over the drawer or its backdrop, or tap outside, to
+dismiss it without changing tabs. The drawer shows the selected tab, activity, and locks, with
+**+** for a new tab on each section's header. Opening it dismisses the
 keyboard without clearing your draft. Stop and the circled **+** attachment icon
 retain 44-point tap targets. New Tab and tab actions live in the
 drawer rather than duplicate top-bar buttons. Resume (when available) remains
@@ -1444,9 +1446,9 @@ The app supports portrait and both landscape orientations on iPhone, plus all
 orientations on iPad. On iPhone Duo, in every pose, the side controls are **one bar** along the
 screen's edge, always open: **Tabs** (folded) or a **sidebar toggle** (unfolded), **Settings**,
 **View Mac** and the tab's menu, whose first item is **Model Settings**, and nothing else. Home's
-sections (Chat, Tasks, Artifacts, Builds) are rows under Cantrip Home in the tab drawer in every pose
-(**Tabs** opens it when folded; unfolded, a swipe right while the sidebar is closed), and
-in the sidebar when unfolded. Never a bottom bar. When the folded bar is short
+sections (Chat, Tasks, Artifacts, Builds) are rows in the left menu, which looks the same in every
+pose: the tab drawer (**Tabs** opens it when folded; unfolded, a swipe right while the sidebar is
+closed) and the sidebar when unfolded. Never a bottom bar. When the folded bar is short
 (on its side, or beside a Live Activity), **Tabs** stays and the other actions move into the
 system's **…** button. The sidebar toggle opens
 and closes Gateway Mac's left sidebar with Pip, Home's sections, the tabs (with **+**), the open

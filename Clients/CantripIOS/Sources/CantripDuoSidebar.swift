@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// iPhone Duo unfolded on its side: Gateway Mac's sidebar beside the chat. Pip and Cantrip Home,
-/// Home's sections, every project tab, and the open chat's skills, with the connection at the
-/// bottom. Header and footer stay put; everything between them scrolls inside the sidebar, so the
-/// keyboard shortens the list instead of hiding it.
+/// The app's one left menu, modelled on Gateway Mac's sidebar: Pip and Cantrip Home, Home's sections,
+/// Background jobs, every project tab, and the open chat's skills, with the connection at the bottom.
+/// It sits beside the chat on the unfolded iPhone Duo (or over it, upright), and is the tab drawer's
+/// panel (iPhone, folded Duo, unfolded Duo with the sidebar put away) and iPad's sidebar column.
+/// Header and footer stay put; everything between them scrolls inside it, so the keyboard shortens
+/// the list instead of hiding it.
 struct CantripDuoSidebar: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject var model: CantripRemoteModel
@@ -29,6 +31,11 @@ struct CantripDuoSidebar: View {
     let onOpenBackground: () -> Void
     let onCustomizeMascot: () -> Void
     let onChoose: (BackendCommandMatch) -> Void
+    var placement: CantripLeftMenuPlacement = .beside
+    /// Over a dimmed chat (the drawer): VoiceOver starts at the header.
+    var isModal = false
+    /// Settings from the footer, where the screen has no other Settings button (iPhone, iPad); nil hides it.
+    var onOpenSettings: (() -> Void)? = nil
 
     @AppStorage(CantripMascotOutfit.storageKey) private var outfit: CantripMascotOutfit = .starryPlush
     @AppStorage(CantripMascotName.storageKey) private var mascotName = ""
@@ -36,6 +43,10 @@ struct CantripDuoSidebar: View {
     @ObservedObject private var collapse = CantripTabSectionCollapse.shared
     @AppStorage("cantrip.duoSidebar.skillsExpanded") private var skillsExpanded = true
     @State private var expandedGroups: Set<BackendSkillsSidebar.Group> = Self.initialExpandedGroups
+    @State private var query = ""
+    @State private var isSearching = false
+    @FocusState private var searchFocused: Bool
+    @AccessibilityFocusState private var headerFocused: Bool
 
     static var width: CGFloat { 288 }
 
@@ -50,18 +61,24 @@ struct CantripDuoSidebar: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if isSearching { searchField }
             ScrollViewReader { proxy in
                 ScrollView {
                     // Not lazy: in a LazyVStack a moved highlight was never redrawn (iOS 27.1).
                     VStack(alignment: .leading, spacing: 2) {
-                        sections
-                        tabs
-                        if showsSkills { skills }
+                        if query.isEmpty {
+                            sections
+                            tabs
+                            if showsSkills { skills }
+                        } else {
+                            searchResults
+                        }
                     }
                     .padding(.horizontal, 8)
                     .padding(.bottom, 12)
                 }
                 .scrollDismissesKeyboard(.never)
+                .accessibilityIdentifier(id("list"))
                 .onChange(of: highlighted) { _, position in
                     guard let id = filteredMatchID(at: position) else { return }
                     withAnimation(nil) { proxy.scrollTo(id, anchor: .center) }
@@ -80,21 +97,56 @@ struct CantripDuoSidebar: View {
             }
             footer
         }
-        .frame(width: dynamicTypeSize.isAccessibilitySize ? 340 : Self.width)
+        .frame(width: placement == .beside ? (dynamicTypeSize.isAccessibilitySize ? 340 : Self.width) : nil)
+        .frame(maxWidth: placement == .beside ? nil : .infinity, maxHeight: placement == .beside ? nil : .infinity)
         .background(Color(.secondarySystemBackground), ignoresSafeAreaEdges: .all)
-        .onAppear { model.refreshSlashCommandsIfNeeded() }
+        .onAppear {
+            model.refreshSlashCommandsIfNeeded()
+            headerFocused = isModal
+        }
+        .onChange(of: model.sessions.isEmpty) { _, empty in
+            if empty { closeSearch() }
+        }
         .onChange(of: model.slashCommandContext) { _, _ in model.refreshSlashCommandsIfNeeded() }
         .onChange(of: filteredCountAnnouncement) { _, text in
             if let text { BackendSlashAnnouncer.announce(text, polite: true) }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Sidebar")
-        .accessibilityIdentifier("duo.sidebar")
+        .accessibilityIdentifier(placement == .beside ? "duo.sidebar" : "drawer.menu")
+    }
+
+    /// Accessibility identifiers: `duo.sidebar.*` beside the chat, `drawer.*` as the drawer's panel.
+    private func id(_ name: String) -> String {
+        (placement == .beside ? "duo.sidebar." : "drawer.") + name
     }
 
     // MARK: Header and footer
 
     private var header: some View {
+        HStack(spacing: 0) {
+            mascotButton
+            Button {
+                if isSearching { closeSearch() } else {
+                    isSearching = true
+                    searchFocused = true
+                }
+            } label: {
+                Image(systemName: isSearching ? "xmark" : "magnifyingglass")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(model.sessions.isEmpty)
+            .accessibilityLabel(isSearching ? "Close Search" : "Search Tabs")
+            .accessibilityIdentifier(id("searchButton"))
+            .padding(.trailing, 6)
+        }
+    }
+
+    private var mascotButton: some View {
         Button(action: onCustomizeMascot) {
             HStack(spacing: 10) {
                 CantripMascotView(mood: mood, outfit: outfit, size: 52)
@@ -117,26 +169,88 @@ struct CantripDuoSidebar: View {
         .accessibilityLabel(CantripMascotName.display(mascotName))
         .accessibilityValue(mood.accessibilityStatus ?? mood.title)
         .accessibilityHint("Customizes the mascot")
-        .accessibilityIdentifier("duo.sidebar.mascot")
+        .accessibilityFocused($headerFocused)
+        .accessibilityIdentifier(placement == .beside ? "duo.sidebar.mascot" : "drawer.homeHeader")
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Search tabs", text: $query)
+                .focused($searchFocused)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .accessibilityIdentifier(id("search"))
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 40)
+        .background(Color.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
+    }
+
+    private func closeSearch() {
+        query = ""
+        searchFocused = false
+        isSearching = false
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(model.isConnected ? Color.green : Color.gray)
-                .frame(width: 8, height: 8)
-            Text("\(serverName) · \(model.connectionLabel.lowercased())")
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                .truncationMode(.middle)
+        VStack(alignment: .leading, spacing: 4) {
+            if let error = model.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(3)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("cantrip-tab-error")
+            }
+            HStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(model.isConnected ? Color.green : Color.gray)
+                        .frame(width: 8, height: 8)
+                    Text("\(serverName) · \(model.connectionLabel.lowercased())")
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                        .truncationMode(.middle)
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier(id("connection"))
+                if let onOpenSettings {
+                    Button(action: onOpenSettings) {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Settings")
+                    .accessibilityIdentifier(id("settings"))
+                }
+            }
         }
-        .font(.footnote)
-        .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, onOpenSettings == nil ? 10 : 0)
         .overlay(alignment: .top) { Divider() }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("duo.sidebar.connection")
     }
 
     // MARK: Home
@@ -163,7 +277,7 @@ struct CantripDuoSidebar: View {
             .buttonStyle(.plain)
             .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityValue(badge(for: section).map { "\($0)" } ?? "")
-            .accessibilityIdentifier("duo.sidebar.section.\(section.rawValue)")
+            .accessibilityIdentifier(id("section.\(section.rawValue)"))
         }
         if let backgroundStatus {
             Button(action: onOpenBackground) {
@@ -190,11 +304,34 @@ struct CantripDuoSidebar: View {
             .buttonStyle(.plain)
             .accessibilityValue(backgroundStatus.accessibilityValue)
             .accessibilityHint("Shows background tasks and scheduled runs")
-            .accessibilityIdentifier("duo.sidebar.background")
+            .accessibilityIdentifier(id("background"))
         }
     }
 
     // MARK: Tabs
+
+    /// Tabs whose name, folder or latest line matches every word typed, in one list.
+    @ViewBuilder private var searchResults: some View {
+        let matches = CantripHomeTabSearch.filter(model.sessions, query: query)
+        Text("Results · \(matches.count)")
+            .textCase(.uppercase)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+            .accessibilityAddTraits(.isHeader)
+        ForEach(matches) { session in
+            tabRow(session)
+        }
+        if matches.isEmpty {
+            Text("No tabs match “\(query)”")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+        }
+    }
 
     @ViewBuilder private var tabs: some View {
         if let groups = CantripTabGrouping.groups(model.sessions, sections: model.tabSections) {
@@ -216,8 +353,10 @@ struct CantripDuoSidebar: View {
         let working = CantripHomeTabCounts.working(in: group.sessions)
         sectionHeader(
             title: "\(group.name) · \(group.sessions.count)",
+            spokenTitle: "\(group.name), \(Self.tabCount(group.sessions.count))",
             detail: working > 0 ? "\(working) working" : nil,
             isExpanded: !collapsed,
+            identifier: id(group.section == nil ? "tabsHeader" : "section.\(group.id)"),
             toggle: { collapse.toggle(group.id, scope: model.tabSectionScope) },
             accessory: {
                 Button {
@@ -235,7 +374,7 @@ struct CantripDuoSidebar: View {
                 .buttonStyle(.plain)
                 .disabled(!model.isConfigured || model.isMutating)
                 .accessibilityLabel(group.section == nil ? "New Tab" : "New Tab in \(group.name)")
-                .accessibilityIdentifier(group.section == nil ? "duo.sidebar.newTab" : "duo.sidebar.newTab.\(group.id)")
+                .accessibilityIdentifier(id(group.section == nil ? "newTab" : "newTab.\(group.id)"))
                 CantripTabSectionMenuButton(model: model, group: group, onNewTab: group.section.map { section in
                     { Task { if let id = await model.createTab(inSection: section.id) { onSelectTab(id) } } }
                 })
@@ -254,7 +393,6 @@ struct CantripDuoSidebar: View {
             Task { await model.perform(action) }
             return true
         }
-        .accessibilityIdentifier(group.section == nil ? "duo.sidebar.tabsHeader" : "duo.sidebar.section.\(group.id)")
         ForEach(CantripTabGrouping.visible(group, collapsed: collapsed,
                                            selectedID: isHomeShown ? nil : model.selectedSessionID)) { session in
             tabRow(session)
@@ -264,9 +402,11 @@ struct CantripDuoSidebar: View {
     @ViewBuilder private var flatTabs: some View {
         sectionHeader(
             title: "Tabs · \(model.sessions.count)",
+            spokenTitle: "Tabs, \(Self.tabCount(model.sessions.count))",
             detail: { let working = CantripHomeTabCounts.working(in: model.sessions)
                       return working > 0 ? "\(working) working" : nil }(),
             isExpanded: tabsExpanded,
+            identifier: id("tabsHeader"),
             toggle: { tabsExpanded.toggle() },
             accessory: {
                 Button(action: onCreateTab) {
@@ -278,10 +418,9 @@ struct CantripDuoSidebar: View {
                 .buttonStyle(.plain)
                 .disabled(!model.isConfigured || model.isMutating)
                 .accessibilityLabel("New Tab")
-                .accessibilityIdentifier("duo.sidebar.newTab")
+                .accessibilityIdentifier(id("newTab"))
             }
         )
-        .accessibilityIdentifier("duo.sidebar.tabsHeader")
         if tabsExpanded {
             ForEach(model.sessions) { session in
                 tabRow(session)
@@ -341,7 +480,7 @@ struct CantripDuoSidebar: View {
         .accessibilityValue(session.tabRowAccessibilityValue)
         .accessibilityHint("Opens this tab. Touch and hold for tab actions.")
         .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
-        .accessibilityIdentifier("duo.sidebar.tab.\(session.id)")
+        .accessibilityIdentifier(id("tab.\(session.id)"))
         .accessibilityActions {
             if canMove(session), let index = tabOrder.firstIndex(where: { $0.id == session.id }) {
                 if index > 0 {
@@ -359,7 +498,7 @@ struct CantripDuoSidebar: View {
     }
 
     private func canMove(_ session: CantripRemoteSession) -> Bool {
-        session.supportsTabReordering == true && model.sessions.count >= 2 && !model.isMutating
+        query.isEmpty && session.supportsTabReordering == true && model.sessions.count >= 2 && !model.isMutating
     }
 
     /// The tabs as shown here: grouped by section, leaving out collapsed sections' idle tabs.
@@ -394,11 +533,11 @@ struct CantripDuoSidebar: View {
                 detail: skillsDetail(content),
                 detailIsActive: false,
                 isExpanded: expanded,
+                identifier: id("skillsHeader"),
                 toggle: { skillsExpanded = !expanded },
                 accessory: { EmptyView() }
             )
             .id(Self.skillsAnchor)
-            .accessibilityIdentifier("duo.sidebar.skillsHeader")
             if expanded { skillRows(content) }
         }
     }
@@ -440,7 +579,7 @@ struct CantripDuoSidebar: View {
                 .accessibilityValue(open ? "Expanded" : "Collapsed")
                 .accessibilityAddTraits(.isHeader)
                 .id("duo.sidebar.skills.\(section.group.rawValue)")
-                .accessibilityIdentifier("duo.sidebar.skills.\(section.group.rawValue)")
+                .accessibilityIdentifier(id("skills.\(section.group.rawValue)"))
                 if open {
                     ForEach(section.matches) { match in
                         skillRow(match, highlighted: false)
@@ -478,7 +617,7 @@ struct CantripDuoSidebar: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .accessibilityIdentifier("duo.sidebar.skills.status")
+                .accessibilityIdentifier(id("skills.status"))
         }
     }
 
@@ -503,9 +642,11 @@ struct CantripDuoSidebar: View {
 
     // MARK: Pieces
 
+    /// A collapsible header; `identifier` and `spokenTitle` (VoiceOver's name for it) go on its toggle,
+    /// not on the row, so its + and … keep their own.
     private func sectionHeader<Accessory: View>(
-        title: String, detail: String?, detailIsActive: Bool = true, isExpanded: Bool,
-        toggle: @escaping () -> Void, @ViewBuilder accessory: () -> Accessory
+        title: String, spokenTitle: String? = nil, detail: String?, detailIsActive: Bool = true, isExpanded: Bool,
+        identifier: String, toggle: @escaping () -> Void, @ViewBuilder accessory: () -> Accessory
     ) -> some View {
         HStack(spacing: 4) {
             Button(action: toggle) {
@@ -529,16 +670,19 @@ struct CantripDuoSidebar: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel([title, detail].compactMap { $0 }.joined(separator: ", "))
+            .accessibilityLabel([spokenTitle ?? title, detail].compactMap { $0 }.joined(separator: ", "))
             .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
             .accessibilityHint(isExpanded ? "Collapses the section" : "Expands the section")
             .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier(identifier)
             accessory()
         }
         .padding(.leading, 12)
         .padding(.trailing, 4)
         .padding(.top, 10)
     }
+
+    private static func tabCount(_ count: Int) -> String { "\(count) \(count == 1 ? "tab" : "tabs")" }
 
     private var serverName: String {
         let name = model.servers.selected?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -564,6 +708,13 @@ struct CantripDuoSidebar: View {
             hasProblem: model.errorMessage != nil
         )
     }
+}
+
+/// Where the left menu is: beside (or over) the chat on the unfolded iPhone Duo, or the tab drawer's
+/// panel and iPad's sidebar column, which fill the width they're given.
+enum CantripLeftMenuPlacement {
+    case beside
+    case drawer
 }
 
 /// The Background jobs row's state; nil hides the row.

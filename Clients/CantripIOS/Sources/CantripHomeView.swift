@@ -169,14 +169,14 @@ struct CantripHomeTabs<ChatContent: View, TasksContent: View, ArtifactsContent: 
         .accessibilityIdentifier("home.tabView")
     }
 
-    /// On an iPhone Duo Home's sections are never a bottom bar: they are in the tab drawer, and unfolded
-    /// also in the sidebar (the bar holds only actions). Other iPhones keep the bottom bar.
-    private var sectionsInRail: Bool { CantripHomeDrawerSections.isListed(in: displayTraits) }
+    /// On an iPhone Duo Home's sections are never a bottom bar: they are in the left menu (the bar holds
+    /// only actions). Other iPhones keep the bottom bar as well.
+    private var sectionsInRail: Bool { displayTraits.hasDuoBar }
 
     private func tabContent<Content: View>(_ content: Content) -> some View {
         content
             .safeAreaPadding(.bottom, sectionsInRail ? 0 : CantripHomeLayout.compactContentBottomClearance)
-            // On a Duo the sections are in the tab drawer (and unfolded, the sidebar).
+            // On a Duo the sections are in the left menu.
             .toolbar(.hidden, for: .tabBar)
     }
 }

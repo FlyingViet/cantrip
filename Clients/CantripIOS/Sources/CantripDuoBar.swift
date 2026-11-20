@@ -2,8 +2,8 @@ import SwiftUI
 
 /// The iPhone Duo's one navigation bar on the screen's edge, in every pose, always open, holding only
 /// actions: the tab list (folded) or sidebar toggle (unfolded), Settings, View Mac and the menu. Home's
-/// sections (Chat, Tasks, Artifacts, Builds) are in the tab drawer in every pose and in the sidebar
-/// unfolded (`CantripHomeDrawerSections`).
+/// sections (Chat, Tasks, Artifacts, Builds) are in the left menu (`CantripDuoSidebar`): the sidebar
+/// unfolded, and the tab drawer's panel in every pose.
 struct CantripDuoBarItems {
     /// The sidebar toggle (unfolded) or the Tabs button (folded).
     var leading: AnyView?

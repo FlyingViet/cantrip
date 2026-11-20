@@ -4,19 +4,15 @@ import XCTest
 @testable import Hermes
 
 /// The iPhone Duo's one navigation bar: always open with only actions (Home's sections are in the
-/// tab drawer in every pose and the sidebar unfolded), and the app-drawn rail (unfolded upright).
+/// left menu), and the app-drawn rail (unfolded upright).
 @MainActor
 final class CantripDuoBarTests: XCTestCase {
-    func testHomesSectionsAreInTheDrawerInEveryDuoPose() {
-        let upright = ChatDisplayTraits(hasVerticalBar: true, isFolded: true)
-        let sideways = ChatDisplayTraits(hasVerticalBar: true, isLandscape: true, isFolded: true)
-        XCTAssertTrue(CantripHomeDrawerSections.isListed(in: upright), "Folded: the bar holds only actions, so the drawer")
-        XCTAssertTrue(CantripHomeDrawerSections.isListed(in: sideways), "Folded on its side, too")
-        XCTAssertTrue(CantripHomeDrawerSections.isListed(in: ChatDisplayTraits(hasVerticalBar: true, isHingeOpen: true)),
-                      "Unfolded on its side, when a swipe opens the drawer with the sidebar closed")
-        XCTAssertTrue(CantripHomeDrawerSections.isListed(in: ChatDisplayTraits(isHingeOpen: true)),
-                      "Unfolded upright (the app-drawn rail), where the sidebar starts closed")
-        XCTAssertFalse(CantripHomeDrawerSections.isListed(in: ChatDisplayTraits()), "Other iPhones keep Home's bottom bar")
+    func testEveryDuoPoseHasTheBarAndNoHomeBottomBar() {
+        XCTAssertTrue(ChatDisplayTraits(hasVerticalBar: true, isFolded: true).hasDuoBar, "Folded")
+        XCTAssertTrue(ChatDisplayTraits(hasVerticalBar: true, isLandscape: true, isFolded: true).hasDuoBar, "Folded on its side")
+        XCTAssertTrue(ChatDisplayTraits(hasVerticalBar: true, isHingeOpen: true).hasDuoBar, "Unfolded on its side")
+        XCTAssertTrue(ChatDisplayTraits(isHingeOpen: true).hasDuoBar, "Unfolded upright (the app-drawn rail)")
+        XCTAssertFalse(ChatDisplayTraits().hasDuoBar, "Other iPhones keep Home's bottom bar and the menu's Settings")
     }
 
     /// The iPhone Duo open upright (669 x 951 pt, an 81 pt status band): the app-drawn rail, always open

@@ -392,22 +392,22 @@ final class CantripHomeTabDrawerTests: XCTestCase {
             }
             try XCTUnwrap(image.pngData()).write(to: output.appendingPathComponent("\(name).png"))
         }
-        let drawer = CantripHomeTabDrawer(
-            model: model, backgroundActiveCount: 3, backgroundInputCount: 0,
-            onDismiss: {}, onSelectHome: {}, onOpenBackground: {}, onSelect: { _ in },
-            onCreate: {}, onRename: { _ in }, onClose: { _ in }
-        )
-        .background(.regularMaterial)
+        // The one left menu, as the tab drawer's panel (iPhone, folded Duo) and beside the chat (unfolded Duo).
+        func menu(_ placement: CantripLeftMenuPlacement, section: CantripHomeSection = .chat) -> some View {
+            CantripDuoSidebar(
+                model: model, slashCommands: BackendSlashCommandStore(), isHomeShown: true, homeSection: section,
+                showsSkills: false, slashToken: nil, highlighted: nil, canOpenModelSettings: false,
+                backgroundStatus: .init(CantripBackgroundJobsSummary(runs: 3, inputs: 0, home: model.currentHomeSummary,
+                                                                     tabs: model.sessions)),
+                isListening: false, isSpeaking: false, onSelectSection: { _ in }, onSelectTab: { _ in },
+                onCreateTab: {}, onRename: { _ in }, onClose: { _ in }, onOpenBackground: {},
+                onCustomizeMascot: {}, onChoose: { _ in }, placement: placement, isModal: placement == .drawer,
+                onOpenSettings: placement == .drawer ? {} : nil
+            )
+        }
+        let drawer = menu(.drawer)
         // The unfolded Duo's sidebar: its Background jobs row with the build queue's line.
-        let sidebar = CantripDuoSidebar(
-            model: model, slashCommands: BackendSlashCommandStore(), isHomeShown: true, homeSection: .chat,
-            showsSkills: false, slashToken: nil, highlighted: nil, canOpenModelSettings: false,
-            backgroundStatus: .init(CantripBackgroundJobsSummary(runs: 3, inputs: 0, home: model.currentHomeSummary,
-                                                                 tabs: model.sessions)),
-            isListening: false, isSpeaking: false, onSelectSection: { _ in }, onSelectTab: { _ in },
-            onCreateTab: {}, onRename: { _ in }, onClose: { _ in }, onOpenBackground: {},
-            onCustomizeMascot: {}, onChoose: { _ in }
-        )
+        let sidebar = menu(.beside)
         for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
             try await capture(sidebar, "home-tabs-duo-sidebar-\(name)", style: style, width: CantripDuoSidebar.width)
             for width: CGFloat in [320, 393] {
@@ -417,14 +417,8 @@ final class CantripHomeTabDrawerTests: XCTestCase {
                                   style: style, width: width, height: 140)
             }
         }
-        // The folded iPhone Duo's drawer (466 pt outer display): Home's sections as rows, Tasks on screen.
-        let foldedDrawer = CantripHomeTabDrawer(
-            model: model, backgroundActiveCount: 3, backgroundInputCount: 0,
-            onDismiss: {}, onSelectHome: {}, onOpenBackground: {}, onSelect: { _ in },
-            onCreate: {}, onRename: { _ in }, onClose: { _ in },
-            homeSections: CantripHomeDrawerSections(selected: .tasks) { _ in }
-        )
-        .background(.regularMaterial)
+        // The folded iPhone Duo's drawer (466 pt outer display), Tasks on screen.
+        let foldedDrawer = menu(.drawer, section: .tasks)
         try await capture(foldedDrawer.frame(width: CantripDrawerGesture.panelWidth(available: 466)),
                           "home-tabs-drawer-duo-folded-dark", style: .dark, width: 466, height: 678)
         try await capture(foldedDrawer, "home-tabs-drawer-duo-folded-ax", style: .dark, width: 466, height: 678,

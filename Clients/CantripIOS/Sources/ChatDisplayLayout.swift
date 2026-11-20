@@ -25,6 +25,10 @@ struct ChatDisplayTraits: Equatable {
 
     /// Unfolded upright, the system's bar runs along the top, so the app draws the rail itself.
     var usesAppRail: Bool { isUnfoldedDuo && !hasVerticalBar }
+
+    /// An iPhone Duo in any pose: its one bar (the system's vertical bar, or the app-drawn rail upright)
+    /// holds the actions, Settings included, and Home's sections are in the left menu, not a bottom bar.
+    var hasDuoBar: Bool { hasVerticalBar || usesAppRail }
 }
 
 private struct ChatDisplayTraitsKey: EnvironmentKey {

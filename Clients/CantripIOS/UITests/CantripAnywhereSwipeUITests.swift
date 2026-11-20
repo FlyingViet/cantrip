@@ -44,7 +44,7 @@ final class CantripAnywhereSwipeUITests: XCTestCase {
         tabs.tap()
         XCTAssertTrue(drawer.waitForExistence(timeout: 5))
         let rows = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier MATCHES 'cantrip-tab-[0-9A-Fa-f-]{36}'"))
+            .matching(NSPredicate(format: "identifier MATCHES 'drawer\\.tab\\.[0-9A-Fa-f-]{36}'"))
         let row = rows.allElementsBoundByIndex.first { $0.isHittable }
         XCTAssertNotNil(row, "The drawer lists tabs")
         row?.tap()

@@ -71,10 +71,13 @@ spans the host and this app is one commit.
   Duo, in every pose and with the sidebar open or closed, the side controls are one bar
   (`CantripDuoBarItems`, Sources/CantripDuoBar.swift), always open (no pill or minimizing, since
   2026-11-18), holding only actions: Tabs (folded) or the sidebar toggle (unfolded), Settings, View Mac
-  and the menu. Home's sections are rows in the tab drawer in every pose (`CantripHomeDrawerSections`,
-  under Cantrip Home; a row closes the drawer and opens Home on that section, from a tab too; unfolded,
-  the drawer opens from a swipe while the sidebar is closed) and in the sidebar unfolded, never on the
-  bar or a bottom bar. Where the system has a vertical bar
+  and the menu. The left menu is one view everywhere, `CantripDuoSidebar` (Gateway Mac's design:
+  Pip header with search, Home's sections as rows, Background jobs, sectioned tabs, skills, the
+  connection): `placement: .beside` next to (or over) the chat on the unfolded Duo (ids
+  `duo.sidebar.*`), `.drawer` as the tab drawer's panel on iPhone, the folded Duo and the unfolded Duo
+  with the sidebar put away, and as iPad's sidebar column (ids `drawer.*`). A section or tab row closes
+  the drawer and opens it, from a tab too; the footer has Settings only where there's no Duo bar
+  (`ChatDisplayTraits.hasDuoBar`). Home's sections are never on the bar or, on a Duo, a bottom bar. Where the system has a vertical bar
   (folded, unfolded on its side) the bar is one `.bottomBar` group with
   `.axisBehavior(.verticalPreferred)` (`CantripDuoVerticalBar`); re-id the host by
   `CantripDuoBarLayout` (posture, Home or tab, View Mac). Settings, View Mac and the menu are

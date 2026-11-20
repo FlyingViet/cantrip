@@ -49,7 +49,7 @@ final class CantripDuoTabPickerUITests: XCTestCase {
         XCTAssertTrue(drawer.waitForExistence(timeout: 5), "And opens it again")
         // Another tab (the fixture opens on its first one).
         let rows = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier MATCHES 'cantrip-tab-[0-9A-Fa-f-]{36}'"))
+            .matching(NSPredicate(format: "identifier MATCHES 'drawer\\.tab\\.[0-9A-Fa-f-]{36}'"))
         let other = rows.allElementsBoundByIndex.dropFirst().first { $0.isHittable }
         XCTAssertNotNil(other, "The picker lists other tabs")
         other?.tap()

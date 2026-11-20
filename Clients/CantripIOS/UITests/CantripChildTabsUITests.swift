@@ -55,7 +55,7 @@ final class CantripChildTabsUITests: XCTestCase {
         let tabs = app.buttons.matching(NSPredicate(format: "label == 'Tabs'")).firstMatch
         XCTAssertTrue(tabs.waitForExistence(timeout: 15))
         tabs.tap()
-        let child = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'cantrip-tab-' AND label CONTAINS 'child tab of Cantrip'")).firstMatch
+        let child = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'drawer.tab.' AND label CONTAINS 'child tab of Cantrip'")).firstMatch
         XCTAssertTrue(child.waitForExistence(timeout: 15), "Child tabs are listed under their parent")
         attach(app, "ios-4-drawer-nested")
         child.tap()
@@ -86,7 +86,7 @@ final class CantripChildTabsUITests: XCTestCase {
         let tabs = app.buttons.matching(NSPredicate(format: "label == 'Tabs'")).firstMatch
         XCTAssertTrue(tabs.waitForExistence(timeout: 30))
         tabs.tap()
-        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'cantrip-tab-' AND label BEGINSWITH %@", title + ",")).firstMatch
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'drawer.tab.' AND label BEGINSWITH %@", title + ",")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         row.tap()
     }
