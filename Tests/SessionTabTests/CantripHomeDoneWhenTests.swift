@@ -40,6 +40,19 @@ extension SessionTabTests {
                      && Check.cardLine(state: .notMet, note: "Not pushed yet.") == "Done when not met. Not pushed yet."
                      && Check.cardLine(state: .checking, note: nil) == nil)
 
+        // The check reads only the handoff's own turn: a queued request the tab took up right after
+        // it (another handoff) isn't read as this one's result.
+        do {
+            var promptA = ChatMessage(role: .user, text: "PROMPT-A"), replyA = ChatMessage(role: .assistant, text: "A is staged.")
+            var promptB = ChatMessage(role: .user, text: "PROMPT-B"), replyB = ChatMessage(role: .assistant, text: "B is half done")
+            (promptA.runID, promptB.runID) = (UUID(), UUID())
+            (replyA.runID, replyB.runID) = (promptA.runID, promptB.runID)
+            var first = CantripHomeDelegation(tabID: UUID(), tabTitle: "Tab", summary: "A", prompt: "PROMPT-A", createdAt: Date())
+            first.tabMessageID = promptA.id
+            let own = CantripHomeDelegations.handoffReplies(first, in: [promptA, replyA, promptB, replyB])
+            precondition(own == ["A is staged."], "\(own)")
+        }
+
         // A real handoff: finished but not pushed → sent back; then pushed → done and confirmed.
         let settings = AppSettings.shared
         let saved = (settings.backend, settings.memoryEnabled, settings.attachScreen)

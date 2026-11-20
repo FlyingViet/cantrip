@@ -644,12 +644,12 @@ final class CantripHomeDelegations {
         let target = manager.sessions.first { $0.id == moved.tabID }
         guard moved.isInChildTab else {
             return startDoneWhenCheck(Self.evaluate(moved, target: target, now: now, waitsForAnswer: waitsForAnswer),
-                                      target: target)
+                                      target: target, waitsForAnswer: waitsForAnswer)
         }
         let child = children[moved.tabID]
         return startDoneWhenCheck(Self.evaluateInChild(moved, child: child, target: target, now: now,
                                                        waitsForAnswer: waitsForAnswer),
-                                  target: target, child: child)
+                                  target: target, child: child, waitsForAnswer: waitsForAnswer)
     }
 
     /// A handoff whose queued request moved into a child tab (Run in Child Tab, or auto-fork)
@@ -814,9 +814,10 @@ final class CantripHomeDelegations {
     /// tool-free check reads the tab's replies (an archived child tab's, from its record);
     /// `applyDoneWhen` then completes it or sends it back.
     private func startDoneWhenCheck(_ next: CantripHomeDelegation, target: ChatSession?,
-                                    child: ChildTab? = nil) -> CantripHomeDelegation {
+                                    child: ChildTab? = nil, waitsForAnswer: Bool) -> CantripHomeDelegation {
         guard next.status == .completed, next.doneWhenState == nil,
-              let replies = target.map({ Self.handoffReplies(next, in: $0) }) ?? child?.replies,
+              let replies = target.map({ Self.handoffReplies(next, in: $0.messages, waitsForAnswer: waitsForAnswer) })
+                ?? child?.replies,
               let input = CantripHomeDoneWhen.input(prompt: next.prompt, replies: replies)
         else { return next }
         var checking = next
@@ -847,11 +848,13 @@ final class CantripHomeDelegations {
         return next
     }
 
-    /// The assistant replies of a handoff's run(s) in its tab, oldest first.
-    static func handoffReplies(_ handoff: CantripHomeDelegation, in target: ChatSession) -> [String] {
-        let messages = target.messages
-        guard let id = handoff.tabMessageID, let start = messages.firstIndex(where: { $0.id == id }) else { return [] }
-        return messages[(start + 1)...].filter { $0.role == .assistant }.map(\.text)
+    /// The assistant replies of a handoff's run(s) in its tab, oldest first: its own span only, so
+    /// a queued request the tab took up right after it isn't read as this one's result.
+    static func handoffReplies(_ handoff: CantripHomeDelegation, in messages: [ChatMessage],
+                               waitsForAnswer: Bool = true) -> [String] {
+        guard handoff.tabMessageID != nil, let span = span(of: handoff, in: messages, waitsForAnswer: waitsForAnswer)
+        else { return [] }
+        return messages[(span.start + 1)..<span.end].filter { $0.role == .assistant }.map(\.text)
     }
 
     private func applyDoneWhen(_ id: UUID, input: CantripHomeDoneWhen.Input,
