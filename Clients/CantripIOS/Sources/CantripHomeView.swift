@@ -429,6 +429,7 @@ struct CantripHomeTasksView: View {
                     }
                 }
                 .listStyle(.plain)
+                .safeAreaInset(edge: .top, spacing: 0) { CantripSavedCopyNotice(model: remote, scope: .tasks) }
                 .overlay(alignment: .bottom) { upcomingStatusCapsule }
                 // The views grid's one destination, outside the lazy list (see CantripHomeViewGridView).
                 .navigationDestination(item: $openedViewID) { id in
@@ -1486,6 +1487,7 @@ struct CantripHomeArtifactsView: View {
                     }
                     .padding()
                 }
+                .safeAreaInset(edge: .top, spacing: 0) { CantripSavedCopyNotice(model: remote, scope: .artifacts) }
             }
         }
         .navigationTitle("Artifacts")

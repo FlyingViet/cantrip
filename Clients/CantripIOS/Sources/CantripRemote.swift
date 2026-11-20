@@ -1883,6 +1883,8 @@ struct CantripRemoteAPI {
     let transport: CantripTransport
     let token: String
     var urlSession: URLSession?
+    /// Where the full answers the launch screens draw first are kept, and the pairing they belong to.
+    var savedCopy: (store: CantripSavedCopy, pairing: String)? = nil
 
     /// Chunked video and file uploads: raw bytes, a longer deadline, and the upload session.
     static func isUploadRoute(_ path: String) -> Bool {
@@ -1969,7 +1971,8 @@ struct CantripRemoteAPI {
     }
 
     func sessionListing() async throws -> CantripSessionsResponse {
-        try await request(path: "/api/v1/sessions")
+        try await request(path: "/api/v1/sessions", revalidating: CantripSavedCopy.Part.sessions,
+                          keepAs: { _ in CantripSavedCopy.Part.sessions })
     }
 
     func completionNotifications(method: String = "GET", body: Data? = nil) async throws -> CantripPushStatus {
@@ -2209,14 +2212,21 @@ struct CantripRemoteAPI {
 
     func session(id: String) async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
-            path: "/api/v1/sessions/\(id)", includeRecentExchanges: true
+            path: "/api/v1/sessions/\(id)", includeRecentExchanges: true, keepAs: { Self.savedPart(for: $0.session) }
         )
         return response.session
     }
 
+    /// Home and tabs keep their last recent-history answer for the next launch.
+    static func savedPart(for session: CantripRemoteSession?) -> String? {
+        guard let session else { return nil }
+        return session.isCantripHome == true ? CantripSavedCopy.Part.home : CantripSavedCopy.Part.tab(session.id)
+    }
+
     func homeSession() async throws -> CantripRemoteSession {
         let response: CantripSessionResponse = try await request(
-            path: "/api/v1/home", includeRecentExchanges: true
+            path: "/api/v1/home", includeRecentExchanges: true, revalidating: CantripSavedCopy.Part.home,
+            keepAs: { $0.session.isCantripHome == true ? CantripSavedCopy.Part.home : nil }
         )
         guard response.session.isCantripHome == true else {
             throw CantripRemoteError.invalidResponse
@@ -2232,14 +2242,46 @@ struct CantripRemoteAPI {
     /// nil when the Mac's tasks still match `revision`; older hosts always send the full list.
     func homeTasks(ifChangedFrom revision: String?) async throws -> CantripHomeTasksSnapshot? {
         let response: CantripHomeTasksResponse = try await request(
-            path: Self.path("/api/v1/home/tasks", revision: revision)
+            path: Self.path("/api/v1/home/tasks", revision: revision),
+            revalidating: revision == nil ? CantripSavedCopy.Part.tasks : nil,
+            keepAs: { $0.unchanged == true ? nil : CantripSavedCopy.Part.tasks }
         )
         if response.unchanged == true {
             guard let revision, response.revision == revision else { throw CantripRemoteError.invalidResponse }
             return nil
         }
-        guard let tasks = response.tasksWithCards else { throw CantripRemoteError.invalidResponse }
+        guard let snapshot = Self.tasksSnapshot(response) else { throw CantripRemoteError.invalidResponse }
+        return snapshot
+    }
+
+    private static func tasksSnapshot(_ response: CantripHomeTasksResponse) -> CantripHomeTasksSnapshot? {
+        guard response.unchanged != true, let tasks = response.tasksWithCards else { return nil }
         return (tasks, response.revision, response.error, response.supportsReordering == true, response.supportsViews == true)
+    }
+
+    /// The saved copy's answers, read the way the Mac's are.
+    static func savedTasks(_ data: Data) -> CantripHomeTasksSnapshot? {
+        (try? JSONDecoder().decode(CantripHomeTasksResponse.self, from: data)).flatMap(tasksSnapshot)
+    }
+
+    static func savedArtifacts(_ data: Data) -> (artifacts: [CantripHomeArtifact], supportsDownloads: Bool)? {
+        guard let response = try? JSONDecoder().decode(CantripHomeArtifactsResponse.self, from: data),
+              response.unchanged != true, let artifacts = response.artifacts else { return nil }
+        return (artifacts, response.supportsDownloads == true)
+    }
+
+    static func savedViews(_ data: Data) -> [CantripHomeViewSummary]? {
+        guard let response = try? JSONDecoder().decode(CantripHomeViewsResponse.self, from: data),
+              response.unchanged != true, let views = response.views else { return nil }
+        return views.compactMap(\.value)
+    }
+
+    static func savedSession(_ data: Data) -> CantripRemoteSession? {
+        (try? JSONDecoder().decode(CantripSessionUpdate.self, from: data))?.session
+    }
+
+    static func savedListing(_ data: Data) -> CantripSessionsResponse? {
+        try? JSONDecoder().decode(CantripSessionsResponse.self, from: data)
     }
 
     /// A record's weather and map cards, and how many seconds until they're worth asking for again.
@@ -2253,7 +2295,9 @@ struct CantripRemoteAPI {
     /// Home's views, pinned first (docs/views.md); nil when they still match `revision`.
     func homeViews(ifChangedFrom revision: String?) async throws -> CantripHomeViewsSnapshot? {
         let response: CantripHomeViewsResponse = try await request(
-            path: Self.path("/api/v1/home/views", revision: revision)
+            path: Self.path("/api/v1/home/views", revision: revision),
+            revalidating: revision == nil ? CantripSavedCopy.Part.views : nil,
+            keepAs: { $0.unchanged == true ? nil : CantripSavedCopy.Part.views }
         )
         if response.unchanged == true {
             guard let revision, response.revision == revision else { throw CantripRemoteError.invalidResponse }
@@ -2364,7 +2408,9 @@ struct CantripRemoteAPI {
     func homeArtifacts(ifChangedFrom revision: String?) async throws
         -> (artifacts: [CantripHomeArtifact], revision: String, supportsDownloads: Bool)? {
         let response: CantripHomeArtifactsResponse = try await request(
-            path: Self.path("/api/v1/home/artifacts", revision: revision)
+            path: Self.path("/api/v1/home/artifacts", revision: revision),
+            revalidating: revision == nil ? CantripSavedCopy.Part.artifacts : nil,
+            keepAs: { $0.unchanged == true ? nil : CantripSavedCopy.Part.artifacts }
         )
         if response.unchanged == true {
             guard let revision, response.revision == revision else { throw CantripRemoteError.invalidResponse }
@@ -2561,7 +2607,8 @@ struct CantripRemoteAPI {
             guard let target = components.string else { throw CantripRemoteError.invalidResponse }
             path = target
         }
-        let response: CantripSessionUpdate = try await request(path: path, includeRecentExchanges: true)
+        let response: CantripSessionUpdate = try await request(path: path, includeRecentExchanges: true,
+                                                               keepAs: { Self.savedPart(for: $0.session) })
         if let session = response.session { return session }
         guard response.unchanged == true, revision != nil else {
             throw CantripRemoteError.invalidResponse
@@ -3214,12 +3261,38 @@ struct CantripRemoteAPI {
         return path
     }
 
+    /// `revalidating` names the saved part whose entity tag goes out as If-None-Match (a 304 answers
+    /// with that part's body); `keepAs` names the part a full answer is kept as, if any.
     private func request<Response: Decodable>(
         path: String,
         method: String = "GET",
         body: Data? = nil,
-        includeRecentExchanges: Bool = false
+        includeRecentExchanges: Bool = false,
+        revalidating revalidatedPart: String? = nil,
+        keepAs keptPart: ((Response) -> String?)? = nil
     ) async throws -> Response {
+        let (data, etag) = try await requestData(path: path, method: method, body: body,
+                                                 includeRecentExchanges: includeRecentExchanges,
+                                                 revalidating: method == "GET" ? revalidatedPart : nil)
+        let response: Response
+        do {
+            response = try JSONDecoder().decode(Response.self, from: data)
+        } catch {
+            throw CantripRemoteError.decoding
+        }
+        if let savedCopy, let part = keptPart?(response) {
+            savedCopy.store.keep(part, body: data, etag: etag, pairing: savedCopy.pairing)
+        }
+        return response
+    }
+
+    private func requestData(
+        path: String,
+        method: String,
+        body: Data?,
+        includeRecentExchanges: Bool,
+        revalidating revalidatedPart: String?
+    ) async throws -> (Data, String?) {
         try Task.checkCancellation()
         guard var target = URLComponents(string: path), target.host == nil else {
             throw CantripRemoteError.invalidResponse
@@ -3231,12 +3304,13 @@ struct CantripRemoteAPI {
         }
         guard let path = target.string else { throw CantripRemoteError.invalidResponse }
         if case .lan(let endpoint) = transport {
-            return try await requestLAN(
+            // The local network is fast: no revalidation, but full answers are still kept.
+            return (try await requestLAN(
                 endpoint: endpoint,
                 path: path,
                 method: method,
                 body: body
-            )
+            ), nil)
         }
         guard case .remote(let baseURL) = transport else {
             throw CantripRemoteError.invalidResponse
@@ -3261,6 +3335,10 @@ struct CantripRemoteAPI {
             request.setValue(method == "PUT" && Self.isUploadRoute(path) ? "application/octet-stream" : "application/json",
                              forHTTPHeaderField: "Content-Type")
         }
+        let held = revalidatedPart.flatMap { savedCopy?.store.entry($0) }
+        if let tag = held?.etag {
+            request.setValue(tag, forHTTPHeaderField: "If-None-Match")
+        }
 
         let data: Data
         let response: URLResponse
@@ -3282,24 +3360,23 @@ struct CantripRemoteAPI {
         if http.statusCode == 401 {
             throw CantripRemoteError.authentication
         }
+        if http.statusCode == 304, let held, held.etag != nil {
+            return (held.body, held.etag)
+        }
         guard (200..<300).contains(http.statusCode) else {
             let serverMessage = (try? JSONDecoder().decode(CantripErrorResponse.self, from: data))?.error
                 ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
             throw CantripRemoteError.http(http.statusCode, serverMessage)
         }
-        do {
-            return try JSONDecoder().decode(Response.self, from: data)
-        } catch {
-            throw CantripRemoteError.decoding
-        }
+        return (data, http.value(forHTTPHeaderField: "ETag"))
     }
 
-    private func requestLAN<Response: Decodable>(
+    private func requestLAN(
         endpoint: NWEndpoint,
         path: String,
         method: String,
         body: Data?
-    ) async throws -> Response {
+    ) async throws -> Data {
         let response = try await CantripLANRequest(
             endpoint: endpoint,
             token: token,
@@ -3316,11 +3393,7 @@ struct CantripRemoteAPI {
             )?.error ?? HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
             throw CantripRemoteError.http(response.statusCode, serverMessage)
         }
-        do {
-            return try JSONDecoder().decode(Response.self, from: response.body)
-        } catch {
-            throw CantripRemoteError.decoding
-        }
+        return response.body
     }
 
     private func endpoint(path: String, baseURL: URL) throws -> URL {
@@ -3455,6 +3528,11 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var historyPrependRevision = 0
     private(set) var historyPrependAnchor: String?
     private var detailCache: [String: CantripRemoteSession] = [:]
+    private let savedCopy: CantripSavedCopy
+    private var savedCopyPairing: String?
+    /// Parts of the saved copy on screen that the Mac hasn't confirmed or replaced yet
+    /// (`CantripSavedCopy.Part` names).
+    @Published private(set) var savedCopyParts: Set<String> = []
     private var regularSelectedSessionID: String?
     private var cacheOrder: [String] = []
     private var expandedHistory: Set<String> = []
@@ -3603,8 +3681,10 @@ final class CantripRemoteModel: ObservableObject {
     init(urlSession: URLSession? = nil, servers: ServerProfiles? = nil,
          completionAlerts: CantripNotifications? = nil,
          liveStatus: CantripLiveStatusController? = nil,
+         savedCopy: CantripSavedCopy? = nil,
          authorizeSensitiveAction: @escaping (String) async throws -> Void = CantripBiometrics.authorize) {
         self.urlSession = urlSession
+        self.savedCopy = savedCopy ?? CantripSavedCopy(directory: nil)
         self.liveStatus = liveStatus
         self.authorizeSensitiveAction = authorizeSensitiveAction
         self.completionAlerts = completionAlerts ?? .shared
@@ -3638,6 +3718,7 @@ final class CantripRemoteModel: ObservableObject {
             if baseURL == nil, !configuredURL.isEmpty {
                 errorMessage = "The saved Remote URL is invalid. Open settings and save it again."
             }
+            openSavedCopy()
         } catch {
             baseURL = nil
             token = nil
@@ -3765,6 +3846,12 @@ final class CantripRemoteModel: ObservableObject {
             guard clearConfiguration() else {
                 throw ServerConfigurationError(message: errorMessage ?? "Could not disconnect the server.")
             }
+        } else if let credential = try? servers.storedCredential(for: server) {
+            savedCopy.discard(pairing: CantripSavedCopy.pairingKey(
+                url: (try? Self.normalizedBaseURL(server.url))??.absoluteString ?? "",
+                directAddress: (try? CantripDirectAddress.normalized(server.directAddress)) ?? nil,
+                token: credential
+            ))
         }
         try servers.remove(server)
         if subscribed { completionAlerts.forget(serverID: server.id) }
@@ -3789,6 +3876,7 @@ final class CantripRemoteModel: ObservableObject {
             videoUploadTask?.cancel()
             lanBrowser.stop()
             stopPolling()
+            savedCopy.writePending()
         }
     }
 
@@ -4035,6 +4123,8 @@ final class CantripRemoteModel: ObservableObject {
                 UserDefaults.standard.set(configuredURL, forKey: Self.endpointKey)
             }
             errorMessage = nil
+            savedCopyPairing = nil
+            openSavedCopy()
             if appIsActive {
                 startLANDiscovery()
                 startPolling()
@@ -4057,6 +4147,10 @@ final class CantripRemoteModel: ObservableObject {
         }
         do {
             try CantripRemoteCredentials.removeToken()
+            if let savedCopyPairing { savedCopy.discard(pairing: savedCopyPairing) }
+            savedCopyPairing = nil
+            savedCopy.open(pairing: nil)
+            savedCopyParts = []
             stopPolling()
             lanBrowser.stop()
             configurationGeneration += 1
@@ -4289,6 +4383,84 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
+    private var savedCopyUse: (store: CantripSavedCopy, pairing: String)? {
+        savedCopyPairing.map { (savedCopy, $0) }
+    }
+
+    private static func savedPart(forSession id: String) -> String {
+        id == CantripHomeIdentity.sessionID ? CantripSavedCopy.Part.home : CantripSavedCopy.Part.tab(id)
+    }
+
+    private func confirmSaved(_ part: String) {
+        if savedCopyParts.contains(part) { savedCopyParts.remove(part) }
+    }
+
+    /// The chat on screen (Home or a tab) or the tab list still shows the saved copy.
+    var showsSavedCopy: Bool {
+        guard !savedCopyParts.isEmpty else { return false }
+        return savedCopyParts.contains(CantripSavedCopy.Part.sessions)
+            || selectedSessionID.map { savedCopyParts.contains(Self.savedPart(forSession: $0)) } == true
+    }
+
+    /// Home's Tasks (with its views) or Artifacts still show the saved copy.
+    var homeTasksShowSavedCopy: Bool {
+        savedCopyParts.contains(CantripSavedCopy.Part.tasks) || savedCopyParts.contains(CantripSavedCopy.Part.views)
+    }
+
+    var homeArtifactsShowSavedCopy: Bool { savedCopyParts.contains(CantripSavedCopy.Part.artifacts) }
+
+    /// Opens the pairing's saved copy and, on a cold launch or a switch of Macs, draws it at once:
+    /// the tab list, Home and the tabs last open, Tasks, artifacts and views. Each part stays marked
+    /// (`savedCopyParts`) until the Mac confirms or replaces it; sending still needs the Mac.
+    private func openSavedCopy() {
+        guard let token, baseURL != nil || directEndpoint != nil else {
+            savedCopyPairing = nil
+            savedCopy.open(pairing: nil)
+            if !savedCopyParts.isEmpty { savedCopyParts = [] }
+            return
+        }
+        let key = CantripSavedCopy.pairingKey(url: configuredURL, directAddress: directAddress, token: token)
+        let changed = key != savedCopyPairing
+        savedCopyPairing = key
+        let saved = savedCopy.open(pairing: key)
+        guard changed else { return }
+        typealias Part = CantripSavedCopy.Part
+        var parts: Set<String> = []
+        if sessions.isEmpty, let body = saved[Part.sessions]?.body, let listing = CantripRemoteAPI.savedListing(body) {
+            sessions = listing.sessions
+            homeSummary = listing.home
+            tabSections = listing.sections ?? []
+            supportsTabSections = listing.supportsTabSections == true
+            parts.insert(Part.sessions)
+        }
+        for (name, entry) in saved where name == Part.home || Part.isTab(name) {
+            guard let session = CantripRemoteAPI.savedSession(entry.body), detailCache[session.id] == nil,
+                  Self.savedPart(forSession: session.id) == name else { continue }
+            detailCache[session.id] = session
+            cacheOrder.append(session.id)
+            parts.insert(name)
+        }
+        if homeTasks.isEmpty, let body = saved[Part.tasks]?.body, let snapshot = CantripRemoteAPI.savedTasks(body) {
+            homeTasks = snapshot.tasks
+            homeTasksSupportReordering = snapshot.supportsReordering
+            homeViewsSupported = snapshot.supportsViews
+            parts.insert(Part.tasks)
+        }
+        if homeArtifacts.isEmpty, let body = saved[Part.artifacts]?.body,
+           let artifacts = CantripRemoteAPI.savedArtifacts(body) {
+            homeArtifacts = artifacts.artifacts
+            homeArtifactsSupportDownloads = artifacts.supportsDownloads
+            parts.insert(Part.artifacts)
+        }
+        if homeViews.isEmpty, homeViewsSupported, let body = saved[Part.views]?.body,
+           let views = CantripRemoteAPI.savedViews(body) {
+            homeViews = views.filter(\.pinned) + views.filter { !$0.pinned }
+            parts.insert(Part.views)
+        }
+        if !parts.isEmpty { transcriptRevision += 1 }
+        savedCopyParts = parts
+    }
+
     func selectHome() async {
         guard let load = showHome() else { return }
         await loadHome(load)
@@ -4369,6 +4541,8 @@ final class CantripRemoteModel: ObservableObject {
             async let artifacts = performHistoryRead { try await $0.homeArtifacts(ifChangedFrom: artifactsRevision) }
             let values = try await (tasks, artifacts)
             guard isHomeSelected else { return }
+            confirmSaved(CantripSavedCopy.Part.tasks)
+            confirmSaved(CantripSavedCopy.Part.artifacts)
             if let snapshot = values.0 {
                 // A snapshot fetched across a reorder may still carry the old order.
                 if orderRevision == homeTaskOrderRevision {
@@ -4384,6 +4558,7 @@ final class CantripRemoteModel: ObservableObject {
                         homeViews = []
                         homeViewsFetched = nil
                         homeViewsError = nil
+                        confirmSaved(CantripSavedCopy.Part.views)
                     }
                 }
                 if homeDataError != snapshot.error { homeDataError = snapshot.error }
@@ -4422,6 +4597,7 @@ final class CantripRemoteModel: ObservableObject {
         do {
             let snapshot = try await performHistoryRead { try await $0.homeViews(ifChangedFrom: revision) }
             guard isHomeSelected else { return }
+            confirmSaved(CantripSavedCopy.Part.views)
             if homeViewsError != nil { homeViewsError = nil }
             guard let snapshot else { return }
             let ordered = snapshot.views.filter(\.pinned) + snapshot.views.filter { !$0.pinned }
@@ -5077,8 +5253,10 @@ final class CantripRemoteModel: ObservableObject {
         updateRoutes()
         // Large history downloads must not hold the polling/mutation request gate.
         let reader = router.independentReader()
+        let saved = savedCopyUse
         let result = try await reader.perform(readOnly: true) { transport in
-            try await operation(CantripRemoteAPI(transport: transport, token: token, urlSession: urlSession))
+            try await operation(CantripRemoteAPI(transport: transport, token: token, urlSession: urlSession,
+                                                 savedCopy: saved))
         }
         try Task.checkCancellation()
         guard generation == configurationGeneration else { throw CancellationError() }
@@ -6081,6 +6259,7 @@ final class CantripRemoteModel: ObservableObject {
             // A poll that finds nothing new publishes nothing: every change redraws the open
             // conversation, and redrawing it every few seconds makes scrolling stutter.
             if sessions != listed { sessions = listed }
+            confirmSaved(CantripSavedCopy.Part.sessions)
             if homeSummary != listing.home { homeSummary = listing.home }
             let sections = listing.sections ?? []
             if tabSections != sections { tabSections = sections }
@@ -6137,6 +6316,7 @@ final class CantripRemoteModel: ObservableObject {
                 let listedRevision = listed.first { $0.id == chosenID }?.historyRevision
                 if let cachedRevision, cachedRevision == listedRevision {
                     if detailError != nil { detailError = nil }
+                    confirmSaved(Self.savedPart(forSession: chosenID))
                 } else {
                     let key = "\(generation):\(revision):\(selection):\(chosenID)"
                     if detailRefreshKey != key {
@@ -6159,6 +6339,7 @@ final class CantripRemoteModel: ObservableObject {
                                       revision == self.mutationRevision, selection == self.selectionRevision,
                                       self.selectedSessionID == chosenID else { return }
                                 if let detail { self.apply(detail) }
+                                self.confirmSaved(Self.savedPart(forSession: chosenID))
                                 if self.detailError != nil { self.detailError = nil }
                             } catch is CancellationError {
                                 return
@@ -6231,7 +6412,8 @@ final class CantripRemoteModel: ObservableObject {
         guard generation == configurationGeneration else { throw CancellationError() }
         updateRoutes()
         return try await router.perform(readOnly: allowFallback) { transport in
-            let api = CantripRemoteAPI(transport: transport, token: token, urlSession: self.urlSession)
+            let api = CantripRemoteAPI(transport: transport, token: token, urlSession: self.urlSession,
+                                       savedCopy: self.savedCopyUse)
             return try await operation(api)
         }
     }
@@ -6288,6 +6470,7 @@ final class CantripRemoteModel: ObservableObject {
             session.hasOlderMessages = true
         }
         session.settleBackgroundAgents()
+        confirmSaved(Self.savedPart(forSession: session.id))
         detailCache[session.id] = session
         cacheOrder.removeAll { $0 == session.id }
         cacheOrder.append(session.id)

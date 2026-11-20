@@ -1971,7 +1971,8 @@ struct ChatView: View {
     }
 
     private var hasRemoteNotices: Bool {
-        remoteIdleStatus != nil
+        remote.showsSavedCopy
+            || remoteIdleStatus != nil
             || remote.selectedSession?.deliveryStatus != nil
             || remote.errorMessage != nil
             || remote.detailError != nil
@@ -1980,6 +1981,7 @@ struct ChatView: View {
     @ViewBuilder private var remoteNotices: some View {
         if hasRemoteNotices {
             VStack(spacing: 8) {
+                CantripSavedCopyNotice(model: remote, scope: .chat, inBand: true)
                 if let status = remoteIdleStatus {
                     Text(status)
                         .font(.caption)

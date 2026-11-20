@@ -10,10 +10,11 @@ struct HermesApp: App {
     // snaps open menus back to the top. ChatView observes the model itself.
     #if DEBUG
     @State private var remoteModel = CantripRemoteModel(
-        liveStatus: .shared, authorizeSensitiveAction: CantripUITestFixtures.authorizeSensitiveAction
+        liveStatus: .shared, savedCopy: .onDevice(),
+        authorizeSensitiveAction: CantripUITestFixtures.authorizeSensitiveAction
     )
     #else
-    @State private var remoteModel = CantripRemoteModel(liveStatus: .shared)
+    @State private var remoteModel = CantripRemoteModel(liveStatus: .shared, savedCopy: .onDevice())
     #endif
     // Held like remoteModel; App state lives for the process, so only cold launches show it.
     @State private var launchSplash = CantripLaunchSplashController()
