@@ -44,6 +44,14 @@ struct CantripHomeDelegation: Codable, Equatable, Identifiable {
     var doneWhenNote: String?
     /// Messages already sent back to the tab because Done when wasn't met.
     var doneWhenSendBacks: Int?
+    /// Not met only because it waits for an install, a scheduled run or the user.
+    var doneWhenWaiting: CantripHomeDoneWhen.Waiting?
+    /// Checks run again after later turns of the tab (`CantripHomeDoneWhen.maximumRechecks`).
+    var doneWhenRechecks: Int?
+    /// The newest later reply a re-check read; a re-check waits for a newer one.
+    var doneWhenCheckedThrough: UUID?
+    /// Each check's result, oldest first (`CantripHomeDoneWhen.historyLimit`).
+    var doneWhenHistory: [CantripHomeDoneWhen.HistoryEntry]?
 
     var isActive: Bool { status == .queued || status == .running }
     var isInChildTab: Bool { parentTabID != nil }
@@ -71,9 +79,10 @@ struct CantripHomeDelegation: Codable, Equatable, Identifiable {
             item["childTab"] = child
         }
         if let doneWhenState {
-            var check: [String: Any] = ["state": doneWhenState.rawValue]
+            var check: [String: Any] = ["state": CantripHomeDoneWhen.label(doneWhenState, waiting: doneWhenWaiting) ?? ""]
             check["note"] = doneWhenNote
             check["sendBacks"] = doneWhenSendBacks
+            check["rechecks"] = doneWhenRechecks
             item["doneWhen"] = check
         }
         return item
@@ -109,6 +118,7 @@ struct CantripHomeHandoffResult: Codable, Equatable {
     /// The Done when check, once the tab finished (optional: older cards lack it).
     var doneWhenState: CantripHomeDoneWhen.State?
     var doneWhenNote: String?
+    var doneWhenWaiting: CantripHomeDoneWhen.Waiting?
     /// nil: a Home handoff. "ask": the reply to a `cantrip tab ask` question, in the asker's chat
     /// (`summary` holds the question, `detail` the reply).
     var kind: String?
@@ -166,8 +176,11 @@ struct CantripHomeHandoffResult: Codable, Equatable {
                 ?? delegation.result.map { CantripHomeDelegations.briefOutcome($0) } ?? ""
             doneWhenState = delegation.doneWhenState
             doneWhenNote = delegation.doneWhenNote
+            doneWhenWaiting = delegation.doneWhenWaiting
             // A missed finish line leads the card; a confirmed one follows the outcome.
-            let check = CantripHomeDoneWhen.cardLine(state: delegation.doneWhenState, note: delegation.doneWhenNote)
+            let check = CantripHomeDoneWhen.cardLine(state: delegation.doneWhenState, note: delegation.doneWhenNote,
+                                                     waiting: delegation.doneWhenWaiting,
+                                                     rechecked: (delegation.doneWhenRechecks ?? 0) > 0)
             detail = [delegation.doneWhenState == .met ? outcome : check, delegation.doneWhenState == .met ? check : outcome,
                       childStatus]
                 .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -221,7 +234,7 @@ struct CantripHomeHandoffResult: Codable, Equatable {
         ]
         item["finishedAt"] = finishedAt?.timeIntervalSince1970
         if let doneWhenState {
-            var check: [String: Any] = ["state": doneWhenState.rawValue]
+            var check: [String: Any] = ["state": CantripHomeDoneWhen.label(doneWhenState, waiting: doneWhenWaiting) ?? ""]
             check["note"] = doneWhenNote
             item["doneWhen"] = check
         }
@@ -508,6 +521,14 @@ final class CantripHomeDelegations {
         if backgroundFinished {
             // Grouped incidents may have been waiting on this one.
             DispatchQueue.main.async { CantripHomeStore.shared.checkNow() }
+        }
+        // Finished handoffs whose Done when isn't met yet: their tabs stay watched, and a later turn
+        // there (proofs after an install, a scheduled run, the user's go) checks them again.
+        let handoffs = allHandoffs
+        let fromHome = Set(home.messages.flatMap(\.delegations).map(\.id))
+        for handoff in handoffs where CantripHomeDoneWhen.awaitsRecheck(handoff, now: now) {
+            activeTabs.insert(handoff.tabID)
+            startRecheck(handoff, among: handoffs, waitsForAnswer: fromHome.contains(handoff.id))
         }
         for id in observers.keys where !activeTabs.contains(id) {
             observers[id] = nil
@@ -840,6 +861,86 @@ final class CantripHomeDelegations {
         return checking
     }
 
+    /// Re-checks running now (handoff IDs).
+    private var doneWhenRechecksRunning: Set<UUID> = []
+
+    /// Checks a finished handoff that isn't met again once its tab has finished a later turn with a
+    /// reply the last check didn't read. One model call, like the first check; never a send-back.
+    private func startRecheck(_ handoff: CantripHomeDelegation, among handoffs: [CantripHomeDelegation],
+                              waitsForAnswer: Bool) {
+        guard !doneWhenRechecksRunning.contains(handoff.id), let manager,
+              let target = manager.sessions.first(where: { $0.id == handoff.tabID }),
+              !target.isStreaming, target.pendingInputs.isEmpty,
+              let later = Self.laterReplies(handoff, others: handoffs, in: target.messages, waitsForAnswer: waitsForAnswer),
+              later.lastID != handoff.doneWhenCheckedThrough,
+              let input = CantripHomeDoneWhen.input(prompt: handoff.prompt, replies: CantripHomeDoneWhen.recheckReplies(
+                  own: Self.handoffReplies(handoff, in: target.messages, waitsForAnswer: waitsForAnswer),
+                  later: later.replies))
+        else { return }
+        doneWhenRechecksRunning.insert(handoff.id)
+        let provider = manager.homeSession.routerProvider
+        let id = handoff.id, through = later.lastID
+        Log.write("home: re-checking handoff \(id) against Done when after a later turn in its tab")
+        Task { @MainActor [weak self] in
+            let verdict: Result<CantripHomeDoneWhen.Verdict, Error>
+            do { verdict = .success(try await CantripHomeDoneWhen.check(input, provider)) }
+            catch { verdict = .failure(error) }
+            guard let self else { return }
+            self.doneWhenRechecksRunning.remove(id)
+            self.applyRecheck(id, through: through, verdict: verdict)
+        }
+    }
+
+    /// Updates a re-checked handoff in place: its card in Home's chat (or its Background entry)
+    /// and, through `refresh`, the handoff log. A check that didn't run still counts toward the cap.
+    private func applyRecheck(_ id: UUID, through: UUID, verdict: Result<CantripHomeDoneWhen.Verdict, Error>,
+                              now: Date = Date()) {
+        guard let manager else { return }
+        func decide(_ handoff: CantripHomeDelegation) -> CantripHomeDelegation {
+            guard CantripHomeDoneWhen.awaitsRecheck(handoff, now: now) else { return handoff }
+            var next = handoff
+            let count = (handoff.doneWhenRechecks ?? 0) + 1
+            next.doneWhenRechecks = count
+            next.doneWhenCheckedThrough = through
+            let before = CantripHomeDoneWhen.label(handoff.doneWhenState, waiting: handoff.doneWhenWaiting) ?? ""
+            guard case .success(let verdict) = verdict else {
+                Log.write("home: handoff \(id) re-check didn't run (\(count) of \(CantripHomeDoneWhen.maximumRechecks))")
+                return next
+            }
+            let state: CantripHomeDoneWhen.State, note: String?, waiting: CantripHomeDoneWhen.Waiting?
+            switch CantripHomeDoneWhen.outcome(of: verdict, sendBacks: handoff.doneWhenSendBacks ?? 0, canSendBack: false) {
+            case .met: (state, note, waiting) = (.met, nil, nil)
+            case .notMet(let missing), .sendBack(let missing): (state, note, waiting) = (.notMet, missing, nil)
+            case .unchecked(let missing): (state, note, waiting) = (.unchecked, missing, nil)
+            case .waiting(let reason, let missing): (state, note, waiting) = (.notMet, missing, reason)
+            }
+            next.doneWhenState = state
+            next.doneWhenNote = note
+            next.doneWhenWaiting = waiting
+            let label = CantripHomeDoneWhen.label(state, waiting: waiting) ?? state.rawValue
+            next.doneWhenHistory = CantripHomeDoneWhen.appending(.init(at: now, state: label, note: note, recheck: true),
+                                                                 to: handoff.doneWhenHistory)
+            Log.write("home: handoff \(id) Done when re-checked: \(before) -> \(label) (\(count) of \(CantripHomeDoneWhen.maximumRechecks))")
+            return next
+        }
+        let home = manager.homeSession
+        for messageIndex in home.messages.indices {
+            guard let index = home.messages[messageIndex].delegations.firstIndex(where: { $0.id == id }) else { continue }
+            let next = decide(home.messages[messageIndex].delegations[index])
+            home.messages[messageIndex].delegations[index] = next
+            Self.noteResult(next, in: home, now: now)
+            home.persistTranscript()
+            return refresh(now: now)
+        }
+        let store = CantripHomeStore.shared
+        for run in store.backgroundRuns {
+            guard var handoffs = run.handoffs, let index = handoffs.firstIndex(where: { $0.id == id }) else { continue }
+            handoffs[index] = decide(handoffs[index])
+            store.updateHandoffs(runID: run.id, handoffs)
+            return refresh(now: now)
+        }
+    }
+
     /// A check that isn't running (Cantrip restarted mid-check) starts over.
     private func recovered(_ handoff: CantripHomeDelegation) -> CantripHomeDelegation {
         guard handoff.doneWhenState == .checking, !doneWhenChecks.contains(handoff.id) else { return handoff }
@@ -857,6 +958,26 @@ final class CantripHomeDelegations {
         return messages[(span.start + 1)..<span.end].filter { $0.role == .assistant }.map(\.text)
     }
 
+    /// The tab's replies after a finished handoff's span, leaving out other handoffs' runs (`others`
+    /// in the same tab), with the newest one's ID; nil while there are none.
+    static func laterReplies(_ handoff: CantripHomeDelegation, others: [CantripHomeDelegation], in messages: [ChatMessage],
+                             waitsForAnswer: Bool = true) -> (replies: [String], lastID: UUID)? {
+        guard handoff.tabMessageID != nil, let span = span(of: handoff, in: messages, waitsForAnswer: waitsForAnswer),
+              span.end < messages.endIndex else { return nil }
+        var excluded = IndexSet()
+        for other in others where other.id != handoff.id && other.tabID == handoff.tabID {
+            guard let range = self.span(of: other, in: messages, waitsForAnswer: waitsForAnswer),
+                  range.start >= span.end else { continue }
+            excluded.insert(integersIn: range.start..<range.end)
+        }
+        let later = messages.indices.dropFirst(span.end).filter {
+            !excluded.contains($0) && messages[$0].role == .assistant
+                && !messages[$0].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        guard let last = later.last else { return nil }
+        return (later.map { messages[$0].text }, messages[last].id)
+    }
+
     private func applyDoneWhen(_ id: UUID, input: CantripHomeDoneWhen.Input,
                                verdict: Result<CantripHomeDoneWhen.Verdict, Error>, now: Date = Date()) {
         guard let manager else { return }
@@ -870,17 +991,22 @@ final class CantripHomeDelegations {
             case .success(let verdict): outcome = CantripHomeDoneWhen.outcome(of: verdict, sendBacks: sendBacks)
             case .failure(let error): outcome = .unchecked("The check didn't run (\(error.localizedDescription)).")
             }
-            func complete(_ state: CantripHomeDoneWhen.State, _ note: String?) {
+            func complete(_ state: CantripHomeDoneWhen.State, _ note: String?, waiting: CantripHomeDoneWhen.Waiting? = nil) {
                 next.status = .completed
                 next.finishedAt = now
                 next.latestStatus = nil
                 next.doneWhenState = state
                 next.doneWhenNote = note
+                next.doneWhenWaiting = waiting
+                next.doneWhenHistory = CantripHomeDoneWhen.appending(
+                    .init(at: now, state: CantripHomeDoneWhen.label(state, waiting: waiting) ?? state.rawValue,
+                          note: note, recheck: false), to: next.doneWhenHistory)
             }
             switch outcome {
             case .met: complete(.met, nil)
             case .notMet(let note): complete(.notMet, note)
             case .unchecked(let note): complete(.unchecked, note)
+            case .waiting(let waiting, let note): complete(.notMet, note, waiting: waiting)
             case .sendBack(let missing):
                 // A child tab's branch may already be merging, so its gap is reported instead.
                 guard let target, !next.isInChildTab, !target.isStreaming, target.pendingInputs.isEmpty else {
@@ -895,7 +1021,9 @@ final class CantripHomeDelegations {
                                                                  attempt: sendBacks + 1), mode: .queue)
                 Log.write("home: handoff \(next.id) sent back to its tab (Done when not met, \(sendBacks + 1) of \(CantripHomeDoneWhen.maximumSendBacks))")
             }
-            if next.doneWhenState != nil { Log.write("home: handoff \(next.id) Done when \(next.doneWhenState!.rawValue)") }
+            if let label = CantripHomeDoneWhen.label(next.doneWhenState, waiting: next.doneWhenWaiting) {
+                Log.write("home: handoff \(next.id) Done when \(label)")
+            }
             return next
         }
         let home = manager.homeSession
@@ -1217,7 +1345,10 @@ final class CantripHomeDelegations {
             .map { handoff in
                 var outcome = handoff.question.map { "waiting for the user's answer to: " + $0 }
                     ?? handoff.result ?? handoff.error ?? handoff.latestStatus ?? ""
-                if handoff.doneWhenState == .notMet || handoff.doneWhenState == .unchecked {
+                if let waiting = handoff.doneWhenWaiting, handoff.doneWhenState == .notMet {
+                    outcome = "Done when waiting on \(waiting == .user ? "the user" : waiting == .install ? "an install" : "a scheduled run") "
+                        + "(\(handoff.doneWhenNote ?? "")). " + outcome
+                } else if handoff.doneWhenState == .notMet || handoff.doneWhenState == .unchecked {
                     outcome = "Done when NOT confirmed (\(handoff.doneWhenNote ?? "")). " + outcome
                 }
                 let detail = outcome.isEmpty ? "" : ": "

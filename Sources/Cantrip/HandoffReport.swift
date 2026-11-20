@@ -1,8 +1,9 @@
 import Foundation
 
-/// One handoff from Cantrip Home (its chat, a background run or an incident) as metadata only:
-/// where it went and how it stands, never its prompt, replies, outcome or question. Kept in
-/// `HandoffLog` after Home's transcript or Background list drops the handoff.
+/// One handoff from Cantrip Home (its chat, a background run or an incident): where it went, how it
+/// stands and what its Done when check found (the checker's note on what's missing, and each
+/// check's result), never its prompt, replies, outcome or question. Kept in `HandoffLog` after
+/// Home's transcript or Background list drops the handoff, so the checks can be reviewed later.
 struct HandoffRecord: Codable, Equatable, Identifiable {
     struct Source: Codable, Equatable {
         enum Kind: String, Codable { case home, background, incident }
@@ -36,6 +37,12 @@ struct HandoffRecord: Codable, Equatable, Identifiable {
     var status: CantripHomeDelegation.Status
     var needsInput: Bool
     var doneWhen: CantripHomeDoneWhen.State?
+    /// What it waits for when `doneWhen` is notMet only because of an install, a schedule or the user.
+    var doneWhenWaiting: CantripHomeDoneWhen.Waiting?
+    /// The checker's note (what's missing, or why it couldn't check); untrusted, plain text.
+    var doneWhenNote: String?
+    var doneWhenRechecks: Int?
+    var doneWhenHistory: [CantripHomeDoneWhen.HistoryEntry]?
     let createdAt: Date
     var finishedAt: Date?
     var source: Source
@@ -57,6 +64,14 @@ struct HandoffRecord: Codable, Equatable, Identifiable {
         status = delegation.status
         needsInput = delegation.needsInput == true
         doneWhen = delegation.doneWhenState
+        doneWhenWaiting = delegation.doneWhenWaiting
+        doneWhenNote = delegation.doneWhenNote.map { TabInsight.oneLine($0, HandoffReport.noteLimit) }
+        doneWhenRechecks = delegation.doneWhenRechecks
+        doneWhenHistory = delegation.doneWhenHistory?.map {
+            var entry = $0
+            entry.note = $0.note.map { TabInsight.oneLine($0, HandoffReport.noteLimit) }
+            return entry
+        }
         createdAt = delegation.createdAt
         finishedAt = delegation.finishedAt
         self.source = source
@@ -120,16 +135,18 @@ final class HandoffLog {
     }
 }
 
-/// `cantrip handoffs [--days N] [--json]`: where handed-off work went, for dashboards such as
-/// Opsboard. Read-only. Titles, Home's labels and states only: no prompts, replies, outcomes,
-/// questions or Done-when notes, and private tabs (with any handoff or child tab naming one) are
-/// left out entirely. Docs: sessions-and-council.md#see-where-handoffs-went.
+/// `cantrip handoffs [--days N] [--json] [--notes]`: where handed-off work went, for dashboards such
+/// as Opsboard. Read-only. Titles, Home's labels and states only (with `--notes`, the Done when
+/// checker's notes too, for reviewing its verdicts): no prompts, replies, outcomes or questions, and
+/// private tabs (with any handoff or child tab naming one) are left out entirely.
+/// Docs: sessions-and-council.md#see-where-handoffs-went.
 @MainActor
 enum HandoffReport {
     nonisolated static let version = 1
     nonisolated static let defaultDays = 7
     nonisolated static let maximumDays = 30
     nonisolated static let titleLimit = 120
+    nonisolated static let noteLimit = 300
 
     /// Every handoff Home's chat and background runs follow now, with the handoff it came from.
     static func current(
@@ -167,7 +184,8 @@ enum HandoffReport {
 
     static func snapshot(
         manager: SessionManager, days requested: Int = defaultDays, now: Date = Date(),
-        runs: [CantripHomeBackgroundRun]? = nil, childStore: ChildTabStore? = nil, log: HandoffLog? = nil
+        runs: [CantripHomeBackgroundRun]? = nil, childStore: ChildTabStore? = nil, log: HandoffLog? = nil,
+        notes: Bool = false
     ) -> [String: Any] {
         let days = min(max(requested, 1), maximumDays)
         let since = now.addingTimeInterval(-TimeInterval(days) * 86_400)
@@ -224,7 +242,13 @@ enum HandoffReport {
             handoffs.append([
                 "id": record.id.uuidString, "summary": record.summary, "status": status,
                 "needsInput": status == "running" && record.needsInput,
-                "doneWhen": record.doneWhen?.rawValue ?? NSNull(),
+                "doneWhen": CantripHomeDoneWhen.label(record.doneWhen, waiting: record.doneWhenWaiting) ?? NSNull(),
+                "doneWhenNote": notes ? record.doneWhenNote ?? NSNull() : NSNull(),
+                "doneWhenRechecks": record.doneWhenRechecks ?? 0,
+                "doneWhenHistory": (record.doneWhenHistory ?? []).map { entry -> [String: Any] in
+                    ["at": ISODate.string(from: entry.at), "state": entry.state,
+                     "note": notes ? entry.note ?? NSNull() : NSNull(), "recheck": entry.recheck]
+                },
                 "createdAt": ISODate.string(from: record.createdAt), "finishedAt": iso(record.finishedAt),
                 "source": source, "target": target, "child": child, "current": current, "queuePosition": position,
             ])

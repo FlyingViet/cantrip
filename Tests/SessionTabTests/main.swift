@@ -170,6 +170,7 @@ struct SessionTabTests {
             try await testCantripHomeNewTabs()
             try await testCantripHomeListsEveryOpenTab()
             try await testCantripHomeDoneWhen()
+            try await testCantripHomeDoneWhenRechecks()
             return
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "composer-keys" {
@@ -391,6 +392,7 @@ struct SessionTabTests {
         try await testHandoffReport()
         try testComposerKeys()
         try await testCantripHomeDoneWhen()
+        try await testCantripHomeDoneWhenRechecks()
         try await testCantripHomeNewTabs()
         try await testCantripHomeListsEveryOpenTab()
         try testHomeLocalProfile()

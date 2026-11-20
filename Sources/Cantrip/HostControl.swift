@@ -34,7 +34,8 @@ final class HostControl {
         case "schedule":
             return HomeUpcoming.shared.handle(request)
         case "handoffs":
-            return HandoffReport.snapshot(manager: manager, days: request["days"] as? Int ?? HandoffReport.defaultDays)
+            return HandoffReport.snapshot(manager: manager, days: request["days"] as? Int ?? HandoffReport.defaultDays,
+                                          notes: request["notes"] as? Bool ?? false)
         case "mcp":
             return mcp(request)
         case "api":

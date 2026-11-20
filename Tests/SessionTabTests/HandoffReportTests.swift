@@ -238,7 +238,8 @@ extension SessionTabTests {
                      && text.contains("child “Fix the parser” (Working)") && text.contains("Done when met")
                      && !text.contains("PROMPT-"), text)
 
-        // The log follows what Home tracks now: metadata only, private tabs left out, saved and reloaded.
+        // The log follows what Home tracks now: metadata and the Done when checker's note (so its
+        // verdicts can be reviewed), private tabs left out, saved and reloaded.
         let synced = HandoffLog(url: scratch.appendingPathComponent("synced-log.json"))
         HandoffReport.sync(manager: manager, runs: [incidentRun, taskRun], childStore: store, log: synced, now: now)
         precondition(Set(synced.records.keys) == Set([queued, inChild, done, failed, fromTask].map(\.id)),
@@ -246,9 +247,10 @@ extension SessionTabTests {
         precondition(synced.records[inChild.id]?.startedChild == true && synced.records[inChild.id]?.childState == .working
                      && synced.records[inChild.id]?.targetID == planner.id, "\(String(describing: synced.records[inChild.id]))")
         let savedLog = try String(contentsOf: synced.url, encoding: .utf8)
-        for leaked in ["PROMPT-", "REPLY-TEXT", "OUTCOME-TEXT", "QUESTION-TEXT", "NOTE-TEXT", "ERROR-TEXT", "Secret"] {
+        for leaked in ["PROMPT-", "REPLY-TEXT", "OUTCOME-TEXT", "QUESTION-TEXT", "ERROR-TEXT", "Secret"] {
             precondition(!savedLog.contains(leaked), "the log keeps \(leaked)")
         }
+        precondition(synced.records[done.id]?.doneWhenNote == "NOTE-TEXT", "the log keeps the checker's note")
         precondition(HandoffLog(url: synced.url).records == synced.records, "the log reloads")
         func modified() throws -> Date? {
             try FileManager.default.attributesOfItem(atPath: synced.url.path)[.modificationDate] as? Date

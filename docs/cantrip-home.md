@@ -95,7 +95,22 @@ goes back to it as a queued message, at most twice; the card is posted only
 once the check passes or the send-backs run out. The card then says whether
 Done when was met, and names what's still missing or what needs the user. If
 the check can't run or isn't confident, the card says "Done when not
-confirmed" instead of claiming the work is finished.
+confirmed" instead of claiming the work is finished. When what's missing is out
+of the tab's hands for now, the card says so instead of "not met": "Done when
+waits for an install" (the change is built or staged and its proofs need it
+installed), "waits for a scheduled run" or "waits for you"; nothing is sent
+back for those.
+
+A finished handoff that isn't met, isn't confirmed or is waiting is checked
+again when its tab finishes a later turn within 72 hours, such as the turn a
+notifier starts once the install is live. That check reads the handoff's own
+last reply and the tab's latest replies, leaving out other handoffs' runs in the
+same tab, and updates the same card in place on every client: "Checked against
+Done when: met after a later turn" when the proof arrived. Each handoff is
+checked again at most three times, and only after a new reply, so it costs one
+small model call per later turn. Handoffs checked by an older version of
+Cantrip are never re-checked. The first check reads only the handoff's own
+turn, so a request the tab took up right after it doesn't count as its result.
 
 When replies from different threads interleave (a background agent finishing
 while you've moved on, or a handoff's result card), Home draws them like inline

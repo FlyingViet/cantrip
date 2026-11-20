@@ -150,11 +150,11 @@ enum CantripCLI {
           --wait SECONDS          How long to wait for the reply (default 300; 0 returns at once)
       cantrip tab reply ASK_ID [--wait SECONDS]
                                   The reply to an earlier question
-      cantrip handoffs [--days N] [--json]
+      cantrip handoffs [--days N] [--json] [--notes]
                                   Where handed-off work went (default: 7 days, up to 30): Home chat, background-run
                                   and incident handoffs with the tab, child tab and status of each, open tabs, and
                                   recent child tabs. Read-only; titles and states only (no prompts or replies), and
-                                  private tabs are never shown
+                                  private tabs are never shown. --notes adds the Done when checker's notes
       cantrip "question"          Ask the active backend (pipe input: cat log | cantrip "why?")
     """
 
@@ -345,14 +345,15 @@ enum CantripCLI {
         return 0
     }
 
-    /// `cantrip handoffs [--days N] [--json]`: options in any order.
-    static func parseHandoffs(_ arguments: [String]) throws -> (days: Int, json: Bool) {
-        let usage = Failure(message: "Usage: cantrip handoffs [--days N] [--json] (N from 1 to \(HandoffReport.maximumDays)).", code: 2)
-        var days = HandoffReport.defaultDays, json = false
+    /// `cantrip handoffs [--days N] [--json] [--notes]`: options in any order.
+    static func parseHandoffs(_ arguments: [String]) throws -> (days: Int, json: Bool, notes: Bool) {
+        let usage = Failure(message: "Usage: cantrip handoffs [--days N] [--json] [--notes] (N from 1 to \(HandoffReport.maximumDays)).", code: 2)
+        var days = HandoffReport.defaultDays, json = false, notes = false
         var index = 0
         while index < arguments.count {
             switch arguments[index] {
             case "--json": json = true
+            case "--notes": notes = true
             case "--days":
                 index += 1
                 guard index < arguments.count, let value = Int(arguments[index]),
@@ -362,12 +363,12 @@ enum CantripCLI {
             }
             index += 1
         }
-        return (days, json)
+        return (days, json, notes)
     }
 
     static func handoffs(_ arguments: [String]) throws -> Int32 {
         let options = try parseHandoffs(arguments)
-        let reply = try request(["command": "handoffs", "days": options.days])
+        let reply = try request(["command": "handoffs", "days": options.days, "notes": options.notes])
         if options.json { printJSON(reply) } else { print(HandoffReport.text(reply)) }
         return 0
     }

@@ -31,7 +31,7 @@ extension SessionTabTests {
         precondition(Check.outcome(of: .init(met: false, missing: "Not pushed yet.", confidence: 0.9), sendBacks: 2)
                      == .notMet("Not pushed yet."), "two send-backs at most")
         precondition(Check.outcome(of: .init(met: false, missing: "Waiting for App Review.", needsUser: true), sendBacks: 0)
-                     == .notMet("It needs you: Waiting for App Review."), "what needs the user is reported, not sent back")
+                     == .waiting(.user, "Waiting for App Review."), "what needs the user waits for them, not sent back")
         precondition(Check.outcome(of: .init(met: false, missing: "Unclear.", confidence: 0.3), sendBacks: 0)
                      == .unchecked("Not sure it's met: Unclear."))
         let back = Check.sendBack(missing: "Not pushed yet.", doneWhen: "It's pushed.", attempt: 1)
