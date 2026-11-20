@@ -832,7 +832,8 @@ millisecond timings for receiving/parsing, MainActor wait, handler work,
 snapshots, journal wait, JSON queue wait/encoding, compression and response sending.
 `bytes` is the response body as encoded and `wire_bytes` what was actually sent
 after compression. Home's endpoints log as `home`, `home_tasks`,
-`home_artifacts` and `home_other`.
+`home_artifacts`, `home_views` and `home_other`, and the personal mascot as
+`mascot`; a `304` logs zero bytes.
 Responses include `X-Cantrip-Request-ID` for correlation. These entries contain
 no pairing tokens, session IDs, raw paths, request/response bodies, or chat text.
 Other existing app log categories may contain sensitive information; do not
@@ -857,6 +858,16 @@ clients keep receiving uncompressed responses.
 they reply `{"unchanged":true,"revision":"…"}` instead of the full list (about
 640 KB for a large tracker workspace), as tab reads already do. A storage
 error always returns the full list with its error.
+
+Successful JSON reads (`GET`) also carry a weak `ETag` of the response body
+(before compression). A client that sends it back as `If-None-Match` gets
+`304 Not Modified` with no body while the response is unchanged. Responses stay `Cache-Control: no-store`, so browsers
+keep nothing; only clients that keep their own copy send the header, and others
+always get the full response. Cantrip Agent on iPhone and iPad keeps the last
+tab list, Home chat, the tabs last open, Tasks, artifacts and views per paired
+Mac (in its Caches, protected while the device is locked), draws them at once on
+a cold launch marked "Saved copy · Updating…" until the Mac confirms or replaces
+each, and sends their tags back. Removing or unpairing the Mac deletes its copy.
 
 Requests still pending after one second log their current stage, then every
 five seconds. Response writes have a 15-second deadline and log numeric network

@@ -111,6 +111,11 @@ struct SessionTabTests {
             try testCopilotRuntimeActivity()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "remote-http" {
+            try await testRemoteCompression()
+            try await testRemoteEntityTags()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "maintenance" {
             try await testRemoteMaintenance()
             try await testRemoteMaintenanceRelease()
@@ -332,6 +337,7 @@ struct SessionTabTests {
         try await testRemoteRequestIsolation()
         try await testRemoteHistory()
         try await testRemoteCompression()
+        try await testRemoteEntityTags()
         try await testRemoteMemory()
         try await testRemoteVoiceVocabulary()
         try await testVoiceTurns()

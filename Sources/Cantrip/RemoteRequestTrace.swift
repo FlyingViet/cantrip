@@ -22,6 +22,9 @@ final class RemoteRequestTrace {
     private var wireBytes = 0
     private(set) var usesPagedHistory = false
     private(set) var acceptsGzip = false
+    /// A GET's If-None-Match: the entity tags of the copy the client already has.
+    private(set) var ifNoneMatch: String?
+    private(set) var isGet = false
     let id = UUID().uuidString
     private let log: (String) -> Void
 
@@ -34,6 +37,8 @@ final class RemoteRequestTrace {
         defer { lock.unlock() }
         usesPagedHistory = request.query("history") == "recent"
         acceptsGzip = HTTPCompression.acceptsGzip(request.headers["accept-encoding"])
+        isGet = request.method == "GET"
+        ifNoneMatch = isGet ? request.headers["if-none-match"] : nil
         method = ["GET", "POST", "PUT", "DELETE"].contains(request.method) ? request.method : "other"
         switch request.path {
         case "/": route = "web"
@@ -50,6 +55,8 @@ final class RemoteRequestTrace {
         case "/api/v1/home": route = "home"
         case "/api/v1/home/tasks": route = "home_tasks"
         case "/api/v1/home/artifacts": route = "home_artifacts"
+        case "/api/v1/home/views": route = "home_views"
+        case "/api/v1/mascot": route = "mascot"
         default:
             route = request.path.hasPrefix("/api/v1/sessions/") ? "session"
                 : request.path.hasPrefix("/api/v1/home/") ? "home_other" : "unknown"

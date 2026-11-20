@@ -2527,7 +2527,7 @@ final class RemoteControlServer {
                     tasks: store.tasks, revision: revision,
                     error: warning
                 )
-                sendEncoded(on: connection) { try JSONEncoder().encode(value) }
+                sendEncoded(on: connection) { try Self.stableEncoder.encode(value) }
                 return
             }
             guard parts.count >= 5, let id = UUID(uuidString: String(parts[4])) else {
@@ -2580,7 +2580,7 @@ final class RemoteControlServer {
                         tasks: store.tasks, revision: store.revision.uuidString,
                         error: store.storageError
                     )
-                    sendEncoded(on: connection) { try JSONEncoder().encode(value) }
+                    sendEncoded(on: connection) { try Self.stableEncoder.encode(value) }
                     return
                 }
                 guard String(parts[5]) == "records" else {
@@ -2658,7 +2658,7 @@ final class RemoteControlServer {
                 let value = CantripHomeArtifactsSnapshot(
                     artifacts: store.artifacts, revision: revision
                 )
-                sendEncoded(on: connection) { try JSONEncoder().encode(value) }
+                sendEncoded(on: connection) { try Self.stableEncoder.encode(value) }
                 return
             }
             if parts.count == 6, parts[5] == "file" || parts[5] == "folder" {
@@ -3768,7 +3768,22 @@ final class RemoteControlServer {
         let compress = connection.trace.acceptsGzip && body.count >= HTTPCompression.minimumBytes
             && body.count <= HTTPCompression.maximumBytes
             && HTTPCompression.isCompressible(contentType: contentType)
+        let tagged = HTTPEntityTag.applies(status: status, isGet: connection.trace.isGet, contentType: contentType)
         let respond = {
+            let entityTag = tagged ? HTTPEntityTag.tag(for: body) : nil
+            if let entityTag, HTTPEntityTag.matches(connection.trace.ifNoneMatch, entityTag) {
+                // The client's copy is current: no body, only the tag it already holds.
+                let header = "HTTP/1.1 304 Not Modified\r\n"
+                    + "ETag: \(entityTag)\r\n"
+                    + "Content-Length: 0\r\n"
+                    + "Cache-Control: no-store\r\n"
+                    + "X-Content-Type-Options: nosniff\r\n"
+                    + "X-Cantrip-Request-ID: \(connection.trace.id)\r\n"
+                    + "Referrer-Policy: no-referrer\r\n"
+                    + "Connection: close\r\n\r\n"
+                connection.send(Data(header.utf8), status: 304, bodyBytes: 0, wireBytes: 0)
+                return
+            }
             var payload = body
             var encoding = ""
             if compress {
@@ -3782,6 +3797,7 @@ final class RemoteControlServer {
                 + "Content-Type: \(contentType)\r\n"
                 + "Content-Length: \(payload.count)\r\n"
                 + encoding
+                + (entityTag.map { "ETag: \($0)\r\n" } ?? "")
                 + "Cache-Control: no-store\r\n"
                 + "X-Content-Type-Options: nosniff\r\n"
                 + "X-Cantrip-Request-ID: \(connection.trace.id)\r\n"
@@ -3793,8 +3809,8 @@ final class RemoteControlServer {
             connection.send(response, status: status, bodyBytes: body.count, wireBytes: payload.count)
         }
         // Never on the caller's queue: the main actor, or the serial JSON queue that also
-        // encodes every client's tab-list poll.
-        if compress {
+        // encodes every client's tab-list poll. Hashing a large body counts too.
+        if compress || (tagged && body.count >= HTTPCompression.minimumBytes) {
             DispatchQueue.global(qos: .userInitiated).async(execute: respond)
         } else {
             respond()
@@ -3803,6 +3819,13 @@ final class RemoteControlServer {
 }
 
 private extension RemoteControlServer {
+    /// Sorted keys: the same list encodes to the same bytes, so its entity tag holds between reads.
+    static var stableEncoder: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return encoder
+    }
+
     static let webAppRevision = SHA256.hash(data: Data(webAppTemplate.utf8))
         .map { String(format: "%02x", $0) }.joined()
     static let webApp = webAppTemplate.replacingOccurrences(of: "__CANTRIP_UI_REVISION__", with: webAppRevision)

@@ -3,7 +3,8 @@ import Foundation
 extension SessionTabTests {
     /// A raw HTTP exchange, so the test sees Content-Encoding and the bytes actually sent.
     nonisolated static func rawHTTP(port: Int, target: String, token: String, acceptGzip: Bool,
-                                    method: String = "GET", body: Data = Data()) async -> (head: String, body: Data) {
+                                    method: String = "GET", body: Data = Data(),
+                                    headers: [String: String] = [:]) async -> (head: String, body: Data) {
         await Task.detached {
             let fd = socket(AF_INET, SOCK_STREAM, 0)
             precondition(fd >= 0)
@@ -28,6 +29,7 @@ extension SessionTabTests {
             precondition(connected == 0, "could not connect to the test server")
             let request = "\(method) \(target) HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer \(token)\r\n"
                 + (acceptGzip ? "Accept-Encoding: gzip, deflate\r\n" : "")
+                + headers.map { "\($0.key): \($0.value)\r\n" }.joined()
                 + (body.isEmpty ? "" : "Content-Type: application/json\r\nContent-Length: \(body.count)\r\n")
                 + "Connection: close\r\n\r\n"
             let bytes = Array(request.utf8) + Array(body)
@@ -134,5 +136,81 @@ extension SessionTabTests {
             precondition(afterRejected["unchanged"] as? Bool == true)
         }
         precondition(CantripHomeStore.shared.revision.uuidString != shown || CantripHomeStore.shared.tasks == tasksBefore)
+    }
+
+    /// JSON reads carry a weak ETag of the body; sending it back as If-None-Match answers 304 with no
+    /// body until the response changes. Browsers still get `no-store`, and clients that don't send the
+    /// header always get the full response.
+    @MainActor
+    static func testRemoteEntityTags() async throws {
+        let manager = SessionManager()
+        let chat = ChatSession()
+        manager.sessions = [chat]
+        defer { chat.cancel() }
+        chat.messages = (0..<12).map {
+            ChatMessage(role: .assistant, text: "Reply \($0) " + String(repeating: "entity tag text ", count: 120))
+        }
+        let homeWasEnabled = AppSettings.shared.cantripHomeEnabled
+        AppSettings.shared.cantripHomeEnabled = true
+        defer { AppSettings.shared.cantripHomeEnabled = homeWasEnabled }
+        let server = RemoteControlServer(manager: manager)
+        let port = Int.random(in: 20_000...45_000)
+        let token = UUID().uuidString
+        server.start(port: port, token: token)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        func field(_ head: String, _ name: String) -> String? {
+            head.components(separatedBy: "\r\n").dropFirst()
+                .first { $0.lowercased().hasPrefix(name.lowercased() + ":") }
+                .map { String($0.split(separator: ":", maxSplits: 1)[1]).trimmingCharacters(in: .whitespaces) }
+        }
+        func get(_ target: String, gzip: Bool = false, ifNoneMatch: String? = nil,
+                 method: String = "GET") async -> (head: String, body: Data) {
+            await rawHTTP(port: port, target: target, token: token, acceptGzip: gzip, method: method,
+                          headers: ifNoneMatch.map { ["If-None-Match": $0] } ?? [:])
+        }
+
+        for target in ["/api/v1/sessions?history=recent", "/api/v1/sessions/\(chat.id)?history=recent",
+                       "/api/v1/home/tasks", "/api/v1/home?history=recent&recentExchanges=3"] {
+            let full = await get(target, gzip: true)
+            precondition(full.head.hasPrefix("HTTP/1.1 200"), "\(target): \(full.head)")
+            let tag = try requireHome(field(full.head, "ETag"))
+            precondition(tag.hasPrefix("W/\"") && tag.hasSuffix("\""), "a weak tag")
+            precondition(field(full.head, "Cache-Control") == "no-store", "browsers still keep nothing")
+            let plain = await get(target)
+            precondition(field(plain.head, "ETag") == tag, "gzip and identity share the tag of the uncompressed body")
+
+            let same = await get(target, gzip: true, ifNoneMatch: tag)
+            precondition(same.head.hasPrefix("HTTP/1.1 304"), "\(target) unchanged: \(same.head)")
+            precondition(same.body.isEmpty && field(same.head, "Content-Length") == "0")
+            precondition(field(same.head, "ETag") == tag && field(same.head, "Content-Encoding") == nil)
+            let listed = await get(target, ifNoneMatch: "W/\"0000\", " + tag)
+            precondition(listed.head.hasPrefix("HTTP/1.1 304"), "any listed tag matches")
+            let strong = await get(target, ifNoneMatch: String(tag.dropFirst(2)))
+            precondition(strong.head.hasPrefix("HTTP/1.1 304"), "weak comparison ignores W/")
+            let other = await get(target, ifNoneMatch: "W/\"0123456789abcdef0123456789abcdef\"")
+            precondition(other.head.hasPrefix("HTTP/1.1 200") && other.body == plain.body, "another copy gets the body")
+        }
+
+        // A change answers the full response and a new tag.
+        let target = "/api/v1/sessions/\(chat.id)?history=recent"
+        let before = try requireHome(field(await get(target).head, "ETag"))
+        chat.messages.append(ChatMessage(role: .assistant, text: "One more reply"))
+        let after = await get(target, ifNoneMatch: before)
+        precondition(after.head.hasPrefix("HTTP/1.1 200") && !after.body.isEmpty, "changed: \(after.head)")
+        let changedTag = try requireHome(field(after.head, "ETag"))
+        precondition(changedTag != before)
+
+        // Only successful JSON reads are tagged: not errors, writes or the web page.
+        let missing = await get("/api/v1/sessions/\(UUID().uuidString)", ifNoneMatch: "*")
+        precondition(missing.head.hasPrefix("HTTP/1.1 404") && field(missing.head, "ETag") == nil)
+        let page = await get("/")
+        precondition(page.head.hasPrefix("HTTP/1.1 200") && field(page.head, "ETag") == nil)
+        let written = await rawHTTP(port: port, target: "/api/v1/sessions/\(chat.id)/metadata", token: token,
+                                    acceptGzip: false, method: "POST", body: Data(#"{"customTitle":"Tagged"}"#.utf8),
+                                    headers: ["If-None-Match": "*"])
+        precondition(!written.head.hasPrefix("HTTP/1.1 304") && field(written.head, "ETag") == nil, written.head)
+        precondition(HTTPEntityTag.matches("*", "W/\"ab\"") && !HTTPEntityTag.matches(nil, "W/\"ab\""))
     }
 }
