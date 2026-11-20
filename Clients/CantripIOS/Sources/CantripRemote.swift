@@ -3413,6 +3413,13 @@ struct CantripRemoteAPI {
     }
 }
 
+/// Home's saved lists, decoded off the main thread.
+private struct CantripSavedLists: @unchecked Sendable {
+    let tasks: CantripHomeTasksSnapshot?
+    let artifacts: (artifacts: [CantripHomeArtifact], supportsDownloads: Bool)?
+    let views: [CantripHomeViewSummary]?
+}
+
 /// A switch `CantripRemoteModel.showSession` or `showHome` has shown and still has to load.
 struct CantripSelectionLoad: Equatable {
     /// The tab; nil for Cantrip Home.
@@ -4395,6 +4402,10 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
+    #if DEBUG
+    var savedCopyForTests: CantripSavedCopy { savedCopy }
+    #endif
+
     private var savedCopyUse: (store: CantripSavedCopy, pairing: String)? {
         savedCopyPairing.map { (savedCopy, $0) }
     }
@@ -4431,7 +4442,7 @@ final class CantripRemoteModel: ObservableObject {
             if !savedCopyParts.isEmpty { savedCopyParts = [] }
             return
         }
-        let key = CantripSavedCopy.pairingKey(url: configuredURL, directAddress: directAddress, token: token)
+        let key = CantripSavedCopy.pairingKey(url: baseURL?.absoluteString ?? "", directAddress: directAddress, token: token)
         let changed = key != savedCopyPairing
         savedCopyPairing = key
         let saved = savedCopy.open(pairing: key)
@@ -4452,25 +4463,39 @@ final class CantripRemoteModel: ObservableObject {
             cacheOrder.append(session.id)
             parts.insert(name)
         }
-        if homeTasks.isEmpty, let body = saved[Part.tasks]?.body, let snapshot = CantripRemoteAPI.savedTasks(body) {
+        if !parts.isEmpty { transcriptRevision += 1 }
+        savedCopyParts = parts
+        // Home's lists can be over a megabyte: they decode off the main thread so the first frame
+        // (with the chat above) isn't held for them.
+        let tasks = saved[Part.tasks]?.body, artifacts = saved[Part.artifacts]?.body, views = saved[Part.views]?.body
+        guard tasks != nil || artifacts != nil || views != nil else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let lists = CantripSavedLists(tasks: tasks.flatMap(CantripRemoteAPI.savedTasks),
+                                          artifacts: artifacts.flatMap(CantripRemoteAPI.savedArtifacts),
+                                          views: views.flatMap(CantripRemoteAPI.savedViews))
+            await self?.drawSavedLists(lists, pairing: key)
+        }
+    }
+
+    /// Draws the saved lists unless the Mac's own answer came first (or the pairing changed).
+    private func drawSavedLists(_ lists: CantripSavedLists, pairing key: String) {
+        typealias Part = CantripSavedCopy.Part
+        guard savedCopyPairing == key else { return }
+        if let snapshot = lists.tasks, homeTasksFetched == nil, homeTasks.isEmpty {
             homeTasks = snapshot.tasks
             homeTasksSupportReordering = snapshot.supportsReordering
             homeViewsSupported = snapshot.supportsViews
-            parts.insert(Part.tasks)
+            savedCopyParts.insert(Part.tasks)
         }
-        if homeArtifacts.isEmpty, let body = saved[Part.artifacts]?.body,
-           let artifacts = CantripRemoteAPI.savedArtifacts(body) {
+        if let artifacts = lists.artifacts, homeArtifactsFetched == nil, homeArtifacts.isEmpty {
             homeArtifacts = artifacts.artifacts
             homeArtifactsSupportDownloads = artifacts.supportsDownloads
-            parts.insert(Part.artifacts)
+            savedCopyParts.insert(Part.artifacts)
         }
-        if homeViews.isEmpty, homeViewsSupported, let body = saved[Part.views]?.body,
-           let views = CantripRemoteAPI.savedViews(body) {
+        if let views = lists.views, homeViewsSupported, homeViewsFetched == nil, homeViews.isEmpty {
             homeViews = views.filter(\.pinned) + views.filter { !$0.pinned }
-            parts.insert(Part.views)
+            savedCopyParts.insert(Part.views)
         }
-        if !parts.isEmpty { transcriptRevision += 1 }
-        savedCopyParts = parts
     }
 
     func selectHome() async {
@@ -4486,7 +4511,8 @@ final class CantripRemoteModel: ObservableObject {
         cancelDetailRefresh()
         selectionRevision += 1
         isHomeSelected = true
-        let cached = homeSummary.flatMap { detailCache[$0.id] }.flatMap { $0.isCantripHome == true ? $0 : nil }
+        // Home's ID is the same on every Mac, so its last copy shows even before the tab list loaded.
+        let cached = detailCache[homeSummary?.id ?? CantripHomeIdentity.sessionID].flatMap { $0.isCantripHome == true ? $0 : nil }
         selectedSessionID = cached?.id
         selectedSession = cached
         detailError = nil

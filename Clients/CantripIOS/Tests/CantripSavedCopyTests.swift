@@ -153,6 +153,9 @@ final class CantripSavedCopyTests: XCTestCase {
             return .init(status: 200, body: data, etag: self.tag(data))
         }
         let (cold, _) = try await makeModel(CantripSavedCopy(directory: folder))
+        XCTAssertEqual(cold.savedCopyParts, ["sessions", "home"], "the tab list and Home draw at once")
+        // Home's lists decode off the main thread.
+        try await until { cold.savedCopyParts.contains("tasks") && cold.savedCopyParts.contains("artifacts") }
         XCTAssertEqual(cold.sessions.map(\.title), ["Garden"], "the tab list is drawn from the saved copy")
         XCTAssertEqual(cold.homeTasks.map(\.title), ["Track SFO flights"], "Tasks are drawn from the saved copy")
         XCTAssertEqual(cold.savedCopyParts, ["sessions", "home", "tasks", "artifacts"])
@@ -222,6 +225,55 @@ final class CantripSavedCopyTests: XCTestCase {
                                      urlSession: client)
         _ = try await plain.sessionListing()
         XCTAssertNil(sent.last!)
+    }
+
+    /// The app's own relaunch: the model starts from the saved server (not `configure`) and still
+    /// draws Home and Tasks from the saved copy before the Mac answers, even without a kept tab list.
+    func testRelaunchFromSavedServerDrawsSavedCopy() async throws {
+        let folder = try directory()
+        let suite = "CantripSavedCopyTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        var secrets: [String: String] = [:]
+        let credentials = ServerCredentialStore(read: { secrets[$0] }, write: { secrets[$0] = $1 },
+                                                remove: { secrets[$0] = nil })
+        SavedCopyRequestProtocol.handler = { [unowned self] request in
+            let data = try XCTUnwrap(self.body(for: self.path(request)), self.path(request))
+            return .init(status: 200, body: data, etag: self.tag(data))
+        }
+        defer { SavedCopyRequestProtocol.handler = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SavedCopyRequestProtocol.self]
+        let client = URLSession(configuration: configuration)
+        defer { client.invalidateAndCancel() }
+
+        let servers = ServerProfiles(kind: .cantrip, defaults: defaults, credentials: credentials)
+        let first = CantripRemoteModel(urlSession: client, servers: servers, savedCopy: CantripSavedCopy(directory: folder))
+        let server = try servers.add(ServerDraft(name: "Mac", url: "http://127.0.0.1:47901", credential: "relaunch-token",
+                                                 tailscaleOnly: true))
+        try await first.selectServer(server)
+        first.setAppActive(true)
+        await first.selectHome()
+        try await until { !first.sessions.isEmpty && !first.homeTasks.isEmpty }
+        first.setAppActive(false)
+        first.savedCopyForTests.flush()
+        // On a slow link the tab list may never have been kept (its 3 s read timed out).
+        let pairing = try XCTUnwrap(try FileManager.default.contentsOfDirectory(atPath: folder.path).first)
+        try FileManager.default.removeItem(at: folder.appendingPathComponent(pairing).appendingPathComponent("sessions.plist"))
+
+        SavedCopyRequestProtocol.handler = { _ in throw URLError(.notConnectedToInternet) }
+        let relaunched = CantripRemoteModel(
+            urlSession: client, servers: ServerProfiles(kind: .cantrip, defaults: defaults, credentials: credentials),
+            savedCopy: CantripSavedCopy(directory: folder)
+        )
+        try await until { relaunched.savedCopyParts.count == 3 }
+        XCTAssertEqual(relaunched.savedCopyParts, ["home", "tasks", "artifacts"])
+        XCTAssertNil(relaunched.homeSummary, "no tab list kept")
+        await relaunched.selectHome()
+        XCTAssertEqual(relaunched.selectedSession?.transcript.last?.text, "Saved reply from the Mac",
+                       "a failed read leaves the saved Home on screen")
+        XCTAssertTrue(relaunched.showsSavedCopy)
+        XCTAssertEqual(relaunched.homeTasks.map(\.title), ["Track SFO flights"])
     }
 
     /// Home's lists are asked for while its chat is still loading, and the personal mascot (about
