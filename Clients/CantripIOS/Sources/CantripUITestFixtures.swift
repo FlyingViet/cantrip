@@ -31,6 +31,44 @@ enum CantripUITestFixtures {
         #endif
     }
 
+    /// `-CantripUITestTimingLog YES` appends one line to Documents/launch-timing.jsonl: when the
+    /// process started, when this launch first showed Home's chat (its messages set and the launch
+    /// splash gone) and, if the saved copy was on screen, when the Mac had confirmed all of it.
+    /// Mac epoch seconds (the simulator shares the Mac's clock). CantripLaunchTimingUITests reads it.
+    @MainActor
+    static func recordLaunchTiming(_ remote: CantripRemoteModel, splash: CantripLaunchSplashController) async {
+        guard UserDefaults.standard.bool(forKey: "CantripUITestTimingLog") else { return }
+        var record: [String: Double] = [:]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        if sysctl(&mib, 4, &info, &size, nil, 0) == 0 {
+            let start = info.kp_proc.p_un.__p_starttime
+            record["processStart"] = Double(start.tv_sec) + Double(start.tv_usec) / 1_000_000
+        }
+        let sawSaved = !remote.savedCopyParts.isEmpty
+        if sawSaved { record["savedCopyShown"] = 1 }
+        let deadline = Date().addingTimeInterval(60)
+        while Date() < deadline {
+            let now = Date().timeIntervalSince1970
+            if record["homeContent"] == nil, !splash.isPresented, remote.selectedSession?.isCantripHome == true,
+               remote.selectedSession?.transcript.isEmpty == false {
+                record["homeContent"] = now
+            }
+            if sawSaved, record["savedCopyConfirmed"] == nil, remote.savedCopyParts.isEmpty { record["savedCopyConfirmed"] = now }
+            if record["homeContent"] != nil, !sawSaved || record["savedCopyConfirmed"] != nil { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: record, options: .sortedKeys),
+              let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let file = folder.appendingPathComponent("launch-timing.jsonl")
+        if !FileManager.default.fileExists(atPath: file.path) { FileManager.default.createFile(atPath: file.path, contents: nil) }
+        guard let handle = try? FileHandle(forWritingTo: file) else { return }
+        handle.seekToEndOfFile()
+        handle.write(data + Data("\n".utf8))
+        try? handle.close()
+    }
+
     static var pairsWithFixtureHost: Bool {
         ProcessInfo.processInfo.arguments.contains("-CantripUITestRemoteURL")
     }

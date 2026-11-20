@@ -6,7 +6,8 @@ import XCTest
 /// timed. Run with `TEST_RUNNER_CANTRIP_UITEST_HOME_URL`, `TEST_RUNNER_CANTRIP_UITEST_HOME_TOKEN`,
 /// `TEST_RUNNER_CANTRIP_UITEST_TIMING` (a JSON file the timestamps go to, in Mac epoch seconds),
 /// `TEST_RUNNER_CANTRIP_UITEST_HOME_TEXT` (text from Home's latest reply) and
-/// `TEST_RUNNER_CANTRIP_UITEST_TASK_TEXT` (a task's title).
+/// `TEST_RUNNER_CANTRIP_UITEST_TASK_TEXT` (a task's title). The app itself logs when each launch
+/// showed Home's chat (`-CantripUITestTimingLog`, Documents/launch-timing.jsonl in its container).
 final class CantripLaunchTimingUITests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
 
@@ -21,7 +22,9 @@ final class CantripLaunchTimingUITests: XCTestCase {
     private func makeApp() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-CantripUITestRemoteURL", env["CANTRIP_UITEST_HOME_URL"]!,
-                               "-CantripUITestRemoteToken", env["CANTRIP_UITEST_HOME_TOKEN"]!, "-CantripUITestLane", "home"]
+                               "-CantripUITestRemoteToken", env["CANTRIP_UITEST_HOME_TOKEN"]!, "-CantripUITestLane", "home",
+                               // The app logs when it showed Home (launch() returns only once it's idle).
+                               "-CantripUITestTimingLog", "YES"]
         return app
     }
 
