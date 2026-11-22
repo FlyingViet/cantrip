@@ -116,6 +116,7 @@ struct SessionTabTests {
             try await testRemoteEntityTags()
             try await testRemoteStepSummaries()
             try await testRemoteLiveCardsSeparate()
+            try testRemoteWebRevalidation()
             return
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "maintenance" {
@@ -342,6 +343,7 @@ struct SessionTabTests {
         try await testRemoteEntityTags()
         try await testRemoteStepSummaries()
         try await testRemoteLiveCardsSeparate()
+        try testRemoteWebRevalidation()
         try await testRemoteMemory()
         try await testRemoteVoiceVocabulary()
         try await testVoiceTurns()

@@ -27,6 +27,20 @@ export interface RequestOptions {
   cache?: RequestCache;
 }
 
+/**
+ * GET answers the Mac tagged (a weak `ETag` of the body), by URL: the next read of that URL sends the tag as
+ * `If-None-Match`, and a 304 (no body) reuses the kept text. Polls of an unchanged tab list or Home cost a few
+ * hundred bytes instead of the whole answer. Kept in memory only; forgotten when the pairing changes.
+ */
+const revalidated = new Map<string, { etag: string; text: string }>();
+export const REVALIDATED_READS = 16;
+/** Larger answers aren't kept (a long tab's history): they're refetched in full. */
+export const REVALIDATED_MAX_CHARS = 4 * 1024 * 1024;
+
+export function clearRevalidatedReads(): void {
+  revalidated.clear();
+}
+
 let activeWrites = 0;
 const writeListeners = new Set<(count: number) => void>();
 export function onWritesChanged(listener: (count: number) => void): () => void {
@@ -48,6 +62,8 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   let url = path + (path.includes("?") ? "&" : "?") + "history=recent";
   if (options.recent) url += "&recentExchanges=3";
   const headers: Record<string, string> = { accept: "application/json", "x-cantrip-gateway": bridge.key };
+  const kept = method === "GET" ? revalidated.get(url) : undefined;
+  if (kept) headers["if-none-match"] = kept.etag;
   let body: BodyInit | undefined;
   if (options.raw) {
     headers["content-type"] = "application/octet-stream";
@@ -77,12 +93,14 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
       }
       throw new APIError((error as Error).message || "Couldn't reach the Mac.", 0);
     }
+    const notModified = response.status === 304 && kept !== undefined;
+    const text = notModified ? kept.text : await response.text();
+    if (method === "GET") keepRead(url, response, text, notModified ? kept.etag : undefined);
     let data: unknown = null;
-    const text = await response.text();
     if (text) {
       try { data = JSON.parse(text); } catch { data = null; }
     }
-    if (!response.ok) {
+    if (!response.ok && !notModified) {
       const message = (data as { error?: string } | null)?.error ?? `The Mac answered with HTTP ${response.status}.`;
       throw new APIError(message, response.status, data ?? undefined);
     }
@@ -95,6 +113,15 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
       for (const listener of writeListeners) listener(activeWrites);
     }
   }
+}
+
+/** `keptTag`: the tag a 304 confirmed (it may not repeat the header). */
+function keepRead(url: string, response: Response, text: string, keptTag: string | undefined): void {
+  const etag = response.headers?.get?.("etag") ?? keptTag;
+  revalidated.delete(url);
+  if (!etag || !(response.ok || keptTag) || !text || text.length > REVALIDATED_MAX_CHARS) return;
+  revalidated.set(url, { etag, text });
+  while (revalidated.size > REVALIDATED_READS) revalidated.delete(revalidated.keys().next().value!);
 }
 
 export function pathComponent(value: string): string {

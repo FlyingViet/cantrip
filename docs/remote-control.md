@@ -897,7 +897,11 @@ Successful JSON reads (`GET`) also carry a weak `ETag` of the response body
 (before compression). A client that sends it back as `If-None-Match` gets
 `304 Not Modified` with no body while the response is unchanged. Responses stay `Cache-Control: no-store`, so browsers
 keep nothing; only clients that keep their own copy send the header, and others
-always get the full response. Cantrip Agent on iPhone and iPad keeps the last
+always get the full response. Gateway Mac and Cantrip.app's Home window keep
+the latest answers in memory and revalidate them (on the Tailscale route; the
+local network skips it). The web page and Gateway for Windows keep up to 16
+tagged reads in memory and send their tags on the next read of the same URL.
+Mac Remote's bridge doesn't forward the header, so it always gets full answers. Cantrip Agent on iPhone and iPad keeps the last
 tab list, Home chat, the tabs last open, Tasks, artifacts and views per paired
 Mac (in its Caches, protected while the device is locked), draws them at once on
 a cold launch marked "Saved copy · Updating…" until the Mac confirms or replaces

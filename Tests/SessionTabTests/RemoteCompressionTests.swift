@@ -1,4 +1,5 @@
 import Foundation
+import JavaScriptCore
 
 extension SessionTabTests {
     /// A raw HTTP exchange, so the test sees Content-Encoding and the bytes actually sent.
@@ -136,6 +137,49 @@ extension SessionTabTests {
             precondition(afterRejected["unchanged"] as? Bool == true)
         }
         precondition(CantripHomeStore.shared.revisionWithLiveCards != shown || CantripHomeStore.shared.tasks == tasksBefore)
+    }
+
+    /// The web page (browser and Mac Remote) keeps each tagged GET answer: the next read of the tab list
+    /// sends its tag as If-None-Match, a 304 reuses the kept answer, a change replaces it, and writes,
+    /// failed reads and a new pairing carry no tag. Runs the page's own `api()` against a stub Mac.
+    @MainActor
+    static func testRemoteWebRevalidation() throws {
+        let source = try String(contentsOfFile: "Sources/Cantrip/RemoteControlServer.swift", encoding: .utf8)
+        let start = source.range(of: "    // GET answers the Mac tagged")!
+        let end = source.range(of: "    function pair(show)", range: start.upperBound..<source.endIndex)!
+        let context = JSContext()!
+        context.exceptionHandler = { _, error in fatalError(error!.toString()) }
+        context.evaluateScript("""
+        let token="fixture",uiNavigating=false,sidebarLayout=false,uiActiveWrites=0,uiMutationWarning="";
+        function scheduleUIReload(){}
+        function setTimeout(){return 1} function clearTimeout(){}
+        class AbortController{constructor(){this.signal={aborted:false,addEventListener(){},removeEventListener(){}}}abort(){}}
+        let body='{"sessions":[{"id":"tab-1","title":"Garden"}]}',failNext=false;const sent=[],statuses=[],results=[],errors=[];
+        const tag=text=>'W/"'+text.length+'"';
+        function fetch(path,options){const header=options.headers["If-None-Match"]??null;sent.push(header);
+          const answer=failNext?{status:500,text:'{"error":"Busy"}',etag:null}:header===tag(body)?{status:304,text:"",etag:tag(body)}:{status:200,text:body,etag:tag(body)};
+          failNext=false;statuses.push(answer.status);
+          return Promise.resolve({status:answer.status,ok:answer.status>=200&&answer.status<300,
+            headers:{get:name=>name.toLowerCase()==="etag"?answer.etag:null},text:()=>Promise.resolve(answer.text)})}
+        \(source[start.lowerBound..<end.lowerBound])
+        async function run(){
+          const read=async()=>{try{results.push((await api("/api/v1/sessions")).sessions[0].title)}catch(e){errors.push(e.message)}};
+          await read();await read();
+          body='{"sessions":[{"id":"tab-1","title":"Garden (renamed)"}]}';await read();await read();
+          await api("/api/v1/sessions/tab-1/metadata",{method:"POST",body:"{}"}).catch(()=>{});
+          failNext=true;await read();await read();
+          revalidatedReads.clear();await read()}
+        run().then(()=>{globalThis.done=true});
+        """)
+        precondition(context.evaluateScript("globalThis.done === true")!.toBool(), "the page's reads finished")
+        let sent = context.evaluateScript("JSON.stringify(sent)")!.toString()!
+        let statuses = context.evaluateScript("JSON.stringify(statuses)")!.toString()!
+        let results = context.evaluateScript("JSON.stringify(results)")!.toString()!
+        precondition(sent == #"[null,"W/\"46\"","W/\"46\"","W/\"56\"",null,"W/\"56\"",null,null]"#, sent)
+        precondition(statuses == "[200,304,200,304,200,500,200,200]", statuses)
+        precondition(results == #"["Garden","Garden","Garden (renamed)","Garden (renamed)","Garden (renamed)","Garden (renamed)"]"#,
+                     "a 304 reuses the kept answer; a change replaces it: \(results)")
+        precondition(context.evaluateScript("errors.length===1 && errors[0]==='Busy'")!.toBool(), "a failed read still fails")
     }
 
     /// `liveCards=separate`: a task's live forecast is served apart from the tasks list. When the card

@@ -4449,20 +4449,28 @@ private extension RemoteControlServer {
     addEventListener("scroll",()=>{const root=document.scrollingElement||document.documentElement,top=root.scrollTop,height=root.scrollHeight,restored=restoredScrollTop!==null&&Math.abs(top-restoredScrollTop)<1;restoredScrollTop=null;
       if(!suppressScroll&&!restored){followOutput=atBottom();if(followOutput)historyReading=false;if(top<lastHistoryScrollTop&&height>=lastHistoryScrollHeight){historyScrollIntent=true;historyReading=true;requestHistoryOnScroll()}}
       lastHistoryScrollTop=top;lastHistoryScrollHeight=height},{passive:true});
+    // GET answers the Mac tagged (a weak ETag of the body), by URL: the next read sends the tag as If-None-Match
+    // and a 304 (no body) reuses the kept text, so polling an unchanged tab list costs a few hundred bytes.
+    const revalidatedReads=new Map(),revalidatedLimit=16,revalidatedMaxChars=4194304;
+    function keepRead(path,response,text,keptTag){const etag=response.headers?.get?.("ETag")||keptTag;revalidatedReads.delete(path);
+      if(!etag||!(response.ok||keptTag)||!text||text.length>revalidatedMaxChars)return;revalidatedReads.set(path,{etag,text});
+      while(revalidatedReads.size>revalidatedLimit)revalidatedReads.delete(revalidatedReads.keys().next().value)}
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
       if(uiNavigating)throw Error("Remote is updating; this request was not sent.");
       path+=(path.includes("?")?"&":"?")+"history=recent&steps=summary";
       const controller=(!options.method||options.method==="GET")?new AbortController():null;
       const segments=path.split("?")[0].split("/").filter(Boolean),historyRead=segments.slice(0,3).join("/")==="api/v1/sessions"&&(segments.length===4||(segments.length===6&&segments[4]==="messages"));
       if(sidebarLayout&&controller&&historyRead&&segments.length===4&&!new URLSearchParams(path.split("?")[1]).has("before"))path+="&recentExchanges=3";
+      const kept=controller?revalidatedReads.get(path):null;if(kept)options.headers["If-None-Match"]=kept.etag;
       const externalSignal=options.signal,abort=()=>controller?.abort();
       if(externalSignal?.aborted)abort();else externalSignal?.addEventListener("abort",abort,{once:true});
       const deadline=controller?setTimeout(()=>controller.abort(),historyRead||options.wait?20000:8000):null;if(controller)options.signal=controller.signal;
       if(!controller)uiActiveWrites++;
-      try{const response=await fetch(path,options);const data=await response.json();if(!response.ok){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;error.data=data;throw error}return data}
+      try{const response=await fetch(path,options),notModified=response.status===304&&Boolean(kept),text=notModified?kept.text:await response.text();
+        if(controller)keepRead(path,response,text,notModified?kept.etag:null);const data=JSON.parse(text);if(!response.ok&&!notModified){const error=new Error(data.error||`HTTP ${response.status}`);error.status=response.status;error.data=data;throw error}return data}
       catch(error){if(!controller)uiMutationWarning=`A Remote action failed: ${error.message}. Check the conversation before retrying; it was not resent.`;throw error}
       finally{externalSignal?.removeEventListener("abort",abort);if(deadline!==null)clearTimeout(deadline);if(!controller){uiActiveWrites--;scheduleUIReload()}}}
-    function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){resetPersonalMascot();connection(false);if(timer){clearInterval(timer);timer=null}}}
+    function pair(show){$("pair").classList.toggle("hidden",!show);$("app").classList.toggle("hidden",show);if(show){revalidatedReads.clear();resetPersonalMascot();connection(false);if(timer){clearInterval(timer);timer=null}}}
     let refreshTask=null,refreshRequested=false,sessionItems=[],draggedTabID=null,draggedSectionID=null,movingTab=false,tabOrderRevision=0,loadingHistory=false;
     // Sections come from the Mac; which ones are collapsed is this browser's choice.
     const collapsedSectionsKey="cantrip.collapsedSections",looseSectionID="tabs";let tabSections=[],sectionsSupported=false,collapsedSections=new Set();

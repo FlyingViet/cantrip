@@ -2,7 +2,7 @@
 // the tab list every 1.5 s while busy / 5 s idle / 15 s behind other windows, the shown session's
 // transcript only when its historyRevision changes, and Home's tasks, artifacts and Upcoming with revisions.
 import { batch, computed, signal } from "@preact/signals";
-import { api, APIError, onWritesChanged, pathComponent } from "../api/client";
+import { api, APIError, clearRevalidatedReads, onWritesChanged, pathComponent } from "../api/client";
 import type {
   ChildTabAction, DeleteMessageRequest, ForkQueuedResponse, HomeArtifactsResponse, HomeArtifactsSnapshot, HomeBackgroundSnapshot, HomeInputGroup, HomeTasksResponse,
   HomeUpcomingItem, HomeViewSummary,
@@ -783,6 +783,7 @@ export async function stopBackgroundRun(runID: string): Promise<void> {
 /** Forgets cached state when the app pairs with a different Mac. */
 export function reset(): void {
   privateMascotLoader.reset();
+  clearRevalidatedReads();
   batch(() => {
     sessions.value = [];
     tabSections.value = [];
