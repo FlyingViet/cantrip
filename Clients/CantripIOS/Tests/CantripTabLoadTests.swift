@@ -174,4 +174,34 @@ final class CantripTabLoadTests: XCTestCase {
         _ = try await model.stepDetails(ref)
         XCTAssertEqual(stepReads, 1, "reopening a step reuses what was loaded")
     }
+
+    /// The personal mascot (1.3 MB on a real Mac) downloading slowly must not stop the tab list from
+    /// being polled: it used to hold the polling gate for its whole download.
+    func testSlowMascotDownloadDoesNotHoldUpTheTabList() async throws {
+        let revision = String(repeating: "ab", count: 32)
+        var listings = 0
+        var mascotStarted = false
+        var release: CheckedContinuation<Void, Never>?
+        TabLoadRequestProtocol.handler = { [unowned self] request in
+            switch self.path(request) {
+            case "/api/v1/sessions":
+                listings += 1
+                return (200, Data(#"{"sessions":[\#(self.session(messages: false, id: self.otherID, title: "Other"))],"privateMascotRevision":"\#(revision)"}"#.utf8))
+            case "/api/v1/mascot":
+                mascotStarted = true
+                await withCheckedContinuation { release = $0 }
+                return (404, Data(#"{"error":"none"}"#.utf8))
+            default:
+                return self.common(request) ?? (404, Data(#"{"error":"not here"}"#.utf8))
+            }
+        }
+        let model = try await model()
+        model.setAppActive(true)
+        try await until { mascotStarted }
+        XCTAssertTrue(mascotStarted, "the mascot download started")
+        let before = listings
+        try await until(8) { listings > before }
+        XCTAssertGreaterThan(listings, before, "the tab list kept polling while the mascot downloaded")
+        release?.resume()
+    }
 }

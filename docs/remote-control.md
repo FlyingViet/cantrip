@@ -820,8 +820,8 @@ for small reads and 20 seconds for conversations, and LAN connection establishme
 still times out after 2 seconds. While a tab's conversation is on its way, Cantrip
 Agent and Gateway Mac show the tab's name with **Loading this tab…** (or the error
 with **Retry**); polling retries a failed read on its own. Cantrip Agent history
-downloads do not hold its polling/mutation gate, and tab polling continues during
-a slow recent-page download. Uncertain writes are never replayed.
+downloads, chat images and the personal mascot do not hold its polling/mutation
+gate, and tab polling continues during a slow download. Uncertain writes are never replayed.
 
 Update both apps and reopen the host when active work has finished to enable
 this behavior. Old clients retain the full-snapshot API, and new clients can

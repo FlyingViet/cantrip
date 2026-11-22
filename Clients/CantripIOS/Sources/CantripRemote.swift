@@ -4340,7 +4340,8 @@ final class CantripRemoteModel: ObservableObject {
         let identity = usageIdentity
         let key = "\(usageIdentity)/\(sessionID)/\(imageID)/\(thumbnail)" as NSString
         if let cached = imageCache.object(forKey: key) { return cached }
-        let data = try await performAuthenticated(allowFallback: true) { api in
+        // Not through the polling gate: a full image on a slow link would hold up the tab list.
+        let data = try await performHistoryRead { api in
             try await api.imageData(sessionID: sessionID, imageID: imageID, thumbnail: thumbnail)
         }
         let isPreview = ChatMessageImage.validPreviewID(imageID)
@@ -6395,9 +6396,11 @@ final class CantripRemoteModel: ObservableObject {
             privateMascot.update(revision: listing.privateMascotRevision, hostError: listing.privateMascotError) { [weak self] revision in
                 guard let self else { throw CancellationError() }
                 // About 1.3 MB: on a slow link it would share the connection with what the screen
-                // is waiting for, so it starts once those reads are done.
+                // is waiting for, so it starts once those reads are done, and never through the
+                // polling gate: holding it for the whole download froze the tab list and every tab
+                // read queued behind it (a minute or more at 150 kbps).
                 try await self.screenReadsSettled()
-                return try await self.performAuthenticated(allowFallback: true) { api in
+                return try await self.performHistoryRead { api in
                     try await api.privateMascot(revision: revision)
                 }
             }
