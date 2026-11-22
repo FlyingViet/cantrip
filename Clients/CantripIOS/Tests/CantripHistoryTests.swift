@@ -176,7 +176,8 @@ final class CantripHistoryTests: XCTestCase {
             XCTAssertTrue(items.contains(URLQueryItem(name: "history", value: "recent")))
             XCTAssertEqual(items.first { $0.name == "recentExchanges" }?.value,
                            request.url!.path == "/api/v1/sessions" ? nil : "3")
-            XCTAssertEqual(request.timeoutInterval, request.url!.path == "/api/v1/sessions" ? 3 : 20,
+            XCTAssertEqual(request.timeoutInterval, request.url!.path == "/api/v1/sessions"
+                           ? CantripRemoteAPI.Limits.readStall : CantripRemoteAPI.Limits.contentStall,
                            "Only conversation reads receive a larger download budget")
             return (200, try self.session(list: request.url!.path == "/api/v1/sessions"))
         }
@@ -456,7 +457,7 @@ final class CantripHistoryTests: XCTestCase {
         var lists = 0
         HistoryRequestProtocol.handler = { request in
             if request.url!.path.contains("/messages/") {
-                XCTAssertEqual(request.timeoutInterval, 20)
+                XCTAssertEqual(request.timeoutInterval, CantripRemoteAPI.Limits.contentStall)
                 await withCheckedContinuation { release = $0 }
                 return (200, try JSONSerialization.data(withJSONObject: [
                     "message": ["id": self.messageID(4), "role": "assistant",

@@ -189,10 +189,7 @@ struct MacHomeChatView: View {
                 .font(.system(size: 56))
                 .foregroundStyle(.tint)
             if isTab, remote.isConfigured, let opening = openingTab {
-                Text(opening.title).font(.title3.weight(.semibold))
-                if remote.detailError == nil {
-                    ProgressView().controlSize(.small).accessibilityLabel("Opening \(opening.title)")
-                }
+                CantripTabLoadingState(model: remote, title: opening.title)
             } else if isTab, remote.isConfigured {
                 Text(remote.selectedSession?.title ?? "No tab open").font(.title3.weight(.semibold))
                 Text(remote.selectedSession == nil

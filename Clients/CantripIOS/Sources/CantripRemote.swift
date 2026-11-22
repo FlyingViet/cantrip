@@ -1929,11 +1929,38 @@ struct CantripRemoteAPI {
             && (parts[5] == "refresh" || parts[5] == "actions")
     }
 
+    /// Time limits (seconds). URLSession's request limit is how long a response may go without a
+    /// byte (a stall); the resource limit caps the whole transfer. On a slow link a full tab's
+    /// recent history (~200 KB compressed for the busiest tabs) takes longer than 20 s while still
+    /// arriving: capping the transfer threw it away and the next poll started over, so the tab
+    /// never loaded. Reads now fail on a stall, and only a very long transfer is cut off.
+    enum Limits {
+        /// The tab list and other small reads: a new connection over a 1 s round trip needs ~3 s
+        /// before its first byte.
+        static let readStall: TimeInterval = 8
+        static let readTotal: TimeInterval = 20
+        /// Conversations, Home's lists and other content reads.
+        static let contentStall: TimeInterval = 20
+        static let contentTotal: TimeInterval = 300
+        /// Changes: a send's reply carries the tab's recent history.
+        static let writeStall: TimeInterval = 12
+        static let writeTotal: TimeInterval = 120
+    }
+
     private static let readSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = 3
-        configuration.timeoutIntervalForResource = 3
+        configuration.timeoutIntervalForRequest = Limits.readStall
+        configuration.timeoutIntervalForResource = Limits.readTotal
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration)
+    }()
+
+    private static let contentSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = Limits.contentStall
+        configuration.timeoutIntervalForResource = Limits.contentTotal
         configuration.waitsForConnectivity = false
         return URLSession(configuration: configuration)
     }()
@@ -1941,8 +1968,8 @@ struct CantripRemoteAPI {
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = 12
-        configuration.timeoutIntervalForResource = 20
+        configuration.timeoutIntervalForRequest = Limits.writeStall
+        configuration.timeoutIntervalForResource = Limits.writeTotal
         configuration.waitsForConnectivity = false
         return URLSession(configuration: configuration)
     }()
@@ -3322,7 +3349,8 @@ struct CantripRemoteAPI {
         var request = URLRequest(
             url: url,
             cachePolicy: .reloadIgnoringLocalCacheData,
-            timeoutInterval: method == "GET" ? (isContentRead ? 20 : 3) : (isImageUpload ? 60 : (isSlowWrite ? 35 : 12))
+            timeoutInterval: method == "GET" ? (isContentRead ? Limits.contentStall : Limits.readStall)
+                : (isImageUpload ? 60 : (isSlowWrite ? 35 : Limits.writeStall))
         )
         request.httpMethod = method
         request.httpBody = body
@@ -3343,8 +3371,9 @@ struct CantripRemoteAPI {
         let data: Data
         let response: URLResponse
         do {
-            let session = urlSession ?? (method == "GET" && !isContentRead
-                ? Self.readSession : (isImageUpload || isSlowWrite ? Self.imageSession : Self.session))
+            let session = urlSession ?? (method == "GET"
+                ? (isContentRead ? Self.contentSession : Self.readSession)
+                : (isImageUpload || isSlowWrite ? Self.imageSession : Self.session))
             (data, response) = try await session.data(for: request)
         } catch is CancellationError {
             throw CancellationError()
@@ -4390,6 +4419,13 @@ final class CantripRemoteModel: ObservableObject {
             homeBackgroundError = error.localizedDescription
             return false
         }
+    }
+
+    /// The tab on screen whose conversation hasn't arrived yet (its entry from the tab list, for the
+    /// title), so it reads as loading, or as failed with `detailError`, never as "No tab open".
+    var loadingTab: CantripRemoteSession? {
+        guard !isHomeSelected, let id = selectedSessionID, selectedSession?.id != id else { return nil }
+        return sessions.first { $0.id == id }
     }
 
     /// Waits (up to 15 s) while Home's chat or lists, or the open tab's history, are still loading.
@@ -7179,6 +7215,31 @@ struct CantripDetailNotice: View {
                     .disabled(model.isRefreshing)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// A tab whose conversation is still on its way: its name and a spinner, or why it failed with Retry
+/// (the poll keeps retrying too).
+struct CantripTabLoadingState: View {
+    @ObservedObject var model: CantripRemoteModel
+    let title: String
+
+    var body: some View {
+        Text(title).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+        if let error = model.detailError {
+            Text(error).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Button("Retry") { Task { await model.refreshNow() } }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isRefreshing)
+                .padding(.top, 4)
+        } else {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Loading this tab…").font(.callout).foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("tab.loading")
         }
     }
 }

@@ -241,7 +241,7 @@ final class CantripImageTransportTests: XCTestCase {
         ImageRequestProtocol.handler = { request in
             XCTAssertEqual(request.httpMethod, "GET")
             XCTAssertNotNil(request.value(forHTTPHeaderField: "Authorization"))
-            XCTAssertEqual(request.timeoutInterval, 3)
+            XCTAssertEqual(request.timeoutInterval, CantripRemoteAPI.Limits.readStall)
             XCTAssertNil(request.httpBody)
             paths.append(try XCTUnwrap(request.url?.path))
             return (200, response)

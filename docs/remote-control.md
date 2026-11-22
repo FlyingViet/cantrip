@@ -800,9 +800,18 @@ Tab-list polling remains single-flight: about 1.5 seconds between active/error r
 5 seconds while idle, and paused while the client is inactive/hidden. A
 successful tab-list read is applied immediately. A failed conversation read
 keeps cached messages and reports a separate error, rather than treating a
-reachable host as disconnected. Lightweight native HTTPS/LAN read deadlines remain
-3/2 seconds; conversation pages and full-message reads allow 20 seconds, while
-LAN connection establishment still times out after 2 seconds. Cantrip Agent history
+reachable host as disconnected. On the HTTPS route, native clients fail a read only
+when no data has arrived for a while, not because a slow transfer is still running:
+small reads (the tab list) after 8 seconds without data (20 seconds in all);
+conversation pages, Home's lists and full-message reads after 20 seconds without
+data (5 minutes in all); changes after 12 seconds without data (2 minutes in all,
+since a send's acknowledgement carries the tab's recent history). A fixed 20-second
+cap used to discard a busy tab's history on a slow link before it finished, and the
+next poll started over, so the tab never loaded. LAN read deadlines remain 2 seconds
+for small reads and 20 seconds for conversations, and LAN connection establishment
+still times out after 2 seconds. While a tab's conversation is on its way, Cantrip
+Agent and Gateway Mac show the tab's name with **Loading this tab…** (or the error
+with **Retry**); polling retries a failed read on its own. Cantrip Agent history
 downloads do not hold its polling/mutation gate, and tab polling continues during
 a slow recent-page download. Uncertain writes are never replayed.
 

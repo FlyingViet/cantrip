@@ -532,8 +532,9 @@ final class CantripRoutingTests: XCTestCase {
             XCTAssertTrue(CantripRemoteError.isRouteFailure(error))
         }
         let elapsed = Date().timeIntervalSince(start)
-        XCTAssertGreaterThanOrEqual(elapsed, 2.5, "Exercise the deadline, not an immediate setup failure")
-        XCTAssertLessThan(elapsed, 4.5)
+        XCTAssertGreaterThanOrEqual(elapsed, CantripRemoteAPI.Limits.readStall - 0.5,
+                                    "Exercise the deadline, not an immediate setup failure")
+        XCTAssertLessThan(elapsed, CantripRemoteAPI.Limits.readStall + 1.5)
     }
 
     func testUnresponsiveLANReadTimesOutBeforeConnectionStales() async throws {

@@ -2245,6 +2245,8 @@ struct ChatView: View {
                     Text(session.title).font(.title3.weight(.semibold))
                     Text("Type or use voice to start this tab. Cantrip runs it on your Mac.")
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                } else if let tab = remote.loadingTab {
+                    CantripTabLoadingState(model: remote, title: tab.title)
                 } else {
                     Text("No tab open").font(.title3.weight(.semibold))
                     Text("Go back to Home and open a tab from the drawer, or start a new one.")
