@@ -334,8 +334,13 @@ final class ChatViewModel: ObservableObject {
                         id: activity.id,
                         name: activity.toolName,
                         arguments: [activity.title, activity.input].compactMap { $0 }.joined(separator: "\n"),
-                        output: activity.output ?? (activity.state == "running" ? nil : activity.state.capitalized),
-                        done: activity.state != "running"
+                        output: activity.output
+                            ?? (activity.state == "running" || activity.detailBytes != nil ? nil : activity.state.capitalized),
+                        done: activity.state != "running",
+                        remoteDetails: activity.detailBytes.flatMap { bytes in
+                            session.map { CantripRemoteStepRef(sessionID: $0.id, messageID: message.id,
+                                                               stepID: activity.id, bytes: bytes) }
+                        }
                     )
                 },
                 streaming: session?.isStreaming == true
@@ -1627,6 +1632,7 @@ struct ChatView: View {
             }
             transcriptList
                 .id(transcriptIdentity)
+                .environment(\.cantripStepDetails, vm.activeLane.usesCantripRemote ? remote.stepDetailsLoader : nil)
             if vm.activeLane.usesCantripRemote {
                 CantripPinnedSubagents(
                     remote: remote,
@@ -4177,6 +4183,22 @@ private struct ToolRow: View {
     let tool: ToolActivity
     let fullOutput: Bool
     @State private var expanded = false
+    @Environment(\.cantripStepDetails) private var loadStepDetails
+    /// A remote step's input and output, loaded when the row opened (`remoteDetails`).
+    @State private var loaded: (ref: CantripRemoteStepRef, arguments: String, output: String?)?
+    @State private var loadError: String?
+    @State private var loadAttempt = 0
+
+    private var details: (arguments: String, output: String?)? {
+        guard let ref = tool.remoteDetails else { return (tool.arguments, tool.output) }
+        guard let loaded, loaded.ref == ref else { return nil }
+        return (loaded.arguments, loaded.output)
+    }
+
+    private var loadKey: String? {
+        guard expanded, let ref = tool.remoteDetails, details == nil else { return nil }
+        return "\(ref.stepID):\(ref.bytes):\(loadAttempt)"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -4193,17 +4215,41 @@ private struct ToolRow: View {
             }
             .buttonStyle(.plain)
             if expanded {
-                if !tool.arguments.isEmpty {
-                    Text(tool.arguments).font(.caption2.monospaced()).foregroundStyle(.secondary)
-                }
-                if let out = tool.output, !out.isEmpty {
-                    Text(out).font(.caption2.monospaced()).foregroundStyle(.secondary)
-                        .lineLimit(fullOutput ? nil : 12)
+                if let details {
+                    if !details.arguments.isEmpty {
+                        Text(details.arguments).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    }
+                    if let out = details.output, !out.isEmpty {
+                        Text(out).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                            .lineLimit(fullOutput ? nil : 12)
+                    }
+                } else if let loadError {
+                    Text(loadError).font(.caption2).foregroundStyle(.orange)
+                    Button("Retry") { loadAttempt += 1 }.font(.caption2)
+                } else {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Loading this step…").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
                 }
             }
         }
         .padding(10)
         .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+        .task(id: loadKey) {
+            guard loadKey != nil, let ref = tool.remoteDetails, let loadStepDetails else { return }
+            loadError = nil
+            do {
+                let step = try await loadStepDetails(ref)
+                loaded = (ref, [step.title, step.input].compactMap { $0 }.joined(separator: "\n"),
+                          step.output ?? (step.state == "running" ? nil : step.state.capitalized))
+            } catch is CancellationError {
+                return
+            } catch {
+                loadError = "Couldn't load this step. \(error.localizedDescription)"
+            }
+        }
     }
 }
 

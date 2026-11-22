@@ -40,6 +40,9 @@ struct CantripRemoteActivity: Decodable, Equatable, Identifiable {
     let state: String
     var input: String? = nil
     var output: String? = nil
+    /// Set when the Mac left a large step's input and output out (`steps=summary`): their size. They
+    /// load with `CantripRemoteModel.stepDetails` when the step is opened.
+    var detailBytes: Int? = nil
     /// From the Mac's `browser` MCP server (agent-only Chrome): the reply shows a live preview card.
     var browser: Bool? = nil
 }
@@ -2664,6 +2667,19 @@ struct CantripRemoteAPI {
         return response.thread
     }
 
+    /// One step's title, input and output in full.
+    func step(_ ref: CantripRemoteStepRef) async throws -> CantripRemoteActivity {
+        guard UUID(uuidString: ref.sessionID) != nil, UUID(uuidString: ref.messageID) != nil else {
+            throw CantripRemoteError.invalidResponse
+        }
+        struct Response: Decodable { let step: CantripRemoteActivity }
+        let response: Response = try await request(
+            path: "/api/v1/sessions/\(ref.sessionID)/messages/\(ref.messageID)/steps/\(try Self.pathComponent(ref.stepID))"
+        )
+        guard response.step.id == ref.stepID else { throw CantripRemoteError.invalidResponse }
+        return response.step
+    }
+
     func fullMessage(sessionID: String, messageID: String) async throws -> CantripRemoteMessage {
         guard UUID(uuidString: sessionID) != nil, UUID(uuidString: messageID) != nil else {
             throw CantripRemoteError.invalidResponse
@@ -3324,7 +3340,9 @@ struct CantripRemoteAPI {
         guard var target = URLComponents(string: path), target.host == nil else {
             throw CantripRemoteError.invalidResponse
         }
-        target.queryItems = (target.queryItems ?? []) + [URLQueryItem(name: "history", value: "recent")]
+        // Large tool steps come as summaries; a step's details load when it's opened (`step`).
+        target.queryItems = (target.queryItems ?? []) + [URLQueryItem(name: "history", value: "recent"),
+                                                         URLQueryItem(name: "steps", value: "summary")]
         if includeRecentExchanges {
             target.queryItems?.append(URLQueryItem(name: "recentExchanges",
                                                   value: String(CantripHistoryWindow.recentExchanges)))
@@ -3566,6 +3584,7 @@ final class CantripRemoteModel: ObservableObject {
     @Published private(set) var historyPrependRevision = 0
     private(set) var historyPrependAnchor: String?
     private var detailCache: [String: CantripRemoteSession] = [:]
+    private var stepDetailsCache: [CantripRemoteStepRef: CantripRemoteActivity] = [:]
     private let savedCopy: CantripSavedCopy
     private var savedCopyPairing: String?
     /// Parts of the saved copy on screen that the Mac hasn't confirmed or replaced yet
@@ -5272,6 +5291,25 @@ final class CantripRemoteModel: ObservableObject {
         }
     }
 
+    /// A step the Mac sent as a summary, in full; kept for this pairing so reopening it is instant.
+    func stepDetails(_ ref: CantripRemoteStepRef) async throws -> CantripRemoteActivity {
+        if let kept = stepDetailsCache[ref] { return kept }
+        let generation = configurationGeneration
+        let step = try await performHistoryRead { try await $0.step(ref) }
+        guard generation == configurationGeneration else { throw CancellationError() }
+        if stepDetailsCache.count >= 200 { stepDetailsCache.removeAll() }
+        stepDetailsCache[ref] = step
+        return step
+    }
+
+    /// For `EnvironmentValues.cantripStepDetails`.
+    var stepDetailsLoader: @MainActor (CantripRemoteStepRef) async throws -> CantripRemoteActivity {
+        { [weak self] ref in
+            guard let self else { throw CancellationError() }
+            return try await self.stepDetails(ref)
+        }
+    }
+
     func fullMessage(sessionID: String, messageID: String) async throws -> CantripRemoteMessage {
         try await performHistoryRead { api in
             try await api.fullMessage(sessionID: sessionID, messageID: messageID)
@@ -6685,6 +6723,7 @@ final class CantripRemoteModel: ObservableObject {
     private func resetHistory() {
         cancelDetailRefresh()
         detailCache.removeAll()
+        stepDetailsCache.removeAll()
         cacheOrder.removeAll()
         expandedHistory.removeAll()
         olderHistoryFailures.removeAll()
@@ -7217,6 +7256,11 @@ struct CantripDetailNotice: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+}
+
+extension EnvironmentValues {
+    /// Loads a remote step's input and output when its row opens; nil where steps always come whole.
+    @Entry var cantripStepDetails: (@MainActor (CantripRemoteStepRef) async throws -> CantripRemoteActivity)? = nil
 }
 
 /// A tab whose conversation is still on its way: its name and a spinner, or why it failed with Retry

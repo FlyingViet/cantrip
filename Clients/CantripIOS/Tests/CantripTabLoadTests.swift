@@ -140,4 +140,38 @@ final class CantripTabLoadTests: XCTestCase {
         XCTAssertEqual(model.selectedSession?.transcript.last?.text, "Loaded reply")
         XCTAssertNil(model.loadingTab)
     }
+
+    /// Tab reads ask for step summaries; a step the Mac sent without its details loads once when opened
+    /// and is reused after that.
+    func testSummarizedStepLoadsItsDetailsOnceWhenOpened() async throws {
+        var queries: [String] = []
+        var stepReads = 0
+        let messageID = "61000000-0000-0000-0000-000000000002"
+        TabLoadRequestProtocol.handler = { [unowned self] request in
+            queries.append(request.url?.query ?? "")
+            switch self.path(request) {
+            case "/api/v1/sessions": return (200, Data(#"{"sessions":[\#(self.session(messages: false))]}"#.utf8))
+            case "/api/v1/sessions/\(self.tabID)":
+                let detail = self.session(messages: false).dropLast() + #","historyStartID":"start","messages":[{"id":"\#(messageID)","role":"assistant","text":"Done","thinking":"","activities":[{"id":"toolu_1","title":"Run checks","toolName":"bash","state":"succeeded","detailBytes":48000}]}]}"#
+                return (200, Data(#"{"session":\#(detail)}"#.utf8))
+            case "/api/v1/sessions/\(self.tabID)/messages/\(messageID)/steps/toolu_1":
+                stepReads += 1
+                return (200, Data(#"{"step":{"id":"toolu_1","title":"Run checks","toolName":"bash","state":"succeeded","input":"make check","output":"all passed"}}"#.utf8))
+            default: return (404, Data(#"{"error":"not here"}"#.utf8))
+            }
+        }
+        let model = try await model()
+        await model.selectSession(tabID)
+        let step = try XCTUnwrap(model.selectedSession?.transcript.last?.activities.first)
+        XCTAssertEqual(step.detailBytes, 48_000)
+        XCTAssertNil(step.output)
+        XCTAssertTrue(queries.last?.contains("steps=summary") == true, "tab reads ask for summaries: \(queries)")
+
+        let ref = CantripRemoteStepRef(sessionID: tabID, messageID: messageID, stepID: "toolu_1", bytes: 48_000)
+        let loaded = try await model.stepDetails(ref)
+        XCTAssertEqual(loaded.output, "all passed")
+        XCTAssertEqual(loaded.input, "make check")
+        _ = try await model.stepDetails(ref)
+        XCTAssertEqual(stepReads, 1, "reopening a step reuses what was loaded")
+    }
 }

@@ -761,9 +761,17 @@ above you. Only one page is requested at a time. There is no button to tap; a
 **Retry** appears in that row only if a page fails, and automatic loading resumes
 after it succeeds. Older history is not deleted, and expanded history stays open
 while you browse or switch cached tabs.
-Every loaded message includes its complete text, reasoning, and tool input/output
-by default. Reasoning/tool disclosures and long-prompt readers use content already
-downloaded; they do not require another message fetch.
+Every loaded message includes its complete text and reasoning. Tool steps come
+complete by default; clients that add `steps=summary` (Cantrip Agent, Gateway Mac
+and the browser remote) get each step whose title, input and output together exceed
+1 KB as a summary: its id, tool, state, a title of at most 512 bytes and
+`detailBytes` (their full size) instead of its input and output. A busy tab's last
+three turns can hold hundreds of steps (0.5–1 MB of commands and output, shown only
+once a step is opened), which kept it from loading at all on a slow link. Opening
+such a step loads it from `GET /api/v1/sessions/{id}/messages/{messageID}/steps/{stepID}`
+(`{"step":{…}}`, complete). Small steps, reasoning and long-prompt readers use
+content already downloaded. Clients that don't ask (Windows, older apps) keep
+receiving complete steps.
 Older hosts that return previews retain the **Load full message and details** fallback.
 
 Automatic reads request `?history=recent`, including mutation acknowledgements.

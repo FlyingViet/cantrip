@@ -21,6 +21,8 @@ final class RemoteRequestTrace {
     private var bytes = 0
     private var wireBytes = 0
     private(set) var usesPagedHistory = false
+    /// The client loads large tool steps on request (`steps=summary`).
+    private(set) var usesStepSummaries = false
     private(set) var acceptsGzip = false
     /// A GET's If-None-Match: the entity tags of the copy the client already has.
     private(set) var ifNoneMatch: String?
@@ -36,6 +38,7 @@ final class RemoteRequestTrace {
         lock.lock()
         defer { lock.unlock() }
         usesPagedHistory = request.query("history") == "recent"
+        usesStepSummaries = request.query("steps") == "summary"
         acceptsGzip = HTTPCompression.acceptsGzip(request.headers["accept-encoding"])
         isGet = request.method == "GET"
         ifNoneMatch = isGet ? request.headers["if-none-match"] : nil

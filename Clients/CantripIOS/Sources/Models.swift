@@ -217,9 +217,19 @@ struct ToolActivity: Identifiable, Codable, Equatable {
     var arguments: String = ""
     var output: String?
     var done = false
+    /// A Mac step that came without its input and output (`detailBytes`): they load when the row opens.
+    var remoteDetails: CantripRemoteStepRef? = nil
 
     /// A short, friendly label for the collapsed row, e.g. "sonarr.search".
     var label: String { name.isEmpty ? "tool" : name }
+}
+
+/// Where a remote step's input and output are (`GET …/messages/<message>/steps/<step>`) and their size.
+struct CantripRemoteStepRef: Codable, Hashable {
+    let sessionID: String
+    let messageID: String
+    let stepID: String
+    let bytes: Int
 }
 
 /// Events decoded from the `/v1/responses` SSE stream. Intentionally tolerant —

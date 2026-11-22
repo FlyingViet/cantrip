@@ -1671,6 +1671,20 @@ final class RemoteControlServer {
             return
         }
 
+        // One step in full: its title, input and output, for clients that got `detailBytes` in its place.
+        if parts.count == 5, parts[1] == "messages", parts[3] == "steps", request.method == "GET" {
+            guard let messageID = UUID(uuidString: String(parts[2])),
+                  let message = session.messages.first(where: { $0.id == messageID }),
+                  let activity = message.activities.first(where: { $0.id == String(parts[4]) }) else {
+                sendError(404, "step no longer available", on: connection)
+                return
+            }
+            let object = RemoteHistory.step(activity)
+            sendEncoded(on: connection, queue: detailEncodingQueue) {
+                try JSONSerialization.data(withJSONObject: ["step": object], options: [.sortedKeys])
+            }
+            return
+        }
         if parts.count == 3, parts[1] == "messages", request.method == "GET" {
             guard let messageID = UUID(uuidString: String(parts[2])),
                   let message = session.messages.first(where: { $0.id == messageID }) else {
@@ -3204,8 +3218,10 @@ final class RemoteControlServer {
             let home = HomeReplyView(session)
             let live = session.liveReplyID
             let tags = ThreadTags.tags(in: session.messages, range: session.messages.indices, sessionID: session.id)
+            let summaries = connection.trace.usesStepSummaries
             result["messages"] = session.messages.map {
-                messageSnapshot($0, sessionID: session.id, liveReplyID: live, home: home, thread: tags[$0.id])
+                messageSnapshot($0, sessionID: session.id, liveReplyID: live, home: home, thread: tags[$0.id],
+                                stepSummaries: summaries)
             }
             result["threadReplies"] = ThreadTags.replyCountsObject(in: session.messages, sessionID: session.id)
         }
@@ -3243,12 +3259,13 @@ final class RemoteControlServer {
     }
 
     private func messageSnapshot(_ message: ChatMessage, sessionID: UUID, liveReplyID: UUID?,
-                                 home: HomeReplyView? = nil, thread: [String: Any]? = nil) -> [String: Any] {
+                                 home: HomeReplyView? = nil, thread: [String: Any]? = nil,
+                                 stepSummaries: Bool = false) -> [String: Any] {
         // Tool marks count the saved text, so the split comes before Home trims its blocks.
         let work = message.workSplit(live: message.id == liveReplyID)
         var message = message
         if let home, message.role == .assistant { message.text = home.text(of: message) }
-        var object = RemoteHistory.message(message)
+        var object = RemoteHistory.message(message, stepSummaries: stepSummaries)
         object["work"] = work?.snapshot
         object["thread"] = thread
         object["isLocalPrivate"] = sessionID == ChatSession.privateLocalID
@@ -3335,6 +3352,7 @@ final class RemoteControlServer {
         let tags = ThreadTags.tags(in: session.messages, range: candidateStart..<end, sessionID: sessionID)
         // For every loaded page: a client updates prompts it cached from older pages too.
         let replyCounts = ThreadTags.replyCountsObject(in: session.messages, sessionID: sessionID)
+        let summaries = connection.trace.usesStepSummaries
         // Full-message sizing and encoding belong off the main actor and tab-list queue.
         sendEncoded(status: status, on: connection, queue: detailEncodingQueue) {
             var result = summary
@@ -3342,13 +3360,14 @@ final class RemoteControlServer {
             var messages: [[String: Any]] = []
             if includesCompleteExchanges {
                 messages = candidates.map {
-                    self.messageSnapshot($0, sessionID: sessionID, liveReplyID: live, home: home, thread: tags[$0.id])
+                    self.messageSnapshot($0, sessionID: sessionID, liveReplyID: live, home: home, thread: tags[$0.id],
+                                         stepSummaries: summaries)
                 }
             } else {
                 var bytes = 0
                 for candidate in candidates.suffix(RemoteHistory.pageSize).reversed() {
                     let message = self.messageSnapshot(candidate, sessionID: sessionID, liveReplyID: live,
-                                                       home: home, thread: tags[candidate.id])
+                                                       home: home, thread: tags[candidate.id], stepSummaries: summaries)
                     let size = try JSONSerialization.data(withJSONObject: message).count
                     if !messages.isEmpty, bytes + size > RemoteHistory.pageBytes { break }
                     messages.insert(message, at: 0)
@@ -3361,7 +3380,7 @@ final class RemoteControlServer {
                    let prompt = candidates[..<start].lastIndex(where: { $0.role == .user }) {
                     messages = candidates[prompt..<start].map {
                         self.messageSnapshot($0, sessionID: sessionID, liveReplyID: live, home: home,
-                                             thread: tags[$0.id])
+                                             thread: tags[$0.id], stepSummaries: summaries)
                     } + messages
                 }
             }
@@ -4409,7 +4428,7 @@ private extension RemoteControlServer {
       lastHistoryScrollTop=top;lastHistoryScrollHeight=height},{passive:true});
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
       if(uiNavigating)throw Error("Remote is updating; this request was not sent.");
-      path+=(path.includes("?")?"&":"?")+"history=recent";
+      path+=(path.includes("?")?"&":"?")+"history=recent&steps=summary";
       const controller=(!options.method||options.method==="GET")?new AbortController():null;
       const segments=path.split("?")[0].split("/").filter(Boolean),historyRead=segments.slice(0,3).join("/")==="api/v1/sessions"&&(segments.length===4||(segments.length===6&&segments[4]==="messages"));
       if(sidebarLayout&&controller&&historyRead&&segments.length===4&&!new URLSearchParams(path.split("?")[1]).has("before"))path+="&recentExchanges=3";
@@ -5816,13 +5835,21 @@ private extension RemoteControlServer {
     function statusIcon(state){const icon=document.createElement("span");icon.className=`status-icon ${state}`;icon.textContent=state==="running"?"•":state==="succeeded"?"✓":state==="failed"?"×":"–";return icon}
     function remember(details,key){details.open=expanded.has(key);details.addEventListener("toggle",()=>{if(details.open)expanded.add(key);else expanded.delete(key)});return details}
     function appendDetail(parent,label,value){if(!value)return;const section=document.createElement("section"),title=document.createElement("div"),content=document.createElement("pre");title.className="detail-label";title.textContent=label;content.textContent=value;section.append(title,content);parent.append(section)}
-    function appendActivity(parent,activity,messageID){const hasDetails=Boolean(activity.input||activity.output),row=document.createElement(hasDetails?"details":"div");row.className="step";
+    // Large steps come without input and output (detailBytes): they load when the step is opened.
+    const stepDetails=new Map();
+    function appendActivity(parent,activity,messageID,sessionID){const deferred=!activity.input&&!activity.output&&activity.detailBytes>0,hasDetails=Boolean(activity.input||activity.output||deferred),row=document.createElement(hasDetails?"details":"div");row.className="step";
       const head=document.createElement(hasDetails?"summary":"div");if(!hasDetails)head.className="step-static";head.append(statusIcon(activity.state));const title=document.createElement("span");title.className="step-title";title.textContent=activity.title||activity.toolName;const tool=document.createElement("span");tool.className="tool-name";tool.textContent=activity.toolName;head.append(title,tool);row.append(head);
-      if(hasDetails){remember(row,`activity:${messageID}:${activity.id}`);const body=document.createElement("div");body.className="step-details";appendDetail(body,"Input",activity.input);appendDetail(body,"Output",activity.output);row.append(body)}parent.append(row)}
-    function appendActivities(parent,activities,messageID){if(!activities.length)return;const disclosure=remember(document.createElement("details"),`steps:${messageID}`);disclosure.className="disclosure steps";
+      if(hasDetails){remember(row,`activity:${messageID}:${activity.id}`);const body=document.createElement("div");body.className="step-details";
+        if(deferred){const owner=sessionID||selected,key=`${owner}:${messageID}:${activity.id}:${activity.detailBytes}`;
+          const fill=async()=>{let step=stepDetails.get(key);if(!step){body.textContent="Loading this step…";try{step=(await api(`/api/v1/sessions/${encodeURIComponent(owner)}/messages/${encodeURIComponent(messageID)}/steps/${encodeURIComponent(activity.id)}`)).step;stepDetails.set(key,step)}catch(error){body.textContent=`Couldn't load this step: ${error.message}`;return}}
+            body.textContent="";appendDetail(body,"Input",step.input);appendDetail(body,"Output",step.output)};
+          row.addEventListener("toggle",()=>{if(row.open)fill()});if(row.open)fill()}
+        else{appendDetail(body,"Input",activity.input);appendDetail(body,"Output",activity.output)}
+        row.append(body)}parent.append(row)}
+    function appendActivities(parent,activities,messageID,sessionID){if(!activities.length)return;const disclosure=remember(document.createElement("details"),`steps:${messageID}`);disclosure.className="disclosure steps";
       const states=activities.map(item=>item.state),state=states.includes("running")?"running":states.includes("failed")?"failed":states.includes("cancelled")?"cancelled":"succeeded";const summary=document.createElement("summary");summary.append(statusIcon(state));
       const label=document.createElement("span");const noun=activities.length===1?"step":"steps";label.textContent=state==="running"?`Working · ${activities.length} ${noun}`:`${activities.length} ${noun}`;summary.append(label);disclosure.append(summary);
-      const body=document.createElement("div");body.className="disclosure-body";for(const activity of activities)appendActivity(body,activity,messageID);disclosure.append(body);parent.append(disclosure)}
+      const body=document.createElement("div");body.className="disclosure-body";for(const activity of activities)appendActivity(body,activity,messageID,sessionID);disclosure.append(body);parent.append(disclosure)}
     function appendThinking(parent,text,messageID){if(!text)return;const details=remember(document.createElement("details"),`thinking:${messageID}`);details.className="disclosure";const summary=document.createElement("summary");const label=document.createElement("span");label.textContent="Reasoning";summary.append(label);const body=document.createElement("div");body.className="disclosure-body prose";body.textContent=text;details.append(summary,body);parent.append(details)}
     // @-mention a tab: "@" at the start of a word suggests the open tabs this one may look into; a picked tab is sent as @[Label](cantrip-tab:<ID>) so the model acts on exactly that tab (TabMentions on the Mac).
     const mentionTokenPattern=/@\\[([^\\[\\]\\n]{1,120})\\]\\(cantrip-tab:([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\\)/g,mentionOpeners="([{\\"'“‘";
@@ -6050,7 +6077,7 @@ private extension RemoteControlServer {
           if(message.role==="error"&&session.supportsStartFresh&&message.id===session.repeatedErrorMessageID)appendErrorRecovery(row,session);
           if(message.role==="error"&&session.continuableMessageIDs?.includes(message.id))appendContinue(row,session,message.id);
           if(canDeleteMessage(session,message))appendDeleteMessage(row,session,message);
-          if(handoffs.length){const stack=document.createElement("div");stack.className="handoffs";for(const handoff of handoffs)stack.append(handoffCard(handoff));row.append(stack)}appendActivities(row.querySelector(":scope>.work-notes>.work-notes-body")||row,activities,message.id);
+          if(handoffs.length){const stack=document.createElement("div");stack.className="handoffs";for(const handoff of handoffs)stack.append(handoffCard(handoff));row.append(stack)}appendActivities(row.querySelector(":scope>.work-notes>.work-notes-body")||row,activities,message.id,session.id);
           if(message.isPreview){const button=document.createElement("button");button.className="control quiet";button.textContent="Load full message and details";button.onclick=async()=>{
             const requestToken=token;button.disabled=true;try{const data=await api(`/api/v1/sessions/${session.id}/messages/${message.id}`);if(token!==requestToken||selected!==session.id)return;
               const full=data.message,parts=[full.text];if(full.thinking)parts.push("Reasoning\\n"+full.thinking);for(const step of full.activities||[])parts.push([step.title,step.input,step.output].filter(Boolean).join("\\n"));readPrompt(parts.join("\\n\\n"));$("promptTitle").textContent="Message details"}

@@ -167,6 +167,7 @@ struct MacHomeChatView: View {
         }
         // Mentions of open tabs open them in the sidebar's Tabs section.
         .cantripMentionLinks(remote: remote, onOpenTab: { navigation.openTab($0) })
+        .environment(\.cantripStepDetails, remote.stepDetailsLoader)
         .contentMargins(.horizontal, sideMargin, for: .scrollContent)
         .textSelection(.enabled)
     }

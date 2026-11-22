@@ -213,4 +213,63 @@ extension SessionTabTests {
         precondition(!written.head.hasPrefix("HTTP/1.1 304") && field(written.head, "ETag") == nil, written.head)
         precondition(HTTPEntityTag.matches("*", "W/\"ab\"") && !HTTPEntityTag.matches(nil, "W/\"ab\""))
     }
+
+    /// `steps=summary`: large tool steps come without their input and output (with `detailBytes`), small
+    /// ones whole, and `…/messages/<id>/steps/<step>` answers one step in full. Clients that don't ask
+    /// keep getting every step whole, and so does the full-message route.
+    @MainActor
+    static func testRemoteStepSummaries() async throws {
+        let manager = SessionManager()
+        let chat = ChatSession()
+        manager.sessions = [chat]
+        defer { chat.cancel() }
+        var reply = ChatMessage(role: .assistant, text: "Checked everything.")
+        reply.activities = (0..<60).map { n in
+            ToolActivity(id: "toolu_big_\(n)", title: "Run check \(n)", toolName: "bash", state: .succeeded,
+                         input: "{\"command\":\"make check-\(n)\"}", output: String(repeating: "line of output \(n)\n", count: 120),
+                         fileChanges: [])
+        } + [ToolActivity(id: "toolu_small", title: "pwd", toolName: "bash", state: .succeeded, input: "pwd",
+                          output: "/tmp", fileChanges: [])]
+        chat.messages = [ChatMessage(role: .user, text: "Run the checks"), reply]
+        let server = RemoteControlServer(manager: manager)
+        let port = Int.random(in: 20_000...45_000)
+        let token = UUID().uuidString
+        server.start(port: port, token: token)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        func get(_ target: String) async throws -> (status: String, object: [String: Any], bytes: Int) {
+            let response = await rawHTTP(port: port, target: target, token: token, acceptGzip: false)
+            let object = (try? JSONSerialization.jsonObject(with: response.body) as? [String: Any]) ?? [:]
+            return (String(response.head.prefix(12)), object, response.body.count)
+        }
+        func steps(_ object: [String: Any]) -> [[String: Any]] {
+            let messages = (object["session"] as? [String: Any])?["messages"] as? [[String: Any]]
+            return messages?.last?["activities"] as? [[String: Any]] ?? []
+        }
+        let base = "/api/v1/sessions/\(chat.id)?history=recent&recentExchanges=3"
+        let full = try await get(base)
+        let summary = try await get(base + "&steps=summary")
+        precondition(steps(full.object).count == 61 && steps(summary.object).count == 61)
+        precondition(steps(full.object).allSatisfy { $0["output"] != nil && $0["detailBytes"] == nil },
+                     "clients that don't ask get every step whole")
+        let big = try requireHome(steps(summary.object).first)
+        precondition(big["input"] == nil && big["output"] == nil, "a large step leaves its details out")
+        precondition(big["title"] as? String == "Run check 0" && big["state"] as? String == "succeeded")
+        precondition((big["detailBytes"] as? Int ?? 0) > 2_000, "and says how much it left out")
+        let small = try requireHome(steps(summary.object).last)
+        precondition(small["output"] as? String == "/tmp" && small["detailBytes"] == nil, "a small step stays whole")
+        precondition(summary.bytes * 8 < full.bytes, "summaries are a fraction of the size: \(summary.bytes) vs \(full.bytes)")
+
+        let messageID = try requireHome(((summary.object["session"] as? [String: Any])?["messages"] as? [[String: Any]])?.last?["id"] as? String)
+        let one = try await get("/api/v1/sessions/\(chat.id)/messages/\(messageID)/steps/toolu_big_0")
+        let step = try requireHome(one.object["step"] as? [String: Any])
+        precondition(one.status.hasPrefix("HTTP/1.1 200") && (step["output"] as? String)?.hasPrefix("line of output 0") == true)
+        precondition(step["input"] as? String == "{\"command\":\"make check-0\"}" && step["detailBytes"] == nil)
+        let missing = try await get("/api/v1/sessions/\(chat.id)/messages/\(messageID)/steps/toolu_gone")
+        precondition(missing.status.hasPrefix("HTTP/1.1 404"))
+        let whole = try await get("/api/v1/sessions/\(chat.id)/messages/\(messageID)?steps=summary")
+        let wholeSteps = (whole.object["message"] as? [String: Any])?["activities"] as? [[String: Any]] ?? []
+        precondition(wholeSteps.count == 61 && wholeSteps.allSatisfy { $0["detailBytes"] == nil },
+                     "the full-message route stays full")
+    }
 }

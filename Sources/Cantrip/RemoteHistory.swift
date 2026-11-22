@@ -3,9 +3,17 @@ import Foundation
 enum RemoteHistory {
     static let pageSize = 30
     static let pageBytes = 192 * 1024
+    /// With step summaries, a step whose input and output together are larger than this sends
+    /// neither: the client loads them (`step`) when the step is opened.
+    static let inlineStepBytes = 1_024
+    static let summaryTitleBytes = 512
 
-    /// `live`: the tab is still writing this reply (see `ChatMessage.workSplit`).
-    static func message(_ message: ChatMessage, live: Bool = false) -> [String: Any] {
+    /// `live`: the tab is still writing this reply (see `ChatMessage.workSplit`). `stepSummaries`:
+    /// the client asked for `steps=summary`, so large steps carry `detailBytes` instead of their
+    /// input and output. A busy tab's last turns hold hundreds of steps (0.5–1 MB of commands and
+    /// their output) that a phone shows only once a step is opened; on a slow link they kept the
+    /// conversation from loading at all.
+    static func message(_ message: ChatMessage, live: Bool = false, stepSummaries: Bool = false) -> [String: Any] {
         var result: [String: Any] = [
             "id": message.id.uuidString,
             // A child tab's card reads as a reply to clients that don't draw it.
@@ -13,16 +21,7 @@ enum RemoteHistory {
             "text": TabMentions.stripConversationLinks(message.text),
             "thinking": message.thinking,
             "activities": message.activities.map { activity -> [String: Any] in
-                var item: [String: Any] = [
-                    "id": activity.id,
-                    "title": activity.title,
-                    "toolName": activity.toolName,
-                    "state": state(activity.state),
-                ]
-                item["input"] = activity.input
-                item["output"] = activity.output
-                if BrowserPreview.isBrowserTool(activity.toolName) { item["browser"] = true }
-                return item
+                stepSummaries ? summary(activity) : step(activity)
             },
         ]
         if let author = message.author { result["author"] = author }
@@ -119,6 +118,42 @@ enum RemoteHistory {
             }
         }
         return item
+    }
+
+    /// A step with its full title, input and output (`GET …/messages/<id>/steps/<step>`).
+    static func step(_ activity: ToolActivity) -> [String: Any] {
+        var item: [String: Any] = [
+            "id": activity.id,
+            "title": activity.title,
+            "toolName": activity.toolName,
+            "state": state(activity.state),
+        ]
+        item["input"] = activity.input
+        item["output"] = activity.output
+        if BrowserPreview.isBrowserTool(activity.toolName) { item["browser"] = true }
+        return item
+    }
+
+    /// A step for a client that loads details on request: small steps whole, large ones with a bounded
+    /// title and `detailBytes` (title, input and output sizes) in place of their input and output.
+    static func summary(_ activity: ToolActivity) -> [String: Any] {
+        let bytes = activity.title.utf8.count + (activity.input?.utf8.count ?? 0) + (activity.output?.utf8.count ?? 0)
+        guard bytes > inlineStepBytes || activity.title.utf8.count > summaryTitleBytes else { return step(activity) }
+        var item = step(activity)
+        item["input"] = nil
+        item["output"] = nil
+        item["title"] = preview(activity.title, bytes: summaryTitleBytes)
+        item["detailBytes"] = bytes
+        return item
+    }
+
+    static func preview(_ text: String, bytes: Int) -> String {
+        guard text.utf8.count > bytes else { return text }
+        var end = text.utf8.index(text.utf8.startIndex, offsetBy: bytes)
+        while end.samePosition(in: text.unicodeScalars) == nil {
+            end = text.utf8.index(before: end)
+        }
+        return String(text[..<end])
     }
 
     private static func state(_ state: ToolActivityState) -> String {
