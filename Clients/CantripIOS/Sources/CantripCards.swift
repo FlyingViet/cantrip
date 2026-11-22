@@ -758,7 +758,8 @@ struct CantripCardPanel: View {
         if updated != nil || attribution != nil {
             divider
             HStack(spacing: 6) {
-                if let updated { Text(updated) }
+                // The time (and "Updating…") stays whole; a long attribution truncates first.
+                if let updated { Text(updated).layoutPriority(1) }
                 Spacer(minLength: 6)
                 if let attribution {
                     if let url = CantripCardStyle.actionURL(card.source?.url) {
