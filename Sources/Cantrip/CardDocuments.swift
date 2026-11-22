@@ -231,6 +231,9 @@ struct CardDocument: Codable, Equatable, Sendable, Identifiable {
     /// What a resolver card was built from, so the Mac can rebuild it while it's on screen
     /// (`LiveCards`). Kept on the Mac: `presented` drops it before a card goes to a client.
     var refresh: Refresh?
+    /// Set on a task's latest-run cards the Mac keeps current, in a tasks list that sends them as
+    /// stored (`liveCards=separate`): `/api/v1/home/live-cards` has their current versions.
+    var live: Bool?
 
     /// A forecast's place: a named place, or the coordinates of the device or Mac it was for.
     struct Refresh: Codable, Equatable, Sendable {

@@ -637,13 +637,23 @@ struct CantripHomeTasksSnapshot: Encodable {
     var supportsViews = true
 
     /// What clients get: run cards as they are now (the latest run's forecast stays live) and the
-    /// workspaces' record cards.
+    /// workspaces' record cards. With `separateLiveCards` the latest run's live cards come as
+    /// stored, marked `live`, so a rebuilt forecast doesn't change the list (`/api/v1/home/live-cards`).
     @MainActor
-    init(tasks: [CantripHomeTask], revision: String, error: String?, now: Date = Date()) {
+    init(tasks: [CantripHomeTask], revision: String, error: String?, separateLiveCards: Bool = false,
+         now: Date = Date()) {
         self.tasks = tasks.map { task in
             var task = task
             for index in task.runs.indices {
                 guard let cards = task.runs[index].cards else { continue }
+                if separateLiveCards {
+                    task.runs[index].cards = cards.map { card in
+                        var shown = card.presented
+                        if index == 0, card.refresh != nil { shown.live = true }
+                        return shown
+                    }
+                    continue
+                }
                 let live = index == 0 && now.timeIntervalSince(task.runs[index].finishedAt) < LiveCards.liveWindow
                 task.runs[index].cards = cards.map { LiveCards.shared.presented($0, live: live, now: now) }
             }
@@ -657,6 +667,37 @@ struct CantripHomeTasksSnapshot: Encodable {
             if !documents.isEmpty { cards[task.id.uuidString] = documents }
         }
         workspaceCards = cards.isEmpty ? nil : cards
+    }
+}
+
+/// `GET /api/v1/home/live-cards`: the current version of each live card on a task's latest run
+/// (a forecast the Mac rebuilds while it's read), for clients that get the tasks list with
+/// `liveCards=separate`. Reading it starts rebuilds for stale ones.
+struct CantripHomeLiveCardsSnapshot: Encodable {
+    struct Entry: Encodable {
+        let taskID: UUID
+        let runID: UUID
+        /// Keeps the stored card's `id`.
+        let card: CardDocument
+    }
+
+    let cards: [Entry]
+    let revision: String
+    /// Seconds after its `source.updatedAt` that a live card is out of date and being rebuilt.
+    var staleAfter = Int(LiveCards.staleAfter)
+    /// Seconds after its run finished that a card stops being kept current.
+    var liveWindow = Int(LiveCards.liveWindow)
+
+    @MainActor
+    init(tasks: [CantripHomeTask], revision: String, now: Date = Date()) {
+        cards = tasks.flatMap { task -> [Entry] in
+            guard let run = task.runs.first,
+                  now.timeIntervalSince(run.finishedAt) < LiveCards.liveWindow else { return [] }
+            return (run.cards ?? []).filter { $0.refresh != nil }.map {
+                Entry(taskID: task.id, runID: run.id, card: LiveCards.shared.presented($0, live: true, now: now))
+            }
+        }
+        self.revision = revision
     }
 }
 
@@ -1051,6 +1092,11 @@ final class CantripHomeStore: ObservableObject {
     @Published private(set) var tasks: [CantripHomeTask] = [] { didSet { revision = UUID() } }
     @Published private(set) var artifacts: [CantripHomeArtifact] = [] { didSet { revision = UUID() } }
     @Published private(set) var revision = UUID()
+    /// Moves when a live run card is rebuilt; `revision` (the tasks list as stored) doesn't.
+    @Published private(set) var liveCardsRevision = UUID()
+    /// The revision of a tasks list with its live cards current in it (older clients' list, and
+    /// `/api/v1/home/live-cards`).
+    var revisionWithLiveCards: String { revision.uuidString + "." + liveCardsRevision.uuidString }
     @Published private(set) var storageError: String?
     /// Newest first; what the Background sheet lists.
     @Published private(set) var backgroundRuns: [CantripHomeBackgroundRun] = []
@@ -2056,10 +2102,11 @@ final class CantripHomeStore: ObservableObject {
         return (recent + latest).filter { $0.refresh != nil }
     }
 
-    /// A live card was rebuilt: clients polling with a revision fetch it.
+    /// A live card was rebuilt: clients polling with a revision fetch it. The stored tasks list
+    /// is unchanged, so its own revision stays.
     private func liveCardsRefreshed() {
         backgroundRevision = UUID()
-        revision = UUID()
+        liveCardsRevision = UUID()
     }
 
     private func persistBackgroundRuns() {

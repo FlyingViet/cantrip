@@ -338,11 +338,15 @@ export function actionSymbol(kind: unknown): string {
   }
 }
 
-/** The footer of a panel card: "Updated 3:39 PM" and the attribution, linked only to a public page. */
-export function cardFooter(source: RemoteCardSource | undefined, locale?: string): { updated: string; attribution: string; url: string | null } | null {
-  if (!source || typeof source !== "object") return null;
+/**
+ * The footer of a panel card: "Updated 3:39 PM" (with " · Updating…" while a live card is out of date) and
+ * the attribution, linked only to a public page.
+ */
+export function cardFooter(source: RemoteCardSource | undefined, locale?: string, updating = false): { updated: string; attribution: string; url: string | null } | null {
+  if (!source || typeof source !== "object") return updating ? { updated: "Updating…", attribution: "", url: null } : null;
   const date = typeof source.updatedAt === "string" ? new Date(source.updatedAt) : null;
-  const updated = date && !Number.isNaN(date.getTime()) ? `Updated ${date.toLocaleTimeString(locale ?? [], { hour: "numeric", minute: "2-digit" })}` : "";
+  const time = date && !Number.isNaN(date.getTime()) ? `Updated ${date.toLocaleTimeString(locale ?? [], { hour: "numeric", minute: "2-digit" })}` : "";
+  const updated = updating ? (time ? `${time} · Updating…` : "Updating…") : time;
   const attribution = cardText(source.attribution) ?? "";
   if (!updated && !attribution) return null;
   return { updated, attribution, url: attribution && isSafePublicUrl(source.url) ? source.url! : null };

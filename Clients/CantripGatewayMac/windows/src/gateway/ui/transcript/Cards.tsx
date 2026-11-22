@@ -69,7 +69,7 @@ interface PartContext {
 
 function PanelCard(props: { card: RemoteCardDocument; parts: CardPart[]; onAction?: CardActionHandler; actionKinds: ReadonlySet<string> }): JSX.Element {
   const { card, parts } = props;
-  const footer = cardFooter(card.source);
+  const footer = cardFooter(card.source, undefined, card.updating === true);
   const context: PartContext = { onAction: props.onAction, actionKinds: props.actionKinds };
   return (
     <section class="card-panel" aria-label={cardLabel(card)}>

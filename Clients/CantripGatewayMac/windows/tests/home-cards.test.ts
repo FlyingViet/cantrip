@@ -7,9 +7,10 @@ import {
   backgroundRunCards, cardDocuments, latestRunCards, MAX_CARDS, parseRecordCards, RECORD_CARDS_MAX_REFRESH_MS,
   RECORD_CARDS_MIN_REFRESH_MS, RECORD_CARDS_REFRESH_MS, RECORD_CARDS_RETRY_MS, RecordCardsPoller, recordCardKinds,
   recordCardsDelay, recordCardsLabel, recordCardsPath, runCards, wantsRecordCards, workspaceCardSpecs, workspaceCards,
-  workspaceCardsView,
+  workspaceCardsView, latestCards,
 } from "../src/gateway/ui/home/homeCardLogic";
-import { cardParts } from "../src/gateway/ui/transcript/cardLogic";
+import { liveCardsNeeded, liveCardsPath, parseLiveCards, tasksPath, updatingKey } from "../src/gateway/state/liveCards";
+import { cardFooter, cardParts } from "../src/gateway/ui/transcript/cardLogic";
 
 // Real host output (the Mac's tasks snapshot, Background list and a record's cards) from a QA Mac.
 const fixture = <T>(name: string): T =>
@@ -264,5 +265,48 @@ describe("the record cards refresh loop", () => {
     expect(errors).toEqual([]);
     expect(poller.scheduled).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("live run cards", () => {
+  // The run finished at 00:00 (Apple epoch); its forecast was fetched at 00:40; it's now 01:00.
+  const RUN_ID = "5E6F7A8B-9C0D-4E1F-8A2B-3C4D5E6F7A8B";
+  const now = (978307200 + 3_600) * 1000;
+  const weather = (title: string, updatedAt: string): RemoteCardDocument =>
+    card("weather-seattle", { type: "weather", live: true, source: { kind: "resolver", updatedAt }, blocks: [{ type: "header", title }] });
+  const latest = run([weather("Seattle, WA", "2001-01-01T00:40:00Z"), card("run-card-1")], { id: RUN_ID, finishedAt: 0 });
+  const answer = parseLiveCards({
+    revision: "list-1.live-1", staleAfter: 900, liveWindow: 86_400,
+    cards: [{ taskID: TASK_ID, runID: RUN_ID, card: weather("Rebuilt", "2001-01-01T00:59:00Z") }, { runID: RUN_ID }, "broken"],
+  })!;
+
+  it("reads the list with liveCards=separate and the live cards with their revision", () => {
+    expect(tasksPath(null)).toBe("/api/v1/home/tasks?liveCards=separate");
+    expect(tasksPath("list 1")).toBe("/api/v1/home/tasks?liveCards=separate&revision=list%201");
+    expect(liveCardsPath(null)).toBe("/api/v1/home/live-cards");
+    expect(liveCardsPath("list-1.live-1")).toBe("/api/v1/home/live-cards?revision=list-1.live-1");
+    expect(parseLiveCards({ unchanged: true, revision: "list-1.live-1" })).toBeNull();
+    expect(answer.cards.size).toBe(1);
+  });
+
+  it("never passes an old forecast off as current", () => {
+    const unread = latestCards(latest, null, now);
+    expect(unread.map((item) => [item.id, item.updating])).toEqual([["weather-seattle", true], ["run-card-1", undefined]]);
+    const current = latestCards(latest, answer, now);
+    expect(current.map((item) => item.blocks[0].title)).toEqual(["Rebuilt", "run-card-1"]);
+    expect(current[0].updating).toBe(false);
+    expect(latestCards(latest, answer, now + 16 * 60_000)[0].updating).toBe(true);
+    expect(latestCards(latest, answer, (978307200 + 25 * 3_600) * 1000)[0].updating).toBe(false);
+    expect(liveCardsNeeded([{ runs: [latest] }], null, now)).toBe(true);
+    expect(liveCardsNeeded([{ runs: [latest] }], answer, (978307200 + 25 * 3_600) * 1000)).toBe(false);
+    expect(liveCardsNeeded([{ runs: [run([card("plain")])] }], null, now)).toBe(false);
+    expect(updatingKey([{ runs: [latest] }], answer, now)).toBe("");
+    expect(updatingKey([{ runs: [latest] }], answer, now + 16 * 60_000)).toBe("weather-seattle");
+  });
+
+  it("says Updating… in the footer", () => {
+    expect(cardFooter({ kind: "resolver", updatedAt: "2001-01-01T00:40:00Z" }, "en-US", true)?.updated).toMatch(/^Updated .+ · Updating…$/);
+    expect(cardFooter(undefined, "en-US", true)?.updated).toBe("Updating…");
+    expect(cardFooter({ kind: "resolver", updatedAt: "2001-01-01T00:40:00Z" }, "en-US")?.updated).not.toContain("Updating");
   });
 });

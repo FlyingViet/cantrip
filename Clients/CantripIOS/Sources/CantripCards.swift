@@ -310,6 +310,9 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
     var source: Source?
     var fallbackText: String?
     var blocks: [Block]
+    /// A task's latest-run card the Mac keeps current, sent as stored: its current version comes from
+    /// `/api/v1/home/live-cards` (`CantripHomeLiveCards`).
+    var live: Bool?
 
     init(id: String, type: String?, style: String? = nil, accessibilityLabel: String?, action: Action? = nil,
          source: Source? = nil, fallbackText: String? = nil, blocks: [Block]) {
@@ -324,7 +327,7 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum Keys: String, CodingKey {
-        case id, type, style, accessibilityLabel, action, source, fallbackText, blocks
+        case id, type, style, accessibilityLabel, action, source, fallbackText, blocks, live
     }
 
     init(from decoder: Decoder) throws {
@@ -343,6 +346,7 @@ struct CantripCard: Codable, Equatable, Identifiable, Sendable {
         fallbackText = text(.fallbackText).map { String($0.prefix(4_000)) }
         let decoded = (try? c.decodeIfPresent([CantripLossy<Block>].self, forKey: .blocks)) ?? nil
         blocks = Array((decoded ?? []).compactMap(\.value).filter { !$0.type.isEmpty }.prefix(Self.maximumBlocks))
+        live = (try? c.decodeIfPresent(Bool.self, forKey: .live)) ?? nil
     }
 
     var isLink: Bool { style == "link" }
@@ -537,9 +541,10 @@ enum CantripCardStyle {
         return CantripLinkPreview.isSafeWebURL(url) ? url : nil
     }
 
-    static func updatedText(_ iso: String?) -> String? {
-        guard let iso, let date = ISO8601DateFormatter().date(from: iso) else { return nil }
-        return "Updated \(date.formatted(date: .omitted, time: .shortened))"
+    static func updatedText(_ iso: String?, updating: Bool = false) -> String? {
+        guard let iso, let date = ISO8601DateFormatter().date(from: iso) else { return updating ? "Updating…" : nil }
+        let updated = "Updated \(date.formatted(date: .omitted, time: .shortened))"
+        return updating ? "\(updated) · Updating…" : updated
     }
 }
 
@@ -567,6 +572,8 @@ struct CantripCardIcon: View {
 struct CantripCardStack: View {
     let cards: [CantripCard]
     @ObservedObject var remote: CantripRemoteModel
+    /// Cards out of date that the Mac is rebuilding: they say so instead of passing as current.
+    var updating: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -576,7 +583,7 @@ struct CantripCardStack: View {
                         CantripLinkPreviewCardView(card: preview, remote: remote)
                     }
                 } else {
-                    CantripCardPanel(card: card, remote: remote)
+                    CantripCardPanel(card: card, remote: remote, updating: updating.contains(card.id))
                 }
             }
         }
@@ -590,6 +597,8 @@ struct CantripCardPanel: View {
     @ObservedObject var remote: CantripRemoteModel
     /// 680 pt under a reply; a view's own screen fills its readable width.
     var maxWidth: CGFloat = 680
+    /// Out of date while the Mac rebuilds it: the footer says "Updating…" after its time.
+    var updating = false
     @Environment(\.openURL) private var openURL
     /// Set only on a view's screen: its `actions` buttons post there. Chat cards draw none.
     @Environment(\.cantripCardActions) private var actions
@@ -744,7 +753,7 @@ struct CantripCardPanel: View {
     }
 
     @ViewBuilder private var footer: some View {
-        let updated = CantripCardStyle.updatedText(card.source?.updatedAt)
+        let updated = CantripCardStyle.updatedText(card.source?.updatedAt, updating: updating)
         let attribution = card.source?.attribution
         if updated != nil || attribution != nil {
             divider

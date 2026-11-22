@@ -876,6 +876,23 @@ they reply `{"unchanged":true,"revision":"…"}` instead of the full list (about
 640 KB for a large tracker workspace), as tab reads already do. A storage
 error always returns the full list with its error.
 
+A task's latest-run forecast stays live (see
+[Cantrip Home](cantrip-home.md)), so the tasks list used to change, with a new
+revision and tag, every time the Mac rebuilt one. Clients that send
+`GET /api/v1/home/tasks?liveCards=separate` (also on `POST …/tasks/<id>/move`)
+get those cards as stored, marked `"live":true`, and a `revision` that moves
+only when the list itself does, so an unchanged list keeps answering
+`unchanged` or 304. They read the current versions from
+`GET /api/v1/home/live-cards[?revision=]`:
+`{"revision","staleAfter":900,"liveWindow":86400,"cards":[{"taskID","runID","card"}]}`,
+where each card keeps its stored `id`. Reading it also starts rebuilds for
+stale cards. A client shows a live card's current version and marks it
+"Updating…" while it's older than `staleAfter` (or not read yet) and its run
+finished less than `liveWindow` seconds ago, so an old forecast never reads as
+current. Clients that don't ask get the current cards in the list and a
+revision that includes the live cards'. Cantrip Agent, Gateway Mac, the web
+page and Gateway for Windows ask.
+
 Successful JSON reads (`GET`) also carry a weak `ETag` of the response body
 (before compression). A client that sends it back as `If-None-Match` gets
 `304 Not Modified` with no body while the response is unchanged. Responses stay `Cache-Control: no-store`, so browsers

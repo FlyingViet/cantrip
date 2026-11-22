@@ -135,7 +135,142 @@ extension SessionTabTests {
         } else {
             precondition(afterRejected["unchanged"] as? Bool == true)
         }
-        precondition(CantripHomeStore.shared.revision.uuidString != shown || CantripHomeStore.shared.tasks == tasksBefore)
+        precondition(CantripHomeStore.shared.revisionWithLiveCards != shown || CantripHomeStore.shared.tasks == tasksBefore)
+    }
+
+    /// `liveCards=separate`: a task's live forecast is served apart from the tasks list. When the card
+    /// goes stale and its rebuild lands, the unchanged list still answers 304 (and "unchanged"), while
+    /// `/api/v1/home/live-cards` has the rebuilt card and keeps refreshing it on its own reads. Clients
+    /// that don't ask still get the current card in the list, under a revision that moves.
+    @MainActor
+    static func testRemoteLiveCardsSeparate() async throws {
+        let manager = SessionManager()
+        let homeWasEnabled = AppSettings.shared.cantripHomeEnabled
+        AppSettings.shared.cantripHomeEnabled = true
+        defer { AppSettings.shared.cantripHomeEnabled = homeWasEnabled }
+        let server = RemoteControlServer(manager: manager)
+        let port = Int.random(in: 20_000...45_000)
+        let token = UUID().uuidString
+        server.start(port: port, token: token)
+        defer { server.stop() }
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        func field(_ head: String, _ name: String) -> String? {
+            head.components(separatedBy: "\r\n").dropFirst()
+                .first { $0.lowercased().hasPrefix(name.lowercased() + ":") }
+                .map { String($0.split(separator: ":", maxSplits: 1)[1]).trimmingCharacters(in: .whitespaces) }
+        }
+        func get(_ target: String, ifNoneMatch: String? = nil) async -> (head: String, body: Data) {
+            await rawHTTP(port: port, target: target, token: token, acceptGzip: true,
+                          headers: ifNoneMatch.map { ["If-None-Match": $0] } ?? [:])
+        }
+        func json(_ response: (head: String, body: Data)) throws -> [String: Any] {
+            precondition(response.head.hasPrefix("HTTP/1.1 200"), response.head)
+            let body = field(response.head, "Content-Encoding") == "gzip"
+                ? try requireHome(HTTPCompression.gunzip(response.body, limit: 32 << 20)) : response.body
+            return try JSONSerialization.jsonObject(with: body) as! [String: Any]
+        }
+        func runCards(_ list: [String: Any], task: UUID) -> [[String: Any]] {
+            let tasks = list["tasks"] as? [[String: Any]] ?? []
+            let runs = tasks.first { $0["id"] as? String == task.uuidString }?["runs"] as? [[String: Any]]
+            return runs?.first?["cards"] as? [[String: Any]] ?? []
+        }
+        func title(_ card: [String: Any]?) -> String? {
+            (card?["blocks"] as? [[String: Any]])?.first?["title"] as? String
+        }
+
+        let store = CantripHomeStore.shared
+        let live = LiveCards.shared
+        let savedRebuild = live.rebuild
+        live.reset()
+        defer {
+            live.rebuild = savedRebuild
+            live.reset()
+        }
+        let proposal = try JSONDecoder().decode(CantripHomeTaskProposal.self, from: Data(#"""
+        {"title":"Live card check","prompt":"Report the forecast.","schedule":{"kind":"weekdays","summary":"Weekdays at 8 AM","timeZone":"America/Los_Angeles","startAt":null,"intervalMinutes":null,"weekdays":[2,3,4,5,6],"hour":8,"minute":0}}
+        """#.utf8))
+        let task = try store.create(proposal)
+        defer { try? store.delete(id: task.id) }
+        let runID = UUID()
+        precondition(store.beginTaskRun(taskID: task.id, runID: runID, at: Date()))
+        // The run's forecast was fetched 16 minutes ago: past `LiveCards.staleAfter`.
+        let fetchedAt = Date().addingTimeInterval(-16 * 60)
+        var header = CardDocument.Block(type: "header")
+        header.title = "Seattle, WA"
+        let stored = CardDocument(id: "weather-seattle", type: "weather",
+                                  source: .init(kind: "resolver", updatedAt: fetchedAt), blocks: [header],
+                                  refresh: .init(kind: "weather", place: "Seattle, WA", unit: "F"))
+        store.complete(runID: runID, status: "succeeded", summary: "Forecast checked.", cards: [stored])
+        live.rebuild = { _ in
+            var card = stored
+            card.source?.updatedAt = Date()
+            card.blocks[0].title = "Rebuilt"
+            return card
+        }
+
+        // Any read of the stale card starts its rebuild, this first one included.
+        let liveRevision = store.liveCardsRevision
+        let legacyBefore = try json(await get("/api/v1/home/tasks"))
+        let legacyRevision = try requireHome(legacyBefore["revision"] as? String)
+        let tasksPath = "/api/v1/home/tasks?liveCards=separate"
+        let first = await get(tasksPath)
+        let list = try json(first)
+        let tag = try requireHome(field(first.head, "ETag"))
+        let revision = try requireHome(list["revision"] as? String)
+        precondition(revision == store.revision.uuidString, "the list's own revision")
+        let listed = runCards(list, task: task.id)
+        precondition(listed.count == 1 && listed[0]["live"] as? Bool == true && listed[0]["refresh"] == nil
+                     && title(listed[0]) == "Seattle, WA", "the stored card, marked live: \(listed)")
+
+        // Reading the stale card rebuilt it: only the live cards moved.
+        try await waitForJournalTest { store.liveCardsRevision != liveRevision }
+        let again = await get(tasksPath, ifNoneMatch: tag)
+        precondition(again.head.hasPrefix("HTTP/1.1 304") && again.body.isEmpty,
+                     "an unchanged list answers 304 after its live card refreshed: \(again.head)")
+        let polled = try json(await get(tasksPath + "&revision=\(revision)"))
+        precondition(polled["unchanged"] as? Bool == true && polled["tasks"] == nil)
+
+        let liveCards = try json(await get("/api/v1/home/live-cards"))
+        let entries = liveCards["cards"] as? [[String: Any]] ?? []
+        let entry = entries.first { $0["taskID"] as? String == task.id.uuidString }
+        let card = entry?["card"] as? [String: Any]
+        precondition(entry?["runID"] as? String == runID.uuidString && card?["id"] as? String == "weather-seattle"
+                     && title(card) == "Rebuilt" && card?["refresh"] == nil, "the rebuilt card: \(entries)")
+        let updatedAt = (card?["source"] as? [String: Any])?["updatedAt"] as? String
+        let rebuiltAt = try requireHome(updatedAt.flatMap { ISO8601DateFormatter().date(from: $0) })
+        precondition(rebuiltAt > fetchedAt)
+        precondition(liveCards["staleAfter"] as? Int == 900 && liveCards["liveWindow"] as? Int == 86_400)
+        let liveCardsRevision = try requireHome(liveCards["revision"] as? String)
+        let liveUnchanged = try json(await get("/api/v1/home/live-cards?revision=\(liveCardsRevision)"))
+        precondition(liveUnchanged["unchanged"] as? Bool == true && liveUnchanged["cards"] == nil)
+
+        // The next stale round is rebuilt from reading the live cards alone; the list stays 304.
+        live.reset()
+        live.rebuild = { _ in
+            var card = stored
+            card.source?.updatedAt = Date()
+            card.blocks[0].title = "Rebuilt again"
+            return card
+        }
+        let staleRevision = store.liveCardsRevision
+        let staleRead = try json(await get("/api/v1/home/live-cards"))
+        let staleCard = (staleRead["cards"] as? [[String: Any]])?.first { $0["taskID"] as? String == task.id.uuidString }
+        precondition(title(staleCard?["card"] as? [String: Any]) == "Seattle, WA", "nothing newer yet")
+        try await waitForJournalTest { store.liveCardsRevision != staleRevision }
+        let staleReadRevision = try requireHome(staleRead["revision"] as? String)
+        let refreshed = try json(await get("/api/v1/home/live-cards?revision=\(staleReadRevision)"))
+        let refreshedCard = (refreshed["cards"] as? [[String: Any]])?.first { $0["taskID"] as? String == task.id.uuidString }
+        precondition(title(refreshedCard?["card"] as? [String: Any]) == "Rebuilt again", "the card keeps refreshing")
+        let stillSame = await get(tasksPath, ifNoneMatch: tag)
+        precondition(stillSame.head.hasPrefix("HTTP/1.1 304"), stillSame.head)
+
+        // Clients that don't ask get the current card in the list, and their revision moved.
+        let legacy = try json(await get("/api/v1/home/tasks?revision=\(legacyRevision)"))
+        precondition(legacy["unchanged"] == nil && legacy["revision"] as? String == store.revisionWithLiveCards)
+        let legacyCards = runCards(legacy, task: task.id)
+        precondition(legacyCards.count == 1 && title(legacyCards[0]) == "Rebuilt again" && legacyCards[0]["live"] == nil,
+                     "older clients keep getting the live card in the list: \(legacyCards)")
     }
 
     /// JSON reads carry a weak ETag of the body; sending it back as If-None-Match answers 304 with no

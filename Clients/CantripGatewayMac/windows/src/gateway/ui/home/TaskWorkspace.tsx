@@ -80,7 +80,7 @@ export function WorkspaceView(props: { taskID: string }): JSX.Element {
 
   const records = filterRecords(workspace.records, query);
   const sections = workspaceSections(workspace, records, searching);
-  const cards = workspaceCardsView(remote.homeTasks.value, task, searching);
+  const cards = workspaceCardsView(remote.homeTasks.value, task, searching, remote.homeLiveCards.value);
   const toggle = (section: WorkspaceSection) => {
     const next = { ...collapsed, [section.id]: !isSectionCollapsed(section, collapsed) };
     setCollapsed(next);

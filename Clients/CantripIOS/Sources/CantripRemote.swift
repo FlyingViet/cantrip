@@ -1204,6 +1204,62 @@ private struct CantripHomeRecordCardsResponse: Decodable {
     var refreshAfter: Int? = nil
 }
 
+private struct CantripHomeLiveCardsResponse: Decodable {
+    struct Entry: Decodable {
+        let runID: UUID
+        let card: CantripCard
+    }
+
+    /// Absent when the Mac answers `unchanged` for the revision the client already has.
+    var cards: [CantripLossy<Entry>]? = nil
+    let revision: String
+    var staleAfter: TimeInterval? = nil
+    var liveWindow: TimeInterval? = nil
+    var unchanged: Bool? = nil
+}
+
+/// The current versions of the latest runs' live cards (a forecast the Mac keeps current), which
+/// the tasks list sends as stored (`liveCards=separate`), so a rebuilt forecast doesn't resend the
+/// list. A live card older than `staleAfter` is being rebuilt and says "Updating…" until it lands.
+struct CantripHomeLiveCards: Equatable {
+    /// By `key(runID:cardID:)`.
+    var cards: [String: CantripCard] = [:]
+    var revision = ""
+    var staleAfter: TimeInterval = 15 * 60
+    /// After this long from its run's end a card isn't kept current, and shows as it last was.
+    var liveWindow: TimeInterval = 24 * 3_600
+
+    static func key(runID: UUID, cardID: String) -> String { "\(runID.uuidString)/\(cardID)" }
+
+    /// A task's latest run's cards as they should show at `now`: each live card's current version
+    /// when fetched, and which are out of date. Before any is fetched, an old one reads as updating.
+    static func shown(_ run: CantripHomeTaskRun, live: CantripHomeLiveCards?,
+                      now: Date = Date()) -> (cards: [CantripCard], updating: Set<String>) {
+        let limits = live ?? CantripHomeLiveCards()
+        let kept = now.timeIntervalSince(run.finishedAt) < limits.liveWindow
+        var updating = Set<String>()
+        let cards = (run.cards ?? []).map { card -> CantripCard in
+            guard card.live == true else { return card }
+            let current = live?.cards[key(runID: run.id, cardID: card.id)] ?? card
+            let updated = current.source?.updatedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
+            if kept, updated.map({ now.timeIntervalSince($0) >= limits.staleAfter }) ?? true {
+                updating.insert(card.id)
+            }
+            return current
+        }
+        return (cards, updating)
+    }
+
+    /// Whether any task's latest run has a card the Mac still keeps current.
+    static func needed(_ tasks: [CantripHomeTask], live: CantripHomeLiveCards?, now: Date = Date()) -> Bool {
+        let window = live?.liveWindow ?? CantripHomeLiveCards().liveWindow
+        return tasks.contains { task in
+            guard let run = task.runs.first, now.timeIntervalSince(run.finishedAt) < window else { return false }
+            return run.cards?.contains { $0.live == true } == true
+        }
+    }
+}
+
 typealias CantripHomeTasksSnapshot = (
     tasks: [CantripHomeTask], revision: String, error: String?, supportsReordering: Bool, supportsViews: Bool
 )
@@ -2269,10 +2325,14 @@ struct CantripRemoteAPI {
         return snapshot
     }
 
+    /// Live run cards come as stored and `homeLiveCards` has their current versions, so a rebuilt
+    /// forecast doesn't change the list. Older Macs ignore it and send them current.
+    static let separateLiveCards = URLQueryItem(name: "liveCards", value: "separate")
+
     /// nil when the Mac's tasks still match `revision`; older hosts always send the full list.
     func homeTasks(ifChangedFrom revision: String?) async throws -> CantripHomeTasksSnapshot? {
         let response: CantripHomeTasksResponse = try await request(
-            path: Self.path("/api/v1/home/tasks", revision: revision),
+            path: Self.path("/api/v1/home/tasks", revision: revision, query: [Self.separateLiveCards]),
             revalidating: revision == nil ? CantripSavedCopy.Part.tasks : nil,
             keepAs: { $0.unchanged == true ? nil : CantripSavedCopy.Part.tasks }
         )
@@ -2401,17 +2461,38 @@ struct CantripRemoteAPI {
                                            message: response.message)
     }
 
-    static func path(_ path: String, revision: String?) -> String {
-        guard let revision else { return path }
+    static func path(_ path: String, revision: String?, query: [URLQueryItem] = []) -> String {
+        let items = query + (revision.map { [URLQueryItem(name: "revision", value: $0)] } ?? [])
+        guard !items.isEmpty else { return path }
         var components = URLComponents()
         components.path = path
-        components.queryItems = [URLQueryItem(name: "revision", value: revision)]
+        components.queryItems = items
         return components.string ?? path
+    }
+
+    /// nil when the live cards still match `revision`.
+    func homeLiveCards(ifChangedFrom revision: String?) async throws -> CantripHomeLiveCards? {
+        let response: CantripHomeLiveCardsResponse = try await request(
+            path: Self.path("/api/v1/home/live-cards", revision: revision)
+        )
+        if response.unchanged == true {
+            guard let revision, response.revision == revision else { throw CantripRemoteError.invalidResponse }
+            return nil
+        }
+        guard let entries = response.cards else { throw CantripRemoteError.invalidResponse }
+        var live = CantripHomeLiveCards(revision: response.revision)
+        if let staleAfter = response.staleAfter, staleAfter > 0 { live.staleAfter = staleAfter }
+        if let liveWindow = response.liveWindow, liveWindow > 0 { live.liveWindow = liveWindow }
+        for entry in entries.compactMap(\.value) {
+            live.cards[CantripHomeLiveCards.key(runID: entry.runID, cardID: entry.card.id)] = entry.card
+        }
+        return live
     }
 
     func moveHomeTask(id: UUID, targetID: UUID, after: Bool) async throws -> CantripHomeTasksSnapshot {
         let response: CantripHomeTasksResponse = try await request(
-            path: "/api/v1/home/tasks/\(id.uuidString)/move", method: "POST",
+            path: Self.path("/api/v1/home/tasks/\(id.uuidString)/move", revision: nil, query: [Self.separateLiveCards]),
+            method: "POST",
             body: JSONSerialization.data(withJSONObject: [
                 "targetID": targetID.uuidString, "placement": after ? "after" : "before",
             ])
@@ -3519,6 +3600,8 @@ final class CantripRemoteModel: ObservableObject {
     /// Cantrip Home's session: the open one while Home is selected, else its listed summary.
     var currentHomeSummary: CantripRemoteSession? { isHomeSelected ? selectedSession : homeSummary }
     @Published private(set) var homeTasks: [CantripHomeTask] = []
+    /// Current versions of the latest runs' live cards; nil until fetched (they show as updating).
+    @Published private(set) var homeLiveCards: CantripHomeLiveCards?
     @Published private(set) var homeArtifacts: [CantripHomeArtifact] = []
     /// The Mac streams original artifact files and folder zips (Save / Share).
     @Published private(set) var homeArtifactsSupportDownloads = false
@@ -3701,6 +3784,7 @@ final class CantripRemoteModel: ObservableObject {
     private var homeArtifactsFetched: (revision: String, artifacts: [CantripHomeArtifact])?
     private var homeViewsFetched: (revision: String, views: [CantripHomeViewSummary])?
     private var homeViewsRefreshInFlight = false
+    private var homeLiveCardsRefreshInFlight = false
     private var homeViewThumbnailsFetchedAt: [String: Date] = [:]
     private var homeViewThumbnailsInFlight = false
     private var homeUpcomingFetched: (revision: String, items: [CantripHomeUpcomingItem])?
@@ -4161,6 +4245,7 @@ final class CantripRemoteModel: ObservableObject {
             homeArtifacts = []
             homeArtifactsSupportDownloads = false
             homeTasksFetched = nil
+            homeLiveCards = nil
             homeArtifactsFetched = nil
             homeViews = []
             homeViewsSupported = false
@@ -4242,6 +4327,7 @@ final class CantripRemoteModel: ObservableObject {
             homeArtifacts = []
             homeArtifactsSupportDownloads = false
             homeTasksFetched = nil
+            homeLiveCards = nil
             homeArtifactsFetched = nil
             homeViews = []
             homeViewsSupported = false
@@ -4636,12 +4722,15 @@ final class CantripRemoteModel: ObservableObject {
         let orderRevision = homeTaskOrderRevision
         let tasksRevision = homeTasksFetched.flatMap { $0.tasks == homeTasks ? $0.revision : nil }
         let artifactsRevision = homeArtifactsFetched.flatMap { $0.artifacts == homeArtifacts ? $0.revision : nil }
-        // Views and Upcoming, when this Mac is known to serve them, load alongside the lists.
+        // Views, Upcoming and live run cards, when this Mac is known to serve them, load alongside the lists.
         let views = homeViewsSupported ? Task { await self.refreshHomeViews() } : nil
         let upcoming = homeUpcomingViewers > 0 ? Task { await self.refreshHomeUpcoming() } : nil
+        let liveCards = CantripHomeLiveCards.needed(homeTasks, live: homeLiveCards)
+            ? Task { await self.refreshHomeLiveCards() } : nil
         defer {
             if let views, Task.isCancelled { views.cancel() }
             if let upcoming, Task.isCancelled { upcoming.cancel() }
+            if let liveCards, Task.isCancelled { liveCards.cancel() }
         }
         do {
             async let tasks = performHistoryRead { try await $0.homeTasks(ifChangedFrom: tasksRevision) }
@@ -4682,6 +4771,11 @@ final class CantripRemoteModel: ObservableObject {
             }
             if let views { await views.value } else if homeViewsSupported { await refreshHomeViews() }
             if let upcoming { await upcoming.value } else if homeUpcomingViewers > 0 { await refreshHomeUpcoming() }
+            if let liveCards {
+                await liveCards.value
+            } else if CantripHomeLiveCards.needed(homeTasks, live: homeLiveCards) {
+                await refreshHomeLiveCards()
+            }
             if (selectedSession?.backgroundInputCount ?? 0) > 0
                 || homeBackground?.runs.contains(where: \.needsInput) == true {
                 await refreshHomeBackground()
@@ -4692,6 +4786,22 @@ final class CantripRemoteModel: ObservableObject {
             guard isHomeSelected else { return }
             let message = error.localizedDescription
             if homeDataError != message { homeDataError = message }
+        }
+    }
+
+    /// The latest runs' live cards, sent with the revision last fetched. Reading them also has the
+    /// Mac rebuild stale ones; a failed read leaves them showing as updating.
+    func refreshHomeLiveCards() async {
+        guard isHomeSelected, isConfigured, !homeLiveCardsRefreshInFlight else { return }
+        homeLiveCardsRefreshInFlight = true
+        defer { homeLiveCardsRefreshInFlight = false }
+        let revision = homeLiveCards?.revision
+        do {
+            let snapshot = try await performHistoryRead { try await $0.homeLiveCards(ifChangedFrom: revision) }
+            guard isHomeSelected, let snapshot, homeLiveCards != snapshot else { return }
+            homeLiveCards = snapshot
+        } catch {
+            return
         }
     }
 

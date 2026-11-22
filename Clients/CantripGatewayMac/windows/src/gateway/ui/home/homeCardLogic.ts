@@ -4,6 +4,7 @@
 import type {
   HomeBackgroundRun, HomeTask, HomeTaskCardSpec, HomeTaskRun, HomeTasksSnapshot, HomeTaskWorkspace, RemoteCardDocument,
 } from "../../api/types";
+import { type HomeLiveCards, shownRunCards } from "../../state/liveCards";
 
 /** More than the Mac sends (4 per run, 4 per workspace), so a broken host can't flood a list. */
 export const MAX_CARDS = 8;
@@ -41,10 +42,15 @@ export function backgroundRunCards(run: Pick<HomeBackgroundRun, "status" | "card
   return isObject(run) && run.status !== "running" ? cardDocuments(run.cards) : [];
 }
 
+/** A task's latest run's cards, live ones current (and `updating` while out of date). */
+export function latestCards(run: HomeTaskRun | null | undefined, live: HomeLiveCards | null = null, now = Date.now()): RemoteCardDocument[] {
+  return isObject(run) ? cardDocuments(shownRunCards(run, live, now)) : [];
+}
+
 /** The task's latest run when it has cards. */
-export function latestRunCards(task: Pick<HomeTask, "runs">): { run: HomeTaskRun; cards: RemoteCardDocument[] } | null {
+export function latestRunCards(task: Pick<HomeTask, "runs">, live: HomeLiveCards | null = null, now = Date.now()): { run: HomeTaskRun; cards: RemoteCardDocument[] } | null {
   const run = Array.isArray(task.runs) ? task.runs[0] : undefined;
-  const cards = runCards(run);
+  const cards = latestCards(run, live, now);
   return run && cards.length ? { run, cards } : null;
 }
 
@@ -68,10 +74,11 @@ export function workspaceCardsView(
   snapshot: Pick<HomeTasksSnapshot, "workspaceCards"> | null | undefined,
   task: Pick<HomeTask, "id" | "runs">,
   searching: boolean,
+  live: HomeLiveCards | null = null,
 ): WorkspaceCardsView | null {
   if (searching) return null;
   const workspace = workspaceCards(snapshot, task.id);
-  const latest = latestRunCards(task);
+  const latest = latestRunCards(task, live);
   return workspace.length || latest ? { workspace, latest } : null;
 }
 

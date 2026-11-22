@@ -2530,7 +2530,10 @@ final class RemoteControlServer {
                     return
                 }
                 LiveCards.shared.check(store.liveRunCards())
-                let revision = store.revision.uuidString
+                // `liveCards=separate`: live run cards come as stored and `live-cards` has their
+                // current versions, so a rebuilt forecast leaves this list (and its tag) unchanged.
+                let separate = request.query("liveCards") == "separate"
+                let revision = separate ? store.revision.uuidString : store.revisionWithLiveCards
                 // Clients clear the warning on "unchanged", so send it in full while one stands.
                 let warning = store.storageError ?? Consolidator.healthWarning
                 if warning == nil, request.query("revision") == revision {
@@ -2539,7 +2542,7 @@ final class RemoteControlServer {
                 }
                 let value = CantripHomeTasksSnapshot(
                     tasks: store.tasks, revision: revision,
-                    error: warning
+                    error: warning, separateLiveCards: separate
                 )
                 sendEncoded(on: connection) { try Self.stableEncoder.encode(value) }
                 return
@@ -2590,9 +2593,11 @@ final class RemoteControlServer {
                         )
                     }
                     try store.move(id: id, relativeTo: targetID, after: placement == "after")
+                    let separate = request.query("liveCards") == "separate"
                     let value = CantripHomeTasksSnapshot(
-                        tasks: store.tasks, revision: store.revision.uuidString,
-                        error: store.storageError
+                        tasks: store.tasks,
+                        revision: separate ? store.revision.uuidString : store.revisionWithLiveCards,
+                        error: store.storageError, separateLiveCards: separate
                     )
                     sendEncoded(on: connection) { try Self.stableEncoder.encode(value) }
                     return
@@ -2658,6 +2663,24 @@ final class RemoteControlServer {
                 Log.write("home: task update failed: \(error.localizedDescription)")
                 sendError(500, "Could not save the task on the Mac.", on: connection)
             }
+        case "live-cards":
+            // GET /api/v1/home/live-cards[?revision=]: current versions of the latest runs' live cards.
+            guard parts.count == 4 else {
+                sendError(404, "not found", on: connection)
+                return
+            }
+            guard request.method == "GET" else {
+                sendError(405, "method not allowed", on: connection)
+                return
+            }
+            LiveCards.shared.check(store.liveRunCards())
+            let revision = store.revisionWithLiveCards
+            if request.query("revision") == revision {
+                sendJSON(["unchanged": true, "revision": revision], on: connection)
+                return
+            }
+            let value = CantripHomeLiveCardsSnapshot(tasks: store.tasks, revision: revision)
+            sendEncoded(on: connection) { try Self.stableEncoder.encode(value) }
         case "artifacts":
             if parts.count == 4 {
                 guard request.method == "GET" else {
@@ -5646,9 +5669,9 @@ private extension RemoteControlServer {
         if(block.type==="map"){const next=blocks[i+1],legend=next?.type==="list"&&next.mapLinked?next:null;if(legend)i++;const node=mapBlockNode(block,legend,key);if(node){wrap.append(node);wrap.classList.add("has-map");drew++}continue}
         const node=cardBlockNode(block,`${key}:${i}`,ctx);if(node){wrap.append(node);drew++}}
       if(!drew)wrap.append(cdEl("div","cd-fallback",card.fallbackText||""));
-      const source=card.source||{},updated=source.updatedAt?new Date(source.updatedAt):null;
-      if(source.attribution||(updated&&!Number.isNaN(updated.getTime()))){const foot=cdEl("div","cd-foot");
-        if(updated&&!Number.isNaN(updated.getTime()))foot.append(cdEl("span","",`Updated ${updated.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}`));
+      const source=card.source||{},updated=source.updatedAt?new Date(source.updatedAt):null,dated=updated&&!Number.isNaN(updated.getTime());
+      if(source.attribution||dated||card.updating){const foot=cdEl("div","cd-foot");
+        if(dated||card.updating)foot.append(cdEl("span","",[dated?`Updated ${updated.toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}`:"",card.updating?"Updating…":""].filter(Boolean).join(" · ")));
         if(source.attribution){const url=cardURL(source.url);const attr=cdEl(url?"a":"span","cd-attr",source.attribution);if(url){attr.href=url;attr.target="_blank";attr.rel="noopener noreferrer"}foot.append(attr)}
         wrap.append(foot)}
       return wrap}
@@ -6316,13 +6339,30 @@ private extension RemoteControlServer {
       $("tasksSearch").value="";setText($("tasksError"),"");renderTasks();$("tasksPanel").showModal();loadTasks()}
     function closeTasks(){if(tasksState){clearInterval(tasksState.timer);clearTimeout(tasksState.upcomingNoteTimer)}tasksState=null}
     async function loadTasks(){const state=tasksState;if(!state||state.loading)return;state.loading=true;loadUpcoming();
-      try{const data=await api("/api/v1/home/tasks"+(state.loaded&&state.revision?`?revision=${encodeURIComponent(state.revision)}`:""));if(state!==tasksState)return;state.failed=false;
-        if(data.unchanged){setText($("tasksError"),"");if(state.viewsSupported)loadViews();return}
+      // Live run cards (forecasts the Mac keeps current) come as stored; loadLiveCards has their current versions.
+      try{const data=await api("/api/v1/home/tasks?liveCards=separate"+(state.loaded&&state.revision?`&revision=${encodeURIComponent(state.revision)}`:""));if(state!==tasksState)return;state.failed=false;
+        if(data.unchanged){setText($("tasksError"),"");if(state.viewsSupported)loadViews();loadLiveCards(state);return}
         setText($("tasksError"),data.error||"");if(data.supportsViews===true)state.viewsSupported=true;
         if(!state.loaded||data.revision!==state.revision){state.revision=data.revision;state.tasks=data.tasks||[];state.workspaceCards=data.workspaceCards||{};state.loaded=true;renderTasks()}
-        if(state.viewsSupported)loadViews()}
+        if(state.viewsSupported)loadViews();loadLiveCards(state)}
       catch(error){if(state===tasksState){setText($("tasksError"),`Couldn't load tasks: ${error.message}`);if(!state.loaded){state.loaded=true;state.failed=true;renderTasks()}}}
       finally{state.loading=false}}
+    function liveCardsNeeded(state){const window=(state.liveCards?.liveWindow||86400)*1000;
+      return state.tasks.some(task=>{const run=task.runs?.[0];return run&&Date.now()-(run.finishedAt+appleEpochSeconds)*1000<window&&Array.isArray(run.cards)&&run.cards.some(card=>card?.live===true)})}
+    // A latest run's cards: each live one as the Mac last rebuilt it, marked updating while it's out of date
+    // (or not fetched yet) so an old forecast never reads as current.
+    function shownRunCards(run){const cards=Array.isArray(run?.cards)?run.cards:[],live=tasksState?.liveCards,now=Date.now();
+      const kept=now-(run.finishedAt+appleEpochSeconds)*1000<(live?.liveWindow||86400)*1000,staleAfter=(live?.staleAfter||900)*1000;
+      return cards.map(card=>{if(card?.live!==true)return card;const current=live?.cards.get(`${run.id}/${card.id}`)||card,updated=new Date(current.source?.updatedAt||"").getTime();
+        return {...current,updating:kept&&(Number.isNaN(updated)||now-updated>=staleAfter)}})}
+    function liveCardsShown(state){return state.tasks.map(task=>shownRunCards(task.runs?.[0]).filter(card=>card?.updating).map(card=>card.id).join(",")).join("|")}
+    async function loadLiveCards(state){if(state.liveLoading||!liveCardsNeeded(state))return;state.liveLoading=true;
+      try{const live=state.liveCards,data=await api("/api/v1/home/live-cards"+(live?.revision?`?revision=${encodeURIComponent(live.revision)}`:""));if(state!==tasksState)return;
+        if(!data.unchanged&&Array.isArray(data.cards)){const cards=new Map();for(const entry of data.cards)if(entry?.runID&&entry.card?.id)cards.set(`${entry.runID}/${entry.card.id}`,entry.card);
+          state.liveCards={revision:data.revision,staleAfter:data.staleAfter||900,liveWindow:data.liveWindow||86400,cards};state.liveShownKey=liveCardsShown(state);renderTasks();return}
+        // Unchanged, but a card may have gone out of date since it was drawn.
+        const shown=liveCardsShown(state);if(shown!==state.liveShownKey){state.liveShownKey=shown;renderTasks()}}
+      catch{}finally{state.liveLoading=false}}
     // Polling re-renders in place: scroll, open records, collapsed sections and the focused row survive.
     function renderTasks(){const state=tasksState;if(!state)return;const panel=$("tasksPanel"),body=$("tasksBody");
       if(state.viewID){const summary=state.view?.view||state.views.find(item=>item.id===state.viewID),focused=document.activeElement?.closest?.("#tasksBody [data-focus-key]")?.dataset.focusKey,scroll=panel.scrollTop;
@@ -6528,8 +6568,8 @@ private extension RemoteControlServer {
       if(task.enabled&&task.nextRunAt!==null&&task.nextRunAt!==undefined)fact("Next run",homeTime(task.nextRunAt));
       view.append(facts,homeNode("h3","","Recent runs"));
       if(!task.runs?.length)view.append(homeNode("p","muted","No runs yet."));
-      else{const runs=homeNode("ul","run-list");for(const run of task.runs.slice(0,5)){const item=homeNode("li");item.append(homeNode("span","task-meta",`${homeTime(run.finishedAt)} · ${run.status}${run.model?` · ${run.model}`:""}`),homeNode("span","run-summary",run.summary||"No summary"));
-        if(Array.isArray(run.cards)&&run.cards.length)appendCards(item,run.cards,`run:${run.id}`);runs.append(item)}view.append(runs)}
+      else{const runs=homeNode("ul","run-list");for(const [index,run] of task.runs.slice(0,5).entries()){const item=homeNode("li");item.append(homeNode("span","task-meta",`${homeTime(run.finishedAt)} · ${run.status}${run.model?` · ${run.model}`:""}`),homeNode("span","run-summary",run.summary||"No summary"));
+        if(Array.isArray(run.cards)&&run.cards.length)appendCards(item,index===0?shownRunCards(run):run.cards,`run:${run.id}`);runs.append(item)}view.append(runs)}
       const prompt=homeNode("details","disclosure");prompt.append(homeNode("summary","","Instructions"),homeNode("p","run-summary",task.prompt));view.append(prompt);
       return view}
     function workspaceView(task){const workspace=task.workspace,query=$("tasksSearch").value.trim().toLowerCase(),searching=Boolean(query);
@@ -6540,7 +6580,7 @@ private extension RemoteControlServer {
       // Cards built from the records (bills due this week), and the latest run's cards, above the list.
       if(!searching){const cards=tasksState?.workspaceCards?.[task.id]||[],run=task.runs?.[0];
         if(cards.length){const box=homeNode("div","workspace-cards");appendCards(box,cards,`workspace:${task.id}`);view.append(box)}
-        if(Array.isArray(run?.cards)&&run.cards.length){const box=homeNode("section","workspace-run");box.append(homeNode("span","task-meta",`Latest run · ${homeTime(run.finishedAt)}`),homeNode("span","run-summary",run.summary||""));appendCards(box,run.cards,`run:${run.id}`);view.append(box)}}
+        if(Array.isArray(run?.cards)&&run.cards.length){const box=homeNode("section","workspace-run");box.append(homeNode("span","task-meta",`Latest run · ${homeTime(run.finishedAt)}`),homeNode("span","run-summary",run.summary||""));appendCards(box,shownRunCards(run),`run:${run.id}`);view.append(box)}}
       if(searching&&!records.length)view.append(homeNode("p","muted tasks-empty",`No ${homeNoun(workspace,2)} match.`));
       if(!sections){if(records.length)view.append(recordList(task,records));return view}
       const remembered=loadWorkspaceGroups(task.id);

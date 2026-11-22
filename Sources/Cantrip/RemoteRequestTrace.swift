@@ -59,6 +59,7 @@ final class RemoteRequestTrace {
         case "/api/v1/home/tasks": route = "home_tasks"
         case "/api/v1/home/artifacts": route = "home_artifacts"
         case "/api/v1/home/views": route = "home_views"
+        case "/api/v1/home/live-cards": route = "home_live_cards"
         case "/api/v1/mascot": route = "mascot"
         default:
             route = request.path.hasPrefix("/api/v1/sessions/") ? "session"

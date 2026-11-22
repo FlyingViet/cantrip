@@ -98,7 +98,7 @@ export async function moveTask(id: string, targetID: string, after: boolean): Pr
   const shown = { ...snapshot, tasks: preview };
   remote.homeTasks.value = shown;
   try {
-    const result = await remote.mutate(() => api<HomeTasksSnapshot>(taskPath(id, "/move"), {
+    const result = await remote.mutate(() => api<HomeTasksSnapshot>(`${taskPath(id, "/move")}?liveCards=separate`, {
       method: "POST", body: { targetID, placement: after ? "after" : "before" },
     }));
     remote.homeTasks.value = result;

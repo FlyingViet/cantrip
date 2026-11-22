@@ -347,7 +347,10 @@ never fails or holds up a run: a card that can't resolve in time is left out.
 Runs get no link previews or automatic tool cards. A forecast on a recent
 result (the last day) stays live: when a client reads one older than 15
 minutes, the Mac rebuilds it in the background (at most every 10 minutes per
-place) and the card's Updated time moves. Notifications and older clients keep
+place) and the card's Updated time moves. Clients read live cards apart from
+the tasks list, so a rebuilt forecast doesn't resend the list, and a forecast
+past 15 minutes says "Updating…" until the new one arrives
+([Remote Control](remote-control.md)). Notifications and older clients keep
 the plain-text summary. A run whose reply ends with a section that begins on its own line
 with `Summary:` uses that section (from the last such label, up to 1,200
 characters, line breaks kept) as its summary, and its first two lines as the

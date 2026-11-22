@@ -19,6 +19,7 @@ import { dropDeletedMessages, resetThreads } from "./threads";
 import { messageLocation } from "./location";
 import { parseUpcoming, upcomingPath } from "./upcoming";
 import { parseViews, supportsViews, viewsPath } from "./views";
+import { type HomeLiveCards, liveCardsNeeded, liveCardsPath, parseLiveCards, tasksPath, updatingKey } from "./liveCards";
 import { privateMascotLoader } from "./privateMascot";
 
 export type Detail = PagedRemoteSessionDetail;
@@ -48,6 +49,8 @@ export const isRefreshing = signal(false);
 export const pendingWrites = signal(0);
 export const stoppingID = signal<string | null>(null);
 export const homeTasks = signal<HomeTasksSnapshot | null>(null);
+/** Current versions of the latest runs' live cards (state/liveCards); null until read. */
+export const homeLiveCards = signal<HomeLiveCards | null>(null);
 export const homeTasksError = signal<string | null>(null);
 export const homeArtifacts = signal<HomeArtifactsSnapshot | null>(null);
 /** Home's views, pinned first (docs/views.md); null until loaded or while the Mac doesn't serve them (`supportsViews`). */
@@ -398,15 +401,17 @@ const UPCOMING_RETRY_MS = 5 * 60_000;
 let upcomingGeneration = 0;
 
 export async function refreshHomeData(): Promise<void> {
-  await Promise.all([refreshTasks().then(refreshViews), refreshArtifacts(), upcomingWanted ? refreshUpcoming() : null]);
+  await Promise.all([
+    refreshTasks().then(() => Promise.all([refreshViews(), refreshLiveCards()])), refreshArtifacts(),
+    upcomingWanted ? refreshUpcoming() : null,
+  ]);
   const home = details.value.get(homeID.value ?? "") ?? homeSummary.value;
   if ((home?.backgroundInputCount ?? 0) > 0 || homeBackground.value?.runs.some(needsInput)) await refreshBackground();
 }
 
 export async function refreshTasks(): Promise<void> {
   try {
-    const query = tasksRevision && homeTasks.value ? `?revision=${encodeURIComponent(tasksRevision)}` : "";
-    const data = await api<HomeTasksResponse>(`/api/v1/home/tasks${query}`);
+    const data = await api<HomeTasksResponse>(tasksPath(homeTasks.value ? tasksRevision : null));
     homeTasksError.value = null;
     if ("tasks" in data) {
       tasksRevision = data.revision;
@@ -414,6 +419,24 @@ export async function refreshTasks(): Promise<void> {
     }
   } catch (error) {
     homeTasksError.value = `Couldn't load tasks: ${(error as Error).message}`;
+  }
+}
+
+let liveUpdatingKey = "";
+
+/** The latest runs' live cards, with their revision; only while one has a card the Mac keeps current. */
+export async function refreshLiveCards(): Promise<void> {
+  const tasks = homeTasks.value?.tasks;
+  if (!liveCardsNeeded(tasks, homeLiveCards.value)) return;
+  try {
+    const live = parseLiveCards(await api<unknown>(liveCardsPath(homeLiveCards.value?.revision)));
+    if (live) homeLiveCards.value = live;
+    // Unchanged, but a card may have gone out of date since it was drawn.
+    const key = updatingKey(homeTasks.value?.tasks, homeLiveCards.value);
+    if (!live && key !== liveUpdatingKey && homeLiveCards.value) homeLiveCards.value = { ...homeLiveCards.value };
+    liveUpdatingKey = key;
+  } catch {
+    // The cards keep showing as they were, marked updating once out of date.
   }
 }
 
@@ -769,6 +792,7 @@ export function reset(): void {
     details.value = new Map();
     selectedID.value = null;
     homeTasks.value = null;
+    homeLiveCards.value = null;
     homeArtifacts.value = null;
     homeViews.value = null;
     homeViewsError.value = null;

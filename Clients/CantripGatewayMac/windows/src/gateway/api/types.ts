@@ -759,6 +759,10 @@ export interface RemoteCardDocument {
   /** The card as plain text, for a client that can't draw it. */
   fallbackText?: string;
   blocks: RemoteCardBlock[];
+  /** A task's latest-run card the Mac keeps current, sent as stored (`liveCards=separate`); see state/liveCards. */
+  live?: boolean;
+  /** Client-only: a live card past `staleAfter` while the Mac rebuilds it; its footer says "Updating…". */
+  updating?: boolean;
 }
 
 /** One transcript message (`RemoteHistory.message` + `messageSnapshot`). */

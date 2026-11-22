@@ -773,7 +773,7 @@ private struct CantripHomeTaskEditView: View {
                         }
                         CantripHomeRunSummaryText(summary: run.summary)
                         if let cards = run.cards, !cards.isEmpty {
-                            CantripHomeCardsRow(cards: cards, remote: remote)
+                            CantripHomeRunCardsRow(run: run, remote: remote)
                         }
                     }
                 }
@@ -890,7 +890,7 @@ struct CantripHomeTaskWorkspaceView: View {
                                         .font(.callout)
                                 }
                                 .listRowSeparator(.hidden)
-                                CantripHomeCardsRow(cards: cards, remote: remote)
+                                CantripHomeRunCardsRow(run: run, remote: remote)
                             }
                         }
                         if let sections = CantripHomeWorkspaceGrouping.sections(
@@ -1766,10 +1766,36 @@ struct CantripHomeCardsRow: View {
 
     var body: some View {
         CantripCardStack(cards: cards, remote: remote)
+            .modifier(CantripHomeCardsRowStyle())
+    }
+}
+
+struct CantripHomeCardsRowStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
             .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
             .accessibilityIdentifier("home.cards")
+    }
+}
+
+/// A task's latest run's cards: a live one (a forecast the Mac keeps current) shows its current
+/// version and says it's updating while it's out of date, rechecked each minute.
+struct CantripHomeRunCardsRow: View {
+    let run: CantripHomeTaskRun
+    @ObservedObject var remote: CantripRemoteModel
+
+    var body: some View {
+        if run.cards?.contains(where: { $0.live == true }) == true {
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                let shown = CantripHomeLiveCards.shown(run, live: remote.homeLiveCards, now: context.date)
+                CantripCardStack(cards: shown.cards, remote: remote, updating: shown.updating)
+            }
+            .modifier(CantripHomeCardsRowStyle())
+        } else {
+            CantripHomeCardsRow(cards: run.cards ?? [], remote: remote)
+        }
     }
 }
 
