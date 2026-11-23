@@ -3578,7 +3578,7 @@ final class ChatSession: ObservableObject {
                                queued: queued.map(\.text))
     }
 
-    private func completedConversationTurns(upTo end: Int? = nil) -> [ConversationTurn] {
+    func completedConversationTurns(upTo end: Int? = nil) -> [ConversationTurn] {
         var turns: [ConversationTurn] = []
         var pendingUser: String?
         var previous: ChatMessage?
@@ -5023,8 +5023,11 @@ final class ChatSession: ObservableObject {
 
     static let freshStartCaption = "Started fresh — earlier messages aren't sent to the model"
 
-    /// Cantrip Home keeps its own continuity; every other tab can start fresh.
-    var supportsStartFresh: Bool { !SessionManager.isCantripHomeReserved(self) && !isMuseTab }
+    /// Every tab and Cantrip Home's chat can start fresh; Home's background runs and the Muse tab
+    /// (whose history comes from Muse) can't. Home keeps its memory, tasks and instructions.
+    var supportsStartFresh: Bool {
+        (isCantripHome || !SessionManager.isCantripHomeReserved(self)) && !isMuseTab
+    }
 
     /// Commands the Copilot Remote server announced for this tab's ACP session.
     var copilotRemoteCommands: (commands: [[String: Any]], endpoint: String)? {
@@ -5083,7 +5086,7 @@ final class ChatSession: ObservableObject {
 
     var startFreshUnavailableReason: String? {
         guard supportsStartFresh else {
-            return "Cantrip Home keeps its own conversation. Start fresh in a project tab instead."
+            return isMuseTab ? Self.museTabPermanence : "Background runs can't start fresh."
         }
         if isStreaming || !queued.isEmpty || shell.isRunning || autoResumePending {
             return "Wait for this tab and its queued work to finish before starting fresh."

@@ -164,6 +164,21 @@ final class CantripStartFreshTests: XCTestCase {
         XCTAssertEqual(legacy.session.transcript.count, 4)
     }
 
+    /// Home's chat offers Start Fresh when the Mac does; Macs before that say false (or nothing) and
+    /// the menus keep it hidden there, while an older Mac's tab shows it disabled with an update note.
+    func testHomeOffersStartFreshWhereTheMacDoes() throws {
+        let decoder = JSONDecoder()
+        func support(_ value: Bool?, home: Bool) throws -> Bool? {
+            CantripStartFresh.support(for: try decoder.decode(SessionResponse.self,
+                                                              from: try snapshot(support: value, home: home)).session)
+        }
+        XCTAssertEqual(try support(true, home: true), true, "a current Mac's Home starts fresh")
+        XCTAssertEqual(try support(false, home: true), false)
+        XCTAssertEqual(try support(nil, home: true), false, "Home on a Mac before Start Fresh hides it")
+        XCTAssertNil(try support(nil, home: false), "an older Mac's tab shows it disabled")
+        XCTAssertEqual(try support(true, home: false), true)
+    }
+
     func testFreshStartMessageDecodesAsANoticeNotAReply() throws {
         let data = try JSONSerialization.data(withJSONObject: message("fresh-1", "freshStart", CantripStartFresh.defaultCaption))
         let divider = try JSONDecoder().decode(CantripRemoteMessage.self, from: data)

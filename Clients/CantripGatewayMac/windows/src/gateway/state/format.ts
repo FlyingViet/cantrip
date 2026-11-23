@@ -81,10 +81,13 @@ export function tabState(session: RemoteSessionSummary | null, connection: "conn
   return "Idle";
 }
 
-/** undefined: older Mac (disabled with a note); false: hidden; true: available. */
+/**
+ * undefined: older Mac (disabled with a note); false: hidden (Home's background runs, the Muse tab, and Home's
+ * chat on Macs before it could start fresh); true: available.
+ */
 export function startFreshSupport(session: RemoteSessionSummary | null | undefined): boolean | undefined {
   if (!session) return false;
-  return session.isCantripHome ? false : session.supportsStartFresh;
+  return session.isCantripHome && session.supportsStartFresh === undefined ? false : session.supportsStartFresh;
 }
 
 export function isBusy(session: RemoteSessionSummary | null | undefined): boolean {

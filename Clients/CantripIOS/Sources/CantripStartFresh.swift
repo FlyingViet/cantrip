@@ -1,16 +1,18 @@
 import SwiftUI
 
-/// Start Fresh: a tab's next prompt starts a new model session. Its title, folder, model
-/// settings, lock and visible history stay; nothing from before is sent to the model.
+/// Start Fresh: a tab's (or Home chat's) next prompt starts a new model session. Its title, folder,
+/// model settings, lock and visible history stay; nothing from before is sent to the model. Home
+/// keeps its memory, tasks and instructions.
 enum CantripStartFresh {
     static let title = "Start Fresh"
     static let systemImage = "arrow.counterclockwise.circle"
     static let defaultCaption = "Started fresh — earlier messages aren't sent to the model"
     static let hint = "Keeps this tab's messages, but the next prompt won't send them to the model."
 
-    /// Nil from Macs before Start Fresh; false where it doesn't apply (Cantrip Home).
+    /// Nil from Macs before Start Fresh; false where it doesn't apply (Home's background runs, the
+    /// Muse tab, and Home's chat on Macs before it could start fresh).
     static func support(for session: CantripRemoteSession) -> Bool? {
-        session.isCantripHome == true ? false : session.supportsStartFresh
+        session.isCantripHome == true && session.supportsStartFresh == nil ? false : session.supportsStartFresh
     }
 
     /// The Mac refuses while the tab works or has messages queued.

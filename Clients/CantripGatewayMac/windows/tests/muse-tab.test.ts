@@ -27,7 +27,8 @@ vi.mock("../src/gateway/bridge", () => ({
 }));
 
 import type { RemoteSessionSummary } from "../src/gateway/api/types";
-import { tabActions } from "../src/gateway/ui/tabActions";
+import { startFreshSupport } from "../src/gateway/state/format";
+import { startFreshEntry, tabActions } from "../src/gateway/ui/tabActions";
 
 // Fake IDs and text only.
 const MUSE = {
@@ -62,5 +63,26 @@ describe("the Muse tab's menu", () => {
     expect(entry(TAB, "Lock Tab")?.disabled).toBe(false);
     expect(entry(TAB, "Close Tab")?.disabled).toBe(false);
     expect(shown.some((label) => label.startsWith("Your Muse chat."))).toBe(false);
+  });
+});
+
+describe("Start Fresh for Cantrip Home's chat", () => {
+  const HOME = { ...TAB, id: "7EAE0CE5-0000-4000-8000-000000000001", title: "Cantrip Home", isCantripHome: true,
+    isLocked: true, isStreaming: false, queuedCount: 0 } as unknown as RemoteSessionSummary;
+
+  it("is offered when the Mac supports it, and hidden on Macs before", () => {
+    const current = { ...HOME, supportsStartFresh: true } as RemoteSessionSummary;
+    expect(startFreshSupport(current)).toBe(true);
+    const entries = startFreshEntry(current);
+    expect(entries.map((item) => ("label" in item ? item.label : "-"))).toEqual(["Start Fresh"]);
+    expect((entries[0] as { disabled?: boolean }).disabled).toBe(false);
+    expect(startFreshSupport({ ...HOME, supportsStartFresh: false } as RemoteSessionSummary)).toBe(false);
+    expect(startFreshSupport({ ...HOME, supportsStartFresh: undefined } as unknown as RemoteSessionSummary)).toBe(false);
+    expect(startFreshEntry({ ...HOME, supportsStartFresh: false } as RemoteSessionSummary)).toEqual([]);
+  });
+
+  it("waits while Home works", () => {
+    const busy = { ...HOME, supportsStartFresh: true, isStreaming: true } as RemoteSessionSummary;
+    expect((startFreshEntry(busy)[0] as { disabled?: boolean }).disabled).toBe(true);
   });
 });

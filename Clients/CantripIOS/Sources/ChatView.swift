@@ -1774,7 +1774,7 @@ struct ChatView: View {
         let isHome: Bool
         let selectedSessionID: String?
         let isLocalPrivate: Bool
-        /// Nil from Macs before Start Fresh; false where it doesn't apply (Cantrip Home).
+        /// Nil from Macs before Start Fresh; false where it doesn't apply (`CantripStartFresh.support`).
         let supportsStartFresh: Bool?
         let isSessionBusy: Bool
         let canResume: Bool

@@ -128,9 +128,9 @@ struct MacHomeWindow: View {
         return navigation.section == .chat ? CantripHomeIdentity.sessionID : nil
     }
 
-    /// The open tab, while the menu bar's Start Fresh can run on it.
+    /// The open tab (or Home's chat), while the menu bar's Start Fresh can run on it.
     private var startFreshTabID: String? {
-        guard isTabOpen, let session = remote.selectedSession, !remote.isMutating,
+        guard let id = visibleTabID, let session = remote.selectedSession, session.id == id, !remote.isMutating,
               CantripStartFresh.support(for: session) == true, !CantripStartFresh.isBusy(session)
         else { return nil }
         return session.id

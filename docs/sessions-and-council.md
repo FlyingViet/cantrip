@@ -76,8 +76,10 @@ messages aren't sent to the model*, marks the point: the next prompt starts a
 new model session with none of the earlier turns, and later context recaps
 only include turns below the divider. Earlier messages stay readable. It works
 on locked tabs, but not while the tab is running, has queued messages or a
-running shell command. Cantrip Home keeps its own conversation and has no
-Start Fresh.
+running shell command. Cantrip Home's chat can start fresh too, from its menu
+(on the web page, **Start Fresh** beside Tasks while Home is open): the next
+message starts a new conversation, and Home still has its memory, tasks and
+instructions. Home's background runs and the Muse tab don't start fresh.
 
 If the same model error ends two attempts in a row (for example a model
 declining, then `400 The requested model is not supported`), the error row

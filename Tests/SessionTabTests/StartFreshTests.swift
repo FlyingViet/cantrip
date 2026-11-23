@@ -133,14 +133,33 @@ extension SessionTabTests {
         chat.removeQueued(at: 0)
         precondition(chat.messages.filter { $0.role == .freshStart }.count == 1 && chat.startFreshUnavailableReason == nil)
 
+        // Cantrip Home's chat starts fresh like a tab: history kept, no earlier turns sent.
         let home = ChatSession(id: ChatSession.cantripHomeID)
-        precondition(!home.supportsStartFresh && home.startFreshUnavailableReason != nil)
-        home.messages = history
+        precondition(home.supportsStartFresh && home.startFreshUnavailableReason == nil)
+        let homeHistory = [ChatMessage(role: .user, text: "What's on my calendar?"),
+                           ChatMessage(role: .assistant, text: "Two meetings today.")]
+        home.messages = homeHistory
+        precondition(home.completedConversationTurns().count == 1)
+        try home.startFresh()
+        precondition(Array(home.messages.prefix(2)) == homeHistory && home.messages.last?.role == .freshStart,
+                     "Home keeps its history and marks the fresh start")
+        precondition(home.completedConversationTurns().isEmpty, "Home's next prompt sends no earlier turns")
+        home.isStreaming = true
         do {
             try home.startFresh()
-            preconditionFailure("Cantrip Home keeps its own continuity")
+            preconditionFailure("A running Home must not start fresh")
         } catch let error as SessionModelSettingsError { precondition(error.status == 409) }
-        precondition(home.messages == history)
+        home.isStreaming = false
+
+        // Home's background runs keep their own sessions.
+        let background = ChatSession(id: ChatSession.cantripHomeBackgroundID)
+        precondition(!background.supportsStartFresh && background.startFreshUnavailableReason != nil)
+        background.messages = history
+        do {
+            try background.startFresh()
+            preconditionFailure("Background runs can't start fresh")
+        } catch let error as SessionModelSettingsError { precondition(error.status == 409) }
+        precondition(background.messages == history)
     }
 
     @MainActor
@@ -375,6 +394,31 @@ extension SessionTabTests {
                      "The tab menu's Start Fresh shows the divider below the kept history: \(String(describing: menu))")
         precondition(stuck.messages.count == 6 && stuck.messages.last?.role == .freshStart)
         try await snapshotStartFresh(webView: webView, name: "web-after")
+
+        // Cantrip Home's chat: the toolbar's Start Fresh shows only while Home is open.
+        let homeWasEnabled = AppSettings.shared.cantripHomeEnabled
+        AppSettings.shared.cantripHomeEnabled = true
+        defer { AppSettings.shared.cantripHomeEnabled = homeWasEnabled }
+        let home = manager.homeSession
+        let homeHistory = [ChatMessage(role: .user, text: "What's on my calendar?"),
+                           ChatMessage(role: .assistant, text: "Two meetings today.")]
+        home.messages = homeHistory
+        let homeFresh = try await webView.callAsyncJavaScript("""
+        await refresh();
+        const onTab=$('homeStartFresh').classList.contains('hidden');
+        selectTab(homeID);renderedPayload="";await refresh();
+        const shown=!$('homeStartFresh').classList.contains('hidden')&&!$('homeStartFresh').disabled;
+        await $('homeStartFresh').onclick();
+        return {onTab,shown,divider:document.querySelector('#messages .fresh-start')?.textContent,
+          error:$('actionError').textContent,stillShown:!$('homeStartFresh').classList.contains('hidden')};
+        """, arguments: ["homeID": home.id.uuidString], contentWorld: .page) as? [String: Any]
+        precondition(homeFresh?["onTab"] as? Bool == true && homeFresh?["shown"] as? Bool == true
+                     && homeFresh?["divider"] as? String == ChatSession.freshStartCaption
+                     && homeFresh?["error"] as? String == "" && homeFresh?["stillShown"] as? Bool == true,
+                     "Home's Start Fresh shows while Home is open and marks the divider: \(String(describing: homeFresh))")
+        precondition(Array(home.messages.prefix(2)) == homeHistory && home.messages.last?.role == .freshStart,
+                     "Home keeps its history: \(home.messages.map(\.role))")
+        try await snapshotStartFresh(webView: webView, name: "web-home")
     }
 
     /// Writes PNGs for review when CANTRIP_SNAPSHOT_DIR is set: the page, then the Mac rows.

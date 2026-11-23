@@ -44,7 +44,9 @@ export function runCommand(command: GatewayCommand): void {
     case "modelSettings": if (!nav.logID.value) nav.openModelSettings(remote.selectedSession.value); break;
     case "startFresh": {
       const session = remote.selectedSession.value;
-      if (nav.openTabID.value && session && startFreshSupport(session) === true && !isBusy(session) && !remote.isMutating.value) {
+      // The open tab, or Home's chat.
+      const shown = nav.openTabID.value ? session?.id === nav.openTabID.value : session?.isCantripHome === true && nav.section.value === "chat";
+      if (shown && session && !nav.logID.value && startFreshSupport(session) === true && !isBusy(session) && !remote.isMutating.value) {
         void remote.startFresh(session.id).catch((error) => toast(`Start Fresh failed: ${error.message}`));
       }
       break;

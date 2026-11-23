@@ -9,7 +9,7 @@ struct CantripTabActionState: Equatable {
     let supportsTabMetadata: Bool
     let supportsTabReordering: Bool
     let supportsInputRequests: Bool
-    /// Nil from Macs before Start Fresh; false where it doesn't apply (Cantrip Home).
+    /// Nil from Macs before Start Fresh; false where it doesn't apply (`CantripStartFresh.support`).
     let supportsStartFresh: Bool?
     let isBusy: Bool
     let isFirst: Bool

@@ -119,6 +119,10 @@ struct SessionTabTests {
             try testRemoteWebRevalidation()
             return
         }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "start-fresh" {
+            try await testStartFresh()
+            return
+        }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "maintenance" {
             try await testRemoteMaintenance()
             try await testRemoteMaintenanceRelease()
