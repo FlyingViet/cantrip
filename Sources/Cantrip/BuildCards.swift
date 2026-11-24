@@ -50,6 +50,8 @@ struct BuildRun: Codable, Equatable, Identifiable {
     /// Waiting for a build slot (`BuildQueue`): what runs and its place in line. Its time starts
     /// once it gets one, so estimates and history leave the wait out.
     var queue: String?
+    /// A transfer's From and To (nil for builds, scripts and cards saved before routes).
+    var route: TransferRoute?
 
     var isWaiting: Bool { state == .running && queue != nil }
 
@@ -66,6 +68,7 @@ struct BuildRun: Codable, Equatable, Identifiable {
         expectedSeconds = estimate?.seconds
         timedRuns = estimate?.runs
         kind = command.isTransfer ? .transfer : nil
+        route = command.isTransfer ? command.route : nil
     }
 
     mutating func finish(_ state: State, exitCode: Int? = nil, at date: Date) {
@@ -215,11 +218,13 @@ extension BuildRun {
         }
     }
 
+    /// A transfer's header says where the data goes instead of the folder it ran in.
     private var headerBlock: CardDocument.Block {
         var header = CardDocument.Block(type: "header")
         header.symbol = stateSymbol
         header.title = title
-        header.subtitle = project
+        header.subtitle = route == nil ? project : nil
+        header.lines = route?.lines
         header.tone = state == .running ? nil : tone
         return header
     }
@@ -306,6 +311,11 @@ extension BuildRun {
         }
         switch state {
         case .running:
+            if isTransfer, step == nil {
+                // Until a transfer prints how far it is, its bar is only the earlier runs' time.
+                let quiet = route?.noProgressFrom.map { "No progress from \($0)" } ?? "No progress printed yet"
+                return quiet + " · " + (usual ?? "first timed run here, so no estimate yet")
+            }
             let steps = step.map { "Step \($0.current) of \($0.total)" }
             if let steps, let usual { return steps + " · " + usual }
             if let steps { return steps }
@@ -387,11 +397,38 @@ struct BuildCommand: Equatable {
     /// It moves data (a copy, download, upload or device install): its card follows the bytes
     /// or percentage it prints.
     var isTransfer = false
+    /// Where a transfer's data comes from and goes, when the command says.
+    var route: TransferRoute?
 
     var project: String? {
         let name = (directory as NSString).lastPathComponent
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return name.isEmpty || name == "/" || directory == home ? nil : name
+    }
+}
+
+/// Where a transfer's data comes from and where it goes, read from its command: the card's
+/// "From this Mac: ~/Coding/Game/" and "To studio: /Users/me/Builds/Game/" lines.
+struct TransferRoute: Codable, Equatable {
+    struct End: Codable, Equatable {
+        /// "this Mac", a host ("studio", "nas"), "S3", "the device", "Hugging Face"…
+        var place: String
+        /// The path there (this Mac's home folder as ~), or a URL's path without its query.
+        var path: String?
+
+        var text: String { path.map { "\(place): \($0)" } ?? place }
+    }
+
+    var from: End
+    var to: End
+    /// What else the command does to the data: "Skips .git", "Deletes files…".
+    var notes: [String]?
+    /// The program, when the command won't print its progress (rsync without `--progress` or
+    /// `--info=progress2`, `curl -s`, `wget -q`): the bar is then only earlier runs' time.
+    var noProgressFrom: String?
+
+    var lines: [String] {
+        ["From " + from.text, "To " + to.text] + ((notes ?? []).isEmpty ? [] : [(notes ?? []).joined(separator: " · ")])
     }
 }
 
@@ -403,7 +440,7 @@ enum BuildDetector {
     static func detect(_ command: String, workdir: String) -> BuildCommand? {
         guard command.count <= 20_000 else { return nil }
         var directory = workdir
-        var found: [(title: String, verb: String, words: [String], directory: String, transfer: Bool)] = []
+        var found: [(title: String, verb: String, words: [String], directory: String, transfer: Bool, route: TransferRoute?)] = []
         for segment in ShellCommandText.segments(of: command) {
             let words = unwrapped(ShellCommandText.commandWords(segment))
             guard let program = words.first else { continue }
@@ -415,23 +452,24 @@ enum BuildDetector {
             if ["bash", "sh", "zsh"].contains(name), let index = words.firstIndex(where: { $0.hasPrefix("-") && $0.contains("c") }),
                index + 1 < words.count {
                 if let inner = detect(words[index + 1], workdir: directory) {
-                    found.append((inner.title, inner.verb, [inner.key], inner.directory, inner.isTransfer))
+                    found.append((inner.title, inner.verb, [inner.key], inner.directory, inner.isTransfer, inner.route))
                 }
                 continue
             }
             var runDirectory = directory
             if let match = match(words, name: name, directory: &runDirectory) {
-                found.append((match.title, match.verb, words, runDirectory, false))
-            } else if let moved = transfer(words, name: name) {
-                found.append((moved.title, moved.verb, words, runDirectory, true))
+                found.append((match.title, match.verb, words, runDirectory, false, nil))
+            } else if let moved = transfer(words, name: name, directory: runDirectory) {
+                found.append((moved.title, moved.verb, words, runDirectory, true, moved.route))
             }
         }
         guard let first = found.first else { return nil }
         let titles = found.map(\.title).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
-        let title = titles.prefix(2).joined(separator: " → ") + (titles.count > 2 ? " …" : "")
+        // "then", not an arrow: a transfer's title uses → for where its data goes.
+        let title = titles.prefix(2).joined(separator: " then ") + (titles.count > 2 ? " …" : "")
         let normalized = found.map { $0.words.map(normalizedWord).joined(separator: " ") }.joined(separator: " && ")
         return BuildCommand(title: String(title.prefix(90)), verb: first.verb, directory: first.directory,
-                            key: first.directory + "\n" + normalized, isTransfer: first.transfer)
+                            key: first.directory + "\n" + normalized, isTransfer: first.transfer, route: first.route)
     }
 
     /// The command inside wrappers `ShellCommandText` leaves: xcrun, bundle exec, npx, timeout,
@@ -684,29 +722,52 @@ enum BuildDetector {
 
     // MARK: Transfers
 
+    typealias Transfer = (title: String, verb: String, route: TransferRoute?)
+
     /// Copies, downloads, uploads and device installs: rsync, scp, rclone, `aws s3`, curl and wget
     /// downloads of big files, aria2c, Hugging Face and Ollama model pulls, `devicectl device copy`
     /// and `install app`, ios-deploy, pymobiledevice3, ideviceinstaller, adb, and scripts named for
-    /// moving data (`push-…`, `upload_…`, `download-…`, `sync-…`).
-    static func transfer(_ words: [String], name: String) -> (title: String, verb: String)? {
+    /// moving data (`push-…`, `upload_…`, `download-…`, `sync-…`). Relative paths are from `directory`.
+    static func transfer(_ words: [String], name: String, directory: String = "/") -> Transfer? {
         let args = Array(words.dropFirst())
         func titled(_ tool: String, _ target: String?) -> String { tool + (targetName(target).map { " · " + $0 } ?? "") }
+        func local(_ path: String?) -> TransferRoute.End { .init(place: thisMac, path: path.map { localPath($0, directory: directory) }) }
+        func device(_ path: String?, _ place: String = "the device") -> TransferRoute.End { .init(place: place, path: path.map(shortPath)) }
+        func route(_ from: TransferRoute.End, _ to: TransferRoute.End, quiet: String? = nil) -> TransferRoute {
+            TransferRoute(from: from, to: to, noProgressFrom: quiet)
+        }
         switch name {
         case "rsync":
             guard !args.contains(where: { ["--dry-run", "--list-only", "--version", "--help"].contains($0) || shortFlags($0, contain: "n") })
             else { return nil }
-            let paths = operands(args, valued: ["-e", "-f", "-T", "-B", "-M", "--rsh", "--filter", "--exclude", "--include",
-                                                "--exclude-from", "--include-from", "--files-from", "--log-file", "--partial-dir",
-                                                "--temp-dir", "--backup-dir", "--link-dest", "--compare-dest", "--copy-dest", "--port",
-                                                "--timeout", "--bwlimit", "--chmod", "--chown", "--password-file", "--out-format",
-                                                "--max-size", "--min-size", "--suffix", "--info", "--debug", "--remote-option",
-                                                "--usermap", "--groupmap", "--iconv", "--max-delete", "--block-size", "--contimeout"])
+            let valued: Set = ["-e", "-f", "-T", "-B", "-M", "--rsh", "--filter", "--exclude", "--include",
+                               "--exclude-from", "--include-from", "--files-from", "--log-file", "--partial-dir",
+                               "--temp-dir", "--backup-dir", "--link-dest", "--compare-dest", "--copy-dest", "--port",
+                               "--timeout", "--bwlimit", "--chmod", "--chown", "--password-file", "--out-format",
+                               "--max-size", "--min-size", "--suffix", "--info", "--debug", "--remote-option",
+                               "--usermap", "--groupmap", "--iconv", "--max-delete", "--block-size", "--contimeout"]
+            let paths = operands(args, valued: valued)
             guard paths.count >= 2, let destination = paths.last else { return nil }
-            return (titled("rsync", destination), direction(from: paths.dropLast(), to: destination))
+            let sources = Array(paths.dropLast())
+            var moved = copy("rsync", sources: sources, to: destination, directory: directory)
+            let shows = args.contains { $0 == "--progress" || shortFlags($0, contain: "P") || ($0.hasPrefix("--info") && $0.contains("progress")) }
+                || zip(args, args.dropFirst()).contains { $0 == "--info" && $1.contains("progress") }
+            moved.route?.noProgressFrom = shows ? nil : "rsync"
+            var notes: [String] = []
+            let skipped = values(of: "--exclude", in: args)
+            if !skipped.isEmpty {
+                notes.append("Skips " + skipped.prefix(3).joined(separator: ", ") + (skipped.count > 3 ? " and \(skipped.count - 3) more" : ""))
+            }
+            if args.contains(where: { $0.hasPrefix("--delete") }) { notes.append("Deletes files the source doesn't have") }
+            if args.contains("--remove-source-files") { notes.append("Removes each source file once it's copied") }
+            moved.route?.notes = notes.isEmpty ? nil : notes
+            return moved
         case "scp":
             let paths = operands(args, valued: ["-c", "-D", "-F", "-i", "-J", "-l", "-o", "-P", "-S", "-X"])
             guard paths.count >= 2, let destination = paths.last else { return nil }
-            return (titled("scp", destination), direction(from: paths.dropLast(), to: destination))
+            var moved = copy("scp", sources: Array(paths.dropLast()), to: destination, directory: directory)
+            moved.route?.noProgressFrom = args.contains { shortFlags($0, contain: "q") } ? "scp" : nil
+            return moved
         case "rclone":
             let words = operands(args, valued: ["--transfers", "--checkers", "--bwlimit", "--config", "--log-file", "--log-level",
                                                 "--include", "--exclude", "--filter", "--files-from", "--include-from", "--exclude-from",
@@ -714,8 +775,14 @@ enum BuildDetector {
                                                 "--retries", "--timeout"])
             guard let sub = words.first, ["copy", "copyto", "sync", "bisync", "move", "moveto", "copyurl"].contains(sub),
                   words.count >= 3, !args.contains(where: { ["--dry-run", "-n", "--interactive", "-i"].contains($0) }) else { return nil }
-            let verb = sub.hasSuffix("sync") ? "Syncing" : direction(from: [words[1]], to: words[2])
-            return (titled("rclone \(sub)", words[2]), verb)
+            var moved = copy("rclone \(sub)", sources: [words[1]], to: words[2], directory: directory)
+            if sub.hasSuffix("sync") { moved.verb = "Syncing" }
+            let shows = args.contains { ["--progress", "--verbose", "--stats-one-line"].contains($0) || shortFlags($0, contain: "P")
+                || shortFlags($0, contain: "v") }
+            moved.route?.noProgressFrom = shows ? nil : "rclone"
+            if sub == "sync" { moved.route?.notes = ["Deletes files the source doesn't have"] }
+            if sub.hasPrefix("move") { moved.route?.notes = ["Removes the source files once they're copied"] }
+            return moved
         case "aws":
             guard let s3 = args.firstIndex(of: "s3"), s3 + 1 < args.count, ["cp", "sync", "mv"].contains(args[s3 + 1]),
                   !args.contains("--dryrun") else { return nil }
@@ -723,64 +790,164 @@ enum BuildDetector {
                                                                    "--storage-class", "--acl", "--sse", "--content-type",
                                                                    "--cache-control", "--endpoint-url", "--metadata", "--expected-size"])
             guard paths.count >= 2 else { return nil }
-            let remote = { (path: String) in path.hasPrefix("s3://") }
-            let verb = remote(paths[1]) ? (remote(paths[0]) ? "Copying" : "Uploading") : remote(paths[0]) ? "Downloading" : "Copying"
-            return (titled("aws s3 \(args[s3 + 1])", paths[1]), args[s3 + 1] == "sync" ? "Syncing" : verb)
+            var moved = copy("aws s3 \(args[s3 + 1])", sources: [paths[0]], to: paths[1], directory: directory)
+            if args[s3 + 1] == "sync" { moved.verb = "Syncing" }
+            let quiet = args.contains { ["--quiet", "--only-show-errors", "--no-progress"].contains($0) }
+            moved.route?.noProgressFrom = quiet ? "aws" : nil
+            if args.contains("--delete") { moved.route?.notes = ["Deletes files the source doesn't have"] }
+            return moved
         case "curl":
-            return curl(args)
+            return curl(args, directory: directory)
         case "wget":
-            return wget(args)
+            return wget(args, directory: directory)
         case "aria2c":
             let urls = operands(args, valued: ["-d", "--dir", "-o", "--out", "-i", "--input-file", "-x", "-s", "-j", "-k", "--max-tries"])
-            return (titled("aria2c", urls.first.map(urlFileName)), "Downloading")
+            let folder = value(of: ["-d", "--dir"], in: args)
+            return (titled("aria2c", urls.first.map(urlFileName)), "Downloading",
+                    urls.first.map { route(end($0, directory: directory), folder.map { local($0) } ?? .init(place: thisMac)) })
         case "huggingface-cli", "hf":
             let words = operands(args, valued: ["--local-dir", "--cache-dir", "--revision", "--include", "--exclude", "--repo-type", "--token"])
             guard let sub = words.first, sub == "download" || sub == "upload" else { return nil }
-            return (titled("\(name) \(sub)", words.dropFirst().first), sub == "download" ? "Downloading" : "Uploading")
+            let repo = words.dropFirst().first
+            let hub = TransferRoute.End(place: "Hugging Face", path: repo)
+            let here = sub == "download" ? (value(of: ["--local-dir"], in: args).map { local($0) } ?? .init(place: thisMac))
+                : (words.count > 2 ? local(words[2]) : .init(place: thisMac))
+            return (titled("\(name) \(sub)", repo), sub == "download" ? "Downloading" : "Uploading",
+                    sub == "download" ? route(hub, here) : route(here, hub))
         case "ollama":
             guard let sub = args.first, sub == "pull" || sub == "push", args.count > 1 else { return nil }
-            return ("ollama \(sub) · \(args[1])", sub == "pull" ? "Downloading" : "Uploading")
+            let registry = TransferRoute.End(place: "ollama.com", path: args[1])
+            return ("ollama \(sub) · \(args[1])", sub == "pull" ? "Downloading" : "Uploading",
+                    sub == "pull" ? route(registry, .init(place: thisMac)) : route(.init(place: thisMac), registry))
         case "devicectl":
             if args.starts(with: ["device", "copy", "to"]) || args.starts(with: ["device", "copy", "from"]) {
+                let source = value(of: ["--source", "--src"], in: args)
                 let destination = value(of: ["--destination", "--dest"], in: args)
-                return (titled("devicectl copy \(args[2])", destination), args[2] == "to" ? "Transferring" : "Downloading")
+                let to = args[2] == "to"
+                return (titled("devicectl copy \(args[2])", destination), to ? "Transferring" : "Downloading",
+                        to ? route(local(source), device(destination)) : route(device(source), local(destination)))
             }
             if args.starts(with: ["device", "install", "app"]) {
-                return (titled("devicectl install", args.last { $0.hasSuffix(".app") || $0.hasSuffix(".ipa") }), "Installing")
+                let app = args.last { $0.hasSuffix(".app") || $0.hasSuffix(".ipa") }
+                return (titled("devicectl install", app), "Installing", route(local(app), device(nil)))
             }
             return nil
         case "ios-deploy":
-            if let bundle = value(of: ["-b", "--bundle"], in: args) { return (titled("ios-deploy", bundle), "Installing") }
-            if let file = value(of: ["-o", "--upload"], in: args) { return (titled("ios-deploy upload", file), "Transferring") }
-            if args.contains(where: { $0 == "-w" || $0.hasPrefix("--download") }) { return ("ios-deploy download", "Downloading") }
+            if let bundle = value(of: ["-b", "--bundle"], in: args) {
+                return (titled("ios-deploy", bundle), "Installing", route(local(bundle), device(nil)))
+            }
+            if let file = value(of: ["-o", "--upload"], in: args) {
+                return (titled("ios-deploy upload", file), "Transferring", route(local(file), device(value(of: ["-2", "--to"], in: args))))
+            }
+            if args.contains(where: { $0 == "-w" || $0.hasPrefix("--download") }) {
+                return ("ios-deploy download", "Downloading", route(device(nil), .init(place: thisMac)))
+            }
             return nil
         case "pymobiledevice3":
             let words = operands(args, valued: ["--udid", "--rsd", "--tunnel"])
             if words.starts(with: ["afc", "push"]) || words.starts(with: ["afc", "pull"]) {
-                return (titled("pymobiledevice3 afc \(words[1])", words.count > 3 ? words[3] : nil),
-                        words[1] == "push" ? "Transferring" : "Downloading")
+                let push = words[1] == "push"
+                let first = words.count > 2 ? words[2] : nil, second = words.count > 3 ? words[3] : nil
+                return (titled("pymobiledevice3 afc \(words[1])", second), push ? "Transferring" : "Downloading",
+                        push ? route(local(first), device(second)) : route(device(first), local(second)))
             }
-            if words.starts(with: ["apps", "install"]) { return (titled("pymobiledevice3 install", words.dropFirst(2).first), "Installing") }
+            if words.starts(with: ["apps", "install"]) {
+                let app = words.dropFirst(2).first
+                return (titled("pymobiledevice3 install", app), "Installing", route(local(app), device(nil)))
+            }
             return nil
         case "ideviceinstaller":
             guard let index = args.firstIndex(where: { ["-i", "--install", "install"].contains($0) }) else { return nil }
-            return (titled("ideviceinstaller", index + 1 < args.count ? args[index + 1] : nil), "Installing")
+            let app = index + 1 < args.count ? args[index + 1] : nil
+            return (titled("ideviceinstaller", app), "Installing", route(local(app), device(nil)))
         case "adb":
+            let android = "the Android device"
             let words = operands(args, valued: ["-s", "-t", "-H", "-P", "-L"])
             guard let sub = words.first else { return nil }
             switch sub {
-            case "push": return (titled("adb push", words.count > 2 ? words.last : nil), "Transferring")
-            case "pull": return (titled("adb pull", words.dropFirst().first), "Downloading")
-            case "install", "install-multiple": return (titled("adb install", words.last), "Installing")
-            case "sync": return ("adb sync", "Syncing")
+            case "push":
+                let target = words.count > 2 ? words.last : nil
+                return (titled("adb push", target), "Transferring", route(local(words.count > 1 ? words[1] : nil), device(target, android)))
+            case "pull":
+                let source = words.dropFirst().first
+                return (titled("adb pull", source), "Downloading", route(device(source, android), local(words.count > 2 ? words[2] : nil)))
+            case "install", "install-multiple":
+                return (titled("adb install", words.last), "Installing", route(local(words.count > 1 ? words.last : nil), device(nil, android)))
+            case "sync": return ("adb sync", "Syncing", nil)
             default: return nil
             }
         case "bash", "sh", "zsh":
             guard let script = args.first, !script.hasPrefix("-") else { return nil }
-            return transferScript(script)
+            return transferScript(script).map { ($0.0, $0.1, nil) }
         default:
-            return words.first.flatMap(transferScript)
+            return words.first.flatMap(transferScript).map { ($0.0, $0.1, nil) }
         }
+    }
+
+    static let thisMac = "this Mac"
+
+    /// A copy from `sources` to `destination` (rsync, scp, rclone, aws s3): titled by what it moves
+    /// and where, "rsync · Game → studio", with the direction as its verb.
+    private static func copy(_ tool: String, sources: [String], to destination: String, directory: String) -> Transfer {
+        let from = end(sources[0], directory: directory)
+        let to = end(destination, directory: directory)
+        func name(_ path: String) -> String? {
+            if let name = targetName(path) { return name }
+            guard !isRemote(path), !path.contains("$") else { return nil }
+            let full = (resolved(path, from: directory) as NSString).lastPathComponent
+            return full == "/" || full.isEmpty ? nil : full
+        }
+        let more = sources.count > 1 ? " +\(sources.count - 1)" : ""
+        let what = (name(sources[0]) ?? "files") + more
+        let place = to.place != thisMac ? to.place : from.place != thisMac ? thisMac : name(destination)
+        var source = from
+        if sources.count > 1 { source.path = (source.path ?? "") + " and \(sources.count - 1) more" }
+        return (tool + " · " + what + (place.map { " → " + $0 } ?? ""), direction(from: sources, to: destination),
+                TransferRoute(from: source, to: to))
+    }
+
+    /// One end of a copy: `host:path`, `user@host:path`, `rsync://host/path`, `s3://bucket/key`, a URL
+    /// (without its query, which can hold a token) or a path on this Mac.
+    static func end(_ operand: String, directory: String) -> TransferRoute.End {
+        if operand.contains("://"), let url = URL(string: operand), let scheme = url.scheme?.lowercased() {
+            if scheme == "s3" { return .init(place: "S3", path: shortPath((url.host ?? "") + url.path)) }
+            let path = url.path
+            return .init(place: url.host ?? scheme, path: path.isEmpty || path == "/" ? nil : shortPath(path))
+        }
+        if isRemote(operand), let colon = operand.firstIndex(of: ":") {
+            let host = operand[..<colon].split(separator: "@").last.map(String.init) ?? String(operand[..<colon])
+            let path = String(operand[operand.index(after: colon)...])
+            return .init(place: host, path: path.isEmpty ? nil : shortPath(path))
+        }
+        return .init(place: thisMac, path: localPath(operand, directory: directory))
+    }
+
+    /// A path on this Mac as the card shows it: from the command's folder, home as ~, and a
+    /// trailing slash kept (rsync copies a folder's contents with one).
+    private static func localPath(_ path: String, directory: String) -> String {
+        guard !path.contains("$") else { return shortPath(path) }
+        var full = resolved(path, from: directory)
+        if path.hasSuffix("/"), !full.hasSuffix("/") { full += "/" }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if full == home || full.hasPrefix(home + "/") { full = "~" + full.dropFirst(home.count) }
+        return shortPath(full)
+    }
+
+    /// A long path keeps its end, where the names are: "…/Builds/Game/source/".
+    private static func shortPath(_ path: String) -> String {
+        guard path.count > 72 else { return path }
+        let tail = path.suffix(70)
+        return "…" + (tail.firstIndex(of: "/").map { tail[$0...] } ?? tail)
+    }
+
+    /// Every value of `--option X` and `--option=X`.
+    private static func values(of option: String, in args: [String]) -> [String] {
+        var found: [String] = []
+        for (index, word) in args.enumerated() {
+            if word == option, index + 1 < args.count { found.append(args[index + 1]) }
+            if word.hasPrefix(option + "=") { found.append(String(word.dropFirst(option.count + 1))) }
+        }
+        return found
     }
 
     /// `push-fefw-usb.py`, `scripts/upload-ipa.sh`, `download_models.py`: a script named for moving data.
@@ -876,7 +1043,7 @@ enum BuildDetector {
         return bigFileExtensions.contains((name as NSString).pathExtension.lowercased())
     }
 
-    private static func curl(_ args: [String]) -> (String, String)? {
+    private static func curl(_ args: [String], directory: String) -> Transfer? {
         let valuedShort = Set("AbcCdDeEFHKmoPQrTuUwxXyYz")
         let valuedLong: Set = ["--output", "--upload-file", "--continue-at", "--url", "--header", "--data", "--data-binary",
                                "--data-raw", "--data-urlencode", "--request", "--user", "--user-agent", "--referer", "--cookie",
@@ -888,6 +1055,7 @@ enum BuildDetector {
         var remoteName = false
         var resumed = false
         var bar = false
+        var silent = false
         var urls: [String] = []
         var index = 0
         while index < args.count {
@@ -905,6 +1073,7 @@ enum BuildDetector {
                 case "--url": if let given { urls.append(given) }
                 case "--remote-name", "--remote-name-all": remoteName = true
                 case "--progress-bar": bar = true
+                case "--silent": silent = true
                 default: break
                 }
                 if inline == nil, valuedLong.contains(option) { index += 1 }
@@ -916,6 +1085,7 @@ enum BuildDetector {
                 let flags = at.map { letters[..<$0] } ?? letters[...]
                 if flags.contains("O") { remoteName = true }
                 if flags.contains("#") { bar = true }
+                if flags.contains("s") { silent = true }
                 guard let at else { continue }
                 let attached = at + 1 < letters.count ? String(letters[(at + 1)...]) : nil
                 let given = attached ?? next
@@ -930,20 +1100,29 @@ enum BuildDetector {
                 urls.append(word)
             }
         }
+        let quiet = silent && !bar ? "curl" : nil
+        let site = urls.first.map { end($0, directory: directory) }
         if let upload {
-            return isBigFile(upload) || resumed || bar ? ("curl · " + (targetName(upload) ?? upload), "Uploading") : nil
+            guard isBigFile(upload) || resumed || bar else { return nil }
+            return ("curl · " + (targetName(upload) ?? upload), "Uploading",
+                    site.map { TransferRoute(from: .init(place: thisMac, path: localPath(upload, directory: directory)), to: $0,
+                                             noProgressFrom: quiet) })
         }
         guard (output != nil && output != "-" && output != "/dev/null") || remoteName else { return nil }
         let name = output.flatMap(targetName) ?? urls.first.map(urlFileName)
         guard isBigFile(name) || resumed || bar else { return nil }
-        return ("curl" + (name.map { " · " + $0 } ?? ""), "Downloading")
+        let saved = output ?? urls.first.map(urlFileName)
+        return ("curl" + (name.map { " · " + $0 } ?? ""), "Downloading",
+                site.map { TransferRoute(from: $0, to: .init(place: thisMac, path: saved.map { localPath($0, directory: directory) }),
+                                         noProgressFrom: quiet) })
     }
 
-    private static func wget(_ args: [String]) -> (String, String)? {
+    private static func wget(_ args: [String], directory: String) -> Transfer? {
         guard !args.contains("--spider") else { return nil }
         let valuedShort = Set("OoPatTwQeUiBlARDXI")
         var output: String?
         var resumed = false
+        var quiet = false
         var urls: [String] = []
         var index = 0
         while index < args.count {
@@ -951,12 +1130,15 @@ enum BuildDetector {
             index += 1
             if word.hasPrefix("--") {
                 if word == "--continue" { resumed = true }
+                if word == "--quiet" || word == "--no-verbose" { quiet = true }
                 if word.hasPrefix("--output-document=") { output = String(word.dropFirst("--output-document=".count)) }
                 if word == "--output-document", index < args.count { output = args[index]; index += 1 }
             } else if word.hasPrefix("-"), word.count > 1 {
+                if word == "-nv" { quiet = true; continue }
                 let letters = Array(word.dropFirst())
                 let at = letters.firstIndex(where: valuedShort.contains)
                 if (at.map { letters[..<$0] } ?? letters[...]).contains("c") { resumed = true }
+                if (at.map { letters[..<$0] } ?? letters[...]).contains("q") { quiet = true }
                 guard let at else { continue }
                 let attached = at + 1 < letters.count ? String(letters[(at + 1)...]) : nil
                 if letters[at] == "O" { output = attached ?? (index < args.count ? args[index] : nil) }
@@ -967,7 +1149,11 @@ enum BuildDetector {
         }
         let name = (output == "-" ? nil : output.flatMap(targetName)) ?? urls.first.map(urlFileName)
         guard isBigFile(name) || resumed else { return nil }
-        return ("wget" + (name.map { " · " + $0 } ?? ""), "Downloading")
+        let saved = output == "-" ? nil : output ?? urls.first.map(urlFileName)
+        return ("wget" + (name.map { " · " + $0 } ?? ""), "Downloading",
+                urls.first.map { TransferRoute(from: end($0, directory: directory),
+                                               to: .init(place: thisMac, path: saved.map { localPath($0, directory: directory) }),
+                                               noProgressFrom: quiet ? "wget" : nil) })
     }
 
     static func resolved(_ path: String, from directory: String) -> String {

@@ -136,6 +136,18 @@ pages and small files get no card.
   estimate. A reading that goes back (another file, a restart) starts the measurement again.
   Until a transfer prints progress its card is a build card's: elapsed time, and the usual time
   from earlier runs. The line under the bar reads `27.0 GB of 29.1 GB · 34.5 MB/s` (or `45%`).
+- **Where the data goes**: a copy's title names what it moves and where, `rsync · Game → studio`
+  (a host, `this Mac` for a download, or the destination folder for a local copy). The header's
+  `lines` (instead of the folder the command ran in) are `From this Mac: ~/Coding/Game/` and
+  `To studio: /Users/me/Builds/Game/source/`, then what else it does (`Skips .git · Deletes files
+  the source doesn't have`). Downloads come from the URL's host and path (never its query, which
+  can hold a token), installs and device copies go to `the device` (`the Android device` for adb),
+  model pulls from `Hugging Face` or `ollama.com`. Scripts get no route. Several commands in one
+  call are titled `make build then make test`, since → means a transfer's direction.
+- **Before any progress**: the line under the bar says the bar is only the earlier runs' time:
+  `No progress from rsync · usually 17s (4 earlier runs)` when the command won't print any (rsync
+  without `--progress`, `-P` or `--info=progress2`; `curl -s`, `wget -q`, `scp -q`, rclone without
+  `-P` or `-v`, `aws s3 --quiet`), else `No progress printed yet · …`.
 - **Result**: as for builds; a failed or stopped transfer says where it got to (`Exit code 1 at
   27.0 GB of 29.1 GB`), and a finished one its size and average rate.
 

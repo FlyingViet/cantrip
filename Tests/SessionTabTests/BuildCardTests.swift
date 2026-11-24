@@ -74,7 +74,7 @@ extension SessionTabTests {
             ("grep -rn xcodebuild Makefile", nil),
             ("echo 'swift build'", nil),
             ("git commit -m 'make build faster'", nil),
-            ("make build && make test", "make build → make test"),
+            ("make build && make test", "make build then make test"),
             // Interpreters and `cantrip env run` run the script that names the work.
             ("Cantrip env run --dir ~/Coding/nxnative -- python -u -B ~/.cache/Cantrip/nxnative/build-fefw.py 1", "build-fefw.py"),
             ("Cantrip env run --dir ~/Coding/nxnative -- bash ~/.cache/Cantrip/nxnative/build-mkw.sh", "build-mkw.sh"),
@@ -84,10 +84,11 @@ extension SessionTabTests {
             // Transfers: copies, downloads, uploads and device installs.
             ("cd /Volumes/MacBuilds/projects/nxnative && usb-transfer-venv/bin/python -u -B ~/.cache/Cantrip/nxnative/push-fefw-usb.py 2>&1 | tee fefw-afc.log",
              "push-fefw-usb.py"),
-            ("rsync -avP --info=progress2 --exclude .git build/ nas:/Volumes/Share/projects/", "rsync · projects"),
-            ("rsync -a nas:/Volumes/Media/Roms/game.zip .", "rsync"),
+            ("rsync -avP --info=progress2 --exclude .git build/ nas:/Volumes/Share/projects/", "rsync · build → nas"),
+            ("rsync -a nas:/Volumes/Media/Roms/game.zip .", "rsync · game.zip → this Mac"),
+            ("rsync -a build/ /Volumes/Backup/", "rsync · build → Backup"),
             ("rsync -avn src/ dst/", nil),
-            ("scp -P 2222 App.ipa user@host:/tmp/", "scp · tmp"),
+            ("scp -P 2222 App.ipa user@host:/tmp/", "scp · App.ipa → host"),
             ("xcrun devicectl device copy to --device 0000-1 --source RomFS.img --destination Documents/romfs.img --domain-type appDataContainer --domain-identifier com.x.y",
              "devicectl copy to · romfs.img"),
             ("xcrun devicectl device install app --device 0000-1 build/Game.app", "devicectl install · Game.app"),
@@ -101,8 +102,8 @@ extension SessionTabTests {
             ("curl -s https://api.github.com/repos/x/y | jq .", nil),
             ("wget -c https://example.com/file", "wget · file"),
             ("wget https://example.com/index.html", nil),
-            ("rclone copy ./photos gdrive:backup --transfers 8 --progress", "rclone copy · backup"),
-            ("aws s3 cp build.zip s3://bucket/releases/ --profile ci", "aws s3 cp · releases"),
+            ("rclone copy ./photos gdrive:backup --transfers 8 --progress", "rclone copy · photos → gdrive"),
+            ("aws s3 cp build.zip s3://bucket/releases/ --profile ci", "aws s3 cp · build.zip → S3"),
             ("ollama pull llama3:8b", "ollama pull · llama3:8b"),
             ("hf download mlx-community/gemma-3-4b --local-dir models", "hf download · gemma-3-4b"),
             ("./scripts/upload-ipa.sh", "upload-ipa.sh"),
@@ -120,6 +121,27 @@ extension SessionTabTests {
                      && verb("rsync -a a/ b/") == "Copying" && verb("curl -LO https://x.dev/a.zip") == "Downloading"
                      && verb("xcrun devicectl device install app --device 1 A.app") == "Installing"
                      && verb("rclone sync a remote:b") == "Syncing" && verb("aws s3 cp s3://b/a.zip .") == "Downloading")
+        // Where a transfer's data goes: From and To lines, what else it does, and whether it prints progress.
+        func route(_ command: String) -> TransferRoute? { BuildDetector.detect(command, workdir: work)?.route }
+        let upload = route("rsync -a --exclude=.git --delete ~/Coding/Game/ studio:/Users/me/Builds/Game/source/")
+        precondition(upload?.lines == ["From this Mac: ~/Coding/Game/", "To studio: /Users/me/Builds/Game/source/",
+                                       "Skips .git · Deletes files the source doesn't have"]
+                     && upload?.noProgressFrom == "rsync", "\(String(describing: upload))")
+        precondition(route("rsync -avP --info=progress2 --exclude .git build/ nas:/Volumes/Share/projects/")
+                     == TransferRoute(from: .init(place: "this Mac", path: work + "/build/"),
+                                      to: .init(place: "nas", path: "/Volumes/Share/projects/"), notes: ["Skips .git"]))
+        precondition(route("scp a.zip b.zip me@nas:")?.lines == ["From this Mac: \(work)/a.zip and 1 more", "To nas"])
+        let download = route("curl -fsSL -o ~/Downloads/a.zip 'https://dl.example.com/files/a.zip?token=abc'")
+        precondition(download?.lines == ["From dl.example.com: /files/a.zip", "To this Mac: ~/Downloads/a.zip"]
+                     && download?.noProgressFrom == "curl", "a URL's query (it can hold a token) stays off the card: \(String(describing: download))")
+        precondition(route("curl -L -O https://x.dev/a.zip")?.noProgressFrom == nil
+                     && route("aws s3 sync s3://b/models ./models --delete")?.lines
+                        == ["From S3: b/models", "To this Mac: \(work)/models", "Deletes files the source doesn't have"]
+                     && route("xcrun devicectl device install app --device 0000-1 build/Game.app")?.lines
+                        == ["From this Mac: \(work)/build/Game.app", "To the device"]
+                     && route("adb pull /sdcard/DCIM/a.mp4 clips/")?.lines
+                        == ["From the Android device: /sdcard/DCIM/a.mp4", "To this Mac: \(work)/clips/"]
+                     && route("python -u push-fefw-usb.py") == nil && route("make build") == nil)
         precondition(BuildDetector.detect("python -u build-fefw.py 1", workdir: work)?.isTransfer == false
                      && BuildDetector.detect("cd /Volumes/X/nxnative && python push-x.py", workdir: work)?.project == "nxnative")
         // A new simulator lease or temp folder is still the same build.
@@ -535,6 +557,17 @@ extension SessionTabTests {
                              startedAt: start, estimate: nil)
         precondition(!build.advance(step: nil, transfer: reading(0.3), at: start) && build.reading == nil
                      && build.document.type == "build")
+        // Until a transfer prints how far it is, the line under the bar says the bar is only
+        // earlier runs' time, and its header says where the data goes instead of the folder.
+        guard let quiet = BuildDetector.detect("rsync -a src/ studio:/b/", workdir: "/w/Game") else { preconditionFailure("rsync") }
+        var silent = BuildRun(id: "t-3", command: quiet, startedAt: start, estimate: .init(seconds: 17, runs: 4))
+        precondition(silent.detail == "No progress from rsync · usually 17s (4 earlier runs)"
+                     && silent.document.blocks[0].lines == ["From this Mac: /w/Game/src/", "To studio: /b/"]
+                     && silent.document.blocks[0].subtitle == nil && silent.document.blocks[0].title == "rsync · src → studio", silent.detail)
+        (silent.expectedSeconds, silent.timedRuns) = (nil, nil)
+        precondition(silent.detail == "No progress from rsync · first timed run here, so no estimate yet", silent.detail)
+        precondition(BuildRun(id: "t-4", command: BuildDetector.detect("rsync -aP src/ nas:/b/", workdir: "/w")!, startedAt: start,
+                              estimate: nil).detail == "No progress printed yet · first timed run here, so no estimate yet")
         precondition(BuildRun.bytesText(999) == "999 bytes" && BuildRun.bytesText(1_850_000_000) == "1.85 GB"
                      && BuildRun.bytesText(29_051_813_685) == "29.1 GB" && BuildRun.bytesText(555_000_000) == "555 MB")
     }
@@ -561,10 +594,11 @@ extension SessionTabTests {
             card("xcodebuild archive · Hermes", "Archiving", started: 60, estimate: nil, runs: nil, end: (.failed, 47, 65)),
         ]
         // Transfers: Fire Emblem's game data going to the Duo, a download and a copy that dropped.
-        func transfer(_ title: String, _ verb: String, started: TimeInterval, total: Int64, readings: [(TimeInterval, Double)],
-                      end: (BuildRun.State, TimeInterval, Int?)? = nil) -> CardDocument {
-            var run = BuildRun(id: title, command: BuildCommand(title: title, verb: verb, directory: "/w/nxnative", key: title, isTransfer: true),
-                               startedAt: now.addingTimeInterval(-started), estimate: nil)
+        func transfer(_ title: String, _ verb: String, command: String? = nil, started: TimeInterval, total: Int64,
+                      readings: [(TimeInterval, Double)], end: (BuildRun.State, TimeInterval, Int?)? = nil) -> CardDocument {
+            let made = command.flatMap { BuildDetector.detect($0, workdir: NSHomeDirectory()) }
+                ?? BuildCommand(title: title, verb: verb, directory: "/w/nxnative", key: title, isTransfer: true)
+            var run = BuildRun(id: title, command: made, startedAt: now.addingTimeInterval(-started), estimate: nil)
             for (at, fraction) in readings {
                 _ = run.advance(step: nil, transfer: TransferProgress(fraction: fraction, bytes: Int64(Double(total) * fraction), totalBytes: total),
                                 at: run.startedAt.addingTimeInterval(at))
@@ -574,10 +608,21 @@ extension SessionTabTests {
         }
         let transfers = [
             transfer("push-fefw-usb.py", "Transferring", started: 600, total: 29_051_813_685, readings: [(20, 0.02), (590, 0.66)]),
-            transfer("curl · Xcode_27.2.xip", "Downloading", started: 40, total: 2_045_843_072, readings: [(5, 0.05), (38, 0.6)]),
-            transfer("rsync · Roms", "Copying", started: 300, total: 23_052_122_595, readings: [(10, 0.01), (180, 0.26)],
-                     end: (.failed, 183, 12)),
+            transfer("curl · Xcode_27.2.xip", "Downloading",
+                     command: "curl -L -o ~/Downloads/Xcode_27.2.xip https://download.developer.apple.com/Developer_Tools/Xcode_27.2/Xcode_27.2.xip",
+                     started: 40, total: 2_045_843_072, readings: [(5, 0.05), (38, 0.6)]),
+            transfer("rsync · Roms", "Copying", command: "rsync -a --info=progress2 /Volumes/Media/Roms/ nas:/Volumes/Share/Roms/",
+                     started: 300, total: 23_052_122_595, readings: [(10, 0.01), (180, 0.26)], end: (.failed, 183, 12)),
         ]
+        // The same upload five times in a reply: four done, the fifth running and printing no progress.
+        let upload = "rsync -a --exclude=.git ~/Coding/GameRuntime/ studio:/Users/me/Builds/GameRuntime/source/"
+        guard let rsync = BuildDetector.detect(upload, workdir: NSHomeDirectory()) else { preconditionFailure("rsync") }
+        let uploads = try require(BuildRun.card(for: (0..<5).map { index in
+            var run = BuildRun(id: "up-\(index)", command: rsync, startedAt: now.addingTimeInterval(Double(index - 5) * 60 + (index == 4 ? 56 : 0)),
+                               estimate: .init(seconds: 17, runs: 4))
+            if index < 4 { run.finish(.succeeded, exitCode: 0, at: run.startedAt.addingTimeInterval(16)) }
+            return run
+        }))
         // A reply's builds as its one card: a build, a failed test, the test again, and a Gateway
         // build running beside it.
         func step(_ title: String, _ verb: String, folder: String = "/w/CantripIOS", started: TimeInterval, estimate: Double? = nil,
@@ -598,15 +643,17 @@ extension SessionTabTests {
             let data = try JSONSerialization.data(withJSONObject: card.snapshot, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).json"))
         }
-        let content = CardDocumentStack(cards: [combined] + cards + transfers, links: [])
-            .padding(16)
-            .frame(width: 560)
-            .background(Color(white: 0.08))
-            .environment(\.colorScheme, .dark)
-        let renderer = ImageRenderer(content: content)
-        renderer.scale = 2
-        guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
-              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
-        try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("mac-build-cards.png"))
+        for (name, stack) in [("mac-build-cards", [combined] + cards + transfers), ("mac-transfer-cards", [uploads] + transfers)] {
+            let content = CardDocumentStack(cards: stack, links: [])
+                .padding(16)
+                .frame(width: 560)
+                .background(Color(white: 0.08))
+                .environment(\.colorScheme, .dark)
+            let renderer = ImageRenderer(content: content)
+            renderer.scale = 2
+            guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+                  let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+            try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
+        }
     }
 }
