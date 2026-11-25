@@ -274,12 +274,24 @@ extension SessionTabTests {
         await watcher.tick()
         precondition(exports == 14, "blocked until Chrome's login changes, even a day later")
 
+        // Check Now while a look is copying Chrome's login: it answers once that copy is done.
+        outcome = .saved
+        clock = clock.addingTimeInterval(2 * day)
+        current = MuseStatus(state: .loginNeeded)
+        try writeChrome(signedIn: [clock.addingTimeInterval(-60)])
+        let exportsBefore = exports
+        let running = Task { await watcher.tick() }
+        while exports == exportsBefore { await Task.yield() }
+        await watcher.tick(manual: true)
+        precondition(current.state == .connected && exports == exportsBefore + 1, "Check Now answered before the copy finished: \(current)")
+        await running.value
+
         // Off, or the demo: nothing at all.
         live = false
-        outcome = .saved
+        let copied = exports
         try writeChrome(signedIn: [clock])
         await watcher.tick()
-        precondition(exports == 14 && watcher.upcomingItem(now: clock) == nil, "\(exports)")
+        precondition(exports == copied && watcher.upcomingItem(now: clock) == nil, "\(exports)")
 
         // What the sign-in may press: only a remembered-account button; never with a password or code asked.
         typealias Page = MuseSignInPage

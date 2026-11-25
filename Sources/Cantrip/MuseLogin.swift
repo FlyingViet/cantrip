@@ -306,6 +306,8 @@ final class MuseLoginWatcher {
     private var running = false
     private var again = false
     private var againManual = false
+    /// Callers that came while a look was running; they return once it's done.
+    private var waiting: [CheckedContinuation<Void, Never>] = []
     private var timer: Timer?
     private var rateLimitLogged: Date?
 
@@ -344,14 +346,16 @@ final class MuseLoginWatcher {
     /// One look at the login: on a timer, when Muse's status changes and after Check Now
     /// (`manual`: the user just checked, so no waiting to recheck, and a blocked login or a
     /// sign-in is tried again).
+    /// A call that comes while one is running (Check Now during a copy) returns once that one is
+    /// done, so it answers with the result instead of the state before it.
     func tick(manual: Bool = false) async {
         if running {
             again = true
             againManual = againManual || manual
+            await withCheckedContinuation { waiting.append($0) }
             return
         }
         running = true
-        defer { running = false }
         var passes = 0
         var asked = manual
         repeat {
@@ -361,6 +365,10 @@ final class MuseLoginWatcher {
             againManual = false
             passes += 1
         } while again && passes < 3
+        running = false
+        let done = waiting
+        waiting = []
+        done.forEach { $0.resume() }
     }
 
     private func refresh() {
