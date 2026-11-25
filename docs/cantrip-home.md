@@ -255,8 +255,8 @@ confirm them. See [Views](views.md) for the format, refresh rules, privacy and t
 **Tasks → Upcoming** lists everything set to run later, on every client: Home tasks' next runs,
 one-off steps a tab or Home scheduled, waits a tab left running (a laptop to wake, a deploy to
 finish), this Mac's recurring background jobs (your LaunchAgents with a calendar or interval
-schedule; CI runners, Apple's and Homebrew's are left out), and reminders Cantrip sends itself
-(Muse's weekly sign-in reminder, [muse.md](muse.md#staying-signed-in)). Each item says what it will do, when it
+schedule; CI runners, Apple's and Homebrew's are left out), and things Cantrip does itself later
+(signing Muse back in each week, [muse.md](muse.md#staying-signed-in)). Each item says what it will do, when it
 runs next and who set it up, grouped as **Next up**, **Waiting**, **Repeating** and **Paused**.
 
 **Cancel** asks first and names what will stop. A one-off step is dropped, a wait is stopped, and a

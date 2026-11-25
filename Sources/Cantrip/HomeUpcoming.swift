@@ -13,7 +13,7 @@ final class HomeUpcoming {
     static let shared = HomeUpcoming()
 
     struct Item: Equatable {
-        /// `reminder`: a notice Cantrip sends itself, such as Muse's weekly sign-in reminder.
+        /// `reminder`: something Cantrip does itself later, such as signing Muse back in each week.
         enum Kind: String { case task, step, wait, job, macJob, reminder }
         enum State: String { case scheduled, waiting, paused }
 
@@ -300,9 +300,6 @@ final class HomeUpcoming {
             Self.stop(pid: pid, ownGroup: false, rows: rows)
             Log.write("upcoming: stopped a tab's background job")
             return "Stopped “\(UpcomingNames.commandTitle(job.arguments) ?? job.name)”."
-        case "muse" where value == "login":
-            guard MuseLoginWatcher.shared.upcomingItem(now: now())?.cancelLabel != nil else { break }
-            return try MuseLoginWatcher.shared.skipReminder()
         case "mac":
             guard let job = macJobs(fresh: true).jobs.first(where: { $0.label == value }) else { break }
             try MacLaunchJobs.pause(job)

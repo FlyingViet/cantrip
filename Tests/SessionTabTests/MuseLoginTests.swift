@@ -3,8 +3,9 @@ import SQLite3
 
 extension SessionTabTests {
     /// Keeping Muse signed in: reading the saved and Chrome's logins (times only), copying a newer
-    /// Chrome login, rechecking a turned-down login before acting, the failure path, rate limits,
-    /// the weekly reminder and its Upcoming item, and the export command.
+    /// Chrome login, rechecking a turned-down login before acting, signing in again through Chrome's
+    /// remembered account and the View Mac fallback, the failure path, rate limits, the Upcoming item,
+    /// what the sign-in may press, and the export command.
     @MainActor
     static func testMuseLogin() async throws {
         let files = FileManager.default
@@ -75,7 +76,7 @@ extension SessionTabTests {
         try files.removeItem(at: chrome.appendingPathComponent("Profile 2"))
         try files.removeItem(at: chrome.appendingPathComponent("System Profile"))
 
-        // A watcher with this test's files, clock, status and export.
+        // A watcher with this test's files, clock, status, export and Chrome sign-in.
         let watcher = MuseLoginWatcher()
         watcher.directory = root
         watcher.savedCookies = cookies
@@ -105,6 +106,19 @@ extension SessionTabTests {
             }
             return outcome
         }
+        // Chrome's sign-in: pressing Continue makes Chrome a new login, unless the page needs the user.
+        var signIns: [String] = []
+        var signInResult = MuseChromeSignIn.Outcome.signedIn
+        watcher.chromeSignIn = { profile, signedIn in
+            signIns.append(profile)
+            if signInResult == .signedIn {
+                try? writeChrome(signedIn: [clock.addingTimeInterval(-5)])
+                precondition(signedIn(), "the sign-in sees Chrome's new login")
+            } else {
+                precondition(!signedIn())
+            }
+            return signInResult
+        }
         var shown: [String] = []
         watcher.showSignIn = { shown.append($0) }
         var notices: [(title: String, body: String)] = []
@@ -122,146 +136,172 @@ extension SessionTabTests {
         await watcher.tick()
         precondition(exports == 1, "the same login isn't copied again")
 
-        // A turned-down login is checked again a few minutes later before anything happens…
+        // A turned-down login during its week is checked again a few minutes later before anything happens…
         current = MuseStatus(state: .loginNeeded)
         await watcher.tick()
-        precondition(exports == 0 + 1 && rechecks == 1 && notices.isEmpty && watcher.state.recheckAt == clock.addingTimeInterval(240))
+        precondition(exports == 1 && rechecks == 1 && signIns.isEmpty && watcher.state.recheckAt == clock.addingTimeInterval(240))
         clock = clock.addingTimeInterval(100)
         await watcher.tick()
         precondition(rechecks == 1, "not before the recheck time")
         clock = clock.addingTimeInterval(150)
         answers = [.connected]
         await watcher.tick()
-        precondition(rechecks == 2 && current.state == .connected && notices.isEmpty && shown.isEmpty, "a short failure recovers: nothing to do")
-        // …and when it's still turned down and Chrome has nothing newer, the user is asked once.
+        precondition(rechecks == 2 && current.state == .connected && signIns.isEmpty && notices.isEmpty, "a short failure recovers")
+        // …and when it's still turned down, Cantrip signs in again through Chrome and copies that: the user does nothing.
         current = MuseStatus(state: .loginNeeded)
         await watcher.tick()
         clock = clock.addingTimeInterval(241)
         answers = [.loginNeeded]
         await watcher.tick()
-        precondition(rechecks == 3 && exports == 1 && notices.count == 1 && notices[0].title == "Muse needs you to sign in"
-                     && notices[0].body.contains("Sign in at muse.ai in Chrome on Test Mac; Cantrip copies the new login by itself."),
-                     "\(notices)")
-        precondition(shown.last?.contains("Chrome's muse.ai login is the one that ended") == true, "\(shown)")
+        precondition(rechecks == 4 && signIns == ["Default"] && exports == 2 && current.state == .connected && notices.isEmpty,
+                     "\(rechecks) \(signIns) \(exports) \(current) \(notices)")
+        precondition(log().contains("login: signing in again through Chrome's remembered account (muse.ai ended the login)"), log())
+        let signedIn = try requireHome(MuseLoginFiles.savedLogin(at: cookies)).signedInAt
+        precondition(signedIn == clock.addingTimeInterval(-5))
+
+        // Upcoming lists the next sign-in: when the login's week is up.
+        let next = try requireHome(watcher.upcomingItem(now: clock))
+        precondition(next.id == "muse:login" && next.kind == .reminder && next.state == .scheduled && next.group == "next"
+                     && next.nextRunAt == signedIn.addingTimeInterval(7 * day + 120) && next.cancelLabel == nil
+                     && next.detail?.contains("in Chrome on Test Mac") == true && next.json["kind"] as? String == "reminder", "\(next)")
+
+        // The week is up: checked once, and the ended login is signed in again at once (no recheck wait).
+        // Here the page asks for a password, so the user gets one push to tap through View Mac.
+        clock = signedIn.addingTimeInterval(7 * day + 121)
+        answers = [.loginNeeded]
+        signInResult = .needsYou("the sign-in asks for your password")
+        await watcher.tick()
+        precondition(rechecks == 5 && current.state == .loginNeeded && watcher.upcomingItem(now: clock) == nil, "probed once")
+        await watcher.tick()
+        precondition(signIns.count == 2 && rechecks == 5 && notices.count == 1 && notices[0].title == "Muse needs one tap"
+                     && notices[0].body.contains("open View Mac in the Cantrip app and tap Continue")
+                     && notices[0].body.contains("asks for your password"), "\(notices)")
+        precondition(shown.last?.contains("muse.ai is open in Chrome on Test Mac") == true, "\(shown)")
         let waiting = try requireHome(watcher.upcomingItem(now: clock))
-        precondition(waiting.kind == .reminder && waiting.state == .waiting && waiting.title == "Sign in to Muse in Chrome"
-                     && waiting.cancelLabel == nil && waiting.json["kind"] as? String == "reminder")
+        precondition(waiting.state == .waiting && waiting.title == "Muse needs one tap in Chrome" && waiting.cancelLabel == nil)
         clock = clock.addingTimeInterval(3_600)
         await watcher.tick()
         await watcher.tick()
-        precondition(rechecks == 3 && exports == 1 && notices.count == 1, "asked once; Muse isn't asked again while waiting")
-
-        // The user signs in again in Chrome: copied, connected, and told it's fixed.
+        precondition(signIns.count == 2 && rechecks == 5 && notices.count == 1, "asked once; Muse isn't asked again while waiting")
+        // The user taps Continue: Chrome's new login is copied, and they're told it's fixed.
         try writeChrome(signedIn: [clock.addingTimeInterval(-60)])
         await watcher.tick()
-        precondition(exports == 2 && current.state == .connected && notices.count == 2 && notices[1].title == "Muse is connected again",
-                     "\(notices)")
-        precondition(watcher.state.askedAt == nil && watcher.upcomingItem(now: clock)?.state == .scheduled)
+        precondition(exports == 3 && current.state == .connected && notices.count == 2 && notices[1].title == "Muse is connected again")
+        precondition(watcher.state.askedAt == nil)
 
-        // Failure while the saved login still works: that Chrome login is blocked, the user isn't bothered…
+        // Another ended login: signed in again through Chrome…
+        func endLogin() async {
+            current = MuseStatus(state: .loginNeeded)
+            await watcher.tick()
+            clock = clock.addingTimeInterval(241)
+            answers = [.loginNeeded]
+            await watcher.tick()
+        }
+        signInResult = .signedIn
+        clock = clock.addingTimeInterval(600)
+        await endLogin()
+        precondition(signIns.count == 3 && exports == 4 && current.state == .connected && notices.count == 2, "\(signIns) \(exports) \(current.state) \(notices.count)\n\(log().suffix(1800))")
+        // …but one more within 30 minutes goes to the user instead, and Check Now tries anyway.
+        clock = clock.addingTimeInterval(300)
+        await endLogin()
+        precondition(signIns.count == 3 && notices.count == 3 && notices[2].title == "Muse needs one tap"
+                     && log().contains("not signing in through Chrome again so soon"), "\(notices.map(\.title))")
+        await watcher.tick(manual: true)
+        precondition(signIns.count == 4 && exports == 5 && current.state == .connected && notices.count == 4
+                     && notices[3].title == "Muse is connected again", "\(signIns) \(exports) \(notices.map(\.title))")
+
+        // No Accessibility (or no Chrome): the user is asked to sign in at muse.ai in Chrome themselves.
+        clock = clock.addingTimeInterval(day)
+        signInResult = .unavailable("Cantrip doesn't have Accessibility access on this Mac")
+        await endLogin()
+        precondition(signIns.count == 5 && notices.count == 5 && notices[4].title == "Muse needs you to sign in"
+                     && notices[4].body.contains("Sign in at muse.ai in Chrome on Test Mac")
+                     && notices[4].body.contains("Accessibility"), "\(notices.last!)")
+        try writeChrome(signedIn: [clock.addingTimeInterval(-60)])
+        await watcher.tick()
+        precondition(exports == 6 && current.state == .connected && notices.count == 6)
+        signInResult = .signedIn
+
+        // A copy that fails while the saved login still works: that Chrome login is blocked, nobody is bothered.
         clock = clock.addingTimeInterval(3_600)
         try writeChrome(signedIn: [clock.addingTimeInterval(-60)])
         outcome = .keychain
         await watcher.tick()
-        precondition(exports == 3 && notices.count == 2 && log().contains("kept the saved login, which still works"), log())
+        precondition(exports == 7 && notices.count == 6 && log().contains("kept the saved login, which still works"), log())
         clock = clock.addingTimeInterval(3 * 3_600)
         await watcher.tick()
-        precondition(exports == 3, "no more copies until Chrome's login changes")
-        // …and once the saved one ends, the user is asked with the reason.
-        current = MuseStatus(state: .loginNeeded)
-        await watcher.tick()
-        clock = clock.addingTimeInterval(241)
-        answers = [.loginNeeded]
-        await watcher.tick()
-        precondition(exports == 3 && notices.count == 3 && shown.last?.contains("Chrome Safe Storage") == true, "\(shown)")
+        precondition(exports == 7, "no more copies until Chrome's login changes")
         // Check Now tries the blocked login once more; a dialog nobody answers isn't retried on its own.
         outcome = .timedOut
         await watcher.tick(manual: true)
-        precondition(exports == 4 && notices.count == 3)
+        precondition(exports == 8 && notices.count == 6)
         clock = clock.addingTimeInterval(6 * 3_600)
         await watcher.tick()
-        precondition(exports == 4)
-        // Copied, but muse.ai turns Chrome's login down too: blocked, and the user (already asked) waits.
-        clock = clock.addingTimeInterval(day)
-        try writeChrome(signedIn: [clock.addingTimeInterval(-60)])
+        precondition(exports == 8)
+
+        // Copied, but muse.ai turns Chrome's login down too (Chrome's own login ended): Chrome signs in again.
         outcome = .saved
         rejectAfterCopy = true
+        clock = clock.addingTimeInterval(day)
+        try writeChrome(signedIn: [clock.addingTimeInterval(-600)])
+        let previous = watcher.chromeSignIn
+        watcher.chromeSignIn = { profile, signedIn in
+            rejectAfterCopy = false
+            return await previous(profile, signedIn)
+        }
         await watcher.tick()
-        precondition(exports == 5 && current.state == .loginNeeded && notices.count == 3
-                     && shown.last?.contains("turned Chrome's login down too") == true, "\(shown)")
-        clock = clock.addingTimeInterval(11 * 60)
-        await watcher.tick()
-        precondition(exports == 5, "blocked")
-        try writeChrome(signedIn: [clock.addingTimeInterval(-60)])
-        rejectAfterCopy = false
-        await watcher.tick()
-        precondition(exports == 6 && current.state == .connected && notices.count == 4 && notices[3].title == "Muse is connected again")
+        precondition(exports == 10 && signIns.count == 6 && current.state == .connected && notices.count == 6
+                     && log().contains("muse.ai turned Chrome's login down too"), "\(exports) \(signIns.count) \(current)")
+        watcher.chromeSignIn = previous
 
-        // Rate limit: a busy Chrome is tried again only after the interval, at most 4 a day, one at a time.
+        // Copy rate limit: a busy Chrome is tried again only after the interval, at most 4 a day, one at a time.
         clock = clock.addingTimeInterval(2 * day)
         try writeChrome(signedIn: [clock.addingTimeInterval(-60)])
         outcome = .busy
         async let first: Void = watcher.tick()
         async let second: Void = watcher.tick()
         _ = await (first, second)
-        precondition(exports == 7, "one copy at a time: \(exports)")
+        precondition(exports == 11, "one copy at a time: \(exports)")
         clock = clock.addingTimeInterval(5 * 60)
         await watcher.tick()
-        precondition(exports == 7 && log().contains("next copy of Chrome's login waits until"))
+        precondition(exports == 11 && log().contains("next copy of Chrome's login waits until"))
         for _ in 0..<5 {
             clock = clock.addingTimeInterval(11 * 60)
             await watcher.tick()
         }
-        precondition(exports == 10 && log().contains("4 copies in the last day; no more until Chrome's login changes"), "\(exports)")
+        precondition(exports == 14 && log().contains("4 copies in the last day; no more until Chrome's login changes"), "\(exports)")
         clock = clock.addingTimeInterval(day)
         await watcher.tick()
-        precondition(exports == 10, "blocked until Chrome's login changes, even a day later")
-
-        // The weekly reminder: listed in Upcoming, sent once a day before the login ends, then a check
-        // once the week is up.
-        outcome = .saved
-        let signedIn = clock.addingTimeInterval(-60)
-        try writeChrome(signedIn: [signedIn])
-        await watcher.tick()
-        precondition(exports == 11 && MuseLoginFiles.savedLogin(at: cookies)?.signedInAt == signedIn)
-        let before = notices.count
-        clock = signedIn.addingTimeInterval(5 * day)
-        await watcher.tick()
-        let reminder = try requireHome(watcher.upcomingItem(now: clock))
-        precondition(reminder.id == "muse:login" && reminder.nextRunAt == signedIn.addingTimeInterval(6 * day)
-                     && reminder.state == .scheduled && reminder.group == "next" && reminder.cancelLabel == "Skip"
-                     && reminder.detail?.contains("Sign in at muse.ai in Chrome on Test Mac") == true && notices.count == before, "\(reminder)")
-        clock = signedIn.addingTimeInterval(6 * day + 60)
-        await watcher.tick()
-        await watcher.tick()
-        precondition(notices.count == before + 1 && notices.last?.title.hasPrefix("Sign in to Muse again by") == true
-                     && notices.last?.body.contains("in Chrome on Test Mac") == true, "\(notices)")
-        precondition(watcher.upcomingItem(now: clock)?.state == .waiting)
-        let checks = rechecks
-        clock = signedIn.addingTimeInterval(7 * day + 180)
-        answers = [.connected]
-        await watcher.tick()
-        await watcher.tick()
-        precondition(rechecks == checks + 1 && watcher.upcomingItem(now: clock) == nil, "one check once the week is up")
-        // Skip: this login's reminder doesn't go out and leaves Upcoming.
-        let next = clock.addingTimeInterval(-60)
-        try writeChrome(signedIn: [next])
-        await watcher.tick()
-        precondition(watcher.upcomingItem(now: clock)?.nextRunAt == next.addingTimeInterval(6 * day))
-        _ = try watcher.skipReminder()
-        precondition(watcher.upcomingItem(now: clock) == nil)
-        clock = next.addingTimeInterval(6 * day + 60)
-        let skippedBefore = notices.count
-        await watcher.tick()
-        precondition(notices.count == skippedBefore, "skipped")
+        precondition(exports == 14, "blocked until Chrome's login changes, even a day later")
 
         // Off, or the demo: nothing at all.
         live = false
-        let copied = exports
+        outcome = .saved
         try writeChrome(signedIn: [clock])
         await watcher.tick()
-        precondition(exports == copied && watcher.upcomingItem(now: clock) == nil, "\(exports)")
+        precondition(exports == 14 && watcher.upcomingItem(now: clock) == nil, "\(exports)")
 
+        // What the sign-in may press: only a remembered-account button; never with a password or code asked.
+        typealias Page = MuseSignInPage
+        typealias El = MuseSignInPage.Element
+        let landing = [El(role: "AXTextField", label: "", placeholder: "Mobile number or email"), El(role: "AXButton", label: "Continue"),
+                       El(role: "AXButton", label: "Log in")]
+        precondition(Page.step(host: "muse.ai", elements: landing) == .wait, "a signed-out page: nothing to press")
+        let oneTap = [El(role: "AXImage", label: "Alex"), El(role: "AXLink", label: "Use another account"),
+                      El(role: "AXButton", label: "Continue as Alex Doe")]
+        precondition(Page.step(host: "muse.ai", elements: oneTap) == .press(2) && Page.step(host: "auth.meta.com", elements: oneTap) == .press(2))
+        precondition(Page.step(host: "evil.example", elements: oneTap) == .wait && Page.step(host: "muse.ai.evil.example", elements: oneTap) == .wait,
+                     "only muse.ai and auth.meta.com")
+        precondition(Page.step(host: "auth.meta.com", elements: [El(role: "AXButton", label: "Continue")]) == .press(0)
+                     && Page.step(host: "muse.ai", elements: [El(role: "AXButton", label: "Continue")]) == .wait,
+                     "a lone Continue only on Meta's account page, with nothing to fill in")
+        precondition(Page.step(host: "auth.meta.com", elements: [El(role: "AXTextField", subrole: "AXSecureTextField", label: ""),
+                                                                El(role: "AXButton", label: "Continue as Alex")])
+                     == .needsYou("the sign-in asks for your password"))
+        precondition(Page.step(host: "auth.meta.com", elements: [El(role: "AXTextField", label: "Enter code", placeholder: "6-digit code"),
+                                                                El(role: "AXButton", label: "Continue")])
+                     == .needsYou("the sign-in asks for a code"))
+        precondition(Page.step(host: "muse.ai", elements: [El(role: "AXButton", label: "Continue as another account")]) == .wait)
         // Never a cookie value in the log or the saved state.
         let state = try String(contentsOf: watcher.stateURL, encoding: .utf8)
         for secret in ["SECRET", "ONE-TAP", "OTHER"] {
@@ -297,6 +337,6 @@ extension SessionTabTests {
 
         // Settings and clients say what to do now: sign in in Chrome; no Terminal.
         precondition(MuseStatus.loginSteps.contains("sign in at muse.ai in Chrome on") && !MuseStatus.loginSteps.contains("auth export"))
-        print("Muse login: saved and Chrome logins, copy, recheck, failure, rate limit, reminder and export passed")
+        print("Muse login: saved and Chrome logins, copy, recheck, Chrome sign-in and its fallback, failure, rate limits, Upcoming and export passed")
     }
 }

@@ -118,7 +118,8 @@ struct MuseStatus: Codable, Equatable {
         "To connect Muse, sign in at muse.ai in Chrome on \(MuseLoginWatcher.computerName). Cantrip copies that login "
             + "to muse-cli by itself, within a few minutes (Check Now does it right away). It stays on that Mac, readable "
             + "only by you. The first time, macOS may ask to share Chrome's login: choose Always Allow. muse.ai ends a "
-            + "login a week after you sign in, so Cantrip reminds you a day before; signing in again in Chrome is all it takes."
+            + "login a week after you sign in; Cantrip then signs in again with Chrome's remembered account and tells you "
+            + "only if it needs a tap (through View Mac)."
     }
     static let installSteps = "Install muse-cli on the Mac running Cantrip: `uv tool install muse-cli==\(MuseConnector.pinnedVersion)`."
 }
