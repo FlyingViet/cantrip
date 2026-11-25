@@ -254,8 +254,9 @@ confirm them. See [Views](views.md) for the format, refresh rules, privacy and t
 
 **Tasks → Upcoming** lists everything set to run later, on every client: Home tasks' next runs,
 one-off steps a tab or Home scheduled, waits a tab left running (a laptop to wake, a deploy to
-finish), and this Mac's recurring background jobs (your LaunchAgents with a calendar or interval
-schedule; CI runners, Apple's and Homebrew's are left out). Each item says what it will do, when it
+finish), this Mac's recurring background jobs (your LaunchAgents with a calendar or interval
+schedule; CI runners, Apple's and Homebrew's are left out), and reminders Cantrip sends itself
+(Muse's weekly sign-in reminder, [muse.md](muse.md#staying-signed-in)). Each item says what it will do, when it
 runs next and who set it up, grouped as **Next up**, **Waiting**, **Repeating** and **Paused**.
 
 **Cancel** asks first and names what will stop. A one-off step is dropped, a wait is stopped, and a
@@ -284,7 +285,7 @@ use these commands rather than detached `sleep` scripts. Steps, waits and Mac jo
 
 `GET /api/v1/home/upcoming` answers `{items, revision}` (or `{"unchanged": true}` for
 `?revision=` with the current one). Each item has `id`, `kind` (`task`, `step`, `wait`, `job`,
-`macJob`), `title`, optional `detail`, optional `nextRunAt` (Unix seconds), `schedule` (text),
+`macJob`, `reminder`), `title`, optional `detail`, optional `nextRunAt` (Unix seconds), `schedule` (text),
 `owner`, optional `ownerTabID`, `state` (`scheduled`, `waiting`, `paused`), `group` (`next`,
 `waiting`, `repeating`, `paused`; items come sorted), optional `cancelLabel` and `confirm` (the
 question to ask), and `canResume`. `POST /api/v1/home/upcoming/cancel` or `/resume` with `{"id"}`

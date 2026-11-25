@@ -113,11 +113,13 @@ struct MuseStatus: Codable, Equatable {
         return label + ": " + String(detail.prefix(200))
     }
 
-    static let loginSteps = """
-    To connect Muse: 1. Sign in at muse.ai in Chrome on the Mac running Cantrip. 2. In Terminal there, run \
-    `muse-cli auth export` and click Always Allow when macOS asks to share Chrome's login (it saves the login \
-    to ~/.config/muse-cli/cookies.txt, readable only by you). 3. In Cantrip, Settings › Muse › Check Now.
-    """
+    /// What connects Muse (MuseLoginWatcher does the rest): Settings, clients and notices show it.
+    static var loginSteps: String {
+        "To connect Muse, sign in at muse.ai in Chrome on \(MuseLoginWatcher.computerName). Cantrip copies that login "
+            + "to muse-cli by itself, within a few minutes (Check Now does it right away). It stays on that Mac, readable "
+            + "only by you. The first time, macOS may ask to share Chrome's login: choose Always Allow. muse.ai ends a "
+            + "login a week after you sign in, so Cantrip reminds you a day before; signing in again in Chrome is all it takes."
+    }
     static let installSteps = "Install muse-cli on the Mac running Cantrip: `uv tool install muse-cli==\(MuseConnector.pinnedVersion)`."
 }
 
@@ -189,6 +191,9 @@ final class MuseConnector: ObservableObject {
     var callTimeout: TimeInterval = 60
     /// Alerts the user (Mac notification and paired devices); set by HostServices.
     var notify: ((_ title: String, _ body: String) -> Void)?
+    /// The login's state changed (`MuseLoginWatcher` rechecks, copies Chrome's login and tells the
+    /// user). Without it, losing a working login is reported right away.
+    var onLoginChange: ((MuseStatus) -> Void)?
     /// Something was sent to Muse's main chat (the Muse tab mirrors it).
     var onMainChatActivity: (() -> Void)?
     var artifactDirectory: () -> URL = { CantripHomeStore.artifactDirectory }
@@ -475,13 +480,21 @@ final class MuseConnector: ObservableObject {
         setStatus(MuseStatus(state: state, detail: detail, demo: settings().demo, checkedAt: Date(), account: status.account))
     }
 
+    /// What the user should do about a missing login, in the status Settings and clients show.
+    func noteLoginNeeded(detail: String) {
+        guard status.state == .loginNeeded else { return }
+        setStatus(MuseStatus(state: .loginNeeded, detail: detail, demo: status.demo, checkedAt: status.checkedAt, account: status.account))
+    }
+
     private func setStatus(_ next: MuseStatus) {
         let previous = status.state
         status = next
         if previous != next.state {
             MuseLog.write("status: \(next.label)")
-            if next.state == .loginNeeded, previous == .connected {
-                notify?("Muse needs you to log in", "Cantrip can't reach your Muse until you log in again. " + MuseStatus.loginSteps)
+            if let onLoginChange {
+                onLoginChange(next)
+            } else if next.state == .loginNeeded, previous == .connected {
+                notify?("Muse needs you to sign in", "Cantrip can't reach your Muse until you sign in again. " + MuseStatus.loginSteps)
             }
         }
         let url = directory.appendingPathComponent("status.json")

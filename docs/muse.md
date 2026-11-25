@@ -16,12 +16,10 @@ you turn that off in Muse's settings.
 1. On the Mac running Cantrip, install muse-cli with uv, at the version Cantrip
    was tested with: `uv tool install muse-cli==0.3.14`. Don't use its curl
    installer.
-2. Sign in at muse.ai in Chrome (or Brave, Arc or Edge) on that Mac.
-3. In Terminal, run `muse-cli auth export` and choose **Always Allow** when macOS
-   asks to share the browser's login. It saves the login to
-   `~/.config/muse-cli/cookies.txt`, readable only by you. The login expires;
-   run the command again when Cantrip says so.
-4. Turn on **Muse** in Settings and choose **Check Now**.
+2. Sign in at muse.ai in Chrome on that Mac.
+3. Turn on **Muse** in Settings and choose **Check Now**. Cantrip copies Chrome's
+   login to muse-cli (see [Staying signed in](#staying-signed-in)). The first
+   time, macOS may ask to share Chrome's login: choose **Always Allow**.
 
 **Demo account (made-up data)** uses muse-cli's demo instead: no login and no
 network, so you can try `@muse` and feeds first. Cantrip keeps the demo's chats
@@ -30,6 +28,38 @@ in `~/.cache/Cantrip/muse/` between uses.
 The Settings section shows whether Muse is connected, the login is missing or
 expired, muse-cli isn't installed, or Muse can't be reached. Cantrip tells you
 on your Mac and paired devices when a working login stops working.
+
+## Staying signed in
+
+muse.ai ends a login a week after you sign in (its cookie claims 30 days, and
+it isn't renewed while you use it), and Chrome's login ends with it. You never
+run a command for it: signing in again at muse.ai in Chrome on the Mac running
+Cantrip is all it takes.
+
+- **Chrome has a newer login**: Cantrip looks at when Chrome's muse.ai
+  `hatch_sess` cookie was made (from a copy of Chrome's cookie database; times
+  only, never values) and compares it with the login muse-cli saved. When
+  Chrome's is newer, Cantrip runs `muse-cli auth export --browser chrome`, which
+  saves Chrome's muse.ai cookies to `~/.config/muse-cli/cookies.txt` (0600), and
+  checks Muse again. It looks every minute, so a new sign-in is picked up within
+  a few minutes; **Check Now** does it right away.
+- **Muse turns the login down**: one failure isn't proof (muse.ai's short
+  failures recover within minutes), so Cantrip checks once more four minutes
+  later. If it still fails and Chrome has nothing newer, Cantrip tells you once
+  on your Mac and paired devices to sign in at muse.ai in Chrome, shows that in
+  Settings, and waits for Chrome's login to change without asking Muse again.
+  Once it's connected again it says so.
+- **A day before a login ends**, Cantrip reminds you to sign in again in Chrome.
+  The reminder is listed in Home's [Upcoming](cantrip-home.md#upcoming) (**Skip**
+  drops this week's), and once the week is up Cantrip checks the login.
+- **Safety**: always Chrome only, so muse-cli never opens a browser window; one
+  copy at a time with a 150-second limit (muse-cli itself gives macOS's keychain
+  dialog 120 seconds); at least 10 minutes apart and at most 4 a day; and after a
+  copy fails, or muse.ai turns Chrome's login down too, none until Chrome's login
+  changes, so keychain dialogs never pile up. Check Now tries once more.
+- `~/.cache/Cantrip/muse/login.json` (0600) keeps the times: copies in the last
+  day, the recheck, the blocked login, the reminder. `activity.log` gets a line
+  for each step, with times and outcomes, never a cookie or key.
 
 ## Talk to Muse with @muse
 

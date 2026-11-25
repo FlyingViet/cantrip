@@ -244,6 +244,10 @@ final class HostServices {
             MacNotices.post(MacNotice(id: UUID().uuidString, title: title, body: body))
         }
         MuseConnector.shared.notify = museNotify
+        // Keeps the login current: copies a newer Chrome login, rechecks a turned-down one, reminds weekly.
+        MuseLoginWatcher.shared.notify = museNotify
+        MuseConnector.shared.onLoginChange = { _ in Task { await MuseLoginWatcher.shared.tick() } }
+        MuseLoginWatcher.shared.start()
         MuseFeeds.shared.notify = museNotify
         MuseFeeds.shared.start()
         MuseRequests.shared.home = { [weak manager] in manager?.homeSession }

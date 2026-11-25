@@ -1229,8 +1229,10 @@ enum SettingsManifest {
             try? MacAttention.shared.openSettings(.screenRecording)
             return [:]
         case "museCheckNow":
-            let status = await MuseConnector.shared.check()
-            return ["message": status.summary]
+            _ = await MuseConnector.shared.check()
+            // A turned-down login is copied from Chrome right away when Chrome has a newer one.
+            await MuseLoginWatcher.shared.tick(manual: true)
+            return ["message": MuseConnector.shared.status.summary]
         case _ where key.hasPrefix("museFeed."):
             return try await performMuseFeed(key)
         case "openAccessibilitySettings":

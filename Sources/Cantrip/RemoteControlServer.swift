@@ -6937,6 +6937,8 @@ extension RemoteControlServer {
                 self.sendJSON(Self.museSnapshot(), on: connection)
             case ("POST", ["check"]):
                 _ = await MuseConnector.shared.check()
+                // A turned-down login is copied from Chrome right away when Chrome has a newer one.
+                await MuseLoginWatcher.shared.tick(manual: true)
                 self.sendJSON(Self.museSnapshot(), on: connection)
             case ("GET", ["requests"]):
                 self.sendJSON(["requests": MuseRequests.shared.cards.map(\.snapshot)], on: connection)
