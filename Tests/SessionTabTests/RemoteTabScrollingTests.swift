@@ -220,7 +220,7 @@ extension SessionTabTests {
           supportsPagedHistory:true,hasOlderMessages:false,messages:all};
         try{
           token="recent-test";historyCache.clear();expandedHistory.clear();historyPaused.clear();
-          const paths=[];window.fetch=async path=>{paths.push(path);return {ok:true,json:async()=>({})}};
+          const paths=[];window.fetch=async path=>{paths.push(path);return {ok:true,status:200,headers:new Headers(),text:async()=>"{}"}};
           await originalAPI("/api/v1/sessions/example");
           await originalAPI("/api/v1/sessions/example?before=cursor");
           await originalAPI("/api/v1/sessions/example/messages",{method:"POST",body:"{}"});

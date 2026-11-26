@@ -81,7 +81,7 @@ extension SessionTabTests {
               check(uiActiveWrites===1&&!canReloadUI(),"All mutations are tracked, not only composer sends");
               await reloadUpdatedUI();
               check(!uiReloading&&!sessionStorage.getItem(uiReloadStorageKey),"An active write must not start navigation");
-              releaseWrite({ok:true,json:async()=>({accepted:true})});await writing;
+              releaseWrite({ok:true,status:200,headers:new Headers(),text:async()=>JSON.stringify({accepted:true})});await writing;
               check(uiActiveWrites===0&&canReloadUI(),"Write completion releases the update gate");
               window.fetch=async()=>{throw Error("Simulated lost acknowledgement")};
               try{await originalAPI("/api/v1/sessions/fixture/messages",{method:"POST",body:"{}"});throw Error("Expected failure")}
