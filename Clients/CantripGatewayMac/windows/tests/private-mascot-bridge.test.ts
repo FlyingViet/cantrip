@@ -20,7 +20,7 @@ it("uses the existing authenticated bridge with no cache and fences equally name
   const { privateMascotLoader: loader, personalMascot } = await import("../src/gateway/state/privateMascot");
   loader.observe(revisionA);
   expect(fetch).toHaveBeenCalledOnce();
-  expect(fetch.mock.calls[0][0]).toBe(`/api/v1/mascot?revision=${revisionA}&history=recent`);
+  expect(fetch.mock.calls[0][0]).toBe(`/api/v1/mascot?revision=${revisionA}&history=recent&reasoning=summary`);
   expect(fetch.mock.calls[0][1]).toMatchObject({
     method: "GET", cache: "no-store", headers: { accept: "application/json", "x-cantrip-gateway": "fixture-window-key" },
   });

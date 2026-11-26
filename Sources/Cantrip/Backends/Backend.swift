@@ -375,6 +375,8 @@ struct ReasoningStep: Equatable {
 
     /// `number` is the step's 1-based position in the whole reply or subagent run.
     func snapshot(number: Int) -> [String: Any] { ["title": title, "text": text, "number": number] }
+    /// The title alone; the text loads when the step is opened (`RemoteHistory.reasoning`).
+    func titleSnapshot(number: Int) -> [String: Any] { ["title": title, "text": "", "number": number] }
 
     /// A line that is only `**Title**` starts a step (GPT reasoning summaries);
     /// otherwise each block is one step titled by its first sentence.

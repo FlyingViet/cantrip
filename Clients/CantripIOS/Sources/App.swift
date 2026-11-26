@@ -58,6 +58,7 @@ struct HermesApp: App {
         #if DEBUG
         .task { await CantripUITestFixtures.pairRemoteIfRequested(remoteModel, env: env) }
         .task { await CantripUITestFixtures.recordLaunchTiming(remoteModel, splash: launchSplash) }
+        .task { await CantripUITestFixtures.recordTabTiming(remoteModel) }
         .task { await CantripUITestFixtures.requestBadgesIfAsked() }
         .task { await CantripUITestFixtures.turnToLandscapeIfAsked() }
         #endif

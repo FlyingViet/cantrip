@@ -199,7 +199,7 @@ describe("POST …/delete-message", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const { url, init } = call();
-    expect(url).toBe(`/api/v1/sessions/${TAB}/delete-message?history=recent&recentExchanges=3`);
+    expect(url).toBe(`/api/v1/sessions/${TAB}/delete-message?history=recent&reasoning=summary&recentExchanges=3`);
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({ messageID: A2 });
     expect((init.headers as Record<string, string>)["content-type"]).toBe("application/json");

@@ -3,6 +3,12 @@ import Foundation
 enum RemoteHistory {
     static let pageSize = 30
     static let pageBytes = 192 * 1024
+    /// The newest page (`recentExchanges`): up to that many whole exchanges while they fit in this
+    /// many bytes, and always the newest exchange whole. Older ones load as the reader scrolls up.
+    static let recentPageBytes = 128 * 1024
+    /// With reasoning summaries, a reply whose reasoning is larger than this sends only its step
+    /// titles and `reasoningBytes`: the client loads the text (`reasoning`) when it's opened.
+    static let inlineReasoningBytes = 2_048
     /// With step summaries, a step whose input and output together are larger than this sends
     /// neither: the client loads them (`step`) when the step is opened.
     static let inlineStepBytes = 1_024
@@ -12,14 +18,20 @@ enum RemoteHistory {
     /// the client asked for `steps=summary`, so large steps carry `detailBytes` instead of their
     /// input and output. A busy tab's last turns hold hundreds of steps (0.5–1 MB of commands and
     /// their output) that a phone shows only once a step is opened; on a slow link they kept the
-    /// conversation from loading at all.
-    static func message(_ message: ChatMessage, live: Bool = false, stepSummaries: Bool = false) -> [String: Any] {
+    /// conversation from loading at all. `reasoningSummaries`: the client asked for `reasoning=summary`,
+    /// so long reasoning (up to 400 KB a reply, sent twice: as `thinking` and as steps) comes as step
+    /// titles, with `reasoningBytes`; clients show it collapsed and load the text when it's opened.
+    static func message(_ message: ChatMessage, live: Bool = false, stepSummaries: Bool = false,
+                        reasoningSummaries: Bool = false) -> [String: Any] {
+        let reasoning = ReasoningStep.steps(from: message.reasoningBlocks)
+        let summarizesReasoning = reasoningSummaries && !reasoning.isEmpty
+            && message.thinking.utf8.count > inlineReasoningBytes
         var result: [String: Any] = [
             "id": message.id.uuidString,
             // A child tab's card reads as a reply to clients that don't draw it.
             "role": message.childResult != nil ? "assistant" : message.role.rawValue,
             "text": TabMentions.stripConversationLinks(message.text),
-            "thinking": message.thinking,
+            "thinking": summarizesReasoning ? "" : message.thinking,
             "activities": message.activities.map { activity -> [String: Any] in
                 stepSummaries ? summary(activity) : step(activity)
             },
@@ -48,10 +60,12 @@ enum RemoteHistory {
         }
         // Home's Muse request card: the exact text, its state and the actions open now.
         if let card = message.museRequest { result["museRequest"] = card.snapshot }
-        let reasoning = ReasoningStep.steps(from: message.reasoningBlocks)
         if !reasoning.isEmpty {
-            result["reasoning"] = reasoning.enumerated().map { $1.snapshot(number: $0 + 1) }
+            result["reasoning"] = reasoning.enumerated().map {
+                summarizesReasoning ? $1.titleSnapshot(number: $0 + 1) : $1.snapshot(number: $0 + 1)
+            }
         }
+        if summarizesReasoning { result["reasoningBytes"] = message.thinking.utf8.count }
         var subagents = message.activities.flatMap(\.subagentActivities)
         if subagents.isEmpty, message.role == .assistant {
             subagents = AntigravitySubagentTranscript.reconstructedActivities(fromText: message.text)
@@ -118,6 +132,13 @@ enum RemoteHistory {
             }
         }
         return item
+    }
+
+    /// A reply's reasoning steps in full (`GET …/messages/<id>/reasoning`), for clients that got titles only.
+    static func reasoning(_ message: ChatMessage) -> [String: Any] {
+        let steps = ReasoningStep.steps(from: message.reasoningBlocks)
+        return ["reasoning": steps.enumerated().map { $1.snapshot(number: $0 + 1) },
+                "reasoningBytes": message.thinking.utf8.count]
     }
 
     /// A step with its full title, input and output (`GET …/messages/<id>/steps/<step>`).

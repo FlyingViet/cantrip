@@ -3920,7 +3920,7 @@ struct TurnView: View, Equatable {
                     : CantripWorkFold.make(text: turn.text, work: remoteMessage?.work, streaming: turn.streaming)
                 let placed = CantripReplyBlocks.placed(cantripSubagents)
                 if !cantripReasoning.isEmpty {
-                    CantripReasoningSteps(steps: cantripReasoning, streaming: turn.streaming)
+                    CantripReasoningSteps(steps: cantripReasoning, streaming: turn.streaming, load: reasoningLoader)
                 } else if turn.executionLane?.usesCantripRemote != true, hasIntermediateSteps {
                     IntermediateStepsView(
                         thinking: turn.thinking,
@@ -4046,6 +4046,14 @@ struct TurnView: View, Equatable {
     static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn && lhs.remoteMessage == rhs.remoteMessage && lhs.remote === rhs.remote
             && lhs.cantripSessionID == rhs.cantripSessionID && lhs.threadLine == rhs.threadLine
+    }
+
+    /// Loads the reasoning text of a reply the Mac sent with step titles only.
+    private var reasoningLoader: (() async throws -> [CantripRemoteReasoningStep])? {
+        guard let message = remoteMessage, message.reasoningBytes != nil, let sessionID = cantripSessionID else { return nil }
+        let live = turn.streaming
+        let remote = remote
+        return { try await remote.reasoningSteps(sessionID: sessionID, messageID: message.id, live: live) }
     }
 
     /// Cantrip replies show reasoning steps; tool calls stay on the Mac.

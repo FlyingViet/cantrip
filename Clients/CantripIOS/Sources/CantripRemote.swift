@@ -665,6 +665,9 @@ struct CantripRemoteMessage: Decodable, Equatable, Identifiable {
     var museRequest: CantripRemoteMuseRequest? = nil
     /// Where the reply's progress notes end and its answer begins. Absent from older Macs.
     var work: CantripRemoteWork? = nil
+    /// Set when `reasoning` holds step titles only (`reasoning=summary`): the reasoning's size on the
+    /// Mac. The text loads when the reasoning is opened (`reasoningSteps`). Absent from older Macs.
+    var reasoningBytes: Int? = nil
 
     var presentedText: String { displayText ?? text }
     /// Result cards Cantrip posts into Home's chat; never a model reply.
@@ -2770,6 +2773,16 @@ struct CantripRemoteAPI {
         return response.message
     }
 
+    /// A reply's reasoning steps in full, for a message that came with titles only.
+    func reasoning(sessionID: String, messageID: String) async throws -> [CantripRemoteReasoningStep] {
+        guard UUID(uuidString: sessionID) != nil, UUID(uuidString: messageID) != nil else {
+            throw CantripRemoteError.invalidResponse
+        }
+        struct Response: Decodable { let reasoning: [CantripRemoteReasoningStep] }
+        let response: Response = try await request(path: "/api/v1/sessions/\(sessionID)/messages/\(messageID)/reasoning")
+        return response.reasoning
+    }
+
     private func mcpAppPath(sessionID: String, appID: String) throws -> String {
         "/api/v1/sessions/\(try Self.pathComponent(sessionID))/apps/\(try Self.pathComponent(appID))"
     }
@@ -3421,9 +3434,11 @@ struct CantripRemoteAPI {
         guard var target = URLComponents(string: path), target.host == nil else {
             throw CantripRemoteError.invalidResponse
         }
-        // Large tool steps come as summaries; a step's details load when it's opened (`step`).
+        // Large tool steps and long reasoning come as summaries; their text loads when it's opened
+        // (`step`, `reasoning`), so a busy tab's newest page stays small.
         target.queryItems = (target.queryItems ?? []) + [URLQueryItem(name: "history", value: "recent"),
-                                                         URLQueryItem(name: "steps", value: "summary")]
+                                                         URLQueryItem(name: "steps", value: "summary"),
+                                                         URLQueryItem(name: "reasoning", value: "summary")]
         if includeRecentExchanges {
             target.queryItems?.append(URLQueryItem(name: "recentExchanges",
                                                   value: String(CantripHistoryWindow.recentExchanges)))
@@ -3668,6 +3683,8 @@ final class CantripRemoteModel: ObservableObject {
     private(set) var historyPrependAnchor: String?
     private var detailCache: [String: CantripRemoteSession] = [:]
     private var stepDetailsCache: [CantripRemoteStepRef: CantripRemoteActivity] = [:]
+    /// Reasoning text loaded for replies that came with step titles only, by session and message.
+    private var reasoningCache: [String: [CantripRemoteReasoningStep]] = [:]
     private let savedCopy: CantripSavedCopy
     private var savedCopyPairing: String?
     /// Parts of the saved copy on screen that the Mac hasn't confirmed or replaced yet
@@ -5413,6 +5430,19 @@ final class CantripRemoteModel: ObservableObject {
         return step
     }
 
+    /// A reply's reasoning in full (it came with titles only); kept for this pairing so reopening it is
+    /// instant. A reply still being written is read again each time, as its reasoning grows.
+    func reasoningSteps(sessionID: String, messageID: String, live: Bool) async throws -> [CantripRemoteReasoningStep] {
+        let key = sessionID + "/" + messageID
+        if !live, let kept = reasoningCache[key] { return kept }
+        let generation = configurationGeneration
+        let steps = try await performHistoryRead { try await $0.reasoning(sessionID: sessionID, messageID: messageID) }
+        guard generation == configurationGeneration else { throw CancellationError() }
+        if reasoningCache.count >= 100 { reasoningCache.removeAll() }
+        reasoningCache[key] = steps
+        return steps
+    }
+
     /// For `EnvironmentValues.cantripStepDetails`.
     var stepDetailsLoader: @MainActor (CantripRemoteStepRef) async throws -> CantripRemoteActivity {
         { [weak self] ref in
@@ -6837,6 +6867,7 @@ final class CantripRemoteModel: ObservableObject {
         cancelDetailRefresh()
         detailCache.removeAll()
         stepDetailsCache.removeAll()
+        reasoningCache.removeAll()
         cacheOrder.removeAll()
         expandedHistory.removeAll()
         olderHistoryFailures.removeAll()

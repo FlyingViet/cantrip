@@ -112,6 +112,7 @@ struct SessionTabTests {
             return
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "remote-http" {
+            try await testRemoteHistory()
             try await testRemoteCompression()
             try await testRemoteEntityTags()
             try await testRemoteStepSummaries()

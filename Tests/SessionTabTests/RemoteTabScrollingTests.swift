@@ -645,6 +645,18 @@ extension SessionTabTests {
           check(retained.messages.length===130&&retained.messages[0].role==="user"&&!retained.hasOlderMessages,"One long turn retains its prompt without inventing older history");
           const reset=cacheSession({...longTurn,historyStartID:"reset",messages:[{...shortMessage(200),role:"user"},shortMessage(201)]});
           check(reset.messages.length===2&&reset.messages[0].id==="200","Reset removes stale prompts");
+          const thoughtful={...current,id:"reasoning",hasOlderMessages:false,messages:[{id:"ask",role:"user",text:"Why?",activities:[]},
+            {id:"why",role:"assistant",text:"Because.",thinking:"",reasoning:[{title:"Plan"}],reasoningBytes:5000,activities:[]}]};
+          selected=thoughtful.id;renderSessions([thoughtful]);render(cacheSession(thoughtful));await settle();
+          const reasoningDetails=()=>Array.from($("messages").querySelectorAll("details")).find(d=>d.querySelector("summary")?.textContent==="Reasoning");
+          let reasoningReads=0;
+          api=async path=>{reasoningReads++;check(path.startsWith("/api/v1/sessions/reasoning/messages/why/reasoning"),`Reasoning loads from its route: ${path}`);
+            return {reasoning:[{title:"Plan",text:"The full plan, loaded on open"}],reasoningBytes:5000}};
+          check(reasoningDetails()&&reasoningReads===0,"Summarized reasoning shows collapsed without a download");
+          reasoningDetails().open=true;await settle();
+          check(reasoningReads===1&&reasoningDetails().textContent.includes("The full plan, loaded on open"),"Opening the reasoning loads its text");
+          render(cacheSession(thoughtful));await settle();
+          check(reasoningReads===1&&reasoningDetails().open&&reasoningDetails().textContent.includes("The full plan, loaded on open"),"Polls keep the loaded reasoning open without reading it again");
         }finally{
           api=originalAPI;token=originalToken;window.requestAnimationFrame=originalFrame;
           if(timer)clearTimeout(timer);timer=null;historyCache.clear();expandedHistory.clear();

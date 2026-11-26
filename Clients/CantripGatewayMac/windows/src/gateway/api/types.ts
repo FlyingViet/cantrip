@@ -802,6 +802,9 @@ export interface RemoteMessage {
   /** A child tab's card in its parent (role `assistant`; `text` is a plain fallback). */
   childResult?: RemoteChildResult;
   reasoning?: RemoteReasoningStep[];
+  /** Set when `reasoning` holds step titles only (`reasoning=summary`): the reasoning's size. Its text loads when
+   * it's opened (`GET …/messages/<id>/reasoning`). Absent from older Macs. */
+  reasoningBytes?: number;
   /** Assistant replies: text before the last tool call is notes, folded above the answer. */
   work?: RemoteWork;
   subagents?: RemoteSubagent[];

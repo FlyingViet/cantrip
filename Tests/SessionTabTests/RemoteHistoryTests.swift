@@ -153,9 +153,10 @@ extension SessionTabTests {
                          "Prompt-aligned cursors must not skip or duplicate messages")
             precondition(chat.messages == fixture)
         }
+        let sizable = String(repeating: "Sizable output\n", count: 4_000)
         let exchanges = (0..<5).map { index in
             [ChatMessage(role: .user, text: "Exchange \(index)"),
-             ChatMessage(role: .assistant, text: index == 2 ? oversized : "Answer \(index)")]
+             ChatMessage(role: .assistant, text: index == 2 ? sizable : "Answer \(index)")]
                 + (index == 3 ? (0..<40).map {
                     ChatMessage(role: .assistant, text: "Continuation \($0)", author: "Council")
                 } : [])
@@ -168,8 +169,8 @@ extension SessionTabTests {
         let expectedThree = exchanges.suffix(3).flatMap { $0 }
         precondition(threeMessages.map { $0["id"] as! String } == expectedThree.map { $0.id.uuidString })
         precondition(threeMessages.filter { $0["role"] as? String == "user" }.count == 3)
-        precondition(threeMessages.count > RemoteHistory.pageSize && threeBytes > RemoteHistory.pageBytes,
-                     "Three complete exchanges must survive both soft page budgets")
+        precondition(threeMessages.count > RemoteHistory.pageSize && threeBytes < RemoteHistory.recentPageBytes,
+                     "Three complete exchanges that fit the newest page's budget survive the count budget")
         for (payload, original) in zip(threeMessages, expectedThree) { expectFull(payload, original: original) }
         precondition(three["hasOlderMessages"] as? Bool == true && chat.messages == completeHistory)
         let (_, previousResponse, _) = try await request(
@@ -194,7 +195,7 @@ extension SessionTabTests {
         precondition(queuedStatus == 202 && chat.queued.count == 1)
         precondition((queuedSession["messages"] as! [[String: Any]]).map { $0["id"] as! String }
                      == expectedThree.map { $0.id.uuidString },
-                     "Send acknowledgements retain three full exchanges beyond the usual page budgets")
+                     "Send acknowledgements retain three full exchanges beyond the usual page count")
         let queuedID = chat.queued[0].id
         let unknownID = UUID()
         let (unknownStatus, _, _) = try await request("/queue/\(unknownID)/send", method: "POST", body: [:])
@@ -254,6 +255,122 @@ extension SessionTabTests {
         let (_, emptyThreeResponse, _) = try await request("?history=recent&recentExchanges=3")
         let emptyThree = emptyThreeResponse["session"] as! [String: Any]
         precondition(emptyThree["hasOlderMessages"] as? Bool == false && (emptyThree["messages"] as! [Any]).isEmpty)
-        print("Remote history: three-exchange opt-in, complete prompt-aligned pages, soft budgets, conditional reads, complete paging, legacy and private access passed")
+        try await testRemoteNewestPageBudget(chat: chat, request: request)
+        try await testRemoteReasoningSummaries(chat: chat, request: request)
+        print("Remote history: three-exchange opt-in, newest-page budget, reasoning summaries, complete prompt-aligned pages, soft budgets, conditional reads, complete paging with new turns arriving, legacy and private access passed")
+    }
+
+    typealias HistoryRequest = (_ suffix: String, _ auth: Bool, _ method: String, _ body: [String: Any]?) async throws
+        -> (Int, [String: Any], Int)
+
+    /// The newest page holds up to three whole exchanges within `recentPageBytes`, dropping the oldest
+    /// first and always keeping the newest whole; `before` cursors then page back to the first message
+    /// with no gap or repeat, while new turns arrive between pages.
+    @MainActor
+    private static func testRemoteNewestPageBudget(chat: ChatSession, request: HistoryRequest) async throws {
+        func read(_ suffix: String) async throws -> [String: Any] {
+            let (status, response, _) = try await request(suffix, true, "GET", nil)
+            precondition(status == 200, "\(suffix) -> \(status)")
+            return response["session"] as! [String: Any]
+        }
+        func ids(_ page: [String: Any]) -> [String] { (page["messages"] as! [[String: Any]]).map { $0["id"] as! String } }
+        let big = String(repeating: "Big reply line\n", count: 10_000)
+        func exchange(_ index: Int, reply: String? = nil) -> [ChatMessage] {
+            [ChatMessage(role: .user, text: "Turn \(index)"), ChatMessage(role: .assistant, text: reply ?? "Answer \(index)")]
+        }
+        // A large reply two exchanges back: the newest page keeps the two newer exchanges.
+        chat.messages = (0..<8).flatMap { exchange($0, reply: $0 == 5 ? big : nil) }
+        let original = chat.messages
+        var page = try await read("?history=recent&recentExchanges=3")
+        precondition(ids(page) == original.suffix(4).map(\.id.uuidString) && page["hasOlderMessages"] as? Bool == true,
+                     "A third exchange that doesn't fit stays for the next page")
+        // New turns arrive while the reader pages back: cursors don't move, and nothing repeats or goes missing.
+        var loaded = ids(page)
+        var added: [ChatMessage] = []
+        while page["hasOlderMessages"] as? Bool == true {
+            let turn = exchange(100 + added.count / 2)
+            chat.messages += turn
+            added += turn
+            page = try await read("?history=recent&recentExchanges=3&before=\(loaded.first!)")
+            precondition(!ids(page).isEmpty && Set(ids(page)).isDisjoint(with: loaded))
+            loaded = ids(page) + loaded
+        }
+        precondition(loaded == original.map(\.id.uuidString), "Paging back reaches the first message once, in order")
+        // The client's merge: the newest page overlaps what it holds, and the new turns follow.
+        let newest = ids(try await read("?history=recent&recentExchanges=3"))
+        let overlap = try requireHistory(loaded.firstIndex(of: newest.first!))
+        precondition(Array(loaded.prefix(overlap)) + newest == chat.messages.map(\.id.uuidString)
+                     && newest.suffix(added.count) == added.map(\.id.uuidString)[...])
+        // A newest exchange larger than the budget comes whole, alone.
+        chat.messages = (0..<4).flatMap { exchange($0, reply: $0 == 3 ? big + big : nil) }
+        page = try await read("?history=recent&recentExchanges=3")
+        precondition(ids(page) == chat.messages.suffix(2).map(\.id.uuidString)
+                     && (page["messages"] as! [[String: Any]])[1]["text"] as? String == big + big
+                     && page["hasOlderMessages"] as? Bool == true)
+        // Mutation replies (here: renaming the tab) send the same budgeted page.
+        let (renamed, response, _) = try await request("/metadata?history=recent&recentExchanges=3", true, "POST",
+                                                       ["customTitle": "Budgeted"])
+        precondition(renamed == 200 && ids(response["session"] as! [String: Any]) == ids(page))
+    }
+
+    /// `reasoning=summary`: long reasoning comes as step titles with `reasoningBytes` (no `thinking`),
+    /// and `…/messages/<id>/reasoning` has the steps in full. Short reasoning and other clients are unchanged.
+    @MainActor
+    private static func testRemoteReasoningSummaries(chat: ChatSession, request: HistoryRequest) async throws {
+        let sections = (1...40).map { "**Checking part \($0)**\n\n" + String(repeating: "Reasoning about part \($0). ", count: 60) }
+        var long = ChatMessage(role: .assistant, text: "Long reasoning reply")
+        long.thinking = sections.joined(separator: "\n\n")
+        long.reasoningStarts = [0]
+        var short = ChatMessage(role: .assistant, text: "Short reasoning reply")
+        short.thinking = "**Quick check**\n\nOne line."
+        short.reasoningStarts = [0]
+        chat.messages = [ChatMessage(role: .user, text: "First"), short, ChatMessage(role: .user, text: "Second"), long]
+        func message(_ suffix: String, _ index: Int) async throws -> [String: Any] {
+            let (status, response, _) = try await request(suffix, true, "GET", nil)
+            precondition(status == 200)
+            return ((response["session"] as! [String: Any])["messages"] as! [[String: Any]])[index]
+        }
+        let (_, plainResponse, plainBytes) = try await request("?history=recent&recentExchanges=3&steps=summary", true, "GET", nil)
+        let (_, _, summaryBytes) = try await request("?history=recent&recentExchanges=3&steps=summary&reasoning=summary",
+                                                     true, "GET", nil)
+        let full = ((plainResponse["session"] as! [String: Any])["messages"] as! [[String: Any]])[3]
+        precondition(full["thinking"] as? String == long.thinking && full["reasoningBytes"] == nil,
+                     "Clients that don't ask keep the reasoning inline")
+        let summarized = try await message("?history=recent&recentExchanges=3&reasoning=summary", 3)
+        let titles = summarized["reasoning"] as! [[String: Any]]
+        let fullSteps = full["reasoning"] as! [[String: Any]]
+        precondition(summarized["thinking"] as? String == "" && summarized["reasoningBytes"] as? Int == long.thinking.utf8.count
+                     && titles.count == 40 && titles.allSatisfy { ($0["text"] as? String) == "" }
+                     && titles.map { $0["title"] as! String } == fullSteps.map { $0["title"] as! String }
+                     && titles.map { $0["number"] as! Int } == Array(1...40))
+        precondition(summaryBytes * 4 < plainBytes, "Titles instead of text: \(summaryBytes) vs \(plainBytes) bytes")
+        let inline = try await message("?history=recent&recentExchanges=3&reasoning=summary", 1)
+        precondition(inline["thinking"] as? String == short.thinking && inline["reasoningBytes"] == nil,
+                     "Short reasoning stays inline")
+        let (status, loaded, _) = try await request("/messages/\(long.id)/reasoning", true, "GET", nil)
+        let steps = loaded["reasoning"] as! [[String: Any]]
+        precondition(status == 200 && loaded["reasoningBytes"] as? Int == long.thinking.utf8.count && steps.count == 40
+                     && zip(steps, fullSteps).allSatisfy {
+                         $0["title"] as? String == $1["title"] as? String && $0["text"] as? String == $1["text"] as? String
+                             && $0["number"] as? Int == $1["number"] as? Int
+                     }, "The full steps match what other clients get inline")
+        let (missing, _, _) = try await request("/messages/\(UUID())/reasoning", true, "GET", nil)
+        let (post, _, _) = try await request("/messages/\(long.id)/reasoning", true, "POST", [:])
+        chat.isPrivate = true
+        let (hidden, _, _) = try await request("/messages/\(long.id)/reasoning", true, "GET", nil)
+        chat.isPrivate = false
+        precondition(missing == 404 && post != 200 && hidden == 404)
+        // A streaming reply's reasoning grows: titles keep up, the text stays on the Mac.
+        chat.isStreaming = true
+        chat.messages[3].thinking += "\n\n**Writing the answer**\n\n" + String(repeating: "More. ", count: 50)
+        let live = try await message("?history=recent&recentExchanges=3&reasoning=summary", 3)
+        precondition((live["reasoning"] as! [[String: Any]]).last?["title"] as? String == "Writing the answer"
+                     && live["reasoningBytes"] as? Int == chat.messages[3].thinking.utf8.count)
+        chat.isStreaming = false
+    }
+
+    private static func requireHistory<T>(_ value: T?) throws -> T {
+        guard let value else { throw NSError(domain: "RemoteHistoryTests", code: 1) }
+        return value
     }
 }

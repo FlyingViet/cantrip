@@ -20,7 +20,9 @@ final class CantripTabLoadUITests: XCTestCase {
         app.launchArguments = ["-CantripUITestRemoteURL", env["CANTRIP_UITEST_HOME_URL"]!,
                                "-CantripUITestRemoteToken", env["CANTRIP_UITEST_HOME_TOKEN"]!, "-CantripUITestLane", "home",
                                // Opens the tab through a tapped completion push once Home is up.
-                               "-CantripUITestNotifyTab", env["CANTRIP_UITEST_TAB_ID"]!, "-CantripUITestNotifyAfter", "2"]
+                               "-CantripUITestNotifyTab", env["CANTRIP_UITEST_TAB_ID"]!, "-CantripUITestNotifyAfter", "2",
+                               // The app's own times (Documents/tab-timing.jsonl): the tab selected, its newest message in.
+                               "-CantripUITestTimingLog", "YES"]
         let launched = Date()
         app.launch()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
@@ -36,11 +38,13 @@ final class CantripTabLoadUITests: XCTestCase {
         let deadline = launched.addingTimeInterval(wait)
         var opened: Date?
         var shown: Date?
+        // Only the reply is polled: each query reads the whole screen, and a missing element (the Duo has
+        // no tab header) costs the most.
         while Date() < deadline {
-            if opened == nil, header.exists { opened = Date() }
             if reply.exists { shown = Date(); break }
-            Thread.sleep(forTimeInterval: 0.2)
+            Thread.sleep(forTimeInterval: 0.1)
         }
+        if header.exists { opened = Date() }
         let headerValue = header.exists ? (header.value as? String ?? "") : "no header"
         var result: [String: Any] = ["launch": launched.timeIntervalSince1970, "header": headerValue]
         result["tabOpened"] = opened?.timeIntervalSince1970

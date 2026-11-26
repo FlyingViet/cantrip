@@ -216,9 +216,27 @@ function reasoningSteps(message: RemoteMessage): RemoteReasoningStep[] {
   return text ? [{ title: "Reasoning", text, number: 1 }] : [];
 }
 
-function ReasoningSteps(props: { steps: RemoteReasoningStep[]; streaming: boolean }): JSX.Element {
+/** `load`: the steps are titles only (the Mac sent `reasoningBytes`); their text loads once it's opened. */
+function ReasoningSteps(props: { steps: RemoteReasoningStep[]; streaming: boolean;
+  load?: () => Promise<RemoteReasoningStep[]> }): JSX.Element {
   const [expanded, setExpanded] = useState(false);
+  const [loaded, setLoaded] = useState<RemoteReasoningStep[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const latest = props.steps[props.steps.length - 1];
+  const shown = remote.mergedReasoning(props.steps, loaded);
+  // Opening it (or Retry) loads the text; a reply still being written is read again each time.
+  useEffect(() => {
+    if (!expanded || !props.load || (loaded && !props.streaming)) return;
+    let current = true;
+    setLoading(true);
+    setFailure(null);
+    props.load().then((steps) => { if (current) setLoaded(steps); })
+      .catch((error: unknown) => { if (current) setFailure(`Couldn't load the reasoning. ${error instanceof Error ? error.message : ""}`.trim()); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [expanded, attempt]);
   return (
     <div class="reasoning">
       <button type="button" class="reasoning-toggle" aria-expanded={expanded ? "true" : "false"}
@@ -227,15 +245,20 @@ function ReasoningSteps(props: { steps: RemoteReasoningStep[]; streaming: boolea
         {props.streaming ? <Spinner size="small" /> : <Icon name="brain" size={14} class="muted" />}
         <strong>Reasoning</strong>
         <span class="grow" />
-        <span class="muted">{stepLabel(props.steps.length)}</span>
+        <span class="muted">{stepLabel(shown.length)}</span>
       </button>
       {props.streaming && !expanded && latest?.title ? <div class="reasoning-now" aria-label={`Now: ${latest.title}`}><Markdown text={latest.title} /></div> : null}
       {expanded ? (
         <div class="reasoning-steps">
-          {props.steps.map((step, index) => (
+          {shown.map((step, index) => (
             <ReasoningStepRow key={step.number ?? index + 1} step={step} number={step.number ?? index + 1}
-              current={props.streaming && index === props.steps.length - 1} />
+              current={props.streaming && index === shown.length - 1} />
           ))}
+          {loading ? <div class="reasoning-loading muted" role="status"><Spinner size="small" /> Loading the reasoning…</div> : null}
+          {!loading && failure ? (
+            <div class="reasoning-loading muted" role="alert">{failure}{" "}
+              <button type="button" class="link" onClick={() => setAttempt(attempt + 1)}>Retry</button></div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -589,7 +612,8 @@ export function MessageRow(props: {
       {rest(
         <>
           {message.author ? <div class="author">{message.author}</div> : null}
-          {steps.length ? <ReasoningSteps steps={steps} streaming={props.streaming} /> : null}
+          {steps.length ? <ReasoningSteps steps={steps} streaming={props.streaming}
+            load={message.reasoningBytes ? () => remote.reasoningSteps(session.id, message.id, props.streaming) : undefined} /> : null}
           {apps.length ? <MCPAppStack sessionID={session.id} apps={apps} /> : null}
           {usesBrowser(message.activities) ? <BrowserCard live={props.streaming} /> : null}
           {!isError ? <ReplyText message={message} session={session} settled={settled} streaming={props.streaming} /> : null}

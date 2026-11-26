@@ -204,7 +204,8 @@ final class CantripMCPAppTests: XCTestCase {
         MCPAppRequestProtocol.handler = { request in
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer " + "unit-token")
             XCTAssertEqual(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems,
-                           [URLQueryItem(name: "history", value: "recent"), URLQueryItem(name: "steps", value: "summary")])
+                           [URLQueryItem(name: "history", value: "recent"), URLQueryItem(name: "steps", value: "summary"),
+                            URLQueryItem(name: "reasoning", value: "summary")])
             switch step {
             case 0:
                 step += 1

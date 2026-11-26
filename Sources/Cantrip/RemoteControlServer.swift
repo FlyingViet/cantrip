@@ -1671,6 +1671,18 @@ final class RemoteControlServer {
             return
         }
 
+        // A reply's reasoning in full, for clients that got its step titles only (`reasoningBytes`).
+        if parts.count == 4, parts[1] == "messages", parts[3] == "reasoning", request.method == "GET" {
+            guard let messageID = UUID(uuidString: String(parts[2])),
+                  let message = session.messages.first(where: { $0.id == messageID }) else {
+                sendError(404, "message no longer available", on: connection)
+                return
+            }
+            sendEncoded(on: connection, queue: detailEncodingQueue) {
+                try JSONSerialization.data(withJSONObject: RemoteHistory.reasoning(message), options: [.sortedKeys])
+            }
+            return
+        }
         // One step in full: its title, input and output, for clients that got `detailBytes` in its place.
         if parts.count == 5, parts[1] == "messages", parts[3] == "steps", request.method == "GET" {
             guard let messageID = UUID(uuidString: String(parts[2])),
@@ -3242,9 +3254,10 @@ final class RemoteControlServer {
             let live = session.liveReplyID
             let tags = ThreadTags.tags(in: session.messages, range: session.messages.indices, sessionID: session.id)
             let summaries = connection.trace.usesStepSummaries
+            let reasoningSummaries = connection.trace.usesReasoningSummaries
             result["messages"] = session.messages.map {
                 messageSnapshot($0, sessionID: session.id, liveReplyID: live, home: home, thread: tags[$0.id],
-                                stepSummaries: summaries)
+                                stepSummaries: summaries, reasoningSummaries: reasoningSummaries)
             }
             result["threadReplies"] = ThreadTags.replyCountsObject(in: session.messages, sessionID: session.id)
         }
@@ -3283,12 +3296,12 @@ final class RemoteControlServer {
 
     private func messageSnapshot(_ message: ChatMessage, sessionID: UUID, liveReplyID: UUID?,
                                  home: HomeReplyView? = nil, thread: [String: Any]? = nil,
-                                 stepSummaries: Bool = false) -> [String: Any] {
+                                 stepSummaries: Bool = false, reasoningSummaries: Bool = false) -> [String: Any] {
         // Tool marks count the saved text, so the split comes before Home trims its blocks.
         let work = message.workSplit(live: message.id == liveReplyID)
         var message = message
         if let home, message.role == .assistant { message.text = home.text(of: message) }
-        var object = RemoteHistory.message(message, stepSummaries: stepSummaries)
+        var object = RemoteHistory.message(message, stepSummaries: stepSummaries, reasoningSummaries: reasoningSummaries)
         object["work"] = work?.snapshot
         object["thread"] = thread
         object["isLocalPrivate"] = sessionID == ChatSession.privateLocalID
@@ -3376,6 +3389,7 @@ final class RemoteControlServer {
         // For every loaded page: a client updates prompts it cached from older pages too.
         let replyCounts = ThreadTags.replyCountsObject(in: session.messages, sessionID: sessionID)
         let summaries = connection.trace.usesStepSummaries
+        let reasoningSummaries = connection.trace.usesReasoningSummaries
         // Full-message sizing and encoding belong off the main actor and tab-list queue.
         sendEncoded(status: status, on: connection, queue: detailEncodingQueue) {
             var result = summary
@@ -3384,13 +3398,24 @@ final class RemoteControlServer {
             if includesCompleteExchanges {
                 messages = candidates.map {
                     self.messageSnapshot($0, sessionID: sessionID, liveReplyID: live, home: home, thread: tags[$0.id],
-                                         stepSummaries: summaries)
+                                         stepSummaries: summaries, reasoningSummaries: reasoningSummaries)
                 }
+                // Whole exchanges, oldest dropped first, until they fit; the newest one always stays.
+                let sizes = try messages.map { try JSONSerialization.data(withJSONObject: $0).count }
+                var total = sizes.reduce(0, +)
+                var start = 0
+                for prompt in candidates.indices.dropFirst() where candidates[prompt].role == .user {
+                    guard total > RemoteHistory.recentPageBytes else { break }
+                    total -= sizes[start..<prompt].reduce(0, +)
+                    start = prompt
+                }
+                messages.removeFirst(start)
             } else {
                 var bytes = 0
                 for candidate in candidates.suffix(RemoteHistory.pageSize).reversed() {
                     let message = self.messageSnapshot(candidate, sessionID: sessionID, liveReplyID: live,
-                                                       home: home, thread: tags[candidate.id], stepSummaries: summaries)
+                                                       home: home, thread: tags[candidate.id], stepSummaries: summaries,
+                                                       reasoningSummaries: reasoningSummaries)
                     let size = try JSONSerialization.data(withJSONObject: message).count
                     if !messages.isEmpty, bytes + size > RemoteHistory.pageBytes { break }
                     messages.insert(message, at: 0)
@@ -3403,7 +3428,8 @@ final class RemoteControlServer {
                    let prompt = candidates[..<start].lastIndex(where: { $0.role == .user }) {
                     messages = candidates[prompt..<start].map {
                         self.messageSnapshot($0, sessionID: sessionID, liveReplyID: live, home: home,
-                                             thread: tags[$0.id], stepSummaries: summaries)
+                                             thread: tags[$0.id], stepSummaries: summaries,
+                                             reasoningSummaries: reasoningSummaries)
                     } + messages
                 }
             }
@@ -4457,7 +4483,7 @@ private extension RemoteControlServer {
       while(revalidatedReads.size>revalidatedLimit)revalidatedReads.delete(revalidatedReads.keys().next().value)}
     async function api(path,options={}){options.headers={...(options.headers||{}),Authorization:`Bearer ${token}`};if(options.body)options.headers["Content-Type"]="application/json";
       if(uiNavigating)throw Error("Remote is updating; this request was not sent.");
-      path+=(path.includes("?")?"&":"?")+"history=recent&steps=summary";
+      path+=(path.includes("?")?"&":"?")+"history=recent&steps=summary&reasoning=summary";
       const controller=(!options.method||options.method==="GET")?new AbortController():null;
       const segments=path.split("?")[0].split("/").filter(Boolean),historyRead=segments.slice(0,3).join("/")==="api/v1/sessions"&&(segments.length===4||(segments.length===6&&segments[4]==="messages"));
       if(sidebarLayout&&controller&&historyRead&&segments.length===4&&!new URLSearchParams(path.split("?")[1]).has("before"))path+="&recentExchanges=3";
@@ -5886,7 +5912,16 @@ private extension RemoteControlServer {
       const states=activities.map(item=>item.state),state=states.includes("running")?"running":states.includes("failed")?"failed":states.includes("cancelled")?"cancelled":"succeeded";const summary=document.createElement("summary");summary.append(statusIcon(state));
       const label=document.createElement("span");const noun=activities.length===1?"step":"steps";label.textContent=state==="running"?`Working · ${activities.length} ${noun}`:`${activities.length} ${noun}`;summary.append(label);disclosure.append(summary);
       const body=document.createElement("div");body.className="disclosure-body";for(const activity of activities)appendActivity(body,activity,messageID,sessionID);disclosure.append(body);parent.append(disclosure)}
-    function appendThinking(parent,text,messageID){if(!text)return;const details=remember(document.createElement("details"),`thinking:${messageID}`);details.className="disclosure";const summary=document.createElement("summary");const label=document.createElement("span");label.textContent="Reasoning";summary.append(label);const body=document.createElement("div");body.className="disclosure-body prose";body.textContent=text;details.append(summary,body);parent.append(details)}
+    // Long reasoning comes as step titles (reasoningBytes, reasoning=summary): its text loads when it's opened, kept per message.
+    const reasoningTexts=new Map();
+    function reasoningText(steps){return (steps||[]).map(step=>[step.title,step.text].filter(Boolean).join("\\n\\n")).join("\\n\\n")}
+    function appendThinking(parent,text,messageID,loadFrom,live){if(!text&&!loadFrom)return;const details=remember(document.createElement("details"),`thinking:${messageID}`);details.className="disclosure";const summary=document.createElement("summary");const label=document.createElement("span");label.textContent="Reasoning";summary.append(label);const body=document.createElement("div");body.className="disclosure-body prose";body.textContent=text||reasoningTexts.get(messageID)||"";details.append(summary,body);parent.append(details);
+      if(text||!loadFrom)return;const sessionID=loadFrom.sessionID;
+      async function load(){if(!details.open||(reasoningTexts.has(messageID)&&!live))return;body.textContent=reasoningTexts.get(messageID)||"Loading the reasoning…";
+        try{const data=await api(`/api/v1/sessions/${encodeURIComponent(sessionID)}/messages/${encodeURIComponent(messageID)}/reasoning`);const full=reasoningText(data.reasoning);reasoningTexts.set(messageID,full);if(reasoningTexts.size>100)reasoningTexts.delete(reasoningTexts.keys().next().value);body.textContent=full}
+        catch(error){if(!reasoningTexts.has(messageID))body.textContent=`Couldn't load the reasoning: ${error.message}. Close and open it to try again.`}}
+      // A re-render (each poll) reuses what loaded; opening it again reads a reply still being written anew.
+      details.addEventListener("toggle",load);if(details.open&&!reasoningTexts.has(messageID))load()}
     // @-mention a tab: "@" at the start of a word suggests the open tabs this one may look into; a picked tab is sent as @[Label](cantrip-tab:<ID>) so the model acts on exactly that tab (TabMentions on the Mac).
     const mentionTokenPattern=/@\\[([^\\[\\]\\n]{1,120})\\]\\(cantrip-tab:([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\\)/g,mentionOpeners="([{\\"'“‘";
     function mentionLabel(title){const label=String(title??"").replace(/[\\[\\]]/g,"").split(/\\s+/).filter(Boolean).join(" ");return [...label].slice(0,60).join("").trim()||"tab"}
@@ -6109,7 +6144,7 @@ private extension RemoteControlServer {
           if(!drawsRow(message,answered))continue;if(message.role==="freshStart"){box.append(freshStartDivider(message));continue}const row=document.createElement("article"),line=lines.get(message.id);let link=null;row.className=`message ${message.role}`;row.dataset.messageId=message.id;if(line)row.classList.add(`thread-${line}`);
           if(message.author){const author=document.createElement("span");author.className="author";author.textContent=message.author;row.append(author)}
           if(message.thread&&message.role!=="user"){row.classList.add("threaded");link=threadQuote(session.id,message);row.append(link)}
-          appendThinking(row,message.thinking,message.id);if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.privacy)row.append(privacyBadge(message.privacy));else if(message.id===privacyPending)row.append(privacyBadge({label:"Privacy check"},true));const replies=session.threadReplies?.[message.id];if(replies>0)row.append(threadRepliesButton(session.id,message,replies));if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.museRequest)row.append(museRequestCard(message.museRequest));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
+          appendThinking(row,message.thinking,message.id,message.reasoningBytes?{sessionID:session.id}:null,Boolean(session.isStreaming&&message.id===session.messages?.[session.messages.length-1]?.id));if(message.role==="user"){const images=message.images||[],text=message.displayText??message.text;if(text)appendPrompt(row,text);if(images.length)appendAttachments(row,session.id,images);if(message.privacy)row.append(privacyBadge(message.privacy));else if(message.id===privacyPending)row.append(privacyBadge({label:"Privacy check"},true));const replies=session.threadReplies?.[message.id];if(replies>0)row.append(threadRepliesButton(session.id,message,replies));if(message.promptUsage)appendPromptUsage(row,message.promptUsage,message.id)}else if(message.childResult)row.append(childResultCard(session.id,message.childResult));else if(message.role==="handoff"&&message.museRequest)row.append(museRequestCard(message.museRequest));else if(message.role==="handoff"&&message.handoffResult)row.append(handoffResultCard(message.handoffResult));else appendReply(row,message,settled,session);
           if(message.role==="error"&&session.supportsStartFresh&&message.id===session.repeatedErrorMessageID)appendErrorRecovery(row,session);
           if(message.role==="error"&&session.continuableMessageIDs?.includes(message.id))appendContinue(row,session,message.id);
           if(canDeleteMessage(session,message))appendDeleteMessage(row,session,message);

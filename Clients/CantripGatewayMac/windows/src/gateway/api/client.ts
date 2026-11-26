@@ -59,7 +59,8 @@ function defaultTimeout(path: string, method: string, bytes: number): number {
 
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = options.method ?? "GET";
-  let url = path + (path.includes("?") ? "&" : "?") + "history=recent";
+  // Long reasoning comes as step titles; its text loads when it's opened (remote.reasoningSteps).
+  let url = path + (path.includes("?") ? "&" : "?") + "history=recent&reasoning=summary";
   if (options.recent) url += "&recentExchanges=3";
   const headers: Record<string, string> = { accept: "application/json", "x-cantrip-gateway": bridge.key };
   const kept = method === "GET" ? revalidated.get(url) : undefined;

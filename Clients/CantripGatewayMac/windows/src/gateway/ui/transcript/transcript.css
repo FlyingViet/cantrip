@@ -129,6 +129,7 @@
 .work-notes-body { margin: 4px 0 2px 6px; padding-left: 12px; border-left: 2px solid var(--separator); color: var(--secondary); font-size: 13px; }
 .work-notes-body .prose, .work-notes-body .prose p, .work-notes-body .prose li { color: var(--secondary); }
 .reasoning-steps { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; }
+.reasoning-loading { display: flex; align-items: center; gap: 6px; padding-left: 4px; font-size: 12px; }
 .reasoning-step {
   display: flex; align-items: baseline; gap: 8px; width: 100%; min-height: 40px; padding: 8px 10px; border: 0; border-radius: 10px;
   background: rgba(255, 255, 255, 0.06); color: var(--text); text-align: left; font-size: 12px;

@@ -69,6 +69,39 @@ enum CantripUITestFixtures {
         try? handle.close()
     }
 
+    /// With `-CantripUITestTimingLog YES` and `-CantripUITestNotifyTab <session>`, appends one line to
+    /// Documents/tab-timing.jsonl: when that tab was selected and when its newest message (a reply, or a
+    /// prompt waiting for one) was in the transcript on screen. Mac epoch seconds. CantripTabLoadUITests.
+    @MainActor
+    static func recordTabTiming(_ remote: CantripRemoteModel) async {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "CantripUITestTimingLog"), let tab = defaults.string(forKey: "CantripUITestNotifyTab") else { return }
+        var record: [String: Double] = [:]
+        let deadline = Date().addingTimeInterval(180)
+        while Date() < deadline {
+            let now = Date().timeIntervalSince1970
+            if record["tabSelected"] == nil, remote.selectedSessionID?.caseInsensitiveCompare(tab) == .orderedSame {
+                record["tabSelected"] = now
+            }
+            if record["tabSelected"] != nil, let session = remote.selectedSession,
+               session.id.caseInsensitiveCompare(tab) == .orderedSame, let last = session.transcript.last,
+               last.role != "user" || session.isStreaming != true {
+                record["tabContent"] = now
+                record["messages"] = Double(session.transcript.count)
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: record, options: .sortedKeys),
+              let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let file = folder.appendingPathComponent("tab-timing.jsonl")
+        if !FileManager.default.fileExists(atPath: file.path) { FileManager.default.createFile(atPath: file.path, contents: nil) }
+        guard let handle = try? FileHandle(forWritingTo: file) else { return }
+        handle.seekToEndOfFile()
+        handle.write(data + Data("\n".utf8))
+        try? handle.close()
+    }
+
     static var pairsWithFixtureHost: Bool {
         ProcessInfo.processInfo.arguments.contains("-CantripUITestRemoteURL")
     }

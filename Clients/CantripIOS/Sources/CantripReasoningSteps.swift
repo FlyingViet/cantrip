@@ -13,6 +13,16 @@ enum CantripReasoningFormat {
             ?? AttributedString(text)
     }
 
+    /// `titles` with the text of `loaded` steps, matched by step number; steps newer than what was
+    /// loaded keep their title alone.
+    static func merged(titles: [CantripRemoteReasoningStep],
+                       loaded: [CantripRemoteReasoningStep]?) -> [CantripRemoteReasoningStep] {
+        guard let loaded, !loaded.isEmpty else { return titles }
+        let byNumber = Dictionary(loaded.enumerated().map { ($1.number ?? $0 + 1, $1) }) { first, _ in first }
+        let merged = titles.enumerated().map { index, step in byNumber[step.number ?? index + 1] ?? step }
+        return merged.count >= loaded.count ? merged : loaded
+    }
+
     /// Host steps, or the whole reasoning as one step from Mac hosts that don't split it.
     static func steps(for message: CantripRemoteMessage?, thinking: String?) -> [CantripRemoteReasoningStep] {
         let steps = (message?.reasoning ?? []).filter { !$0.title.isEmpty || !$0.text.isEmpty }
@@ -26,18 +36,52 @@ enum CantripReasoningFormat {
 struct CantripReasoningSteps: View {
     let steps: [CantripRemoteReasoningStep]
     let streaming: Bool
+    /// Set when `steps` are titles only (the Mac sent `reasoningBytes`): loads their text, once the
+    /// reasoning is opened.
+    var load: (() async throws -> [CantripRemoteReasoningStep])? = nil
     @State private var expanded: Bool
+    @State private var loaded: [CantripRemoteReasoningStep]?
+    @State private var loading = false
+    @State private var failure: String?
+    @State private var attempt = 0
 
-    init(steps: [CantripRemoteReasoningStep], streaming: Bool, initiallyExpanded: Bool = false) {
+    init(steps: [CantripRemoteReasoningStep], streaming: Bool, initiallyExpanded: Bool = false,
+         load: (() async throws -> [CantripRemoteReasoningStep])? = nil) {
         self.steps = steps
         self.streaming = streaming
+        self.load = load
         _expanded = State(initialValue: initiallyExpanded)
+    }
+
+    /// The loaded text in place of each title it covers; titles that arrived since stay as they are.
+    private var shown: [CantripRemoteReasoningStep] {
+        CantripReasoningFormat.merged(titles: steps, loaded: loaded)
     }
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            CantripReasoningStepList(steps: steps, streaming: streaming)
-                .padding(.top, 6)
+            VStack(alignment: .leading, spacing: 6) {
+                CantripReasoningStepList(steps: shown, streaming: streaming)
+                if loading {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.mini)
+                        Text("Loading the reasoning…")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(CantripReasoningFormat.secondaryText)
+                    .accessibilityIdentifier("cantrip.reasoning.loading")
+                } else if let failure {
+                    HStack(spacing: 10) {
+                        Text(failure)
+                            .font(.caption)
+                            .foregroundStyle(CantripReasoningFormat.secondaryText)
+                        Button("Retry") { attempt += 1 }
+                            .font(.caption)
+                            .accessibilityLabel("Retry loading the reasoning")
+                    }
+                }
+            }
+            .padding(.top, 6)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
@@ -66,6 +110,20 @@ struct CantripReasoningSteps: View {
             .accessibilityElement(children: .combine)
         }
         .accessibilityHint(expanded ? "Hides the reasoning steps" : "Shows each reasoning step")
+        // Opening it (or Retry) loads the text; a reply still being written is read again each time.
+        .task(id: expanded ? attempt : -1) {
+            guard expanded, let load, loaded == nil || streaming else { return }
+            loading = true
+            failure = nil
+            defer { loading = false }
+            do {
+                loaded = try await load()
+            } catch is CancellationError {
+                return
+            } catch {
+                failure = "Couldn't load the reasoning. \(error.localizedDescription)"
+            }
+        }
     }
 }
 

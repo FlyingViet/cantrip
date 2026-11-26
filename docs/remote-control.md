@@ -764,7 +764,7 @@ above you. Only one page is requested at a time. There is no button to tap; a
 **Retry** appears in that row only if a page fails, and automatic loading resumes
 after it succeeds. Older history is not deleted, and expanded history stays open
 while you browse or switch cached tabs.
-Every loaded message includes its complete text and reasoning. Tool steps come
+Every loaded message includes its complete text. Tool steps come
 complete by default; clients that add `steps=summary` (Cantrip Agent, Gateway Mac
 and the browser remote) get each step whose title, input and output together exceed
 1 KB as a summary: its id, tool, state, a title of at most 512 bytes and
@@ -772,9 +772,18 @@ and the browser remote) get each step whose title, input and output together exc
 three turns can hold hundreds of steps (0.5–1 MB of commands and output, shown only
 once a step is opened), which kept it from loading at all on a slow link. Opening
 such a step loads it from `GET /api/v1/sessions/{id}/messages/{messageID}/steps/{stepID}`
-(`{"step":{…}}`, complete). Small steps, reasoning and long-prompt readers use
+(`{"step":{…}}`, complete). Small steps, short reasoning and long-prompt readers use
 content already downloaded. Clients that don't ask (Windows, older apps) keep
 receiving complete steps.
+Reasoning is likewise sent as a summary to clients that add `reasoning=summary`
+(Cantrip Agent, Gateway Mac, the browser remote and Gateway for Windows): a reply
+whose reasoning exceeds 2 KB carries only its step titles, an empty `thinking` and
+`reasoningBytes` (the full size). One long-thinking reply could hold 350 KB of
+reasoning (sent twice, as `thinking` and as steps), so opening its tab took 20
+seconds on a slow link. The **Reasoning** section loads the text when opened from
+`GET /api/v1/sessions/{id}/messages/{messageID}/reasoning` (`{"reasoning":[…],
+"reasoningBytes":N}`); a reply still being written is read again each time it's
+opened. Clients that don't ask keep receiving complete reasoning.
 Older hosts that return previews retain the **Load full message and details** fallback.
 
 Automatic reads request `?history=recent`, including mutation acknowledgements.
@@ -787,9 +796,10 @@ excludes metadata and the ordered queue.
 Native Mac Remote and Cantrip Agent add `recentExchanges=3` to recent conversation
 reads. Cantrip Agent also includes it on session mutations so their acknowledgements
 do not collapse the transcript after a follow-up. The bounded opt-in (1-3) is
-validated before any mutation and returns up to three complete exchanges even
-when their combined output exceeds the usual soft page budgets. A running prompt
-counts as the newest exchange; older-page requests retain normal paging.
+validated before any mutation and returns up to three complete exchanges within a
+128 KiB encoded budget: older exchanges are left for scrolling up first, and the
+newest exchange is always sent whole, whatever its size. A running prompt counts as
+the newest exchange; older-page requests retain normal paging.
 Browsers and clients without the opt-in keep their existing page sizes. Legacy hosts
 without pagination retain the full transcript rather than hiding inaccessible history.
 Page sizing and encoding run off the main actor and the lightweight tab-list queue.

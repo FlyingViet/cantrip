@@ -6,7 +6,7 @@ import { api, APIError, clearRevalidatedReads, onWritesChanged, pathComponent } 
 import type {
   ChildTabAction, DeleteMessageRequest, ForkQueuedResponse, HomeArtifactsResponse, HomeArtifactsSnapshot, HomeBackgroundSnapshot, HomeInputGroup, HomeTasksResponse,
   HomeUpcomingItem, HomeViewSummary,
-  HomeTasksSnapshot, InputAnswerRequest, MoveTabResponse, PagedRemoteSessionDetail, RemoteMessage,
+  HomeTasksSnapshot, InputAnswerRequest, MoveTabResponse, PagedRemoteSessionDetail, RemoteMessage, RemoteReasoningStep,
   RemoteSessionSummary, SendMessageRequest, SessionResponse, SessionsListResponse, SessionUpdateResponse,
   SubagentCancelResponse, TabSection, TabSectionsResponse,
 } from "../api/types";
@@ -340,6 +340,30 @@ function setHistory(id: string, value: { loading: boolean; error: string | null 
   if (value) map.set(id, value);
   else map.delete(id);
   historyState.value = map;
+}
+
+/** Reasoning text loaded for replies that came with step titles only, by session and message. */
+const reasoningTexts = new Map<string, RemoteReasoningStep[]>();
+
+/** A reply's reasoning steps in full (it came with titles only); a reply still being written is read again. */
+export async function reasoningSteps(sessionID: string, messageID: string, live: boolean): Promise<RemoteReasoningStep[]> {
+  const key = `${sessionID}/${messageID}`;
+  const kept = reasoningTexts.get(key);
+  if (kept && !live) return kept;
+  const data = await api<{ reasoning: RemoteReasoningStep[] }>(
+    `/api/v1/sessions/${pathComponent(sessionID)}/messages/${pathComponent(messageID)}/reasoning`);
+  const steps = Array.isArray(data.reasoning) ? data.reasoning : [];
+  reasoningTexts.set(key, steps);
+  if (reasoningTexts.size > 100) reasoningTexts.delete(reasoningTexts.keys().next().value!);
+  return steps;
+}
+
+/** `titles` with the text of `loaded` steps, by step number; steps newer than what loaded keep their title alone. */
+export function mergedReasoning(titles: RemoteReasoningStep[], loaded: RemoteReasoningStep[] | null): RemoteReasoningStep[] {
+  if (!loaded?.length) return titles;
+  const byNumber = new Map(loaded.map((step, index) => [step.number ?? index + 1, step] as const));
+  const merged = titles.map((step, index) => byNumber.get(step.number ?? index + 1) ?? step);
+  return merged.length >= loaded.length ? merged : loaded;
 }
 
 /** Loads the page of messages before the oldest one shown (GET …?before=). */

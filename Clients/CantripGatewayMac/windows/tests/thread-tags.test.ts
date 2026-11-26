@@ -258,7 +258,7 @@ describe("thread tags", () => {
     expect(openThread.value).toEqual({ sessionID: SESSION, threadID: PROMPT_ID, prompt: TAG.prompt, messageID: TAGGED });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe(`/api/v1/sessions/${SESSION}/threads/${PROMPT_ID}?history=recent`);
+    expect(url).toBe(`/api/v1/sessions/${SESSION}/threads/${PROMPT_ID}?history=recent&reasoning=summary`);
     expect(init.method).toBe("GET");
     expect(init.headers["x-cantrip-gateway"]).toBe("gateway-key");
     const loading = body();

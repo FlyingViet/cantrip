@@ -201,12 +201,12 @@ describe("switching a tab's backend", () => {
     serve(ON_MAC, { "Claude Code": ON_CLAUDE });
     const state = modelSettingsState(SESSION);
     await state.load(true);
-    expect(calls().map((call) => call.url)).toEqual([`${PATH}?history=recent`]);
+    expect(calls().map((call) => call.url)).toEqual([`${PATH}?history=recent&reasoning=summary`]);
     expect(state.backend.value).toBe("mac");
     expect(state.backendChanged.value).toBe(false);
 
     await state.chooseBackend("Claude Code");
-    expect(calls()[1]).toMatchObject({ url: `${PATH}?backend=Claude%20Code&history=recent`, method: "GET" });
+    expect(calls()[1]).toMatchObject({ url: `${PATH}?backend=Claude%20Code&history=recent&reasoning=summary`, method: "GET" });
     expect(state.backend.value).toBe("Claude Code");
     expect(state.backendChanged.value).toBe(true);
     expect(state.settings.value?.models.map((model) => model.id)).toEqual(["sample-claude-a", "sample-claude-b"]);
@@ -217,7 +217,7 @@ describe("switching a tab's backend", () => {
 
     expect(await state.save()).toBe(true);
     // The check before writing reads the draft's backend.
-    expect(calls()[2]).toMatchObject({ url: `${PATH}?backend=Claude%20Code&history=recent`, method: "GET" });
+    expect(calls()[2]).toMatchObject({ url: `${PATH}?backend=Claude%20Code&history=recent&reasoning=summary`, method: "GET" });
     expect(posted()).toEqual({ revision: "rev-1", usesDefaults: false, model: "sample-claude-b", effort: "high", contextTier: "", backend: "Claude Code" });
   });
 
@@ -227,12 +227,12 @@ describe("switching a tab's backend", () => {
     await state.load(true);
     await state.chooseBackend("Claude Code");
     await state.load(false, true);
-    expect(calls().at(-1)?.url).toBe(`${PATH}?backend=Claude%20Code&refresh=true&history=recent`);
+    expect(calls().at(-1)?.url).toBe(`${PATH}?backend=Claude%20Code&refresh=true&history=recent&reasoning=summary`);
     expect(state.selection.value.model).toBe("sample-claude-b");
 
     await state.load(true);
     await state.load(false, true);
-    expect(calls().at(-1)?.url).toBe(`${PATH}?refresh=true&history=recent`);
+    expect(calls().at(-1)?.url).toBe(`${PATH}?refresh=true&history=recent&reasoning=summary`);
   });
 
   it("keeps only the latest pick's reply, and none once the sheet closes", async () => {
@@ -280,7 +280,7 @@ describe("switching a tab's backend", () => {
     expect(state.backend.value).toBe("Claude Code");
 
     await state.chooseBackend("mac");
-    expect(calls()[1].url).toBe(`${PATH}?backend=mac&history=recent`);
+    expect(calls()[1].url).toBe(`${PATH}?backend=mac&history=recent&reasoning=summary`);
     expect(state.settings.value?.unavailableReason).toContain("no per-tab models");
     expect(state.validation.value).toBeNull();
     expect(state.canSave.value).toBe(true);
@@ -309,7 +309,7 @@ describe("switching a tab's backend", () => {
 
     state.usesDefaults.value = true;
     expect(await state.save()).toBe(true);
-    expect(calls().map((call) => call.url)).toEqual([`${PATH}?history=recent`, `${PATH}?history=recent`, `${PATH}?history=recent`]);
+    expect(calls().map((call) => call.url)).toEqual([`${PATH}?history=recent&reasoning=summary`, `${PATH}?history=recent&reasoning=summary`, `${PATH}?history=recent&reasoning=summary`]);
     expect(posted()).toEqual({ revision: "rev-0", usesDefaults: true });
   });
 });
