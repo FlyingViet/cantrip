@@ -28,10 +28,14 @@ struct ScheduledStep: Codable, Equatable, Identifiable {
     var createdAt = Date()
     var status: Status = .scheduled
     var finishedAt: Date?
+    /// The wait whose waiter scheduled it: its own follow-up, so Cantrip doesn't also wake the tab
+    /// when that wait ends.
+    var waitID: UUID?
 }
 
 /// A background wait a tab started through Cantrip (`cantrip schedule wait`) or registered by
-/// process ID: listed while its process runs; cancelling stops it.
+/// process ID: listed while its process runs; cancelling stops it. When its process ends (or
+/// passes `until`), Cantrip logs it and wakes the tab that started it with how it ended.
 struct RegisteredWait: Codable, Equatable, Identifiable {
     var id = UUID()
     var title: String
@@ -43,9 +47,13 @@ struct RegisteredWait: Codable, Equatable, Identifiable {
     /// Whether Cantrip started it in its own process group (cancelling stops the whole group).
     var ownGroup = false
     var tabID: UUID?
-    /// When it gives up on its own, if it says.
+    /// Its deadline: a waiter still running a few minutes past it is stopped, and its tab told.
     var until: Date?
     var createdAt = Date()
+    /// For a waiter Cantrip started: its output log, and the file its exit status goes to
+    /// (both in ~/.cache/Cantrip/home/waits/).
+    var outputPath: String?
+    var statusPath: String?
 }
 
 /// Plain-language words for a recurring Mac job, set with `cantrip schedule describe`.

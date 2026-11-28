@@ -96,6 +96,12 @@ struct SessionTabTests {
             exit(process.terminationStatus)
         }
         let home = ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_HOME"]!
+        // A stand-in for a tab's `cantrip schedule wait -- …` (UpcomingWaitTests): start the waiter, print it, exit.
+        if let command = ProcessInfo.processInfo.environment["CANTRIP_TEST_START_WAITER"] {
+            let waiter = try CantripCLI.startWaiter(["/bin/sh", "-c", command])
+            print("\(waiter.pid)\t\(waiter.output)\t\(waiter.status)")
+            exit(0)
+        }
         precondition(Bundle.main.bundleIdentifier == nil,
                      "Tests must not run with a bundle ID (\(Bundle.main.bundlePath)): its settings would be an app's")
         precondition(FileManager.default.homeDirectoryForCurrentUser.path == home)
@@ -109,6 +115,10 @@ struct SessionTabTests {
             try await testCopilotRuntimeRecovery()
             try await testCopilotDiscoveryCache()
             try testCopilotRuntimeActivity()
+            return
+        }
+        if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "upcoming-waits" {
+            try await testUpcomingWaits()
             return
         }
         if ProcessInfo.processInfo.environment["CANTRIP_TAB_TEST_ONLY"] == "remote-http" {
@@ -432,6 +442,7 @@ struct SessionTabTests {
         try await testParallelRequestRouting()
         try await testQueueGrouping()
         try await testPromptUsage()
+        try await testUpcomingWaits()
         try await testRemoteClientLocation()
         try await testHostProtection(manager: manager)
         print("Session tab persistence, protection, privacy, and web controls passed")

@@ -81,6 +81,12 @@ final class HomeUpcoming {
         tick()
     }
 
+    /// Stops delivering (the app quitting; tests standing in for a relaunch).
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
     private func persist() {
         do { try store.save(records, now: now()) } catch { Log.write("upcoming: couldn't save: \(error.localizedDescription)") }
     }
@@ -105,6 +111,7 @@ final class HomeUpcoming {
             changed = true
         }
         if changed { persist() }
+        reapWaits()
     }
 
     private func deliver(_ step: ScheduledStep, homeStillBusy: Bool) -> Bool {
@@ -128,6 +135,101 @@ final class HomeUpcoming {
         return true
     }
 
+    // MARK: Ending waits
+
+    /// How long a waiter may run past its `until` before Cantrip stops it (its own give-up comes first).
+    static let deadlineGrace: TimeInterval = 300
+
+    /// Ends each wait whose process has exited, or that is still running past its deadline: logs it,
+    /// drops it and wakes the tab that started it with how it ended. A waiter that scheduled its own
+    /// follow-up step (`cantrip schedule add` from inside it) has already said what comes next.
+    func reapWaits() {
+        let date = now()
+        var ended: [(RegisteredWait, String)] = []
+        for wait in records.waits {
+            if !Self.isRunning(wait) {
+                ended.append((wait, exitDescription(wait)))
+            } else if let until = wait.until, date > until.addingTimeInterval(Self.deadlineGrace) {
+                Log.write("upcoming: wait \(Self.short(wait.id)) passed its deadline (\(Self.clock(until))); stopping process \(wait.pid)")
+                Self.stop(pid: wait.pid, ownGroup: wait.ownGroup, rows: processes(fresh: true))
+                ended.append((wait, "it was still waiting at its deadline (\(Self.clock(until))), so Cantrip stopped it"))
+            }
+        }
+        guard !ended.isEmpty else { return }
+        let gone = Set(ended.map(\.0.id))
+        records.waits.removeAll { gone.contains($0.id) }
+        persist()
+        for (wait, how) in ended {
+            Log.write("upcoming: wait \(Self.short(wait.id)) ended: \(how)")
+            wake(wait, how: how)
+        }
+    }
+
+    private static func isRunning(_ wait: RegisteredWait) -> Bool {
+        guard let start = processStart(wait.pid) else { return false }
+        return abs(start - wait.processStart) < 2
+    }
+
+    /// "process 14125 exited with status 0 after 8 min".
+    private func exitDescription(_ wait: RegisteredWait) -> String {
+        let status = wait.statusPath.flatMap { Self.waitFile($0) }
+        let endedAt = status.flatMap { try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date } ?? now()
+        let seconds = endedAt.timeIntervalSince(Date(timeIntervalSince1970: wait.processStart))
+        let ran = seconds < 60 ? "\(max(Int(seconds), 1)) s" : Self.duration(seconds)
+        guard wait.statusPath != nil else { return "process \(wait.pid) exited after about \(ran)" }
+        guard let path = status, let text = try? String(contentsOfFile: path, encoding: .utf8),
+              let code = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return "process \(wait.pid) ended without an exit status (it was stopped or killed) after about \(ran)"
+        }
+        return "process \(wait.pid) exited with status \(code) after \(ran)"
+    }
+
+    /// Queues the end of `wait` in the tab that started it (Home if that tab is gone).
+    private func wake(_ wait: RegisteredWait, how: String) {
+        let id = Self.short(wait.id)
+        if let step = records.steps.first(where: { $0.waitID == wait.id }) {
+            Log.write("upcoming: not waking a tab for wait \(id): its waiter scheduled step \(Self.short(step.id)) itself")
+            return
+        }
+        guard let manager, let tabID = wait.tabID else {
+            Log.write("upcoming: wait \(id) has no tab to wake (registered outside a tab)")
+            return
+        }
+        var text = "(Automated: your wait “\(wait.title)” ended: \(how).)"
+        if let output = wait.outputPath.flatMap({ Self.waitFile($0) }), let tail = Self.tail(of: output) {
+            text += "\n\nIts last output (\(output)):\n```\n\(tail)\n```"
+        }
+        text += "\n\nDo the step it was waiting for now, or say why not."
+        let session: ChatSession
+        if let tab = manager.managedSession(id: tabID), !manager.homeRuns.contains(where: { $0.id == tab.id }) {
+            session = tab
+        } else {
+            session = manager.homeSession
+            text += "\n\n(The tab that started this wait was closed, so it came to Home.)"
+        }
+        session.submitRemote(text, mode: .queue)
+        Log.write("upcoming: delivered the end of wait \(id) to \(session.id == manager.homeSession.id ? "Home" : "its tab")")
+    }
+
+    /// A waiter's own existing file, only inside ~/.cache/Cantrip/home/waits/.
+    private static func waitFile(_ path: String) -> String? {
+        waitFolderPath(path).flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }
+    }
+
+    /// The last 20 lines (at most 2 KB) of a waiter's output.
+    private static func tail(of path: String) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: size > 2_048 ? size - 2_048 : 0)
+        guard let data = try? handle.readToEnd() else { return nil }
+        let lines = String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+        let text = lines.suffix(20).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    static func short(_ id: UUID) -> String { String(id.uuidString.prefix(8)) }
+
     // MARK: Registering
 
     func addStep(_ step: ScheduledStep) throws -> ScheduledStep {
@@ -144,7 +246,14 @@ final class HomeUpcoming {
         }
         records.steps.append(step)
         persist()
+        Log.write("upcoming: scheduled step \(Self.short(step.id)) for \(Self.clock(step.runAt))"
+                  + (step.waitID.map { " (from the waiter of wait \(Self.short($0)))" } ?? ""))
         return step
+    }
+
+    /// The running wait whose waiter is one of `processes` (a `cantrip schedule add` run inside it).
+    func waitRunning(among processes: [Int32]) -> RegisteredWait? {
+        records.waits.first { processes.contains($0.pid) && Self.isRunning($0) }
     }
 
     func addWait(_ wait: RegisteredWait) throws -> RegisteredWait {
@@ -155,10 +264,27 @@ final class HomeUpcoming {
             throw Failure(status: 404, message: "Process \(wait.pid) isn't running.")
         }
         guard Self.processOwner(wait.pid) == getuid() else { throw Failure(status: 403, message: "That process isn't this user's.") }
+        var wait = wait
+        wait.outputPath = wait.outputPath.flatMap { Self.waitFile($0) }
+        wait.statusPath = wait.statusPath.flatMap { Self.waitFolderPath($0) }
+        for replaced in records.waits where replaced.pid == wait.pid {
+            Log.write("upcoming: wait \(Self.short(wait.id)) replaces wait \(Self.short(replaced.id)) (same process)")
+        }
         records.waits.removeAll { $0.pid == wait.pid }
         records.waits.append(wait)
         persist()
+        Log.write("upcoming: registered wait \(Self.short(wait.id)) (process \(wait.pid)"
+                  + (wait.tabID.map { ", tab \(Self.short($0))" } ?? ", no tab")
+                  + (wait.until.map { ", until \(Self.clock($0))" } ?? "") + ")")
         return wait
+    }
+
+    /// A path inside ~/.cache/Cantrip/home/waits/ (the file may not exist yet).
+    private static func waitFolderPath(_ path: String) -> String? {
+        let folder = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/Cantrip/home/waits").standardizedFileURL.path + "/"
+        let standard = URL(fileURLWithPath: path).standardizedFileURL.path
+        return standard.hasPrefix(folder) ? standard : nil
     }
 
     func describeMacJob(label: String, note: MacJobNote) throws {
@@ -209,10 +335,8 @@ final class HomeUpcoming {
 
         let rows = processes()
         var shown: Set<Int32> = []
-        records.waits.removeAll { wait in
-            guard let start = Self.processStart(wait.pid), abs(start - wait.processStart) < 2 else { return true }
-            return false
-        }
+        // A wait whose process ended is logged and its tab woken, never just dropped from the list.
+        reapWaits()
         for wait in records.waits {
             shown.insert(wait.pid)
             items.append(Item(
@@ -279,15 +403,15 @@ final class HomeUpcoming {
             return "Cancelled “\(records.steps[index].title)”."
         case "wait":
             guard let wait = records.waits.first(where: { $0.id.uuidString == value }) else { break }
-            guard let start = Self.processStart(wait.pid), abs(start - wait.processStart) < 2 else {
-                records.waits.removeAll { $0.id == wait.id }
-                persist()
+            guard Self.isRunning(wait) else {
+                // Ended before the cancel arrived: logged and its tab told like any other end.
+                reapWaits()
                 return "“\(wait.title)” had already finished."
             }
             Self.stop(pid: wait.pid, ownGroup: wait.ownGroup, rows: processes(fresh: true))
             records.waits.removeAll { $0.id == wait.id }
             persist()
-            Log.write("upcoming: stopped a registered wait")
+            Log.write("upcoming: stopped registered wait \(Self.short(wait.id)) (process \(wait.pid)); cancelled, so no tab is woken")
             return "Stopped “\(wait.title)”."
         case "job":
             let parts = value.split(separator: ":")
@@ -445,6 +569,7 @@ final class HomeUpcoming {
                 var step = ScheduledStep(title: title, message: message, tabID: tab, runAt: Date(timeIntervalSince1970: at))
                 step.whenHomeIsQuiet = request["whenHomeIsQuiet"] as? Bool ?? false
                 step.deadline = (request["deadline"] as? Double).map(Date.init(timeIntervalSince1970:))
+                step.waitID = waitRunning(among: (request["ancestors"] as? [Int] ?? []).map(Int32.init))?.id
                 let saved = try addStep(step)
                 return ["id": "step:\(saved.id.uuidString)",
                         "text": "Scheduled “\(saved.title)” for \(Self.clock(saved.runAt)) (step:\(saved.id.uuidString)). It's listed in Home's Upcoming; cancel it there or with `cantrip schedule cancel step:\(saved.id.uuidString)`."]
@@ -458,6 +583,8 @@ final class HomeUpcoming {
                 wait.ownGroup = request["ownGroup"] as? Bool ?? false
                 wait.tabID = (request["tab"] as? String).flatMap(UUID.init(uuidString:))
                 wait.until = (request["until"] as? Double).map(Date.init(timeIntervalSince1970:))
+                wait.outputPath = request["output"] as? String
+                wait.statusPath = request["status"] as? String
                 let saved = try addWait(wait)
                 return ["id": "wait:\(saved.id.uuidString)",
                         "text": "Listed “\(saved.title)” (process \(pid)) in Home's Upcoming as wait:\(saved.id.uuidString)."]
@@ -501,6 +628,8 @@ final class HomeUpcoming {
         happen (a Mac waking up, a deploy, a first event), start the waiter through Cantrip: \
         `\(command) schedule wait --title "Waits for the laptop to wake, then installs the update" \
         --until +48h -- /bin/bash waiter.sh`, or list one that's already running with `--pid PID`. \
+        A waiter only has to exit once its condition holds: Cantrip then wakes this tab with its exit \
+        status and last output (unless the waiter scheduled its own step), and stops it past --until. \
         Titles say what it will do in plain words, without commands, paths or secrets. Everything \
         shows in Home's Upcoming list (Tasks) with when and who set it up, where the user can \
         cancel it; `\(command) schedule list` and `\(command) schedule cancel ID` do the same here.

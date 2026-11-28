@@ -277,7 +277,14 @@ cantrip schedule list | cancel ID | resume ID
 ```
 
 `--at` takes "22:35" (today, or tomorrow once past), "2026-11-20 08:00" or "+90m"/"+2h"/"+1d". A
-wait Cantrip starts runs in its own session with its output in `~/.cache/Cantrip/home/waits/`.
+wait Cantrip starts runs in its own session (a tab's runtime stopping when idle doesn't end it) with
+its output in `~/.cache/Cantrip/home/waits/` and its exit status beside it. A waiter only has to exit
+once what it waits for has happened: within 15 seconds Cantrip logs the end and queues a message in
+the tab that started it (Home if that tab was closed) with the exit status and the last lines of its
+output. A waiter that schedules its own follow-up with `cantrip schedule add` isn't followed by that
+message, a cancelled wait wakes nobody, and one still running five minutes past `--until` is
+stopped and its tab told. A wait that ended while Cantrip wasn't running is reported at the next
+launch. Cantrip.log has a line for each registration, end and delivery (`upcoming: …`).
 Background jobs a tab's Copilot shell started without registering still show, by their script's
 name and the tab that started them, so nothing runs out of sight. Every tab's instructions say to
 use these commands rather than detached `sleep` scripts. Steps, waits and Mac job names are kept in

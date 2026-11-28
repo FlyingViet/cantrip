@@ -259,6 +259,8 @@ enum CantripCLI {
             payload.merge(["action": "add", "at": at, "title": title, "message": message, "tab": tab,
                            "whenHomeIsQuiet": flags.contains("--when-home-quiet")]) { $1 }
             payload["deadline"] = try time("--deadline")
+            // A waiter scheduling its own follow-up: Cantrip then doesn't wake the tab again when it ends.
+            payload["ancestors"] = ancestorPIDs().map(Int.init)
         case "wait":
             guard let title = options["--title"] else {
                 throw Failure(message: "Usage: cantrip schedule wait --title TEXT [--until TIME] (--pid PID | -- COMMAND…)", code: 2)
@@ -271,7 +273,10 @@ enum CantripCLI {
                 guard let pid = Int(raw) else { throw Failure(message: "--pid needs a process ID.", code: 2) }
                 payload["pid"] = pid
             } else if let command = rest, !command.isEmpty {
-                payload["pid"] = Int(try startWaiter(command))
+                let waiter = try startWaiter(command)
+                payload["pid"] = Int(waiter.pid)
+                payload["output"] = waiter.output
+                payload["status"] = waiter.status
                 payload["ownGroup"] = true
             } else {
                 throw Failure(message: "Give --pid PID, or the command to start after --.", code: 2)
@@ -301,11 +306,15 @@ enum CantripCLI {
     }
 
     /// Starts `command` in its own session, detached from this shell, with its output in
-    /// ~/.cache/Cantrip/home/waits/ (0600). Returns its process ID.
-    static func startWaiter(_ command: [String]) throws -> pid_t {
+    /// ~/.cache/Cantrip/home/waits/ (0600). A small `sh` runs it and writes its exit status next to
+    /// the output, so Cantrip can tell the tab how it ended. Returns the waiter's process ID.
+    static func startWaiter(_ command: [String]) throws -> (pid: pid_t, output: String, status: String) {
+        guard executableExists(command[0]) else { throw Failure(message: "Couldn't start \(command[0]): no such command.") }
         let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cache/Cantrip/home/waits")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let log = folder.appendingPathComponent("\(UUID().uuidString).log").path
+        let name = UUID().uuidString
+        let log = folder.appendingPathComponent("\(name).log").path
+        let statusFile = folder.appendingPathComponent("\(name).status").path
         guard FileManager.default.createFile(atPath: log, contents: nil, attributes: [.posixPermissions: 0o600]) else {
             throw Failure(message: "Couldn't create the waiter's log.")
         }
@@ -319,12 +328,34 @@ enum CantripCLI {
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
-        let argv: [UnsafeMutablePointer<CChar>?] = command.map { strdup($0) } + [nil]
+        let script = #"status="$1"; shift; "$@"; code=$?; umask 077; printf '%s\n' "$code" > "$status"; exit "$code""#
+        let arguments = ["/bin/sh", "-c", script, "cantrip-wait", statusFile] + command
+        let argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
         defer { argv.forEach { free($0) } }
         var pid: pid_t = 0
-        let status = posix_spawnp(&pid, command[0], &actions, &attributes, argv, environ)
+        let status = posix_spawn(&pid, "/bin/sh", &actions, &attributes, argv, environ)
         guard status == 0 else { throw Failure(message: "Couldn't start \(command[0]): \(String(cString: strerror(status)))") }
-        return pid
+        return (pid, log, statusFile)
+    }
+
+    private static func executableExists(_ name: String) -> Bool {
+        if name.contains("/") { return FileManager.default.isExecutableFile(atPath: name) }
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        return path.split(separator: ":").contains { FileManager.default.isExecutableFile(atPath: "\($0)/\(name)") }
+    }
+
+    /// This process's parent, its parent and so on (up to 12, stopping at launchd).
+    static func ancestorPIDs() -> [pid_t] {
+        var result: [pid_t] = []
+        var current = getppid()
+        while current > 1, result.count < 12 {
+            result.append(current)
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+            guard proc_pidinfo(current, PROC_PIDTBSDINFO, 0, &info, size) == size else { break }
+            current = pid_t(info.pbi_ppid)
+        }
+        return result
     }
 
     static func tab(_ arguments: [String]) throws -> Int32 {
